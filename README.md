@@ -116,7 +116,9 @@ https://github.com/ImranR98/Obtainium/releases/latest/download/app-release.apk
 On Fire TV, also allow Obtainium under Settings, My Fire TV, Developer Options, Install unknown apps: it installs apps
 itself.
 
-1. In Obtainium, add an app with this repository's address, `https://github.com/skjaere/nzstreamer`.
+1. In Obtainium, choose Add App. Type `nzstreamer` in the field labelled Search (some sources only), search, and pick
+   skjaere/nzstreamer from GitHub's results. Or type the repository's address, `github.com/skjaere/nzstreamer`:
+   Obtainium adds the `https://` itself.
 2. Install NZStreamer from Obtainium. If you installed it from the browser or Downloader already, keep it: removing it
    would remove its settings. Obtainium asks you to confirm its first update, as it didn't install the version you have.
 
