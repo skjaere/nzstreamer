@@ -1,0 +1,6 @@
+{
+  "success": true,
+  "error": null,
+  "detail": "Found Cached Torrent. Using Cached Download.",
+  "data": {"hash": "d3adb33fd3adb33fd3adb33fd3adb33fd3adb33f", "torrent_id": 5021337, "auth_id": "00000000-0000-4000-8000-0000000000bb"}
+}

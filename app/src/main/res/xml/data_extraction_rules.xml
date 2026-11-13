@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+. The secrets are sealed with an AndroidKeyStore key that never leaves this device,
+     so a copy on another device couldn't be read: SecretStore would read it as absent, the same as
+     a file left out, so it is left out and nothing sealed leaves the device. There the app asks for
+     the secrets again; a provider without a login needs none and is used as it is (#131).
+     Play on TV's link.json is left out for the same reason: its pins mean nothing without this device's link
+     key, which never leaves it, and a copy elsewhere would only point at pairings that device doesn't have (L29).
+     The logs' folder is left out too: the last crash's log holds the log before the crash and this device's header,
+     which leave the device only when shared from Settings › Logs, as the privacy page says (L139).
+     The debrid folder is left out as well: its listings and its records of what this device's plays added to a service
+     account are the device's own, as each device removes only what it added (L233), and they name accounts by ids
+     another device's settings don't hold.
+     allowBackup="false" already turns cloud backup off but not device-to-device transfer. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="datastore/secrets.json" />
+        <exclude domain="file" path="datastore/secrets.json.tmp" />
+        <exclude domain="file" path="datastore/link.json" />
+        <exclude domain="file" path="datastore/link.json.tmp" />
+        <exclude domain="file" path="logs/" />
+        <exclude domain="file" path="debrid/" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="datastore/secrets.json" />
+        <exclude domain="file" path="datastore/secrets.json.tmp" />
+        <exclude domain="file" path="datastore/link.json" />
+        <exclude domain="file" path="datastore/link.json.tmp" />
+        <exclude domain="file" path="logs/" />
+        <exclude domain="file" path="debrid/" />
+    </device-transfer>
+</data-extraction-rules>

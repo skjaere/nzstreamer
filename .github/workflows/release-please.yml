@@ -1,0 +1,45 @@
+# release-please, on each push to main: it keeps a release pull request open from the conventional commits since the
+# last release (version.txt and the changelog, per release-please-config.json). Merging that pull request makes the
+# release as a draft, with its tag; then release-apk.yml builds the APK, attaches it and publishes the release.
+# A release made with the workflow token starts no other workflow, so the APK job is called from here.
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # The scopes release-please's README asks for: commits and tags, its pull request, and that pull request's labels.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      # No release-type input: the manifest and release-please-config.json decide. The workflow token.
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+
+  # The release's APK. The signing secrets are the release-signing environment's; secrets: inherit passes them on, and
+  # release-apk.yml fails when one arrives empty.
+  apk:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-apk.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+      publish: true
+    secrets: inherit

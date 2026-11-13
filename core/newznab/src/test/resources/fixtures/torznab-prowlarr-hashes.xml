@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <atom:link rel="self" type="application/rss+xml" />
+    <title>Prowlarr</title>
+    <item>
+      <title>Harbor.Lights.S01E03.1080p.WEB-DL.H.264-KESTREL</title>
+      <guid isPermaLink="true">https://tracker.example.org/torrent/61/harbor-lights-s01e03-1080p</guid>
+      <prowlarrindexer id="4" type="public">Example Tracker</prowlarrindexer>
+      <pubDate>Mon, 02 Nov 2026 20:00:00 +0000</pubDate>
+      <size>1288490188</size>
+      <link>http://prowlarr.local:9696/4/download?apikey=TESTKEY123&amp;link=SGFyYm9yMw&amp;file=Harbor+Lights+S01E03</link>
+      <category>5040</category>
+      <enclosure url="http://prowlarr.local:9696/4/download?apikey=TESTKEY123&amp;link=SGFyYm9yMw&amp;file=Harbor+Lights+S01E03" length="1288490188" type="application/x-bittorrent" />
+      <torznab:attr name="category" value="5040" />
+      <torznab:attr name="seeders" value="88" />
+      <torznab:attr name="infohash" value="YCQ6F45U2WLIO6DJLJFTYLI6B6NIW7DN" />
+      <torznab:attr name="files" value="1" />
+    </item>
+    <item>
+      <title>Harbor.Lights.S01E04.1080p.WEB-DL.H.264-KESTREL</title>
+      <guid isPermaLink="true">https://tracker.example.org/torrent/62/harbor-lights-s01e04-1080p</guid>
+      <prowlarrindexer id="4" type="public">Example Tracker</prowlarrindexer>
+      <pubDate>Mon, 02 Nov 2026 19:00:00 +0000</pubDate>
+      <size>1288490188</size>
+      <link>http://prowlarr.local:9696/4/download?apikey=TESTKEY123&amp;link=SGFyYm9yNA&amp;file=Harbor+Lights+S01E04</link>
+      <category>5040</category>
+      <enclosure url="http://prowlarr.local:9696/4/download?apikey=TESTKEY123&amp;link=SGFyYm9yNA&amp;file=Harbor+Lights+S01E04" length="1288490188" type="application/x-bittorrent" />
+      <torznab:attr name="category" value="5040" />
+      <torznab:attr name="seeders" value="31" />
+      <torznab:attr name="infohash" value="09824131ed29543c3521a3c749080fab0aeda9654647cb70179beab3148613b5" />
+      <torznab:attr name="files" value="1" />
+    </item>
+    <item>
+      <title>Harbor.Lights.S01E05.1080p.WEB-DL.H.264-KESTREL</title>
+      <guid isPermaLink="true">https://tracker.example.org/torrent/63/harbor-lights-s01e05-1080p</guid>
+      <prowlarrindexer id="4" type="public">Example Tracker</prowlarrindexer>
+      <pubDate>Mon, 02 Nov 2026 18:00:00 +0000</pubDate>
+      <size>1288490188</size>
+      <link>http://prowlarr.local:9696/4/download?apikey=TESTKEY123&amp;link=SGFyYm9yNQ&amp;file=Harbor+Lights+S01E05</link>
+      <category>5040</category>
+      <enclosure url="http://prowlarr.local:9696/4/download?apikey=TESTKEY123&amp;link=SGFyYm9yNQ&amp;file=Harbor+Lights+S01E05" length="1288490188" type="application/x-bittorrent" />
+      <torznab:attr name="category" value="5040" />
+      <torznab:attr name="seeders" value="27" />
+      <torznab:attr name="infohash" value="12207f3e1c5a9b2d4e6f8a0c1e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b1d3f" />
+      <torznab:attr name="files" value="1" />
+    </item>
+    <item>
+      <title>Harbor.Lights.S01E06.1080p.WEB-DL.H.264-KESTREL</title>
+      <guid isPermaLink="true">https://tracker.example.org/torrent/64/harbor-lights-s01e06-1080p</guid>
+      <prowlarrindexer id="4" type="public">Example Tracker</prowlarrindexer>
+      <pubDate>Mon, 02 Nov 2026 17:00:00 +0000</pubDate>
+      <size>1288490188</size>
+      <link>http://prowlarr.local:9696/4/download?apikey=TESTKEY123&amp;link=SGFyYm9yNg&amp;file=Harbor+Lights+S01E06</link>
+      <category>5040</category>
+      <enclosure url="http://prowlarr.local:9696/4/download?apikey=TESTKEY123&amp;link=SGFyYm9yNg&amp;file=Harbor+Lights+S01E06" length="1288490188" type="application/x-bittorrent" />
+      <torznab:attr name="category" value="5040" />
+      <torznab:attr name="seeders" value="19" />
+      <torznab:attr name="infohash" value="09824131ed29543c3521a3c749080fab0aeda9654647cb70179beab3148613b5" />
+      <torznab:attr name="magneturl" value="magnet:?xt=urn:btmh:122009824131ed29543c3521a3c749080fab0aeda9654647cb70179beab3148613b5&amp;xt=urn:btih:5be1f00d2a4c6e8091b3d5f7193b5d7f9a1c3e5f&amp;dn=Harbor.Lights.S01E06&amp;tr=udp%3A%2F%2Ftracker.example.org%3A1337%2Fannounce" />
+      <torznab:attr name="files" value="1" />
+    </item>
+    <item>
+      <title>Harbor.Lights.S01E07.1080p.WEB-DL.H.264-KESTREL</title>
+      <guid isPermaLink="true">https://tracker.example.org/torrent/65/harbor-lights-s01e07-1080p</guid>
+      <prowlarrindexer id="4" type="public">Example Tracker</prowlarrindexer>
+      <pubDate>Mon, 02 Nov 2026 16:00:00 +0000</pubDate>
+      <size>1288490188</size>
+      <link>http://prowlarr.local:9696/4/download?apikey=TESTKEY123&amp;link=SGFyYm9yNw&amp;file=Harbor+Lights+S01E07</link>
+      <category>5040</category>
+      <enclosure url="http://prowlarr.local:9696/4/download?apikey=TESTKEY123&amp;link=SGFyYm9yNw&amp;file=Harbor+Lights+S01E07" length="1288490188" type="application/x-bittorrent" />
+      <torznab:attr name="category" value="5040" />
+      <torznab:attr name="seeders" value="12" />
+      <torznab:attr name="infohash" value="12207f3e1c5a9b2d4e6f8a0c1e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b1d3f" />
+      <torznab:attr name="magneturl" value="magnet:?xt=urn:btmh:12207f3e1c5a9b2d4e6f8a0c1e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b1d3f&amp;xt=urn:btih:LPQ7ADJKJRXIBENT2X3RSO25P6NBYPS7&amp;dn=Harbor.Lights.S01E07" />
+      <torznab:attr name="files" value="1" />
+    </item>
+  </channel>
+</rss>

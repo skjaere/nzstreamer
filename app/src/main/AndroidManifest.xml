@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- "Set up with your phone" on a TV: which Wi-Fi or Ethernet address its page can listen on (a normal
+         permission, granted at install). Not WifiManager's ACCESS_WIFI_STATE, which implies Wi-Fi hardware. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Play on TV: a TV on Wi-Fi below Android 13's T extensions 7 must hold a multicast lock to hear the mDNS queries
+         its record answers (a normal permission, granted at install). It implies Wi-Fi hardware, which a TV on
+         Ethernet alone lacks: hence the uses-feature below. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- The cast service is a media-playback foreground service (L85): Android 14 asks for its type's permission too, a
+         normal one, granted at install. Media notifications need no POST_NOTIFICATIONS. Google's Cast framework adds
+         FOREGROUND_SERVICE. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
+    <!-- One APK for phones and TVs: Leanback not required (required would list it for TVs only),
+         and no touch, which TVs lack; Play takes touch as required unless it is declared not. -->
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.faketouch" android:required="false" />
+    <!-- Implied by CHANGE_WIFI_MULTICAST_STATE; the Shield and other TVs may be on Ethernet alone. -->
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
+
+    <!-- Settings › Logs offers Share only while some app takes shared text: on many TVs none does.
+         Search's mic shows only where a speech recognizer is there to listen (many TV boxes have none);
+         the recognizer records, not the app, so there is no RECORD_AUDIO and no microphone required. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="text/plain" />
+        </intent>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+    </queries>
+
+    <!-- allowBackup="false" stops backups and, up to Android 11, device-to-device transfer too;
+         on Android 12+ the data extraction rules keep the secrets out of a transfer, and both
+         rule files keep them out should backups ever be allowed. -->
+    <!-- Cleartext is allowed because self-hosted indexers (Prowlarr, NZBHydra) on a home network
+         usually speak plain HTTP. The app warns before saving an http:// address that isn't on
+         the local network (UrlSecurity), since the API key would travel unencrypted. -->
+    <!-- largeHeap: a 4K remux's buffers (the player's, up to Media3's 137 MB, and the streams'
+         read-ahead) outgrew a TV box's 192 MB heap class; the Shield gives 512 MB. PlaybackBudgets
+         sizes a play from the heap the process gets. -->
+    <application
+        android:name=".UsenetApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:usesCleartextTraffic="true"
+        android:largeHeap="true"
+        android:label="@string/app_name"
+        android:banner="@drawable/tv_banner"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@android:style/Theme.Material.NoActionBar"
+        tools:ignore="PictureInPictureIssue">
+
+        <!-- Starts on the splash theme, which installSplashScreen() swaps for the app's (res/values/themes.xml). -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.NZStreamer.Splash"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- The TV launcher's: it lists the app with the application's banner. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Takes .nzb files other apps open or share (NzbIntents): reads each while the sender's
+             permission lasts, hands it to Import and finishes. Never http(s) links. Out of the
+             app's task and of Recents, so all it leaves behind is Import. -->
+        <activity
+            android:name=".OpenNzbActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/x-nzb" />
+            </intent-filter>
+            <!-- Android knows no type for .nzb, so a .nzb downloaded or copied to the device is
+                 typed application/octet-stream, and the Files app's Downloads and Recent views open
+                 it by a URI that doesn't name it (content://…/document/msf%3A1234): taken by its
+                 type, and turned down by its name, read from the provider before the file is, if it
+                 isn't a .nzb (NzbIntents.title). An intent typed */* matches this filter too. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+            <!-- File managers also send a .nzb as another type (application/xml) or with none at
+                 all: taken by its path. pathPattern's .* stops at the first dot it can, hence one
+                 pattern per number of dots; pathSuffix does it properly from Android 12. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathSuffix=".nzb" tools:targetApi="31" />
+                <data android:pathPattern=".*\\.nzb" />
+                <data android:pathPattern=".*\\..*\\.nzb" />
+                <data android:pathPattern=".*\\..*\\..*\\.nzb" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.nzb" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.nzb" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:pathSuffix=".nzb" tools:targetApi="31" />
+                <data android:pathPattern=".*\\.nzb" />
+                <data android:pathPattern=".*\\..*\\.nzb" />
+                <data android:pathPattern=".*\\..*\\..*\\.nzb" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\.nzb" />
+                <data android:pathPattern=".*\\..*\\..*\\..*\\..*\\.nzb" />
+            </intent-filter>
+            <!-- Shared: the name is checked once read, since a share carries the file only as EXTRA_STREAM. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/x-nzb" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+        </activity>
+
+        <!-- Picture-in-picture on phones and tablets: the player keeps it off on a TV (PictureInPicturePolicy). Lint looks
+             for setAutoEnterEnabled(true) as written, and says so on <application>, where it is ignored: the player sets it
+             as the play allows, true only while it plays. -->
+        <activity
+            android:name=".PlayerActivity"
+            android:exported="false"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape"
+            android:supportsPictureInPicture="true"
+            android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen" />
+
+        <!-- The phone serves a cast play's file while it plays on a Cast device (L85), from the tap until it ends, with its
+             media session's notification, lock screen and volume keys (L86, L87). Exported with Media3's action, as a
+             media session service is, so other apps' controllers can find it; with no cast play it gives them none, and
+             on a TV it never builds one (L67). -->
+        <service
+            android:name=".cast.CastService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback"
+            tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
+
+        <!-- A log shared from Settings › Logs: the app picked may read that one file, from cache/logs/ alone. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.logs"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/log_paths" />
+        </provider>
+    </application>
+</manifest>

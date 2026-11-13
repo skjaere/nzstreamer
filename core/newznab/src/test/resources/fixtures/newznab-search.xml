@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">
+<channel>
+  <title>Example Newznab</title>
+  <newznab:response offset="0" total="2"/>
+  <item>
+    <title>Harbor.Lights.S01E02.1080p.WEB-DL.DDP5.1.H.264-NTGRP</title>
+    <guid isPermaLink="true">https://indexer.example.org/details/a1b2c3d4</guid>
+    <link>https://indexer.example.org/getnzb/a1b2c3d4.nzb&amp;i=42&amp;r=TESTKEY123</link>
+    <pubDate>Sun, 11 Oct 2026 18:30:00 +0000</pubDate>
+    <category>TV &gt; HD</category>
+    <enclosure url="https://indexer.example.org/getnzb/a1b2c3d4.nzb&amp;i=42&amp;r=TESTKEY123" length="2147483648" type="application/x-nzb"/>
+    <newznab:attr name="category" value="5000"/>
+    <newznab:attr name="category" value="5040"/>
+    <newznab:attr name="size" value="2147483648"/>
+    <newznab:attr name="guid" value="a1b2c3d4"/>
+    <newznab:attr name="files" value="43"/>
+    <newznab:attr name="grabs" value="117"/>
+    <newznab:attr name="tvdbid" value="398712"/>
+    <newznab:attr name="season" value="S01"/>
+    <newznab:attr name="episode" value="E02"/>
+    <newznab:attr name="usenetdate" value="Sun, 11 Oct 2026 17:55:12 +0000"/>
+    <newznab:attr name="password" value="0"/>
+  </item>
+  <item>
+    <title>Harbor.Lights.S01E02.720p.HDTV.x264-SANDBAR</title>
+    <guid isPermaLink="true">https://indexer.example.org/details/e5f6a7b8</guid>
+    <link>https://indexer.example.org/getnzb/e5f6a7b8.nzb&amp;i=42&amp;r=TESTKEY123</link>
+    <pubDate>Sat, 10 Oct 2026 04:00:00 +0000</pubDate>
+    <newznab:attr name="category" value="5000"/>
+    <newznab:attr name="size" value="734003200"/>
+    <newznab:attr name="guid" value="e5f6a7b8"/>
+    <newznab:attr name="password" value="1"/>
+  </item>
+</channel>
+</rss>

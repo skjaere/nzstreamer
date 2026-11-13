@@ -1,0 +1,34 @@
+{
+  "tmdb_id": 900002,
+  "type": "tv",
+  "season": 1,
+  "episode": 2,
+  "intro": [
+    {
+      "start_ms": null,
+      "end_ms": 23000
+    }
+  ],
+  "recap": [
+    {
+      "start_ms": 25000,
+      "end_ms": 134000
+    }
+  ],
+  "credits": [
+    {
+      "start_ms": 2580000,
+      "end_ms": 2640000
+    },
+    {
+      "start_ms": 2652000,
+      "end_ms": null
+    }
+  ],
+  "preview": [
+    {
+      "start_ms": 2680000,
+      "end_ms": 2700000
+    }
+  ]
+}

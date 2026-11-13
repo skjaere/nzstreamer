@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:torznab="http://torznab.com/schemas/2015/feed">
+  <channel>
+    <atom:link href="http://jackett.home.lan:9117/" rel="self" type="application/rss+xml" />
+    <title>Example Tracker</title>
+    <description>Example Tracker</description>
+    <link>https://tracker.example.org/</link>
+    <language>en-US</language>
+    <category>search</category>
+    <!-- The hash in magneturl alone; the guid is the whole magnet, as Jackett fills a guid the site didn't give. -->
+    <item>
+      <title>The.Glass.Orchard.S02.1080p.WEB-DL.DDP5.1.H.264-KESTREL</title>
+      <guid>magnet:?xt=urn:btih:af7a87d87c99ef8f47b5802b4aa68052a98ca809&amp;dn=The.Glass.Orchard.S02.1080p.WEB-DL.DDP5.1.H.264-KESTREL&amp;tr=udp%3A%2F%2Ftracker.example.org%3A6969%2Fannounce&amp;tr=http%3A%2F%2Fannounce.example.net%2Fannounce</guid>
+      <jackettindexer id="exampletracker">Example Tracker</jackettindexer>
+      <type>public</type>
+      <comments>https://tracker.example.org/torrent/77/the-glass-orchard-s02</comments>
+      <pubDate>Thu, 29 Oct 2026 12:00:00 +0000</pubDate>
+      <size>9663676416</size>
+      <files>10</files>
+      <grabs>1543</grabs>
+      <description />
+      <link>magnet:?xt=urn:btih:af7a87d87c99ef8f47b5802b4aa68052a98ca809&amp;dn=The.Glass.Orchard.S02.1080p.WEB-DL.DDP5.1.H.264-KESTREL&amp;tr=udp%3A%2F%2Ftracker.example.org%3A6969%2Fannounce&amp;tr=http%3A%2F%2Fannounce.example.net%2Fannounce</link>
+      <category>5040</category>
+      <category>100005</category>
+      <enclosure url="magnet:?xt=urn:btih:af7a87d87c99ef8f47b5802b4aa68052a98ca809&amp;dn=The.Glass.Orchard.S02.1080p.WEB-DL.DDP5.1.H.264-KESTREL&amp;tr=udp%3A%2F%2Ftracker.example.org%3A6969%2Fannounce&amp;tr=http%3A%2F%2Fannounce.example.net%2Fannounce" length="9663676416" type="application/x-bittorrent" />
+      <torznab:attr name="category" value="5040" />
+      <torznab:attr name="category" value="100005" />
+      <torznab:attr name="seeders" value="88" />
+      <torznab:attr name="peers" value="101" />
+      <torznab:attr name="magneturl" value="magnet:?xt=urn:btih:af7a87d87c99ef8f47b5802b4aa68052a98ca809&amp;dn=The.Glass.Orchard.S02.1080p.WEB-DL.DDP5.1.H.264-KESTREL&amp;tr=udp%3A%2F%2Ftracker.example.org%3A6969%2Fannounce&amp;tr=http%3A%2F%2Fannounce.example.net%2Fannounce" />
+      <torznab:attr name="downloadvolumefactor" value="0" />
+      <torznab:attr name="uploadvolumefactor" value="1" />
+    </item>
+    <!-- A base32 hash in the magnet. -->
+    <item>
+      <title>The.Glass.Orchard.S02E05.720p.WEB.H264-QUARRY</title>
+      <guid>https://tracker.example.org/torrent/78/the-glass-orchard-s02e05</guid>
+      <type>public</type>
+      <pubDate>Thu, 29 Oct 2026 11:00:00 +0000</pubDate>
+      <size>812646400</size>
+      <files>1</files>
+      <grabs>96</grabs>
+      <link>magnet:?xt=urn:btih:RYBSUEWFFXCEH37XZZAD6OXP5XAQPVHL&amp;dn=The.Glass.Orchard.S02E05.720p.WEB.H264-QUARRY&amp;tr=udp%3A%2F%2Ftracker.example.org%3A6969%2Fannounce</link>
+      <category>5040</category>
+      <enclosure url="magnet:?xt=urn:btih:RYBSUEWFFXCEH37XZZAD6OXP5XAQPVHL&amp;dn=The.Glass.Orchard.S02E05.720p.WEB.H264-QUARRY&amp;tr=udp%3A%2F%2Ftracker.example.org%3A6969%2Fannounce" length="812646400" type="application/x-bittorrent" />
+      <torznab:attr name="seeders" value="9" />
+      <torznab:attr name="peers" value="11" />
+      <torznab:attr name="magneturl" value="magnet:?xt=urn:btih:RYBSUEWFFXCEH37XZZAD6OXP5XAQPVHL&amp;dn=The.Glass.Orchard.S02E05.720p.WEB.H264-QUARRY&amp;tr=udp%3A%2F%2Ftracker.example.org%3A6969%2Fannounce" />
+    </item>
+    <!-- A hybrid magnet, v2 hash first, in the enclosure alone (the link is a .torrent through Jackett). -->
+    <item>
+      <title>Quiet.Orbit.S02E05.1080p.WEB.H264-GRP</title>
+      <guid>https://tracker.example.org/torrent/79/quiet-orbit-s02e05</guid>
+      <type>public</type>
+      <pubDate>Thu, 29 Oct 2026 10:00:00 +0000</pubDate>
+      <size>1395864371</size>
+      <files>1</files>
+      <grabs>310</grabs>
+      <link>http://jackett.home.lan:9117/dl/exampletracker/?jackett_apikey=TESTKEY123&amp;path=Q2hhbmdlTWU&amp;file=Quiet.Orbit.S02E05</link>
+      <category>5040</category>
+      <enclosure url="magnet:?xt=urn:btmh:122009824131ed29543c3521a3c749080fab0aeda9654647cb70179beab3148613b5&amp;xt=urn:btih:4d59de26e786129d949fc9ebb40f115b1d69b1b7&amp;dn=Quiet.Orbit.S02E05.1080p.WEB.H264-GRP&amp;tr=udp%3A%2F%2Ftracker.example.org%3A6969%2Fannounce" length="1395864371" type="application/x-bittorrent" />
+      <torznab:attr name="seeders" value="41" />
+      <torznab:attr name="peers" value="44" />
+    </item>
+    <!-- The magnet in the link alone. -->
+    <item>
+      <title>Quiet.Orbit.S02E06.1080p.WEB.H264-GRP</title>
+      <guid>https://tracker.example.org/torrent/80/quiet-orbit-s02e06</guid>
+      <type>public</type>
+      <pubDate>Thu, 29 Oct 2026 09:00:00 +0000</pubDate>
+      <size>1395864371</size>
+      <link>magnet:?xt=urn:btih:6f0597cc034efa3d715b411dd3e5304ce1e4780e&amp;dn=Quiet.Orbit.S02E06.1080p.WEB.H264-GRP&amp;tr=udp%3A%2F%2Ftracker.example.org%3A6969%2Fannounce</link>
+      <category>5040</category>
+      <enclosure url="http://jackett.home.lan:9117/dl/exampletracker/?jackett_apikey=TESTKEY123&amp;path=T3RoZXJPbmU&amp;file=Quiet.Orbit.S02E06" length="1395864371" type="application/x-bittorrent" />
+      <torznab:attr name="seeders" value="40" />
+    </item>
+    <!-- The magnet in the guid alone, with the hash's xt as "xt.1" (BEP 9's numbered form). -->
+    <item>
+      <title>Quiet.Orbit.S02E07.1080p.WEB.H264-GRP</title>
+      <guid>magnet:?xt.1=urn%3Abtih%3Ad23dc5a7369b2192f83841063bc801d14ae03aa6&amp;dn=Quiet.Orbit.S02E07.1080p.WEB.H264-GRP&amp;tr=udp%3A%2F%2Ftracker.example.org%3A6969%2Fannounce</guid>
+      <type>public</type>
+      <pubDate>Thu, 29 Oct 2026 08:00:00 +0000</pubDate>
+      <size>1395864371</size>
+      <link>http://jackett.home.lan:9117/dl/exampletracker/?jackett_apikey=TESTKEY123&amp;path=Q3V0VGhpcw&amp;file=Quiet.Orbit.S02E07</link>
+      <category>5040</category>
+      <enclosure url="http://jackett.home.lan:9117/dl/exampletracker/?jackett_apikey=TESTKEY123&amp;path=Q3V0VGhpcw&amp;file=Quiet.Orbit.S02E07" length="1395864371" type="application/x-bittorrent" />
+    </item>
+    <!-- A tracker's download link with a passkey as the guid, as Jackett fills one; the hash in infohash. -->
+    <item>
+      <title>The.Glass.Orchard.2024.2160p.BluRay.REMUX.HEVC-KESTREL</title>
+      <guid>https://tracker.example.org/download/5?torrent_pass=0badc0de0badc0de0badc0de0badc0de</guid>
+      <type>public</type>
+      <pubDate>Wed, 28 Oct 2026 08:00:00 +0000</pubDate>
+      <size>53687091200</size>
+      <files>1</files>
+      <grabs>2</grabs>
+      <link>http://jackett.home.lan:9117/dl/exampletracker/?jackett_apikey=TESTKEY123&amp;path=UGFzc2tleQ&amp;file=The.Glass.Orchard.2024</link>
+      <category>2045</category>
+      <enclosure url="http://jackett.home.lan:9117/dl/exampletracker/?jackett_apikey=TESTKEY123&amp;path=UGFzc2tleQ&amp;file=The.Glass.Orchard.2024" length="53687091200" type="application/x-bittorrent" />
+      <torznab:attr name="infohash" value="6f0597cc034efa3d715b411dd3e5304ce1e47abc" />
+    </item>
+    <!-- A v2-only magnet: no v1 hash anywhere. -->
+    <item>
+      <title>Quiet.Orbit.S02E08.1080p.WEB.H265-VTWO</title>
+      <guid>https://tracker.example.org/torrent/82/quiet-orbit-s02e08</guid>
+      <type>public</type>
+      <pubDate>Wed, 28 Oct 2026 07:00:00 +0000</pubDate>
+      <size>1288490188</size>
+      <link>magnet:?xt=urn:btmh:122009824131ed29543c3521a3c749080fab0aeda9654647cb70179beab3148613b5&amp;dn=Quiet.Orbit.S02E08.1080p.WEB.H265-VTWO&amp;tr=udp%3A%2F%2Ftracker.example.org%3A6969%2Fannounce</link>
+      <category>5040</category>
+      <enclosure url="magnet:?xt=urn:btmh:122009824131ed29543c3521a3c749080fab0aeda9654647cb70179beab3148613b5&amp;dn=Quiet.Orbit.S02E08.1080p.WEB.H265-VTWO&amp;tr=udp%3A%2F%2Ftracker.example.org%3A6969%2Fannounce" length="1288490188" type="application/x-bittorrent" />
+      <torznab:attr name="magneturl" value="magnet:?xt=urn:btmh:122009824131ed29543c3521a3c749080fab0aeda9654647cb70179beab3148613b5&amp;dn=Quiet.Orbit.S02E08.1080p.WEB.H265-VTWO&amp;tr=udp%3A%2F%2Ftracker.example.org%3A6969%2Fannounce" />
+    </item>
+    <!-- A .torrent link and nothing else. -->
+    <item>
+      <title>Quiet.Orbit.S02E09.1080p.WEB.H264-NOHASH</title>
+      <guid>https://tracker.example.org/torrent/83/quiet-orbit-s02e09</guid>
+      <type>public</type>
+      <pubDate>Wed, 28 Oct 2026 06:00:00 +0000</pubDate>
+      <size>1395864371</size>
+      <link>http://jackett.home.lan:9117/dl/exampletracker/?jackett_apikey=TESTKEY123&amp;path=Tm9IYXNo&amp;file=Quiet.Orbit.S02E09</link>
+      <category>5040</category>
+      <enclosure url="http://jackett.home.lan:9117/dl/exampletracker/?jackett_apikey=TESTKEY123&amp;path=Tm9IYXNo&amp;file=Quiet.Orbit.S02E09" length="1395864371" type="application/x-bittorrent" />
+    </item>
+  </channel>
+</rss>

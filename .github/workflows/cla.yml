@@ -1,0 +1,63 @@
+# The contributor licence agreement (CLA.md, CONTRIBUTING.md): CLA Assistant Lite asks each contributor to sign once, by
+# a comment on a pull request, and keeps the signatures on the cla-signatures branch, which must exist before its first
+# run. It runs on pull_request_target with a write token, so it never checks out or runs a pull request's code:
+# tools/cla/check_workflow.py checks that, the permissions, the pin and the commit messages.
+name: CLA
+
+on:
+  # A pull request opened or pushed to. Not one closed or merged: with lock-pullrequest-aftermerge false the action would
+  # only check it again, and a stray comment or a red mark is all that could come of it.
+  pull_request_target:
+    types: [opened, synchronize]
+  issue_comment:
+    types: [created]
+
+# The four scopes the action's README asks for. Its pinned code never sets a commit status: it reports through this
+# job's own check run, so statuses: write goes unused. It stays so the set is the README's.
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  cla:
+    # A pull request's events, or a comment on a pull request that holds the sign sentence or recheck. contains(), not
+    # ==: the action trims a comment before it compares it, and an expression can't trim.
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event.issue.pull_request &&
+       (contains(github.event.comment.body, 'recheck') ||
+        contains(github.event.comment.body, 'I have read the CLA Document and I hereby sign the CLA')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the CLA signatures
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-document: https://github.com/skjaere/nzstreamer/blob/main/CLA.md
+          branch: cla-signatures
+          # The folder of CLA.md's version (v1 for Version 1.0): a new version starts a new record, as a signature
+          # stays with the version signed. tools/cla/check_workflow.py checks that they agree.
+          path-to-signatures: signatures/v1/cla.json
+          # Matches no one: no login or git name holds '<'. Where a commit's address is linked to no GitHub
+          # account, the action matches this list against the commit's git name, which anyone can set, and with
+          # no list it matches an empty name. So every committer signs.
+          allowlist: "<nobody>"
+          custom-pr-sign-comment: I have read the CLA Document and I hereby sign the CLA
+          custom-notsigned-prcomment: >-
+            Thank you for this pull request. Before it can be merged, $you need to sign the
+            [Contributor Licence Agreement](https://github.com/skjaere/nzstreamer/blob/main/CLA.md) once.
+            Read it, then post a new comment on this pull request that holds only the sentence below.
+            One signature covers later pull requests to this repository too.
+          custom-allsigned-prcomment: Everyone who committed to this pull request has signed the Contributor Licence Agreement.
+          create-file-commit-message: "chore: start the CLA signature record"
+          signed-commit-message: "chore: record a CLA signature"
+          signed-empty-commit-message: "chore: record a CLA signature"
+          lock-pullrequest-aftermerge: false

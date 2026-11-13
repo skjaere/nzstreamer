@@ -1,0 +1,279 @@
+# A release's APK: the beta at the release's own versionCode, built from the release's tag with the beta key, checked
+# as the site's publish script checks a beta, attached to the release's draft with its .sha256 and the licence files,
+# and the release then published with a licence footer in its notes.
+# release-please.yml calls it once it has made a release's draft. Run it by hand from main for a tag whose draft is
+# there, with publish off to look at the draft first. Nothing a pull request does can start it: it has no pull request
+# trigger, and its job runs in the release-signing environment, which holds the key's secrets and takes main alone. Every
+# run's ref is main, the tag being an input: a run from a tag would run that tag's copy of this file, so the environment
+# allows no tag, and the first step refuses any ref but main.
+# Values from the event reach the shell through env, never inside a run: script. The key lives in the runner's temp
+# folder for the build alone. Every action is pinned by its full commit id.
+name: release-apk
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      publish:
+        type: boolean
+        default: true
+    secrets:
+      BETA_KEYSTORE_BASE64:
+        required: true
+      BETA_STORE_PASSWORD:
+        required: true
+      BETA_KEY_ALIAS:
+        required: true
+      BETA_KEY_PASSWORD:
+        required: true
+      BETA_SCAN_CANARIES:
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release's tag, vMAJOR.MINOR.PATCH, whose draft release is there already
+        type: string
+        required: true
+      publish:
+        description: Publish the release once its APK is attached (off leaves the draft to look at)
+        type: boolean
+        default: true
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: release-signing
+    permissions:
+      contents: write
+    concurrency:
+      group: release-apk-${{ inputs.tag }}
+      cancel-in-progress: false
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      # Run from main only. A tag that is no version prints nowhere. A published release takes no new file, and a file
+      # already on the draft would stop the upload after the build: both are refused before it.
+      - name: Check the tag and its draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ $GITHUB_REF == refs/heads/main ]] ||
+            { echo "::error::Run it from main, giving the tag as its input: this run's ref is $GITHUB_REF"; exit 1; }
+          [[ $TAG =~ ^v(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]] && ((BASH_REMATCH[1] < 2100)) ||
+            { echo "::error::The tag must be vMAJOR.MINOR.PATCH, MAJOR under 2100 and MINOR and PATCH under 100"; exit 1; }
+          release=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft,assets --jq '[.isDraft, (.assets | length)] | @tsv') ||
+            { echo "::error::$TAG has no release: release-please makes its draft, or gh release create --draft makes one"; exit 1; }
+          read -r draft assets <<<"$release"
+          [[ $draft == true ]] || { echo "::error::$TAG's release is published already: it takes no new APK"; exit 1; }
+          [[ $assets == 0 ]] || { echo "::error::$TAG's draft holds files already: delete them from the draft first"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          submodules: true # third_party/rapidyenc
+          fetch-depth: 0 # the tag's commit must be on main
+          persist-credentials: false
+
+      # The release's own code, which no local beta takes: ((MAJOR * 100 + MINOR) * 100 + PATCH) * 100, as the build
+      # makes it from version.txt.
+      - name: Version, code and commit
+        id: v
+        run: |
+          version=${TAG#v}
+          [[ $(tr -d '[:space:]' <version.txt) == "$version" ]] || { echo "::error::version.txt at $TAG is not $version"; exit 1; }
+          [[ $version =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]
+          code=$((((BASH_REMATCH[1] * 100 + BASH_REMATCH[2]) * 100 + BASH_REMATCH[3]) * 100))
+          # The betas the site published before the first release took codes 1 to 8.
+          ((code > 8)) || { echo "::error::versionCode $code is not above the site's earlier betas"; exit 1; }
+          git merge-base --is-ancestor HEAD origin/main || { echo "::error::$TAG's commit is not on main"; exit 1; }
+          {
+            echo "version=$version"
+            echo "code=$code"
+            echo "commit=$(git rev-parse HEAD)"
+          } >>"$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK packages
+        run: |
+          sdkmanager=$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager
+          ndk=$(sed -n 's/^ndk = "\([0-9.]*\)"$/\1/p' gradle/libs.versions.toml)
+          [[ -n $ndk ]] || { echo "::error::gradle/libs.versions.toml names no NDK version"; exit 1; }
+          (yes || true) | "$sdkmanager" --licenses >/dev/null
+          "$sdkmanager" --install "platforms;android-36" "build-tools;35.0.0" "ndk;$ndk" "cmake;3.22.1" >/dev/null
+
+      # No cache: a signed release reads nothing another workflow's run could have written.
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-disabled: true
+          cache-provider: basic
+
+      # A secret the caller didn't pass arrives empty, with no error of its own.
+      - name: Check the key's secrets
+        env:
+          BETA_KEYSTORE_BASE64: ${{ secrets.BETA_KEYSTORE_BASE64 }}
+          BETA_STORE_PASSWORD: ${{ secrets.BETA_STORE_PASSWORD }}
+          BETA_KEY_ALIAS: ${{ secrets.BETA_KEY_ALIAS }}
+          BETA_KEY_PASSWORD: ${{ secrets.BETA_KEY_PASSWORD }}
+        run: |
+          empty=()
+          for name in BETA_KEYSTORE_BASE64 BETA_STORE_PASSWORD BETA_KEY_ALIAS BETA_KEY_PASSWORD; do
+            [[ -n ${!name} ]] || empty+=("$name")
+          done
+          ((${#empty[@]} == 0)) ||
+            { echo "::error::Empty: ${empty[*]}. They are the release-signing environment's secrets; a caller passes them with secrets: inherit"; exit 1; }
+
+      # The canaries (optional) are strings the APK and the notes must never carry: each value is masked before Gradle
+      # runs, and the build's secret check reads them from the file. The key and the canaries stay in the runner's temp
+      # folder. The draft's notes, release-please's changelog of commit subjects (a pull request's title among them), are
+      # looked at now, before the build, and again before the release is published.
+      - name: The key and the canaries into the runner's temp folder
+        id: key
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BETA_KEYSTORE_BASE64: ${{ secrets.BETA_KEYSTORE_BASE64 }}
+          BETA_SCAN_CANARIES: ${{ secrets.BETA_SCAN_CANARIES }}
+        run: |
+          umask 077
+          mkdir "$RUNNER_TEMP/beta"
+          printf '%s' "$BETA_KEYSTORE_BASE64" | base64 --decode >"$RUNNER_TEMP/beta/beta.p12"
+          python3 -I -B tools/release/canaries.py "$RUNNER_TEMP/beta/canaries.tsv"
+          if [[ -s $RUNNER_TEMP/beta/canaries.tsv ]]; then
+            echo "canaries=true" >>"$GITHUB_OUTPUT"
+            gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json body --jq .body >"$RUNNER_TEMP/beta/body.txt"
+            python3 -I -B tools/release/canaries.py --scan "$RUNNER_TEMP/beta/body.txt"
+          fi
+
+      # As the site's publish script refuses them: nothing may show debrid in this beta, give it dev settings, another
+      # key or local libraries, or point Google's artifacts at another host. One build, no daemon left after it, no cache
+      # read or written.
+      - name: Build beta ${{ steps.v.outputs.code }}, debrid hidden
+        env:
+          # Two malloc arenas, as in CI: the build's memory stays within a 7 GB runner.
+          MALLOC_ARENA_MAX: "2"
+          CODE: ${{ steps.v.outputs.code }}
+          CANARIES: ${{ steps.key.outputs.canaries }}
+          ORG_GRADLE_PROJECT_betaStoreFile: ${{ runner.temp }}/beta/beta.p12
+          ORG_GRADLE_PROJECT_betaStorePassword: ${{ secrets.BETA_STORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_betaKeyAlias: ${{ secrets.BETA_KEY_ALIAS }}
+          ORG_GRADLE_PROJECT_betaKeyPassword: ${{ secrets.BETA_KEY_PASSWORD }}
+        run: |
+          [[ ! -L local.properties && ! -e local.properties ]] || { echo "::error::The checkout holds a local.properties"; exit 1; }
+          names='withDebrid|hideDebrid|betaDevSettings|betaConnections|betaSigning|betaScanExtra|usenetLibsDir|googleMavenMirror'
+          for props in gradle.properties "${GRADLE_USER_HOME:-$HOME/.gradle}/gradle.properties"; do
+            ! grep -qE "^[[:space:]]*($names)[[:space:]]*[=:]" "$props" 2>/dev/null ||
+              { echo "::error::$props sets a debrid, beta, library or repository property"; exit 1; }
+          done
+          for name in ${names//|/ }; do
+            variable=ORG_GRADLE_PROJECT_$name
+            [[ -z ${!variable+set} ]] || { echo "::error::$variable is set"; exit 1; }
+          done
+          extra=()
+          if [[ $CANARIES == true ]]; then
+            extra=("-PbetaScanExtra=$RUNNER_TEMP/beta/canaries.tsv")
+          fi
+          ./gradlew --no-daemon --no-build-cache --no-configuration-cache \
+            -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8" --max-workers=2 \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.internal.http.socketTimeout=300000 -Dorg.gradle.internal.http.connectionTimeout=300000 \
+            -PbetaBuild="$CODE" -PbetaRelease=true -PexpectHideDebrid=true "${extra[@]}" \
+            :app:assembleBeta :app:testBetaUnitTest --tests '*HiddenBuildTest' --tests '*VersionCodeTest'
+
+      - name: Remove the key and the canaries
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/beta"
+
+      # Signed by the beta key alone (tools/beta-cert.sha256), the release's package, code and name, the secret check
+      # passed on these bytes, the two tests run in full. Stages the APK and its .sha256 for the upload.
+      - name: Check the APK
+        env:
+          CODE: ${{ steps.v.outputs.code }}
+          VERSION: ${{ steps.v.outputs.version }}
+          CANARIES: ${{ steps.key.outputs.canaries }}
+        run: |
+          flags=()
+          if [[ $CANARIES == true ]]; then
+            flags=(--canaries)
+          fi
+          bash tools/release/check-beta-apk.sh --digest-file tools/beta-cert.sha256 --code "$CODE" --version "$VERSION" \
+            --out "$RUNNER_TEMP/apk" "${flags[@]}"
+
+      # No --clobber: a file already there fails the upload, so bytes once attached are never replaced.
+      - name: Attach the APK and the licence files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          name=NZStreamer-Beta-$VERSION.apk
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" "$RUNNER_TEMP/apk/$name" "$RUNNER_TEMP/apk/$name.sha256" \
+            LICENSE.md THIRD_PARTY_NOTICES.md LICENSES/Apache-2.0.txt
+
+      # The licence footer: the files attached, and each usenet library's licence and notices at the commit its pinned
+      # version was built from. The notes pass the privacy scan before they are written. Editing a release whose tag is
+      # gone would make the tag again at another commit: the tag must be there, at the commit built.
+      - name: Add the licence footer to the notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.v.outputs.commit }}
+        run: |
+          notes=$RUNNER_TEMP/notes
+          mkdir "$notes"
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json body --jq .body >"$notes/body.txt"
+          python3 -I -B tools/release/release_notes.py pins gradle/libs.versions.toml >"$notes/pins.tsv"
+          while IFS=$'\t' read -r repo version; do
+            commit=$(gh api "repos/$repo/commits/$version" --jq .sha)
+            gh api "repos/$repo/contents/LICENSE.md?ref=$commit" --silent ||
+              { echo "::error::$repo has no LICENSE.md at $version"; exit 1; }
+            if gh api "repos/$repo/contents/THIRD_PARTY_NOTICES.md?ref=$commit" --silent 2>"$notes/error.txt"; then
+              notices=yes
+            elif grep -q 'HTTP 404' "$notes/error.txt"; then
+              notices=no
+            else
+              cat "$notes/error.txt" >&2
+              exit 1
+            fi
+            printf '%s\t%s\t%s\t%s\n' "$repo" "$version" "$commit" "$notices"
+          done <"$notes/pins.tsv" >"$notes/libraries.tsv"
+          python3 -I -B tools/release/release_notes.py notes "$notes/body.txt" "$notes/libraries.tsv" >"$notes/notes.txt"
+          python3 -I -B tools/release/release_notes.py scan "$notes/notes.txt"
+          ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha') ||
+            { echo "::error::$TAG is no tag in this repository: the release can't be edited"; exit 1; }
+          read -r type tagged <<<"$ref"
+          if [[ $type == tag ]]; then
+            tagged=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tagged" --jq .object.sha)
+          fi
+          [[ $tagged == "$COMMIT" ]] || { echo "::error::$TAG is at $tagged, not at the commit built, $COMMIT"; exit 1; }
+          gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes-file "$notes/notes.txt"
+
+      # The notes as they are now pass the privacy scan and hold none of the canaries, and the tag is still at the commit
+      # built.
+      - name: Publish the release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.v.outputs.commit }}
+          BETA_SCAN_CANARIES: ${{ secrets.BETA_SCAN_CANARIES }}
+        run: |
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json body --jq .body >"$RUNNER_TEMP/notes/now.txt"
+          python3 -I -B tools/release/release_notes.py scan "$RUNNER_TEMP/notes/now.txt"
+          python3 -I -B tools/release/canaries.py --scan "$RUNNER_TEMP/notes/now.txt"
+          ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha') ||
+            { echo "::error::$TAG is no tag in this repository: publishing would make it at another commit"; exit 1; }
+          read -r type tagged <<<"$ref"
+          if [[ $type == tag ]]; then
+            tagged=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tagged" --jq .object.sha)
+          fi
+          [[ $tagged == "$COMMIT" ]] || { echo "::error::$TAG is at $tagged, not at the commit built, $COMMIT"; exit 1; }
+          gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false

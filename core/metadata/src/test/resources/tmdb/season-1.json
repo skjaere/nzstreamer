@@ -1,0 +1,5 @@
+{"_id":"x","season_number":1,"name":"Season 1","overview":"","air_date":"2021-03-04","episodes":[
+ {"season_number":1,"episode_number":1,"name":"Pilot","overview":"It begins.","air_date":"2021-03-04","runtime":52,"still_path":"/e1.jpg","crew":[],"guest_stars":[]},
+ {"season_number":1,"episode_number":2,"name":"Low Water","overview":"","air_date":"2021-03-11","runtime":null,"still_path":null},
+ {"season_number":1,"episode_number":3,"name":"Episode 3","overview":"","air_date":"2021-03-18","runtime":44,"still_path":null}
+]}

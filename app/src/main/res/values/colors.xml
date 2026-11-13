@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ui/Theme.kt's AppColors.background, for what is drawn before Compose is: the splash, the window. -->
+    <color name="app_background">#FF0E0F12</color>
+</resources>

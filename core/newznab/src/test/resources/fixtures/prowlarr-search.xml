@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="1.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">
+  <channel>
+    <atom:link rel="self" type="application/rss+xml" />
+    <title>Prowlarr</title>
+    <item>
+      <title>The Quiet Orbit S02E10 1080p WEB H264-GRP</title>
+      <guid isPermaLink="true">https://upstream.example.com/details/9988776655</guid>
+      <prowlarrindexer id="3" type="private">Upstream Example</prowlarrindexer>
+      <comments>https://upstream.example.com/details/9988776655</comments>
+      <pubDate>Fri, 09 Oct 2026 20:00:00 GMT</pubDate>
+      <size>1610612736</size>
+      <link>http://prowlarr.local:9696/3/download?apikey=TESTKEY123&amp;link=Q2hhbmdlTWU&amp;file=The+Quiet+Orbit+S02E10</link>
+      <category>5000</category>
+      <category>100040</category>
+      <enclosure url="http://prowlarr.local:9696/3/download?apikey=TESTKEY123&amp;link=Q2hhbmdlTWU&amp;file=The+Quiet+Orbit+S02E10" length="1610612736" type="application/x-nzb" />
+      <newznab:attr name="category" value="5000" />
+      <newznab:attr name="category" value="100040" />
+      <newznab:attr name="size" value="1610612736" />
+      <newznab:attr name="tvdbid" value="401234" />
+      <newznab:attr name="tvmazeid" value="65432" />
+      <newznab:attr name="imdb" value="tt7654321" />
+      <newznab:attr name="grabs" value="12" />
+    </item>
+  </channel>
+</rss>

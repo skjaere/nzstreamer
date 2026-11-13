@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The beta installs beside the regular app (applicationIdSuffix .beta), so it says which it is. -->
+    <string name="app_name">NZStreamer Beta</string>
+</resources>

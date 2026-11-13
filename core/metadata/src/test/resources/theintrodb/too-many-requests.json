@@ -1,0 +1,5 @@
+{
+  "error": "Usage limit exceeded",
+  "code": "usage_limit_exceeded",
+  "retry_after": "8.4 hours"
+}

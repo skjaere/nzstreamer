@@ -1,0 +1,16 @@
+{
+  "tmdb_id": 900002,
+  "type": "tv",
+  "season": 1,
+  "episode": 1,
+  "intro": [
+    {
+      "start_ms": 30000,
+      "end_ms": 90000
+    },
+    {
+      "start_ms": 120000,
+      "end_ms": 150000
+    }
+  ]
+}

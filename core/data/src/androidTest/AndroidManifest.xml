@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- For the test APK alone: core:data has no manifest of its own, and without these the link's device tests
+     (LinkPlatformDeviceTest) would fail opening a socket with EACCES, or taking the multicast lock mDNS needs. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- The pair run's TV half asks for a Wi-Fi network (LinkPlatformDeviceTest.holdWifi). -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+</manifest>

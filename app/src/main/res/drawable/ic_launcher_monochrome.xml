@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Made by tools/brand/generate.py: change the generator, not this file. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M38.17,32 L76.17,54 L38.17,76 L38.17,64 L55.27,64 L55.27,60 L38.17,60 L38.17,48 L55.27,48 L55.27,44 L38.17,44 Z" />
+</vector>

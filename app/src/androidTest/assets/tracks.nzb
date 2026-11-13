@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">
+<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
+  <file poster="seed@mock" date="1791997192" subject="[1/1] - &quot;tracks.mkv&quot; yEnc (1/8)">
+    <groups>
+      <group>alt.binaries.test</group>
+    </groups>
+    <segments>
+      <segment bytes="103526" number="1">seed-df3160e7-0-1@mock</segment>
+      <segment bytes="103492" number="2">seed-df3160e7-0-2@mock</segment>
+      <segment bytes="103582" number="3">seed-df3160e7-0-3@mock</segment>
+      <segment bytes="103540" number="4">seed-df3160e7-0-4@mock</segment>
+      <segment bytes="103535" number="5">seed-df3160e7-0-5@mock</segment>
+      <segment bytes="103496" number="6">seed-df3160e7-0-6@mock</segment>
+      <segment bytes="103504" number="7">seed-df3160e7-0-7@mock</segment>
+      <segment bytes="68383" number="8">seed-df3160e7-0-8@mock</segment>
+    </segments>
+  </file>
+</nzb>

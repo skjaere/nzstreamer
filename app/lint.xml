@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- The adaptive icons sit in mipmap-anydpi-v26, where lint finds the version qualifier
+         needless at minSdk 26: in mipmap-anydpi they would be said to hide the legacy PNGs beside
+         them (IconXmlAndPng), which tools/brand makes for tools that don't take adaptive icons. -->
+    <issue id="ObsoleteSdkInt">
+        <ignore path="src/main/res/mipmap-anydpi-v26" />
+    </issue>
+</lint>

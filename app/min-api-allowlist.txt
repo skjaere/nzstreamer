@@ -1,0 +1,4 @@
+# Uses of JDK APIs above minSdk that :app:checkMinApi accepts, one per line:
+#   <referencing class or class.method> <reference>     (as checkMinApi prints them)
+# Only for uses that cannot run below the API level, e.g. behind a Build.VERSION.SDK_INT check.
+# Say why above each entry.

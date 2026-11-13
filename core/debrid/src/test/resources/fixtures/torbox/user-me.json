@@ -1,0 +1,23 @@
+{
+  "success": true,
+  "error": null,
+  "detail": "User data retrieved successfully.",
+  "data": {
+    "id": 4242,
+    "auth_id": "00000000-0000-4000-8000-0000000000bb",
+    "created_at": "2025-03-02T09:14:11Z",
+    "updated_at": "2026-10-30T18:01:44Z",
+    "plan": 3,
+    "total_downloaded": 1832,
+    "customer": "cus_INVENTED42",
+    "server": 12,
+    "is_subscribed": true,
+    "premium_expires_at": "2027-01-12T00:00:00Z",
+    "cooldown_until": "2026-11-01T00:00:00Z",
+    "email": "quay.viewer@example.org",
+    "user_referral": "00000000-0000-4000-8000-000000000000",
+    "base_email": "quay.viewer@example.org",
+    "total_bytes_downloaded": 912345678901,
+    "settings": {"seed_torrents": 3, "allow_zipped": false, "a_field_from_later": [1, 2]}
+  }
+}

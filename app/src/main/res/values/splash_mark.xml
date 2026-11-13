@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Made by tools/brand/generate.py: change the generator, not this file. -->
+<resources>
+    <!-- How long drawable-v31/splash_mark.xml animates: the splash theme's windowSplashScreenAnimationDuration. -->
+    <integer name="splash_mark_duration">600</integer>
+</resources>

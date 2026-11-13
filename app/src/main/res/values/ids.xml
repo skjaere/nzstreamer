@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The player's moment label, found by the device tests while a held key keeps it from being a live region. -->
+    <item name="moment_label" type="id" />
+    <!-- The side mark a double-tap at a side of the picture shows (play/SideMark.kt): its pill, how far, and where to. -->
+    <item name="side_mark" type="id" />
+    <item name="side_mark_count" type="id" />
+    <item name="side_mark_time" type="id" />
+</resources>

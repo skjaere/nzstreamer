@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">
+<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
+  <file poster="seed@mock" date="1791985721" subject="[1/1] - &quot;chapters.mkv&quot; yEnc (1/7)">
+    <groups>
+      <group>alt.binaries.test</group>
+    </groups>
+    <segments>
+      <segment bytes="103196" number="1">seed-fe2c646e-0-1@mock</segment>
+      <segment bytes="103126" number="2">seed-fe2c646e-0-2@mock</segment>
+      <segment bytes="103111" number="3">seed-fe2c646e-0-3@mock</segment>
+      <segment bytes="103016" number="4">seed-fe2c646e-0-4@mock</segment>
+      <segment bytes="103012" number="5">seed-fe2c646e-0-5@mock</segment>
+      <segment bytes="103106" number="6">seed-fe2c646e-0-6@mock</segment>
+      <segment bytes="92762" number="7">seed-fe2c646e-0-7@mock</segment>
+    </segments>
+  </file>
+</nzb>

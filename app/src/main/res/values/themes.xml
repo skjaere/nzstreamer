@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- MainActivity's once it has started: the platform's, on the app's background, which the window
+         shows wherever Compose draws nothing yet (Material's grey otherwise). -->
+    <style name="Theme.NZStreamer" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/app_background</item>
+    </style>
+
+    <!-- MainActivity's as it starts, until installSplashScreen() swaps in Theme.NZStreamer: the mark on
+         the app's background, animated on Android 12+ (drawable-v31/splash_mark.xml) and still before.
+         Light bar icons on the dark splash, whatever the system's theme. -->
+    <style name="Theme.NZStreamer.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/app_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_mark</item>
+        <item name="windowSplashScreenAnimationDuration">@integer/splash_mark_duration</item>
+        <item name="postSplashScreenTheme">@style/Theme.NZStreamer</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">false</item>
+    </style>
+</resources>

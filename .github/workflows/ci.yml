@@ -1,0 +1,142 @@
+# CI, on every push to main and every pull request: the public privacy scan (on a push, also who made each pushed
+# commit), the Python tools' tests and the CLA workflow's check, ./gradlew check, and a beta built as the release
+# workflow builds one, signed with a throwaway key. It holds no secret, and its token only reads.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A pull request's newer push replaces its run. Every push to main runs to its end: the identity check reads the commits
+# since the push's old tip, so a cancelled run would leave its commits unchecked.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.ref) || format('ci-push-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    # glibc's malloc keeps an arena for each of the Gradle daemon's busy threads. Two arenas took the daemon of a
+    # check running every task with these flags from 5.4 to 4.6 GiB, and the build's processes from 6.6 to 5.7 GiB
+    # together, in the same time: room on a private repository's 7 GB runner. Its heap and Metaspace were the same.
+    env:
+      MALLOC_ARENA_MAX: "2"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true # third_party/rapidyenc
+          fetch-depth: 0 # the identity check reads the pushed commits
+          persist-credentials: false
+
+      # tools/privacy-scan.sh, as the maintainer's pre-push check runs it: the tree, and on a push each commit since the
+      # push's old tip, a merge's other parents' too.
+      - name: Privacy scan
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [[ $EVENT != push ]]; then
+            bash tools/privacy-scan.sh HEAD
+            exit
+          fi
+          [[ $BEFORE =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || { echo "::error::The push's old tip is no commit id"; exit 1; }
+          since=$BEFORE
+          # A new branch has no old tip (all zeros). After a forced push the old tip may be gone: then every commit is
+          # checked.
+          if [[ ! $since =~ ^0+$ ]] && ! git cat-file -e "$since^{commit}" 2>/dev/null; then
+            echo "::notice::The push's old tip is not in the history: checking every commit"
+            since=0000000000000000000000000000000000000000
+          fi
+          bash tools/privacy-scan.sh HEAD --since "$since"
+
+      - name: Python tools' tests and the CLA workflow's check
+        run: |
+          failed=0
+          for dir in tools/pgs tools/dovi tools/stream-bench tools/privacy tools/cla tools/release; do
+            echo "::group::$dir"
+            python3 -I -B -m unittest discover -s "$dir" -p 'test_*.py' || failed=1
+            echo "::endgroup::"
+          done
+          python3 -I -B tools/cla/check_workflow.py || failed=1
+          exit "$failed"
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # The NDK the version catalog names, the CMake native/rapidyenc asks for, and build-tools 35.0.0 (AGP 8.13's), whose
+      # dexdump the app's checks run.
+      - name: Android SDK packages
+        run: |
+          sdkmanager=$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager
+          ndk=$(sed -n 's/^ndk = "\([0-9.]*\)"$/\1/p' gradle/libs.versions.toml)
+          [[ -n $ndk ]] || { echo "::error::gradle/libs.versions.toml names no NDK version"; exit 1; }
+          (yes || true) | "$sdkmanager" --licenses >/dev/null
+          "$sdkmanager" --install "platforms;android-36" "build-tools;35.0.0" "ndk;$ndk" "cmake;3.22.1" >/dev/null
+
+      # The open-source cache, not the action's default commercial one. Only a run on main writes it.
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-provider: basic
+
+      # A private repository's runner has 7 GB: one Gradle daemon of 3 GB, two workers, and the Kotlin compiler inside
+      # the daemon rather than a daemon of its own. JitPack can be slow to answer: longer HTTP timeouts.
+      - name: Gradle check
+        run: |
+          ./gradlew check --continue \
+            -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8" --max-workers=2 \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.internal.http.socketTimeout=300000 -Dorg.gradle.internal.http.connectionTimeout=300000
+
+      # The release's own beta (version.txt's code, -PbetaRelease=true), built as release-apk.yml builds it but signed with
+      # a key made here and dropped after: debrid hidden, HiddenBuildTest and VersionCodeTest run in full, and the APK
+      # passes the release's checks against this key's certificate.
+      - name: A beta as the release builds it, with a throwaway key
+        run: |
+          umask 077
+          dir=$RUNNER_TEMP/throwaway-beta
+          mkdir "$dir"
+          version=$(tr -d '[:space:]' <version.txt)
+          [[ $version =~ ^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]] ||
+            { echo "::error::version.txt holds no MAJOR.MINOR.PATCH"; exit 1; }
+          code=$((((BASH_REMATCH[1] * 100 + BASH_REMATCH[2]) * 100 + BASH_REMATCH[3]) * 100))
+          THROWAWAY_PASSWORD=$(openssl rand -hex 24)
+          export THROWAWAY_PASSWORD
+          keytool -genkeypair -noprompt -storetype PKCS12 -keystore "$dir/beta.p12" -storepass:env THROWAWAY_PASSWORD \
+            -alias beta -keyalg RSA -keysize 2048 -validity 2 -dname "CN=Throwaway CI key"
+          keytool -exportcert -keystore "$dir/beta.p12" -storepass:env THROWAWAY_PASSWORD -alias beta |
+            sha256sum | cut -d' ' -f1 >"$dir/cert.sha256"
+          # The key as the release workflow gives it: the four beta* properties, from the environment.
+          export ORG_GRADLE_PROJECT_betaStoreFile=$dir/beta.p12 ORG_GRADLE_PROJECT_betaKeyAlias=beta
+          export ORG_GRADLE_PROJECT_betaStorePassword=$THROWAWAY_PASSWORD ORG_GRADLE_PROJECT_betaKeyPassword=$THROWAWAY_PASSWORD
+          ./gradlew --no-configuration-cache \
+            -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8" --max-workers=2 \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.internal.http.socketTimeout=300000 -Dorg.gradle.internal.http.connectionTimeout=300000 \
+            -PbetaBuild="$code" -PbetaRelease=true -PexpectHideDebrid=true \
+            :app:assembleBeta :app:testBetaUnitTest --tests '*HiddenBuildTest' --tests '*VersionCodeTest'
+          bash tools/release/check-beta-apk.sh --digest-file "$dir/cert.sha256" --code "$code" --version "$version" \
+            --out "$dir/apk"
+
+      - name: Remove the throwaway key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/throwaway-beta"
+
+      - name: Upload the reports
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reports
+          path: "**/build/reports/"
+          if-no-files-found: ignore
+          retention-days: 14

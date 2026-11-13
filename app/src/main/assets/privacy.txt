@@ -1,0 +1,43 @@
+NZStreamer has no analytics, no ads and no server of its own. What leaves this phone goes to your own Usenet providers and indexers, [debrid]to your own torrent indexers and debrid services, [/debrid]to TMDB with your own key, to TheIntroDB while its switch is on, and to Google while its Cast software runs.
+
+## Your providers and indexers
+
+The app sends your searches to the indexers you add, and asks your Usenet providers for the parts of what you play. It comes with none set up. Their own terms apply.
+
+[debrid]## Your torrent indexers and debrid services
+
+The app sends your searches to the torrent indexers you add. It sends your debrid services the info hashes of the torrents they find, to ask which they have cached, and for what you play asks them for the file and a link to it. Some services keep what you play in your account’s list, as their own sites do. From a TorBox account the app removes the torrents it added, a couple of minutes after you stop playing (or the next time the app starts), unless you turn off Remove after playing; it removes nothing else. Only the hash is sent, never a torrent file, its trackers or which indexer found it. It comes with none set up. Their own terms apply.
+
+[/debrid]## TMDB
+
+With your own TMDB key, the app sends TMDB the words you search for, the shows and films it looks up, and your language. In the beta builds, the lists of titles to browse are asked of TMDB with your country and time zone, and with the genres or services you filter by. TMDB sees your internet address. Posters and stills come from image.tmdb.org.
+
+## TheIntroDB
+
+Only while its switch is on (it starts off): when an episode plays, its TMDB id, season and episode, and the file’s length. TheIntroDB keeps internet addresses for up to 30 days.
+
+## Voice search
+
+Voice search uses your device’s speech recognition service. The app itself records nothing.
+
+## Set up with your phone (on a TV)
+
+The TV serves a one-time form on your home network, unencrypted, behind a single-use code.
+
+## Play on TV
+
+Your phone and your TV talk directly on your home network, encrypted, and only after you pair them by matching numbers. They exchange what to play, what is playing and where it stopped, for plays the phone started. Each device keeps its own providers, indexers and keys; none cross.
+
+## Casting to Google Cast devices
+
+NZStreamer is Google Cast-enabled. To find and control Chromecasts and TVs with Google Cast, it uses Google’s Cast software from Google Play services. That software starts only after you choose “Look for Cast devices” in the app, and from then on each time you open the list of devices to play on. While it runs, it keeps records on your phone about finding Cast devices and about cast sessions, about your phone (such as its model and Android version) and about this app, and sends them to Google LLC, also while the app is closed. They reach Google from your internet address. Google says the records hold no identifiers that point to you and are kept for a short time. Neither you nor we can stop what it sends while it runs, or have it deleted. You can stop it starting again in Settings › Playback › Google Cast; that takes effect the next time the app starts, and records already kept on your phone may still be sent. Google’s privacy policy applies: policies.google.com/privacy.
+
+While you cast, your phone sends the video to the Cast device over your home network, unencrypted, at a one-time address. Other devices on your network can see that address and the title. Once the Cast device asks for the video, the phone sends it to no other device. The title and poster go to the Cast device, which fetches the poster from TMDB. To choose releases the device can play, the app reads the device’s model from your network and keeps what it learns on your phone. Google’s software on the Cast device may report its own use to Google. Other phones on your network may show what is playing and offer controls.
+
+## On this device
+
+Your settings, your library and what the app learns about your Cast devices stay on this device. Android’s transfer to a new phone may copy them, but never your passwords, keys or TV pairings. Passwords and keys are stored encrypted, the app makes no cloud backups, and logs leave the device only when you share them from Settings › Logs.
+
+## This website
+
+nzstreamer.app is served by Cloudflare, which sees your internet address when you open a page or download the beta. We keep no logs of our own and set no cookies or analytics on it.

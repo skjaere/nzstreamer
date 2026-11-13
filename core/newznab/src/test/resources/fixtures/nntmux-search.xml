@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">
+  <channel>
+    <atom:link href="https://nntmux.example.net/api" rel="self" type="application/rss+xml"/>
+    <title>NNTmux Example</title>
+    <newznab:apilimits apicurrent="142" apimax="1000" grabcurrent="7" grabmax="100" apioldesttime="" graboldesttime=""/>
+    <newznab:response offset="0" total="1"/>
+    <item>
+      <title>Copper.Crown.2019.German.DL.1080p.BluRay.x264-GRP</title>
+      <guid isPermaLink="true">https://nntmux.example.net/details/0f1e2d3c4b5a</guid>
+      <link>https://nntmux.example.net/getnzb?id=0f1e2d3c4b5a.nzb&amp;r=TESTKEY123</link>
+      <comments>https://nntmux.example.net/details/0f1e2d3c4b5a#comments</comments>
+      <pubDate>Tue, 06 Oct 2026 09:12:44 +0200</pubDate>
+      <category>Movies &gt; HD</category>
+      <enclosure url="https://nntmux.example.net/getnzb?id=0f1e2d3c4b5a.nzb&amp;r=TESTKEY123" length="9876543210" type="application/x-nzb"/>
+      <newznab:attr name="category" value="2000"/>
+      <newznab:attr name="category" value="2040"/>
+      <newznab:attr name="size" value="9876543210"/>
+      <newznab:attr name="guid" value="0f1e2d3c4b5a"/>
+      <newznab:attr name="imdb" value="1234567"/>
+      <newznab:attr name="tmdbid" value="555001"/>
+      <newznab:attr name="coverurl" value="https://nntmux.example.net/covers/movies/1234567-cover.jpg"/>
+      <newznab:attr name="video" value="AVC"/>
+      <newznab:attr name="resolution" value="1920x800"/>
+      <newznab:attr name="audio" value="AC-3"/>
+      <newznab:attr name="audio" value="DTS-HD MA"/>
+      <newznab:attr name="language" value="German, English"/>
+      <newznab:attr name="subs" value="German"/>
+      <newznab:attr name="grabs" value="1203"/>
+      <newznab:attr name="usenetdate" value="Mon, 05 Oct 2026 22:01:00 +0200"/>
+    </item>
+  </channel>
+</rss>

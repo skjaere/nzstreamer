@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The cast's notification and status-bar icon (L86, CsPhoneNotification): NZStreamer's mark alone, from
+     ic_launcher_monochrome.xml's path, centred in a square of its own size. Android tints it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="54"
+    android:viewportHeight="54">
+    <group
+        android:translateX="-30.17"
+        android:translateY="-27">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M38.17,32 L76.17,54 L38.17,76 L38.17,64 L55.27,64 L55.27,60 L38.17,60 L38.17,48 L55.27,48 L55.27,44 L38.17,44 Z" />
+    </group>
+</vector>

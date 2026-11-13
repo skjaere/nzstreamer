@@ -1,0 +1,12 @@
+{
+  "status": "success",
+  "location": "https://cdn-12.example.net/dl/7b20/The.Glass.Orchard.S02.1080p.WEB-DL.H.264-KESTREL.zip?sig=ZIPSECRET",
+  "filename": "The.Glass.Orchard.S02.1080p.WEB-DL.H.264-KESTREL",
+  "filesize": 4435476481,
+  "content": [
+    {"path": "The.Glass.Orchard.S02.1080p.WEB-DL.H.264-KESTREL/Sample/sample.mkv", "size": 31457280, "link": "https://cdn-12.example.net/dl/a1/sample.mkv?sig=LINKSECRET00", "stream_link": null, "transcode_status": "not_applicable"},
+    {"path": "The.Glass.Orchard.S02.1080p.WEB-DL.H.264-KESTREL/The.Glass.Orchard.S02E01.1080p.WEB-DL.H.264-KESTREL.mkv", "size": 1468006400, "link": "https://cdn-12.example.net/dl/a2/The.Glass.Orchard.S02E01.mkv?sig=LINKSECRET01", "stream_link": "https://cdn-12.example.net/s/a2.m3u8", "transcode_status": "finished"},
+    {"path": "The.Glass.Orchard.S02.1080p.WEB-DL.H.264-KESTREL/The.Glass.Orchard.S02E02.1080p.WEB-DL.H.264-KESTREL.mkv", "size": 1468006401, "link": "https://cdn-12.example.net/dl/a3/The.Glass.Orchard.S02E02.mkv?sig=LINKSECRET02"},
+    {"path": "The.Glass.Orchard.S02.1080p.WEB-DL.H.264-KESTREL/The.Glass.Orchard.S02E03.1080p.WEB-DL.H.264-KESTREL.mkv", "size": 1468006402, "link": "https://cdn-12.example.net/dl/a4/The.Glass.Orchard.S02E03.mkv?sig=LINKSECRET03", "transcode_status": 7}
+  ]
+}

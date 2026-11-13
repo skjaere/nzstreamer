@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="1.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">
+  <channel>
+    <atom:link rel="self" type="application/rss+xml" />
+    <title>Prowlarr</title>
+    <item>
+      <title>The Quiet Orbit S02E11 1080p WEB H264-GRP</title>
+      <guid isPermaLink="true">https://indexer.example/details.php?guid=3f2b9c0d1e4a5b6c7d8e9f0a1b2c3d4e</guid>
+      <pubDate>Fri, 16 Oct 2026 20:00:00 GMT</pubDate>
+      <size>1610612736</size>
+      <link>http://prowlarr.local:9696/5/download?apikey=TESTKEY123&amp;link=R2Vla0E&amp;file=The+Quiet+Orbit+S02E11</link>
+      <category>5040</category>
+    </item>
+    <item>
+      <title>The Quiet Orbit S02E11 2160p WEB H265-GRP</title>
+      <guid isPermaLink="true">https://indexer.example/details.php?guid=a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4</guid>
+      <pubDate>Fri, 16 Oct 2026 20:05:00 GMT</pubDate>
+      <size>4294967296</size>
+      <link>http://prowlarr.local:9696/5/download?apikey=TESTKEY123&amp;link=R2Vla0I&amp;file=The+Quiet+Orbit+S02E11</link>
+      <category>5045</category>
+    </item>
+    <item>
+      <title>The Quiet Orbit S02E11 720p HDTV x264-SANDBAR</title>
+      <guid isPermaLink="true">https://indexer.example/details.php?cat=5040&amp;id=42</guid>
+      <pubDate>Fri, 16 Oct 2026 21:00:00 GMT</pubDate>
+      <size>734003200</size>
+      <link>http://prowlarr.local:9696/6/download?apikey=TESTKEY123&amp;link=SWQ0Mg&amp;file=The+Quiet+Orbit+S02E11</link>
+      <category>5030</category>
+    </item>
+    <item>
+      <title>The Quiet Orbit S02E11 1080p WEB-DL DDP5.1 H.264-NTGRP</title>
+      <guid isPermaLink="true">https://upstream.example.com/details/9988776655/</guid>
+      <pubDate>Fri, 16 Oct 2026 21:30:00 GMT</pubDate>
+      <size>2147483648</size>
+      <link>http://prowlarr.local:9696/3/download?apikey=TESTKEY123&amp;link=UGF0aA&amp;file=The+Quiet+Orbit+S02E11</link>
+      <category>5040</category>
+    </item>
+    <item>
+      <title>The Quiet Orbit S02E11 480p WEB x264-XYZ</title>
+      <guid isPermaLink="true">https://other.example/view.php?release=77&amp;r=TESTKEY123</guid>
+      <pubDate>Fri, 16 Oct 2026 22:00:00 GMT</pubDate>
+      <size>367001600</size>
+      <link>http://prowlarr.local:9696/7/download?apikey=TESTKEY123&amp;link=T3BhcXVl&amp;file=The+Quiet+Orbit+S02E11</link>
+      <category>5030</category>
+    </item>
+    <item>
+      <title>The Quiet Orbit S02E11 1080p AMZN WEB-DL DDP5.1 H.264-SKERRY</title>
+      <guid isPermaLink="false">b7e1f0c2</guid>
+      <pubDate>Fri, 16 Oct 2026 22:30:00 GMT</pubDate>
+      <size>2362232012</size>
+      <link>http://prowlarr.local:9696/8/download?apikey=TESTKEY123&amp;link=UGxhaW4&amp;file=The+Quiet+Orbit+S02E11</link>
+      <category>5040</category>
+    </item>
+  </channel>
+</rss>

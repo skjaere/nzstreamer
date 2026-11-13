@@ -1,0 +1,49 @@
+build/
+.gradle/
+.kotlin/
+.cxx/
+.idea/
+*.iml
+local.properties
+captures/
+.externalNativeBuild/
+*.swp
+*.swo
+# Python bytecode, written when a tool or its test is imported.
+__pycache__/
+*.pyc
+# The private notes and ops scripts: a repo of their own, nested here.
+/docs/
+# Local tool folders.
+.claude/
+.vscode/
+.fleet/
+.DS_Store
+# The site tool's cache.
+.wrangler/
+# Keys and secrets. Only the test TLS keys are tracked.
+*.jks
+*.keystore
+*.p12
+!app/src/androidTest/assets/tls-*.p12
+*.pfx
+*.pem
+*.key
+*.der
+*signing*.properties
+.env
+.env.*
+google-services.json
+id_rsa*
+id_ed25519*
+id_ecdsa*
+.netrc
+# Build products and captures outside build/.
+*.apk
+*.aab
+*.idsig
+*.hprof
+*.trace
+*.perfetto-trace
+perf.data*
+*.log

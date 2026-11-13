@@ -1,0 +1,9 @@
+{
+  "status": "success",
+  "customer_id": 900000042,
+  "premium_until": 1799712000,
+  "limit_used": 0.0213,
+  "space_used": 104857600,
+  "booster_points": 0,
+  "a_field_from_later": {"x": [1, 2]}
+}

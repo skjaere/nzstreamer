@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<issues format="6" by="lint 8.13.2" type="baseline" client="gradle" dependencies="false" name="AGP (8.13.2)" variant="all" version="8.13.2">
+
+    <issue
+        id="NonObservableLocale"
+        message="Reading locale in a non-observable way in a composable function"
+        errorLine1="                val device = Locale.getDefault().toLanguageTag()"
+        errorLine2="                             ~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/settings/MetadataScreen.kt"
+            line="138"
+            column="30"/>
+    </issue>
+
+    <issue
+        id="RestrictedApi"
+        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`nzstreamer`)"
+        errorLine1="    override fun dispatchKeyEvent(event: KeyEvent): Boolean {"
+        errorLine2="                 ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/PlayerActivity.kt"
+            line="986"
+            column="18"/>
+    </issue>
+
+    <issue
+        id="RestrictedApi"
+        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`nzstreamer`)"
+        errorLine1="            failure != null -> super.dispatchKeyEvent(event)"
+        errorLine2="                                     ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/PlayerActivity.kt"
+            line="1000"
+            column="38"/>
+    </issue>
+
+    <issue
+        id="RestrictedApi"
+        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`nzstreamer`)"
+        errorLine1="            failure != null -> super.dispatchKeyEvent(event)"
+        errorLine2="                                                      ~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/PlayerActivity.kt"
+            line="1000"
+            column="55"/>
+    </issue>
+
+    <issue
+        id="RestrictedApi"
+        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`nzstreamer`)"
+        errorLine1="            sheetShown -> super.dispatchKeyEvent(event) || sheetMediaKey(event)"
+        errorLine2="                                ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/PlayerActivity.kt"
+            line="1001"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="RestrictedApi"
+        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`nzstreamer`)"
+        errorLine1="            sheetShown -> super.dispatchKeyEvent(event) || sheetMediaKey(event)"
+        errorLine2="                                                 ~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/PlayerActivity.kt"
+            line="1001"
+            column="50"/>
+    </issue>
+
+    <issue
+        id="RestrictedApi"
+        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`nzstreamer`)"
+        errorLine1="            currentFocus == null || playerView.hasFocus() -> playerView.dispatchKeyEvent(event) || super.dispatchKeyEvent(event)"
+        errorLine2="                                                                                                         ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/PlayerActivity.kt"
+            line="1002"
+            column="106"/>
+    </issue>
+
+    <issue
+        id="RestrictedApi"
+        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`nzstreamer`)"
+        errorLine1="            currentFocus == null || playerView.hasFocus() -> playerView.dispatchKeyEvent(event) || super.dispatchKeyEvent(event)"
+        errorLine2="                                                                                                                          ~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/PlayerActivity.kt"
+            line="1002"
+            column="123"/>
+    </issue>
+
+    <issue
+        id="RestrictedApi"
+        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`nzstreamer`)"
+        errorLine1="            else -> super.dispatchKeyEvent(event) || playerView.dispatchKeyEvent(event)"
+        errorLine2="                          ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/PlayerActivity.kt"
+            line="1003"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="RestrictedApi"
+        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`nzstreamer`)"
+        errorLine1="            else -> super.dispatchKeyEvent(event) || playerView.dispatchKeyEvent(event)"
+        errorLine2="                                           ~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/PlayerActivity.kt"
+            line="1003"
+            column="44"/>
+    </issue>
+
+    <issue
+        id="ModifierParameter"
+        message="Modifier parameter should be the first optional parameter"
+        errorLine1="fun NavRow(title: String, status: String? = null, warn: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {"
+        errorLine2="                                                                         ~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/ui/Components.kt"
+            line="86"
+            column="74"/>
+    </issue>
+
+    <issue
+        id="ModifierParameter"
+        message="Modifier parameter should be the first optional parameter"
+        errorLine1="fun PosterBox(width: Int, height: Int, tint: Color = Color(0xFF2E4A5C), modifier: Modifier = Modifier) {"
+        errorLine2="                                                                        ~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/ui/Components.kt"
+            line="197"
+            column="73"/>
+    </issue>
+
+    <issue
+        id="ModifierParameter"
+        message="Modifier parameter should be the first optional parameter"
+        errorLine1="fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit, detail: String? = null, modifier: Modifier = Modifier) {"
+        errorLine2="                                                                                                    ~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/ui/Fields.kt"
+            line="93"
+            column="101"/>
+    </issue>
+
+    <issue
+        id="DiscouragedApi"
+        message="Fixed screen orientations will be ignored in most cases, starting from Android 16. Android is moving toward a model where apps are expected to adapt to various orientations, display sizes, and aspect ratios."
+        errorLine1="            android:screenOrientation=&quot;sensorLandscape&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="131"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
+        message="This field leaks a context object"
+        errorLine1="class LogsViewModel(private val container: AppContainer, private val app: Context) : ViewModel() {"
+        errorLine2="                                                         ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/settings/LogsScreen.kt"
+            line="125"
+            column="58"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
+        message="This field leaks a context object"
+        errorLine1="class CrashLogViewModel(private val container: AppContainer, private val app: Context) : ViewModel() {"
+        errorLine2="                                                             ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/settings/LogsScreen.kt"
+            line="470"
+            column="62"/>
+    </issue>
+
+    <issue
+        id="FrequentlyChangingValue"
+        message="Reading a value annotated with @FrequentlyChangingValue inside composition"
+        errorLine1="            val first = current.view.rows.getOrNull((list.firstVisibleItemIndex - headerItems).coerceAtLeast(0))"
+        errorLine2="                                                          ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/collection/CollectionScreen.kt"
+            line="429"
+            column="59"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?"
+        errorLine1="        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))"
+        errorLine2="                                                 ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/ExternalLinks.kt"
+            line="18"
+            column="50"/>
+    </issue>
+
+    <issue
+        id="UseKtx"
+        message="Use the KTX extension function `Int.toDrawable` instead?"
+        errorLine1="        window.setBackgroundDrawable(ColorDrawable(android.graphics.Color.BLACK))"
+        errorLine2="                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/PlayerActivity.kt"
+            line="343"
+            column="38"/>
+    </issue>
+
+    <issue
+        id="AccessibilityFocus"
+        message="Do not force accessibility focus, as this interferes with screen readers and gives an inconsistent user experience, especially across apps"
+        errorLine1="            audioButton.performAccessibilityAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS, null)"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/PlayerActivity.kt"
+            line="874"
+            column="13"/>
+    </issue>
+
+</issues>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<caps>
+  <server title="Prowlarr" />
+  <limits default="100" max="100" />
+  <searching>
+    <search available="yes" supportedParams="q" />
+    <tv-search available="yes" supportedParams="q,season,ep,imdbid,tvdbid,tmdbid,tvmazeid" />
+    <movie-search available="no" supportedParams="q" />
+  </searching>
+  <categories>
+    <category id="5000" name="TV" />
+  </categories>
+</caps>

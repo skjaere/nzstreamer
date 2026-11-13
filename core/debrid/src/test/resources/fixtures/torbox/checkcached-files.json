@@ -1,0 +1,19 @@
+{
+  "success": true,
+  "error": null,
+  "detail": "Found 1 cached torrents.",
+  "data": [
+    {
+      "name": "The.Glass.Orchard.S02.1080p.WEB-DL.H.264-KESTREL",
+      "size": 4404019200,
+      "hash": "d3adb33fd3adb33fd3adb33fd3adb33fd3adb33f",
+      "opensubtitles_hash": null,
+      "files": [
+        {"name": "The.Glass.Orchard.S02.1080p.WEB-DL.H.264-KESTREL/Sample/sample.mkv", "size": 31457280},
+        {"name": "The.Glass.Orchard.S02.1080p.WEB-DL.H.264-KESTREL/The.Glass.Orchard.S02E01.1080p.WEB-DL.H.264-KESTREL.mkv", "size": 1468006400},
+        {"name": "The.Glass.Orchard.S02.1080p.WEB-DL.H.264-KESTREL/The.Glass.Orchard.S02E02.1080p.WEB-DL.H.264-KESTREL.mkv", "size": 1468006401},
+        {"name": "The.Glass.Orchard.S02.1080p.WEB-DL.H.264-KESTREL/The.Glass.Orchard.S02E03.1080p.WEB-DL.H.264-KESTREL.mkv", "size": 1468006402}
+      ]
+    }
+  ]
+}

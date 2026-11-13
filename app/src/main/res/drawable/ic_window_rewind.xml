@@ -1,0 +1,6 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <!-- The arrow is drawn here. The "10" is Material's, from replay_10 and forward_10, scaled: Google's, under the
+         Apache License 2.0 (THIRD_PARTY_NOTICES.md). -->
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="2.2" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M4,12a8,8 0,1 0,2.3,-5.6M4,4v4h4" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M10.61 10.19V15.6H9.54V11.46L8.26 11.86V10.99L10.5 10.19Z M16 13.36Q16 14.58 15.5 15.13Q15 15.67 14.19 15.67Q13.37 15.67 12.86 15.13Q12.36 14.58 12.36 13.36V12.42Q12.36 11.21 12.86 10.66Q13.36 10.12 14.18 10.12Q14.99 10.12 15.5 10.66Q16 11.2 16 12.4ZM14.93 12.28Q14.93 11.56 14.73 11.27Q14.54 10.99 14.18 10.99Q13.83 10.99 13.63 11.27Q13.43 11.54 13.43 12.25V13.51Q13.43 14.23 13.63 14.52Q13.83 14.81 14.19 14.81Q14.54 14.81 14.73 14.53Q14.93 14.24 14.93 13.54Z" />
+</vector>

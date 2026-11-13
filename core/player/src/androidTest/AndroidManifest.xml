@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- For the test APK alone: core:player has no manifest of its own, and ServiceDataSourceDeviceTest reads from a server of
+     its own on this device's loopback address, over plain HTTP, as the debrid fake's links are. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application android:usesCleartextTraffic="true" />
+</manifest>
