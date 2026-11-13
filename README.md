@@ -138,9 +138,10 @@ The first says the download is whole (on macOS, `shasum -a 256 -c NZStreamer.apk
 each line with `certificate SHA-256 digest:` in it must end in the digest that `tools/beta-cert.sha256` holds. Newer
 build-tools print one such line for each signature scheme; a second signer would show a second digest.
 
-On the phone, AppVerifier (from Accrescent or its GitHub releases) shows an installed app's package name and signing
-certificate digest: they must be `app.nzstreamer.beta` and the digest in `tools/beta-cert.sha256`. AppVerifier writes
-the digest in capitals, with a colon between each pair of digits.
+On a phone with Android 9 or newer, AppVerifier (from Accrescent, which needs Android 10, or from AppVerifier's GitHub
+releases) shows an installed app's package name and signing certificate digest: they must be `app.nzstreamer.beta` and
+the digest in `tools/beta-cert.sha256`. AppVerifier writes the digest in capitals, with a colon between each pair of
+digits.
 
 ## Building from source
 
