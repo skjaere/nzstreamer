@@ -49,6 +49,18 @@ def certs(*digests):
     return "\n".join(lines) + "\n"
 
 
+def certs37(*digests, schemes=("V2",)):
+    """What build-tools 37's apksigner prints: one set of lines per signature scheme, with no signer number."""
+    lines = []
+    for scheme in schemes:
+        for number, digest in enumerate(digests, 1):
+            lines += [f"{scheme} Signer: certificate DN: CN=Invented Key {number}",
+                      f"{scheme} Signer: certificate SHA-256 digest: {digest}",
+                      f"{scheme} Signer: certificate SHA-1 digest: {'0' * 40}",
+                      f"{scheme} Signer: certificate MD5 digest: {'0' * 32}"]
+    return "\n".join(lines) + "\n"
+
+
 def badging(package=PACKAGE, code="10000", name="0.1.0"):
     return (f"package: name='{package}' versionCode='{code}' versionName='{name}' platformBuildVersionName='16' "
             "platformBuildVersionCode='36' compileSdkVersion='36' compileSdkVersionCodename='16'\nsdkVersion:'26'\n")
@@ -129,6 +141,28 @@ class CheckBetaApkTest(unittest.TestCase):
         self.write("badging.txt", badging(code="10001", name="0.1.0-beta.10001"))
         self.assertPasses(self.run_check(code="10001", version="0.1.0-beta.10001"))
         self.assertTrue(os.path.isfile(os.path.join(self.out, "NZStreamer-Beta-0.1.0-beta.10001.apk")))
+
+    def test_build_tools_37s_signer_lines_pass(self):
+        self.write("certs.txt", certs37(DIGEST))
+        self.assertPasses(self.run_check())
+
+    def test_build_tools_37s_lines_for_two_schemes_are_one_signer(self):
+        self.write("certs.txt", certs37(DIGEST, schemes=("V2", "V3")))
+        self.assertPasses(self.run_check())
+
+    def test_build_tools_37s_lines_with_another_key_fail(self):
+        self.write("certs.txt", certs37(OTHER_DIGEST))
+        done = self.run_check()
+        self.assertFails(done, "signed")
+        self.assertNotIn(OTHER_DIGEST, done.stdout + done.stderr)
+
+    def test_build_tools_37s_lines_with_a_second_signer_fail(self):
+        self.write("certs.txt", certs37(DIGEST, OTHER_DIGEST))
+        self.assertFails(self.run_check(), "2 signers")
+
+    def test_signer_lines_in_a_form_the_check_does_not_know_fail(self):
+        self.write("certs.txt", f"Signer certificate SHA-256 digest is {DIGEST}\n")
+        self.assertFails(self.run_check(), "0 signers")
 
     def test_another_key_fails(self):
         self.write("certs.txt", certs(OTHER_DIGEST))

@@ -114,10 +114,13 @@ done
 tools=$(printf '%s\n' "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
 [[ -x $tools/apksigner && -x $tools/aapt2 ]] || fail "no apksigner and aapt2 in $ANDROID_HOME/build-tools"
 certs=$("$tools/apksigner" verify --print-certs "$staged") || fail "apksigner doesn't verify $name"
-signers=$(grep -c '^Signer #[0-9]* certificate SHA-256 digest: ' <<<"$certs" || true)
+# Up to build-tools 36, apksigner prints "Signer #1 certificate SHA-256 digest: <hex>". From 37 it prints
+# "V2 Signer: certificate SHA-256 digest: <hex>", once for each signature scheme it verified. Either way a signer is a
+# certificate, so the signers are the distinct digests. Lines in any other form count for nothing, so the check fails.
+digests=$(sed -n -E 's/^(Signer #[0-9]+ |V[0-9.]+ Signer: )certificate SHA-256 digest: ([0-9a-f]{64})$/\2/p' <<<"$certs" | sort -u)
+signers=$(grep -c . <<<"$digests" || true)
 [[ $signers == 1 ]] || fail "$name has $signers signers: a beta has one, the beta key"
-[[ $(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<<"$certs") == "$expected" ]] ||
-    fail "$name isn't signed by the key whose certificate digest $digest_file holds"
+[[ $digests == "$expected" ]] || fail "$name isn't signed by the key whose certificate digest $digest_file holds"
 package=$("$tools/aapt2" dump badging "$staged" | grep '^package: ') || fail "aapt2 can't read $name's package"
 [[ "$package " == "package: name='$PACKAGE' versionCode='$code' versionName='$version' "* ]] ||
     fail "$name is not $PACKAGE at versionCode $code, versionName $version: $package"
