@@ -282,20 +282,22 @@ class SetupServerTest {
     /**
      * The port refuses connections, within a moment: the listening socket closed by a connection's thread is let go
      * once the accept thread wakes, and the events may come first. Until then it may still take a connection, and reset
-     * it as it closes.
+     * it as it closes. A refusal is told by its type: the text of a reset is the C library's, in the desktop's language.
      */
     private fun refused(port: Int) {
         val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        var failed: SocketException? = null
         while (true) {
             try {
                 Socket().use { it.connect(InetSocketAddress(loopback, port), 2000) }
             } catch (_: ConnectException) {
                 return
             } catch (e: SocketException) {
-                // Taken by the listener as it closed, then reset: it still took connections then, so try again.
-                if (e.message?.contains("reset") != true) throw e
+                // Taken by the listener as it closed, then reset: it still took connections then, so try again. Any other
+                // error comes out at the deadline.
+                failed = e
             }
-            assertTrue(System.nanoTime() < until, "the port still takes connections")
+            assertTrue(System.nanoTime() < until, "the port still takes connections" + (failed?.let { "; the last error: $it" } ?: ""))
             Thread.sleep(20)
         }
     }
