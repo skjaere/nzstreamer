@@ -103,7 +103,15 @@ then download again. If Play Protect blocks the install, choose Details, then In
 
 ### Staying up to date
 Obtainium installs apps from their releases and keeps them up to date. Get it from its GitHub releases, F-Droid or
-IzzyOnDroid. It runs on TVs too, where you install it with Downloader.
+IzzyOnDroid. It runs on TVs too: in Downloader, type this address, which gets the APK of Obtainium's newest release
+that runs on every device:
+
+```
+https://github.com/ImranR98/Obtainium/releases/latest/download/app-release.apk
+```
+
+On Fire TV, also allow Obtainium under Settings, My Fire TV, Developer Options, Install unknown apps: it installs apps
+itself.
 
 1. In Obtainium, add an app with this repository's address, `https://github.com/skjaere/nzstreamer`.
 2. Install NZStreamer from Obtainium, not from the browser.
