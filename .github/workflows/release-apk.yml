@@ -2,10 +2,11 @@
 # as the site's publish script checks a beta, attached to the release's draft as NZStreamer.apk with its .sha256 and
 # the licence files, and the release then published with a licence footer in its notes.
 # release-please.yml calls it once it has made a release's draft. Run it by hand from main for a tag whose draft is
-# there, with publish off to look at the draft first. Nothing a pull request does can start it: it has no pull request
-# trigger, and its job runs in the release-signing environment, which holds the key's secrets and takes main alone. Every
-# run's ref is main, the tag being an input: a run from a tag would run that tag's copy of this file, so the environment
-# allows no tag, and the first step refuses any ref but main.
+# there, with publish off to look at the draft first. Whoever then publishes it by hand keeps "Set as the latest
+# release" ticked: releases/latest/download/NZStreamer.apk gets the release marked Latest. Nothing a pull request does
+# can start it: it has no pull request trigger, and its job runs in the release-signing environment, which holds the
+# key's secrets and takes main alone. Every run's ref is main, the tag being an input: a run from a tag would run that
+# tag's copy of this file, so the environment allows no tag, and the first step refuses any ref but main.
 # Values from the event reach the shell through env, never inside a run: script. The key lives in the runner's temp
 # folder for the build alone. Every action is pinned by its full commit id.
 name: release-apk
@@ -211,7 +212,7 @@ jobs:
           bash tools/release/check-beta-apk.sh --digest-file tools/beta-cert.sha256 --code "$CODE" --version "$VERSION" \
             --out "$RUNNER_TEMP/apk" --name NZStreamer.apk "${flags[@]}"
 
-      # Every release's APK has the one name, so releases/latest/download/NZStreamer.apk always gets the newest. Its
+      # Every release's APK has the one name, so releases/latest/download/NZStreamer.apk gets the Latest release's. Its
       # .sha256 names it, so sha256sum -c checks the download. One APK alone: an app that updates from the releases would
       # ask which to take. No --clobber: a file already there fails the upload, so bytes once attached are never replaced.
       - name: Attach the APK and the licence files
@@ -260,7 +261,8 @@ jobs:
           gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes-file "$notes/notes.txt"
 
       # The notes as they are now pass the privacy scan and hold none of the canaries, and the tag is still at the commit
-      # built.
+      # built. --latest marks it Latest, which releases/latest/download follows, rather than leave that to GitHub's
+      # default.
       - name: Publish the release
         if: inputs.publish
         env:
@@ -278,4 +280,4 @@ jobs:
             tagged=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tagged" --jq .object.sha)
           fi
           [[ $tagged == "$COMMIT" ]] || { echo "::error::$TAG is at $tagged, not at the commit built, $COMMIT"; exit 1; }
-          gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false
+          gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false --latest
