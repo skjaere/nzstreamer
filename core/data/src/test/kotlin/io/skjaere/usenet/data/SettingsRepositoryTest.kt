@@ -19,7 +19,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -446,12 +445,15 @@ class SettingsRepositoryTest {
         val held = CompletableDeferred<Unit>()
         secretsFile.hold = held
         val replacing = scope.async { repository.replaceKey(id, "TB-2", signIns::signIn) }
-        // The new key stored, the time it was saved not moved yet.
-        withTimeout(5_000) { while (secrets.get(ServiceAccount(id, "").apiKeySecret) != "TB-2") delay(10) }
-        secretsFile.hold = null
-        val reads = scope.async { listOf(repository.servicesWithKeys().single(), repository.service(id)!!) }
-        delay(300)
-        held.complete(Unit)
+        val reads = try {
+            // The new key stored, the time it was saved not moved yet. Each get starts a read of its own, so the first one
+            // after the write lands sees the key, however long the write takes.
+            while (secrets.get(ServiceAccount(id, "").apiKeySecret) != "TB-2") delay(10)
+            secretsFile.hold = null
+            scope.async { listOf(repository.servicesWithKeys().single(), repository.service(id)!!) }.also { delay(300) }
+        } finally {
+            held.complete(Unit)
+        }
         replacing.await()
         reads.await().forEach { read ->
             assertTrue(read.apiKey == "TB-1" && read.record.keySavedAt == old || read.apiKey == "TB-2" && read.record.keySavedAt > old, "read as ${read.apiKey} saved at ${read.record.keySavedAt} (the old at $old)")
