@@ -114,7 +114,9 @@ On Fire TV, also allow Obtainium under Settings, My Fire TV, Developer Options, 
 itself.
 
 1. In Obtainium, add an app with this repository's address, `https://github.com/skjaere/nzstreamer`.
-2. Install NZStreamer from Obtainium, not from the browser.
+2. Install NZStreamer from Obtainium. If you installed it from the browser or Downloader already, keep it: removing it
+   would remove its settings. Obtainium then asks you to confirm its first update, as it didn't install the version you
+   have.
 
 Obtainium then checks for new releases in the background. On Android 12 and newer it installs them in the background
 too, as long as it installed the version you have and its background updates are on. On older Android it tells you
