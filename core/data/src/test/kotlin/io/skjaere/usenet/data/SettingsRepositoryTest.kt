@@ -61,11 +61,20 @@ class SettingsRepositoryTest {
         }
     }
 
-    /** [store], whose writer is held once its write is stored while [hold] is set: a set that returns late, or never. */
+    /**
+     * [store], whose writes begun while [hold] is set are held once stored, until it completes: a set that returns late, or
+     * never. A test that holds a write that doesn't stop for a cancel (a sign-out's, a save's) lets it go however the test
+     * ends, or its runBlocking would wait for it for good. Such a test waits for its write with no time bound of its own: a
+     * write to disk takes what it takes, seconds on a busy CI runner, and the test's limit (set in the build) fails one
+     * that never lands.
+     */
     private class HeldStore<T>(private val store: DataStore<T>) : DataStore<T> {
         @Volatile var hold: CompletableDeferred<Unit>? = null
         override val data: Flow<T> get() = store.data
-        override suspend fun updateData(transform: suspend (t: T) -> T): T = store.updateData(transform).also { hold?.await() }
+        override suspend fun updateData(transform: suspend (t: T) -> T): T {
+            val held = hold
+            return store.updateData(transform).also { held?.await() }
+        }
     }
 
     private val cipher = FakeCipher()
@@ -540,11 +549,15 @@ class SettingsRepositoryTest {
     @Test
     fun `a sign-out whose screen goes midway still removes the key`() = runBlocking<Unit> {
         val id = repository.saveService("TorBox", "TB-1", SignIns(setOf("TB-1"), torBoxAccount)::signIn)
-        settingsFile.hold = CompletableDeferred()
+        val held = CompletableDeferred<Unit>()
+        settingsFile.hold = held
         val out = launch(Dispatchers.IO) { repository.signOut(id) }
-        withTimeout(5_000) { repository.settings.first { it.services.single().deleted } }
-        out.cancel()
-        settingsFile.hold!!.complete(Unit)
+        try {
+            repository.settings.first { it.services.single().deleted }
+            out.cancel()
+        } finally {
+            held.complete(Unit)
+        }
         out.join()
         assertNull(repository.service(id))
         assertEquals(emptySet(), serviceKeys())
@@ -558,19 +571,21 @@ class SettingsRepositoryTest {
     @Test
     fun `a save cut short by a second press leaves one account and no key without it`() = runBlocking<Unit> {
         val taken = setOf("TB-1", "TB-2")
-        secretsFile.hold = CompletableDeferred()
+        val held = CompletableDeferred<Unit>()
+        secretsFile.hold = held
         val first = launch(Dispatchers.IO) { repository.saveService("TorBox", "TB-1", SignIns(taken, torBoxAccount)::signIn) }
-        withTimeout(5_000) { secretsFile.data.first { it.entries.keys.any { name -> name.startsWith("service:") } } }
-        first.cancel()
-        val held = secretsFile.hold!!
-        secretsFile.hold = null
-        val signedIn = CompletableDeferred<Unit>()
-        val second = async(Dispatchers.IO) {
-            repository.saveService("TorBox", "TB-2") { key -> SignIns(taken, torBoxAccount).signIn(key).also { signedIn.complete(Unit) } }
+        val second = try {
+            secretsFile.data.first { it.entries.keys.any { name -> name.startsWith("service:") } }
+            first.cancel()
+            secretsFile.hold = null
+            val signedIn = CompletableDeferred<Unit>()
+            async(Dispatchers.IO) {
+                repository.saveService("TorBox", "TB-2") { key -> SignIns(taken, torBoxAccount).signIn(key).also { signedIn.complete(Unit) } }
+            }.also { signedIn.await() }
+        } finally {
+            held.complete(Unit)
         }
-        withTimeout(5_000) { signedIn.await() }
-        held.complete(Unit)
-        val id = withTimeout(5_000) { second.await() }
+        val id = second.await()
         first.join()
         assertEquals(listOf(id), repository.services.first().map { it.id })
         assertEquals("TB-2", repository.service(id)?.apiKey)
