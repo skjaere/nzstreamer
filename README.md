@@ -96,7 +96,8 @@ Amazon Appstore alone, so it can't install NZStreamer. On a smart TV with Fire T
    the first item, the device's name, about seven times; Developer Options shows one menu back.
 2. Install Downloader by AFTVnews: from Google Play on Android TV and Google TV, from the Amazon Appstore on Fire TV.
    On Fire TV, then allow it under Settings, My Fire TV, Developer Options, Install unknown apps.
-3. Open Downloader and type the address above into its text field.
+3. Open Downloader and type the code `4890122` into its text field: Downloader's short code for the address above. The
+   address itself works too.
 4. Let Downloader install unknown apps, then choose Install. On Android TV and Google TV, choose Settings in the message
    that comes up after the download, and set Downloader to Allowed.
 
