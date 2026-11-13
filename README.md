@@ -148,6 +148,22 @@ releases) shows an installed app's package name and signing certificate digest: 
 the digest in `tools/beta-cert.sha256`. AppVerifier writes the digest in capitals, with a colon between each pair of
 digits.
 
+## Getting a TMDB key
+
+A TMDB key is optional, but the collection, posters, episode lists and title suggestions need one. It's free, and
+each user brings their own.
+
+1. Create an account on [themoviedb.org](https://www.themoviedb.org/signup) and confirm your e-mail address.
+2. Open [Settings, API](https://www.themoviedb.org/settings/api) and request an API key. Choose personal use, accept
+   TMDB's terms, and fill in the short form: an application name, a URL and a summary. For example: NZStreamer,
+   `https://github.com/skjaere/nzstreamer`, and "For NZStreamer on my own devices".
+3. The same page then shows an API Key and an API Read Access Token. NZStreamer takes either.
+4. In NZStreamer, open Settings › Metadata, paste the key into "TMDB API key or read access token", and choose Check
+   and save. On a TV, choose Set up with your phone there and paste the key in your phone's browser instead of typing
+   it with the remote.
+
+TMDB's [getting started page](https://developer.themoviedb.org/docs/getting-started) has the same steps.
+
 ## Building from source
 
 You need:
