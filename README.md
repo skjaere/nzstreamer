@@ -8,7 +8,8 @@ content of its own.
 
 ### Streaming
 - Streams NZB releases over NNTP while they play, with yEnc decoding in native code.
-- Plays files inside uncompressed RAR (4 and 5) and 7-Zip volumes, and finds obfuscated file names through PAR2.
+- Plays files inside uncompressed RAR (4 and 5) and 7-Zip volumes, also when the set is packed inside another (RAR
+  volumes inside RAR, 7-Zip inside RAR, RAR inside 7-Zip), and finds obfuscated file names through PAR2.
 - Several providers in your order: articles missing on one are fetched from the next.
 - Searches your Newznab indexers together.
 - Opens `.nzb` files from your device or from other apps, and asks for an archive's password when one needs it.
