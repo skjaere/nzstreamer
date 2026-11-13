@@ -80,6 +80,9 @@ debrid is hidden. It needs Android 8.0 or newer.
 2. Open the download. The first time, Android sends you to Install unknown apps for the browser (or the files app you
    opened it from): allow it, go back, and tap Install.
 
+If the browser warns about the file, choose Download anyway. If Play Protect blocks the install, choose More details,
+then Install anyway.
+
 ### TVs
 Fire TV needs Fire OS 7 or newer, which Settings, My Fire TV, About shows as its software version. A Fire TV that runs
 Vega OS (About shows its software as OS, not Fire OS) installs apps from the
@@ -96,7 +99,7 @@ Amazon Appstore alone, so it can't install NZStreamer. On a smart TV with Fire T
    that comes up after the download, and set Downloader to Allowed.
 
 If Downloader says Unknown Sources is disabled in place of that message, the developer options aren't on: do step 1,
-then download again.
+then download again. If Play Protect blocks the install, choose Details, then Install anyway.
 
 ### Staying up to date
 Obtainium installs apps from their releases and keeps them up to date. Get it from its GitHub releases, F-Droid or
