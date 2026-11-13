@@ -24,10 +24,14 @@ defaults:
 jobs:
   check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # With the flags below, a check with no Gradle cache took 10 minutes on four CPUs that build it a fifth faster than
+    # this runner does. A test task stops at 30 minutes (the root build.gradle.kts). An hour leaves room for such a run
+    # with a hung test task: the build fails that task, and the reports are uploaded. A job that reaches its limit is
+    # cancelled, and a cancelled job uploads no reports.
+    timeout-minutes: 60
     # glibc's malloc keeps an arena for each of the Gradle daemon's busy threads. Two arenas took the daemon of a
-    # check running every task with these flags from 5.4 to 4.6 GiB, and the build's processes from 6.6 to 5.7 GiB
-    # together, in the same time: room on a private repository's 7 GB runner. Its heap and Metaspace were the same.
+    # check running every task with two workers and a 3 GB heap from 5.4 to 4.6 GiB, and the build's processes from 6.6
+    # to 5.7 GiB together, in the same time. Its heap and Metaspace were the same.
     env:
       MALLOC_ARENA_MAX: "2"
     steps:
@@ -89,12 +93,17 @@ jobs:
         with:
           cache-provider: basic
 
-      # A private repository's runner has 7 GB: one Gradle daemon of 3 GB, two workers, and the Kotlin compiler inside
-      # the daemon rather than a daemon of its own. JitPack can be slow to answer: longer HTTP timeouts.
+      # GitHub's runner for a public repository has 4 CPUs and 16 GB. Four workers, one for each CPU, and one Gradle
+      # daemon with a 4 GB heap, the Kotlin compiler inside it rather than in a daemon of its own. Each test task runs
+      # in one test JVM with Gradle's default heap of 512 MB, so at most four test JVMs run at once. On four CPUs with no
+      # Gradle cache, these flags kept the CPUs busy, and the build's processes peaked at 7.3 GB together: the daemon
+      # 5.7 GB, four test JVMs 1.5 GB. Two workers and a 3 GB heap took 15 minutes there, these 10. The beta step takes
+      # the same flags, so it reuses this daemon rather than start a second. JitPack can be slow to answer: longer
+      # HTTP timeouts.
       - name: Gradle check
         run: |
           ./gradlew check --continue \
-            -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8" --max-workers=2 \
+            -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8" --max-workers=4 \
             -Pkotlin.compiler.execution.strategy=in-process \
             -Dorg.gradle.internal.http.socketTimeout=300000 -Dorg.gradle.internal.http.connectionTimeout=300000
 
@@ -120,7 +129,7 @@ jobs:
           export ORG_GRADLE_PROJECT_betaStoreFile=$dir/beta.p12 ORG_GRADLE_PROJECT_betaKeyAlias=beta
           export ORG_GRADLE_PROJECT_betaStorePassword=$THROWAWAY_PASSWORD ORG_GRADLE_PROJECT_betaKeyPassword=$THROWAWAY_PASSWORD
           ./gradlew --no-configuration-cache \
-            -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8" --max-workers=2 \
+            -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8" --max-workers=4 \
             -Pkotlin.compiler.execution.strategy=in-process \
             -Dorg.gradle.internal.http.socketTimeout=300000 -Dorg.gradle.internal.http.connectionTimeout=300000 \
             -PbetaBuild="$code" -PbetaRelease=true -PexpectHideDebrid=true \

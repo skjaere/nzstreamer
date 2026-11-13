@@ -161,7 +161,7 @@ jobs:
       # read or written.
       - name: Build beta ${{ steps.v.outputs.code }}, debrid hidden
         env:
-          # Two malloc arenas, as in CI: the build's memory stays within a 7 GB runner.
+          # Two malloc arenas, four workers and a 4 GB heap, as in CI: the public runner's 4 CPUs and 16 GB.
           MALLOC_ARENA_MAX: "2"
           CODE: ${{ steps.v.outputs.code }}
           CANARIES: ${{ steps.key.outputs.canaries }}
@@ -185,7 +185,7 @@ jobs:
             extra=("-PbetaScanExtra=$RUNNER_TEMP/beta/canaries.tsv")
           fi
           ./gradlew --no-daemon --no-build-cache --no-configuration-cache \
-            -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8" --max-workers=2 \
+            -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8" --max-workers=4 \
             -Pkotlin.compiler.execution.strategy=in-process \
             -Dorg.gradle.internal.http.socketTimeout=300000 -Dorg.gradle.internal.http.connectionTimeout=300000 \
             -PbetaBuild="$CODE" -PbetaRelease=true -PexpectHideDebrid=true "${extra[@]}" \
