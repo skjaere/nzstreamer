@@ -7,6 +7,7 @@ import io.skjaere.usenet.releases.QualityPreference
 import io.skjaere.usenet.releases.RankingPrefs
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -15,6 +16,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -64,9 +66,9 @@ class SettingsRepositoryTest {
     /**
      * [store], whose writes begun while [hold] is set are held once stored, until it completes: a set that returns late, or
      * never. A test that holds a write that doesn't stop for a cancel (a sign-out's, a save's) lets it go however the test
-     * ends, or its runBlocking would wait for it for good. Such a test waits for its write with no time bound of its own: a
-     * write to disk takes what it takes, seconds on a busy CI runner, and the test's limit (set in the build) fails one
-     * that never lands.
+     * ends, or its runBlocking would wait for it for good. Such a test waits for its write ([watchFor]) with no time bound of
+     * its own: a write to disk takes what it takes, seconds on a busy CI runner, and the test's limit (set in the build)
+     * fails one that never lands.
      */
     private class HeldStore<T>(private val store: DataStore<T>) : DataStore<T> {
         @Volatile var hold: CompletableDeferred<Unit>? = null
@@ -75,6 +77,17 @@ class SettingsRepositoryTest {
             val held = hold
             return store.updateData(transform).also { held?.await() }
         }
+    }
+
+    /**
+     * Watches [flow] for a value [predicate] takes, and returns once the watch has its first value: a write begun after
+     * that is seen. A test that waits for a write starts watching before it writes. A DataStore's data started while a
+     * write is under way misses that write: it reads the old file under the new write's version, then drops the new value
+     * as no newer. It would only see the next write, and a test with none waits for good.
+     */
+    private suspend fun <T> CoroutineScope.watchFor(flow: Flow<T>, predicate: (T) -> Boolean): Deferred<T> {
+        val watching = CompletableDeferred<Unit>()
+        return async(Dispatchers.IO) { flow.onEach { watching.complete(Unit) }.first(predicate) }.also { watching.await() }
     }
 
     private val cipher = FakeCipher()
@@ -551,9 +564,10 @@ class SettingsRepositoryTest {
         val id = repository.saveService("TorBox", "TB-1", SignIns(setOf("TB-1"), torBoxAccount)::signIn)
         val held = CompletableDeferred<Unit>()
         settingsFile.hold = held
+        val deleted = watchFor(repository.settings) { it.services.single().deleted }
         val out = launch(Dispatchers.IO) { repository.signOut(id) }
         try {
-            repository.settings.first { it.services.single().deleted }
+            deleted.await()
             out.cancel()
         } finally {
             held.complete(Unit)
@@ -573,9 +587,10 @@ class SettingsRepositoryTest {
         val taken = setOf("TB-1", "TB-2")
         val held = CompletableDeferred<Unit>()
         secretsFile.hold = held
+        val keyStored = watchFor(secretsFile.data) { it.entries.keys.any { name -> name.startsWith("service:") } }
         val first = launch(Dispatchers.IO) { repository.saveService("TorBox", "TB-1", SignIns(taken, torBoxAccount)::signIn) }
         val second = try {
-            secretsFile.data.first { it.entries.keys.any { name -> name.startsWith("service:") } }
+            keyStored.await()
             first.cancel()
             secretsFile.hold = null
             val signedIn = CompletableDeferred<Unit>()
@@ -1145,9 +1160,10 @@ class SettingsRepositoryTest {
         repository.setTmdbKey("old")
         assertEquals("old", repository.tmdbKey())
         secretsFile.hold = CompletableDeferred()
-        val set = launch(Dispatchers.IO) { repository.setTmdbKey("new") }
         val stored = cipher.seal("new".encodeToByteArray())
-        withTimeout(5_000) { secretsFile.data.first { stored in it.entries.values } }
+        val told = watchFor(secretsFile.data) { stored in it.entries.values }
+        val set = launch(Dispatchers.IO) { repository.setTmdbKey("new") }
+        told.await()
         assertEquals("new", repository.tmdbKey())
         // The screen that set it went (its scope cancelled) before the set returned.
         set.cancelAndJoin()
