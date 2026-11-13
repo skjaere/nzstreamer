@@ -126,17 +126,20 @@ Notifications.
 
 ### Checking the APK
 Every release is signed with one key, whose certificate's SHA-256 digest is in
-[`tools/beta-cert.sha256`](tools/beta-cert.sha256). On a computer with the Android SDK's build-tools, in the folder
-that holds `NZStreamer.apk` and the release's `NZStreamer.apk.sha256`:
+[`tools/beta-cert.sha256`](tools/beta-cert.sha256). On a computer with Java and the Android SDK's build-tools, in the
+folder that holds `NZStreamer.apk` and the release's `NZStreamer.apk.sha256`:
 
 ```sh
 sha256sum -c NZStreamer.apk.sha256
-apksigner verify --print-certs NZStreamer.apk
+"$ANDROID_HOME"/build-tools/<version>/apksigner verify --print-certs NZStreamer.apk
 ```
 
-The first says the download is whole (on macOS, `shasum -a 256 -c NZStreamer.apk.sha256`). In what the second prints,
-each line with `certificate SHA-256 digest:` in it must end in the digest that `tools/beta-cert.sha256` holds. Newer
-build-tools print one such line for each signature scheme; a second signer would show a second digest.
+The first says the download is whole. On macOS it is `shasum -a 256 -c NZStreamer.apk.sha256`. On Windows,
+`certutil -hashfile NZStreamer.apk SHA256` prints the download's digest, which must be the one in
+`NZStreamer.apk.sha256`. The second runs apksigner from one of the SDK's build-tools folders (on Windows,
+`%ANDROID_HOME%\build-tools\<version>\apksigner.bat`), as it isn't on the path. In what it prints, each line with
+`certificate SHA-256 digest:` in it must end in the digest that `tools/beta-cert.sha256` holds. Newer build-tools print
+one such line for each signature scheme; a second signer would show a second digest.
 
 On a phone with Android 9 or newer, AppVerifier (from Accrescent, which needs Android 10, or from AppVerifier's GitHub
 releases) shows an installed app's package name and signing certificate digest: they must be `app.nzstreamer.beta` and
