@@ -29,7 +29,8 @@ import kotlin.test.assertTrue
  * [ServedStreamSpikeTest]'s stack on 127.0.0.1 alone, so that a Shield session spends no time on a stand-in that doesn't
  * serve: through the relay and the direct server, each file comes byte-exact through [ServedStream] and its stand-in
  * stream; armed zeros come as zeros, counted once as a gap; an armed failure, the stand-in's stream ending there, is the
- * server's own close at its byte (L76).
+ * server's own close at its byte (L76). Closing it with the failure as its cause instead, as the Shield session's stand-in
+ * does, it is the server's own close by that byte.
  * Nothing here reaches the home network.
  */
 class SpikeStreamTest {
@@ -134,6 +135,23 @@ class SpikeStreamTest {
         val (status, body) = get(url("direct"))
         assertEquals(206, status)
         assertContentEquals(film.copyOf(300_000), body)
+        assertTrue("upstreamFailures=1" in counters(), counters())
+        assertTrue(lines.any { "\"fault_fired\"" in it && "\"fail\"" in it }, "$lines")
+    }
+
+    /**
+     * The stand-in's own failure path, the one a Shield session runs: its stream closed with the failure as its cause, as
+     * the engine's is. The channel drops what ServedStream hasn't taken, so the body is the film's start up to the
+     * failure's byte, all of it or less.
+     */
+    @Test
+    fun `an armed failure closing the stand-in's stream with its cause is the server's own close by its byte`(@TempDir folder: File) {
+        start(folder)
+        ctl("/ctl/fault", mapOf("file" to "b.mkv", "fail" to listOf(mapOf("offset" to 300_000))))
+        val (status, body) = get(url("direct"))
+        assertEquals(206, status)
+        assertTrue(body.size <= 300_000, "${body.size} bytes, past the failure's byte")
+        assertContentEquals(film.copyOf(body.size), body)
         assertTrue("upstreamFailures=1" in counters(), counters())
         assertTrue(lines.any { "\"fault_fired\"" in it && "\"fail\"" in it }, "$lines")
     }
