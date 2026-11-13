@@ -60,7 +60,8 @@ content of its own.
   builds show it unless built with `-PhideDebrid=true`.
 
 ### Requirements
-Android 8.0 (API 26) or later; phones, tablets and Android TV / Google TV; arm64-v8a, armeabi-v7a or x86_64.
+Android 8.0 (API 26) or later: phones, tablets, Android TV / Google TV, and Fire TV with Fire OS 7 or later (not Vega
+OS). arm64-v8a, armeabi-v7a or x86_64.
 English only for now.
 
 ## Install
@@ -80,6 +81,11 @@ debrid is hidden. It needs Android 8.0 or newer.
    opened it from): allow it, go back, and tap Install.
 
 ### TVs
+Fire TV needs Fire OS 7 or newer, which Settings, My Fire TV, About shows as its software version. A Fire TV that runs
+Vega OS (About shows its software as OS, not Fire OS) installs apps from the
+Amazon Appstore alone, so it can't install NZStreamer. On a smart TV with Fire TV built in, My Fire TV is called Device
+& Software.
+
 1. On Google TV and Fire TV, turn on the TV's developer options first. On Google TV: Settings, System, About, then
    select Android TV OS build until it says you are a developer. On Fire TV: Settings, My Fire TV, About, then select
    the first item, the device's name, about seven times; Developer Options shows one menu back.
