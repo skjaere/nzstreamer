@@ -120,7 +120,9 @@ itself.
 
 Obtainium then checks for new releases in the background. On Android 12 and newer it installs them in the background
 too, as long as it installed the version you have and its background updates are on. On older Android it tells you
-about a new release, and you confirm the install. This goes for TV boxes as well.
+about a new release, and you confirm the install. Fire OS 7 and 8 are Android 9 to 11, so on them you always confirm.
+On a TV the notice may not pop up: open Obtainium to see new releases, or on Fire TV look under Settings,
+Notifications.
 
 ### Checking the APK
 Every release is signed with one key, whose certificate's SHA-256 digest is in
