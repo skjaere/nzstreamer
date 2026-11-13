@@ -36,9 +36,10 @@ subprojects {
 
 // Each JVM test has 2 minutes, and so has each @BeforeAll, @BeforeEach, @AfterEach and @AfterAll. The slowest test takes
 // about 15 s on CI. A test runs on a thread of its own: at the limit JUnit gives up on that thread and fails the test with
-// its stack, so a hang names its test and where it was stuck, and the tests after it still run. The limit is off while a
-// debugger is attached. A test task has 30 minutes: that limit catches a hang outside any test. A failure's whole stack
-// goes to the build's output, so CI's log shows where a test was stuck. The runs by hand that a -P property turns on
+// the thread's stack, and the tests after it still run. So a hang names its test and the line its thread waits at. For a
+// test in runBlocking, that is its runBlocking line: the stack doesn't show the call the coroutine is suspended in. The
+// limit is off while a debugger is attached. A test task has 30 minutes: that limit catches a hang outside any test. A
+// failure's whole stack goes to the build's output, so CI's log shows it. The runs by hand that a -P property turns on
 // (serveSpike, serveProbe, debridLive, linkPeer) take as long as they need: their modules turn both limits off for them.
 subprojects {
     tasks.withType<Test>().configureEach {
