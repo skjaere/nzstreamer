@@ -80,23 +80,31 @@ class ServedStreamSpikeTest {
 /**
  * [file], a file of the spike's media folder, as the app serves a release's: [ServedStream] over [SpikeOpener], under the
  * faults armed for [name]. Its NZB is made up around it (one file, no articles): the stand-in reads the file itself.
+ * [endsShort] is the stand-in's.
  */
-internal fun servedStream(file: File, name: String, faults: SpikeFaults, scope: CoroutineScope): ByteSource {
+internal fun servedStream(file: File, name: String, faults: SpikeFaults, scope: CoroutineScope, endsShort: Boolean = false): ByteSource {
     val nzb = PreparedNzb(
         "spike-$name", name,
         ExtractedMetadata.Raw(NzbMetadataResponse(volumes = emptyList(), obfuscated = false, entries = emptyList()), NzbDocument(emptyList())),
         listOf(FileCandidate(0, StreamableFile(name, file.length(), 0, 0, 0, 0))),
     )
-    return ServedStream(nzb, nzb.candidates.single(), SpikeOpener(FaultySource(file, name, faults), scope), scope)
+    return ServedStream(nzb, nzb.candidates.single(), SpikeOpener(FaultySource(file, name, faults), scope, endsShort), scope)
 }
 
 /**
  * A stand-in for the engine's stream of a release's file: [source]'s bytes (the spike's file under its armed faults) in the
  * range asked, written on a coroutine of [scope]'s into a channel as the engine's download writes one. A stretch of zeros
- * goes into the stream's gaps before its zeros; a failure closes the channel with its cause once the bytes before it are
- * written; a stall writes nothing for its time. Cancelling the job stops it.
+ * goes into the stream's gaps before its zeros; a stall writes nothing for its time. Cancelling the job stops it.
+ *
+ * A failure closes the channel with its cause once the bytes before it are written, as the engine's does: the channel then
+ * drops what the reader hasn't taken, so the read fails short of the failure's byte when the reader is behind. With
+ * [endsShort] the channel ends there instead, as a stream that ends short does: every byte before it is read first.
  */
-internal class SpikeOpener(private val source: ByteSource, private val scope: CoroutineScope) : StreamOpener {
+internal class SpikeOpener(
+    private val source: ByteSource,
+    private val scope: CoroutineScope,
+    private val endsShort: Boolean = false,
+) : StreamOpener {
     override suspend fun open(nzb: PreparedNzb, fileIndex: Int, range: LongRange): OpenedStream {
         val gaps = StreamGaps()
         val upstream = source.open(range.first, gaps::add)
@@ -120,7 +128,7 @@ internal class SpikeOpener(private val source: ByteSource, private val scope: Co
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                channel.close(e)
+                if (endsShort) channel.flushAndClose() else channel.close(e)
             } finally {
                 upstream.close()
             }

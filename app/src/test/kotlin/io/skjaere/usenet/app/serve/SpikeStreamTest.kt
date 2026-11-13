@@ -28,7 +28,8 @@ import kotlin.test.assertTrue
 /**
  * [ServedStreamSpikeTest]'s stack on 127.0.0.1 alone, so that a Shield session spends no time on a stand-in that doesn't
  * serve: through the relay and the direct server, each file comes byte-exact through [ServedStream] and its stand-in
- * stream; armed zeros come as zeros, counted once as a gap; an armed failure is the server's own close at its byte (L76).
+ * stream; armed zeros come as zeros, counted once as a gap; an armed failure, the stand-in's stream ending there, is the
+ * server's own close at its byte (L76).
  * Nothing here reaches the home network.
  */
 class SpikeStreamTest {
@@ -39,11 +40,12 @@ class SpikeStreamTest {
     private val scope = CoroutineScope(SupervisorJob())
     private lateinit var stack: SpikeStack
 
-    private fun start(folder: File) {
+    /** The stack over [folder]'s copy of the film; [endsShort] as [SpikeOpener]'s. */
+    private fun start(folder: File, endsShort: Boolean = false) {
         File(folder, "b.mkv").writeBytes(film)
         stack = SpikeStack(
             loopback, folder, relayPort = 0, controlPort = 0, directPort = 0, directPeers = { it.isLoopbackAddress }, out = { lines += it },
-            source = { file, name, faults -> servedStream(file, name, faults, scope) },
+            source = { file, name, faults -> servedStream(file, name, faults, scope, endsShort) },
         )
     }
 
@@ -121,9 +123,13 @@ class SpikeStreamTest {
         assertTrue("gaps=1" in counters(), counters())
     }
 
+    /**
+     * The stand-in's stream ends at the failure, so the server has every byte before it. Closed with the failure as its
+     * cause, as the engine's is, the channel drops what ServedStream hasn't taken yet: under load the close comes short.
+     */
     @Test
     fun `an armed failure is the server's own close at its byte`(@TempDir folder: File) {
-        start(folder)
+        start(folder, endsShort = true)
         ctl("/ctl/fault", mapOf("file" to "b.mkv", "fail" to listOf(mapOf("offset" to 300_000))))
         val (status, body) = get(url("direct"))
         assertEquals(206, status)
