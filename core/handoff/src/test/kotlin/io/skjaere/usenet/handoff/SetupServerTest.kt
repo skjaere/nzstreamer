@@ -9,8 +9,10 @@ import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketException
 import java.net.URLEncoder
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Future
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -41,7 +43,25 @@ class SetupServerTest {
     private val i1 = SetupSlot(SetupSection.Indexer, 1)
 
     /** A test from the page, as the tester was asked for it: the card, and the future the server waits on. */
-    private class Call(val item: SetupTestItem, val future: CompletableFuture<SetupResult>, val thread: String)
+    private class Call(val item: SetupTestItem, val future: Held, val thread: String)
+
+    /**
+     * A test's future that says when the server first waits on it. Only then does the server hold it: a close or a newer
+     * test before that can't cancel it yet, and the server cancels it itself once the tester hands it over.
+     */
+    private class Held : CompletableFuture<SetupResult>() {
+        val waitedOn = CountDownLatch(1)
+
+        override fun get(): SetupResult {
+            waitedOn.countDown()
+            return super.get()
+        }
+
+        override fun get(timeout: Long, unit: TimeUnit): SetupResult {
+            waitedOn.countDown()
+            return super.get(timeout, unit)
+        }
+    }
 
     /**
      * The app's tester: answers at once with [result] of the card, or, while [hold], leaves the test running. While
@@ -55,7 +75,7 @@ class SetupServerTest {
 
         override fun test(item: SetupTestItem): Future<SetupResult> {
             if (fails) throw IllegalStateException("the tester broke")
-            val future = CompletableFuture<SetupResult>()
+            val future = Held()
             calls.put(Call(item, future, Thread.currentThread().name))
             when {
                 failsLater -> future.completeExceptionally(IllegalStateException("the test broke at marker-host"))
@@ -64,7 +84,12 @@ class SetupServerTest {
             return future
         }
 
-        fun next(): Call = assertNotNull(calls.poll(5, TimeUnit.SECONDS), "the tester wasn't asked")
+        /** The next test the tester was asked for, once the server waits on it. */
+        fun next(): Call {
+            val call = assertNotNull(calls.poll(5, TimeUnit.SECONDS), "the tester wasn't asked")
+            assertTrue(call.future.waitedOn.await(5, TimeUnit.SECONDS), "the server never waited on the test")
+            return call
+        }
     }
 
     /** A provider and a debrid service work, an indexer and a torrent indexer don't, a TMDB key isn't tried. */
@@ -226,7 +251,8 @@ class SetupServerTest {
 
     /**
      * The port refuses connections, within a moment: the listening socket closed by a connection's thread is let go
-     * once the accept thread wakes, and the events may come first.
+     * once the accept thread wakes, and the events may come first. Until then it may still take a connection, and reset
+     * it as it closes.
      */
     private fun refused(port: Int) {
         val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
@@ -235,6 +261,9 @@ class SetupServerTest {
                 Socket().use { it.connect(InetSocketAddress(loopback, port), 2000) }
             } catch (_: ConnectException) {
                 return
+            } catch (e: SocketException) {
+                // Taken by the listener as it closed, then reset: it still took connections then, so try again.
+                if (e.message?.contains("reset") != true) throw e
             }
             assertTrue(System.nanoTime() < until, "the port still takes connections")
             Thread.sleep(20)
