@@ -4,7 +4,7 @@ import io.skjaere.usenet.player.DisplayFacts
 import io.skjaere.usenet.player.MatchContentFrameRate
 import io.skjaere.usenet.player.ModeSize
 import io.skjaere.usenet.releases.Hdr
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 

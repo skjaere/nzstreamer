@@ -150,6 +150,10 @@ into a release build, so don't share a debug APK built with them.
 - Lint's TV checks are errors. `app/lint-baseline.xml` holds the issues there were when they were turned on, so
   only new ones fail.
 
+Each unit test has 2 minutes and each test task 30 minutes, in every module (the root `build.gradle.kts` sets both). A
+test that hangs fails with its name and the stack it was stuck at, and the tests after it still run. The test's limit is
+off while a debugger is attached.
+
 ### Device tests
 Instrumented tests run on an emulator or a device: `./gradlew :app:connectedDebugAndroidTest`. The tests that stream
 need the mock NNTP server, reachable from the emulator at `10.0.2.2:1119`, with test media seeded into it by

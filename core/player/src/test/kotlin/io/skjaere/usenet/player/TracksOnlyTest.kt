@@ -2,7 +2,7 @@ package io.skjaere.usenet.player
 
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.LoadControl
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 
 @androidx.annotation.OptIn(UnstableApi::class)

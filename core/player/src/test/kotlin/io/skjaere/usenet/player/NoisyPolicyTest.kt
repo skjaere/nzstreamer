@@ -21,7 +21,7 @@ import android.media.AudioDeviceInfo.TYPE_USB_DEVICE
 import android.media.AudioDeviceInfo.TYPE_USB_HEADSET
 import android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES
 import android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue

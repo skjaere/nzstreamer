@@ -1,6 +1,6 @@
 package io.skjaere.usenet.player
 
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import java.security.MessageDigest
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue

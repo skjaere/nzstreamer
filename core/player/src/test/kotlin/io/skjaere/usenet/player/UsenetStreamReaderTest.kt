@@ -43,7 +43,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.io.Buffer
 import kotlinx.io.Source
-import org.junit.Test
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
@@ -96,7 +97,8 @@ class UsenetStreamReaderTest {
         return out.toByteArray()
     }
 
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun fullRead() {
         val reader = UsenetStreamReader(store, preparer, opener)
         assertEquals(data.size.toLong(), reader.open("ab12", 0, 0, C.LENGTH_UNSET.toLong()))
@@ -104,7 +106,8 @@ class UsenetStreamReaderTest {
         assertEquals(listOf(0L until data.size), openedRanges)
     }
 
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun theBytesReadAreCountedForTheStreamCostLine() {
         val traffic = StreamTraffic()
         val reader = UsenetStreamReader(store, preparer, opener, traffic)
@@ -126,7 +129,8 @@ class UsenetStreamReaderTest {
         assertEquals(2L, traffic.snapshot().endedStreams)
     }
 
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun rangedReadIsClampedToFileEnd() {
         val reader = UsenetStreamReader(store, preparer, opener)
         assertEquals(50_000L, reader.open("ab12", 0, 150_000, 80_000))
@@ -134,7 +138,8 @@ class UsenetStreamReaderTest {
         assertEquals(150_000L..199_999L, openedRanges.single())
     }
 
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun openAtEndReadsNothingAndOpensNoStream() {
         val reader = UsenetStreamReader(store, preparer, opener)
         assertEquals(0L, reader.open("ab12", 0, data.size.toLong(), C.LENGTH_UNSET.toLong()))
@@ -142,14 +147,16 @@ class UsenetStreamReaderTest {
         assertTrue(openedRanges.isEmpty())
     }
 
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun positionPastEndIsOutOfRange() {
         val reader = UsenetStreamReader(store, preparer, opener)
         val e = assertFailsWith<DataSourceException> { reader.open("ab12", 0, data.size + 1L, C.LENGTH_UNSET.toLong()) }
         assertEquals(PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE, e.reason)
     }
 
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun earlyEndOfStreamIsAnError() {
         val short = StreamOpener { _, _, _ -> OpenedStream(ByteReadChannel(ByteArray(10)), Job()) }
         val reader = UsenetStreamReader(store, preparer, short)
@@ -158,7 +165,8 @@ class UsenetStreamReaderTest {
         assertFailsWith<DataSourceException> { reader.read(ByteArray(100), 0, 100) }
     }
 
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun missingArticleMapsToFileNotFound() {
         val failing = StreamOpener { _, _, _ ->
             val channel = ByteChannel()
@@ -172,7 +180,8 @@ class UsenetStreamReaderTest {
         assertEquals(PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND, e.reason)
     }
 
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun playerErrorKeepsTheClassificationOfAThrownUsenetException() {
         // NzbStreamOpener throws this when the engine has no provider.
         val unconfigured = StreamOpener { _, _, _ -> throw UsenetException(UsenetError.NotConfigured) }
@@ -184,7 +193,8 @@ class UsenetStreamReaderTest {
         assertEquals(UsenetError.NotConfigured, e.usenetError())
     }
 
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun playerErrorKeepsTheClassificationOfAnUnexpectedFailure() {
         val broken = StreamOpener { _, _, _ -> throw IllegalStateException("boom") }
         val reader = UsenetStreamReader(store, preparer, broken)
@@ -193,7 +203,8 @@ class UsenetStreamReaderTest {
         assertEquals(UsenetError.Unknown("boom"), e.usenetError())
     }
 
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun segmentTimeoutMapsToTimeout() {
         // nzb-streamer's segment fetch timing out on every provider: since N20 its writer closes the
         // channel with the library's own exception, which holds the timeout that fired.
@@ -212,7 +223,8 @@ class UsenetStreamReaderTest {
         assertFalse(UsenetLoadErrorHandlingPolicy.isPermanent(e))
     }
 
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun readReturnsDataBeforeWriterFinishesAndCloseCancelsIt() {
         val writerJob = Job()
         val slow = StreamOpener { _, _, _ ->
@@ -238,7 +250,8 @@ class UsenetStreamReaderTest {
      * 1- to 8-byte reads) made a blocking round trip per read, millions of them: 20 s and more on a
      * TV box (#224). Reads of bytes the stream already holds copy them without one.
      */
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun smallReadsCopyWhatTheStreamHoldsWithoutBlocking() {
         val pieces = 4
         val writing = StreamOpener { _, _, _ ->
@@ -266,7 +279,8 @@ class UsenetStreamReaderTest {
      * Segments larger than the 1 MiB a Ktor channel takes before its writer waits in flush (a 4K
      * remux's are 3.84 MB): the reads of held bytes must still wake it, or the stream stalls.
      */
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun smallReadsWakeAWriterWaitingWithASegmentLargerThanTheChannel() {
         val piece = 1_500_000
         val large = Random(2).nextBytes(2 * piece)
@@ -297,7 +311,8 @@ class UsenetStreamReaderTest {
      * taken for the channel closing there, it was lost, and the next read went on as if nothing happened.
      */
     @OptIn(InternalAPI::class)
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun aFaultInTheChannelThatIsntItsClosingFailsTheRead() {
         val held = Buffer().apply { write(ByteArray(100) { 1 }) }
         var faults = 1
@@ -314,7 +329,8 @@ class UsenetStreamReaderTest {
         assertIs<IllegalStateException>(e.cause)
     }
 
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun seekClosesThePreviousStream() {
         val reader = UsenetStreamReader(store, preparer, opener)
         reader.open("ab12", 0, 0, 1_000)
@@ -330,7 +346,8 @@ class UsenetStreamReaderTest {
      * waits for good once it has the tracks: an MP4's or an AVI's seek back from its index opened a
      * stream nobody read, and one opened past a file's start downloads its whole read-ahead at once.
      */
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun anOpenThatIsNeverReadStartsNoStream() {
         val reader = UsenetStreamReader(store, preparer, opener)
         assertEquals(1_000L, reader.open("ab12", 0, 100_000, 1_000))
@@ -342,7 +359,8 @@ class UsenetStreamReaderTest {
         assertEquals(listOf(100_000L..100_999L), openedRanges)
     }
 
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun dataSourceTellsTheExtractorTheOpenedFileIsAnAvi() {
         // UsenetDataSource.open only parses its URI (a stub class on the JVM) and opens the reader.
         val reader = UsenetStreamReader(store, preparer, opener)
@@ -355,7 +373,8 @@ class UsenetStreamReaderTest {
         assertEquals(emptyMap(), source.responseHeaders)
     }
 
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun dataSourceGivesNoTypeForAnUnknownExtension() {
         val reader = UsenetStreamReader(store, preparer, opener)
         val source = UsenetDataSource(reader)
@@ -381,7 +400,8 @@ class UsenetStreamReaderTest {
         )
     }
 
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun uriRoundTrip() {
         assertEquals(UsenetUris.Target("ab12", 3), UsenetUris.parse(UsenetUris.build("ab12", 3)))
         assertEquals(null, UsenetUris.parse("https://example.com"))
@@ -397,7 +417,8 @@ class UsenetStreamReaderTest {
      * (#179); a URI from before names were opens by position. A name the listing lacks is a file not
      * there, which loading again won't change.
      */
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun theFileIsOpenedByTheNameItsUriGivesWhereverThePreparedAgainNzbListsIt() {
         val listedOtherwise = NzbPreparer(object : PrepareBackend {
             override suspend fun prepare(nzbBytes: ByteArray, password: String?) = PrepareResult.Success(nzb.metadata)
@@ -426,7 +447,8 @@ class UsenetStreamReaderTest {
      * again on open. When that can't succeed (articles gone, an archive it can't stream), loading
      * again only repeats it: the open fails as the retry policy won't retry (#62).
      */
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun anNzbThatCanNoLongerBePreparedFailsForGood() {
         val outcomes = listOf(
             PrepareResult.MissingArticles("2 of 40 articles missing", IOException("430")) to UsenetError.MissingArticle::class,
@@ -476,7 +498,8 @@ class UsenetStreamReaderTest {
      * An article missing on every provider, partway through: the read fails as a missing article,
      * which the player doesn't retry (#62), not as a dropped connection.
      */
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun anArticleMissingPartwayFailsTheReadForGood() {
         val readInFront = CompletableDeferred<Unit>()
         val failing = failingPartway(ArticleNotFoundException("Article <seg4@mock> not found on any pool"), readInFront)
@@ -490,7 +513,8 @@ class UsenetStreamReaderTest {
      * A provider's connection dropping partway through an article, as the library reports it: a connection lost on the
      * way, which the player loads again.
      */
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun aConnectionDroppedPartwayFailsTheReadSoThePlayerLoadsAgain() {
         val readInFront = CompletableDeferred<Unit>()
         val dropped = NntpConnectionLostException("Connection closed mid-article, before =yend or the article terminator")
@@ -501,7 +525,8 @@ class UsenetStreamReaderTest {
     }
 
     /** A provider that can't be reached partway through, a later segment's connect refused: the player loads again too. */
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun aProviderOutOfReachPartwayFailsTheReadSoThePlayerLoadsAgain() {
         val readInFront = CompletableDeferred<Unit>()
         val refused = NntpConnectionException("Could not connect to news.example.net:563: Connection refused")
@@ -565,7 +590,8 @@ class UsenetStreamReaderTest {
      * front of it, never one of its zeros, and the next read fails at its first byte, saying which bytes
      * are missing. Not loaded again (a retry would reach the same byte), as a missing article wasn't.
      */
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun aReadStopsAtTheFirstByteOfAGapAndTheNextSaysWhichBytesAreMissing() {
         val gap = 50_000L..59_999L
         val reader = UsenetStreamReader(store, preparer, zeroFilling(listOf(gap)))
@@ -582,7 +608,8 @@ class UsenetStreamReaderTest {
     }
 
     /** A run of missing articles, found one at a time: one gap, all of it, so a skip goes past the whole run. */
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun missingArticlesSideBySideAreReachedAsOneGap() {
         val reader = UsenetStreamReader(store, preparer, zeroFilling(listOf(50_000L..54_999L, 55_000L..59_999L, 70_000L..79_999L)))
         reader.open("ab12", 0, 0, C.LENGTH_UNSET.toLong())
@@ -595,7 +622,8 @@ class UsenetStreamReaderTest {
      * The gap found while a read waits for the stream (the blocking bridge, not the bytes it holds): the
      * read that gets bytes from in front of it and from it returns only those in front.
      */
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun aGapFoundWhileAReadWaitsCutsThatReadAtItsStart() {
         val gap = 45_000L..54_999L
         val inFrontRead = CountDownLatch(1)
@@ -627,7 +655,8 @@ class UsenetStreamReaderTest {
      * though the new stream fills only the part from where it starts: what the reader knows of the file's
      * gaps outlives its streams.
      */
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun theReaderStopsAtAGapItKnowsFromAnEarlierStreamOfTheFile() {
         val gap = 50_000L..59_999L
         val reader = UsenetStreamReader(store, preparer, zeroFilling(listOf(gap)))
@@ -653,7 +682,8 @@ class UsenetStreamReaderTest {
     }
 
     /** The stream-cost line counts what the player got: the bytes in front of a gap, none of its zeros. */
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun aGapsZerosArentCountedForTheStreamCostLine() {
         val traffic = StreamTraffic()
         val reader = UsenetStreamReader(store, preparer, zeroFilling(listOf(50_000L..59_999L)), traffic)
@@ -666,7 +696,8 @@ class UsenetStreamReaderTest {
      * The player of a file counts the missing stretches its streams find, as they find them: the read-ahead's too, past
      * what the player has read. Each is reported by file, to those listening for its NZB.
      */
-    @Test(timeout = 10_000)
+    @Test
+    @Timeout(10)
     fun theStretchesAStreamFindsAreReportedForItsFileAsFound() {
         val reports = GapReports()
         val heard = CopyOnWriteArrayList<GapReports.Found>()

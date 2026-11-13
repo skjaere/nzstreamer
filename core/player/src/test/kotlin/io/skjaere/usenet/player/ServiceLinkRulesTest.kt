@@ -2,7 +2,7 @@ package io.skjaere.usenet.player
 
 import androidx.media3.common.C
 import io.skjaere.usenet.player.ServiceLinkRules.Answer
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue

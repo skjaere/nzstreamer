@@ -8,7 +8,7 @@ import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
 import io.skjaere.nntp.ArticleNotFoundException
 import io.skjaere.usenet.core.UsenetError
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import java.io.IOException
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

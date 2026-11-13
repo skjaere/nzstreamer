@@ -1,6 +1,6 @@
 package io.skjaere.usenet.player
 
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 
 class ProbeStallLogTest {

@@ -14,8 +14,8 @@ import io.skjaere.usenet.core.ProbedTrack
 import io.skjaere.usenet.core.ProbedTracks
 import io.skjaere.usenet.core.ProbedVideo
 import io.skjaere.usenet.releases.Hdr
-import org.junit.BeforeClass
-import org.junit.Test
+import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -344,7 +344,7 @@ class ExoTrackProbeTest {
 
     companion object {
         /** Strict reads, as MatroskaVideoFactsTest has them: Media3's own test check throws on android.jar's stubs. */
-        @BeforeClass
+        @BeforeAll
         @JvmStatic
         fun strictReads() = ParsableByteArray.setShouldEnforceLimitOnLegacyMethods(true)
     }

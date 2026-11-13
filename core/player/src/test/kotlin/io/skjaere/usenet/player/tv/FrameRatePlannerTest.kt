@@ -2,7 +2,7 @@ package io.skjaere.usenet.player.tv
 
 import io.skjaere.usenet.player.MatchContentFrameRate
 import io.skjaere.usenet.player.ModeSize
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue

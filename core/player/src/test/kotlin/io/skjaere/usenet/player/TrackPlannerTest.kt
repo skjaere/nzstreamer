@@ -4,7 +4,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MimeTypes
 import io.skjaere.usenet.player.TrackFixtures.audio
 import io.skjaere.usenet.player.TrackFixtures.text
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import java.util.Locale
 import kotlin.test.assertEquals
 import kotlin.test.assertNull

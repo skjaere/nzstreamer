@@ -15,8 +15,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import org.junit.BeforeClass
-import org.junit.Test
+import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.Test
 
 /**
  * What a play's media source makes of each subtitle format in `subtitles.mkv` (see the README beside it). Parsed while
@@ -107,7 +107,7 @@ class PlaySubtitleFormatsTest {
 
     companion object {
         /** Media3 checks its reads strictly in tests (see MatroskaTrackFlagsTest). */
-        @BeforeClass
+        @BeforeAll
         @JvmStatic
         fun strictReads() = ParsableByteArray.setShouldEnforceLimitOnLegacyMethods(true)
     }

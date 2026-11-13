@@ -1,6 +1,7 @@
 package io.skjaere.usenet.player
 
-import org.junit.Test
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -109,7 +110,8 @@ class ReadAheadTest {
         }
     }
 
-    @Test(timeout = 20_000)
+    @Test
+    @Timeout(20)
     fun fromTheFilesFirstByteItReads2MiBAheadUntilThePlayerHasTaken1MiBThenTheBudget() {
         val file = FakeFile(64 * MIB, from = 0)
         val ahead = ReadAhead(start = 0, budget = 8 * MIB, pool = ReadAhead.Pool(keep = 40))
@@ -122,7 +124,8 @@ class ReadAheadTest {
         ahead.close()
     }
 
-    @Test(timeout = 20_000)
+    @Test
+    @Timeout(20)
     fun fromAnyOtherByteItReadsTheWholeBudgetAtOnce() {
         val file = FakeFile(64 * MIB, from = 5_000_000)
         val ahead = ReadAhead(start = 5_000_000, budget = 8 * MIB, pool = ReadAhead.Pool(keep = 40))
@@ -133,7 +136,8 @@ class ReadAheadTest {
         ahead.close()
     }
 
-    @Test(timeout = 60_000)
+    @Test
+    @Timeout(60)
     fun itNeverHoldsMoreThanTheBudgetAndOneChunkAhead() {
         val budget = 3 * MIB + 12_345
         val file = FakeFile(64 * MIB, from = 777).apply { most = 100_003 }
@@ -151,7 +155,8 @@ class ReadAheadTest {
         ahead.close()
     }
 
-    @Test(timeout = 20_000)
+    @Test
+    @Timeout(20)
     fun aFailureIsKeptAtItsByteAfterTheBytesBeforeIt() {
         val refused = Refused()
         val file = FakeFile(64 * MIB, from = 1_000).apply {
@@ -167,7 +172,8 @@ class ReadAheadTest {
         ahead.close()
     }
 
-    @Test(timeout = 20_000)
+    @Test
+    @Timeout(20)
     fun aCutAfterSomeBytesIsOpenedAgainOnceAtItsByteAndOneWithNoneSinceFailsThere() {
         val file = FakeFile(64 * MIB, from = 2_000).apply {
             cuts += 502_000
@@ -182,7 +188,8 @@ class ReadAheadTest {
         ahead.close()
     }
 
-    @Test(timeout = 20_000)
+    @Test
+    @Timeout(20)
     fun eachCutAfterBytesSinceTheLastOpenIsOpenedAgainAtItsByteTheBytesUnbroken() {
         val file = FakeFile(3_000_000, from = 0).apply {
             cuts += 200_000
@@ -196,7 +203,8 @@ class ReadAheadTest {
         ahead.close()
     }
 
-    @Test(timeout = 20_000)
+    @Test
+    @Timeout(20)
     fun itsChunksGoBackToThePoolAsTheyAreTakenAndOnCloseAndTheNextOpenTakesThem() {
         val pool = ReadAhead.Pool(keep = 40)
         val first = FakeFile(64 * MIB, from = 10)
@@ -220,7 +228,8 @@ class ReadAheadTest {
         two.close()
     }
 
-    @Test(timeout = 20_000)
+    @Test
+    @Timeout(20)
     fun aCloseEndsAReadWaitingAndTheReaderLetsGoOfItsChunkAsItsReadComesBack() {
         val pool = ReadAhead.Pool(keep = 40)
         val file = FakeFile(64 * MIB, from = 0).apply { silent = CountDownLatch(1) }
@@ -253,7 +262,8 @@ class ReadAheadTest {
      * leaves the upstream to the closing thread, the reader done with it; as Media3 closes a load it cancelled, its thread
      * interrupted, the close waits all the same, and the thread stays interrupted.
      */
-    @Test(timeout = 20_000)
+    @Test
+    @Timeout(20)
     fun aCloseWaitsAMomentForAReadUnderWayAndOneThatComesBackLeavesTheUpstreamToTheCloser() {
         val pool = ReadAhead.Pool(keep = 40)
         val file = FakeFile(64 * MIB, from = 0).apply { silent = CountDownLatch(1) }
@@ -284,7 +294,8 @@ class ReadAheadTest {
     }
 
     /** One still in its read when the wait is out (a CDN gone silent) is left to the reader: the caller aborts it. */
-    @Test(timeout = 20_000)
+    @Test
+    @Timeout(20)
     fun aReadStillUnderWayWhenTheWaitIsOutIsLeftToTheReader() {
         val pool = ReadAhead.Pool(keep = 40)
         val file = FakeFile(64 * MIB, from = 0).apply { silent = CountDownLatch(1) }
@@ -302,7 +313,8 @@ class ReadAheadTest {
         assertEquals(pool.made, pool.kept, "and its chunk goes back")
     }
 
-    @Test(timeout = 20_000)
+    @Test
+    @Timeout(20)
     fun aCloseWithTheReaderWaitingForRoomLeavesNothingToTheReader() {
         val pool = ReadAhead.Pool(keep = 40)
         val file = FakeFile(64 * MIB, from = 4_000)

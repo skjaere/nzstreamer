@@ -7,8 +7,8 @@ import androidx.media3.common.util.ParsableByteArray
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.extractor.metadata.Chapter
 import androidx.media3.extractor.mkv.MatroskaExtractor
-import org.junit.BeforeClass
-import org.junit.Test
+import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -149,7 +149,7 @@ class MatroskaVideoFactsTest {
 
     companion object {
         /** Strict reads, as MatroskaTrackFlagsTest has them: Media3's own test check throws on android.jar's stubs. */
-        @BeforeClass
+        @BeforeAll
         @JvmStatic
         fun strictReads() = ParsableByteArray.setShouldEnforceLimitOnLegacyMethods(true)
     }

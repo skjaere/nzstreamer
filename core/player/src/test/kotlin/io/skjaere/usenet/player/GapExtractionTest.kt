@@ -17,8 +17,8 @@ import androidx.media3.extractor.TrackOutput
 import androidx.media3.extractor.mkv.MatroskaExtractor
 import androidx.media3.extractor.mp4.Mp4Extractor
 import androidx.media3.extractor.text.SubtitleParser
-import org.junit.BeforeClass
-import org.junit.Test
+import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -376,7 +376,7 @@ class GapExtractionTest {
          * Media3 checks its reads strictly in tests, which it tells by Build.FINGERPRINT first: null in android.jar's
          * stubs, so that check throws. Strict, as Media3 would have chosen.
          */
-        @BeforeClass
+        @BeforeAll
         @JvmStatic
         fun strictReads() = ParsableByteArray.setShouldEnforceLimitOnLegacyMethods(true)
     }

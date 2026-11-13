@@ -14,8 +14,8 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
-import org.junit.After
-import org.junit.Test
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Test
 import java.util.concurrent.Executors
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -33,7 +33,7 @@ class DeviceCapabilitiesLoaderTest {
     private fun decoders(route: Passthrough = Passthrough.NONE, listed: Map<String, List<Decoder>> = emptyMap()) =
         MediaCodecDeviceCapabilities(listed, emptyMap(), route, display(emptySet()))
 
-    @After
+    @AfterEach
     fun stop() {
         fakeMain.close()
         fakeDefault.close()

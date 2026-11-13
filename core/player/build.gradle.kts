@@ -28,6 +28,7 @@ android {
     // JVM unit tests run against android.jar stubs: Media3's Util.normalizeLanguageCode builds its
     // replacement map with TextUtils.isEmpty, which returns false instead of throwing "not mocked".
     testOptions.unitTests.isReturnDefaultValues = true
+    testOptions.unitTests.all { it.useJUnitPlatform() }
     // The JVM tests read the device tests' media fixtures too (see the README there), and the app's chapters.mkv, a
     // file with chapters, which Media3 adds to its tracks' formats.
     sourceSets["test"].resources.srcDir("src/androidTest/assets")
@@ -56,8 +57,9 @@ dependencies {
     implementation(libs.slf4j.api)
 
     testImplementation(libs.kotlin.test)
-    testImplementation(libs.junit4)
+    testImplementation(libs.junit.jupiter)
     testImplementation(libs.kotlinx.coroutines.test)
+    testRuntimeOnly(libs.junit.platform.launcher)
 
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)

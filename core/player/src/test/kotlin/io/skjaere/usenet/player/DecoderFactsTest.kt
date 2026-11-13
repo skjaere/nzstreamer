@@ -7,7 +7,7 @@ import androidx.media3.exoplayer.audio.AudioCapabilities
 import io.skjaere.usenet.releases.AudioCodec
 import io.skjaere.usenet.releases.Hdr
 import io.skjaere.usenet.releases.VideoCodec
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals

@@ -1,7 +1,7 @@
 package io.skjaere.usenet.player.tv
 
 import androidx.media3.exoplayer.DefaultLoadControl
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 
 class PlaybackBudgetTest {

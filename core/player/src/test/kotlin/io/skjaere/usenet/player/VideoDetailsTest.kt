@@ -10,10 +10,10 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.extractor.mkv.MatroskaExtractor
 import io.skjaere.usenet.releases.Hdr
 import io.skjaere.usenet.releases.VideoCodec
-import org.junit.After
-import org.junit.Before
-import org.junit.BeforeClass
-import org.junit.Test
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Locale
@@ -30,10 +30,10 @@ class VideoDetailsTest {
     private val saved = Locale.getDefault()
 
     // Frame rates follow the default locale's digits, as sizes do; pin one so the decimal separator is predictable.
-    @Before
+    @BeforeEach
     fun pin() = Locale.setDefault(Locale.US)
 
-    @After
+    @AfterEach
     fun unpin() = Locale.setDefault(saved)
 
     private fun video(
@@ -302,7 +302,7 @@ class VideoDetailsTest {
 
     companion object {
         /** Strict reads, as MatroskaTrackFlagsTest has them: Media3's own test check throws on android.jar's stubs. */
-        @BeforeClass
+        @BeforeAll
         @JvmStatic
         fun strictReads() = ParsableByteArray.setShouldEnforceLimitOnLegacyMethods(true)
     }

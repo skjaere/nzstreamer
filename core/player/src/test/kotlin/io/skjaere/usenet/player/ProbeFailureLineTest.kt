@@ -4,7 +4,7 @@ import androidx.media3.common.ParserException
 import androidx.media3.exoplayer.upstream.Loader
 import androidx.media3.extractor.SniffFailure
 import io.skjaere.usenet.core.UsenetError
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import java.io.IOException
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

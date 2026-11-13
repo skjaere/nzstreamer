@@ -9,7 +9,7 @@ import androidx.media3.extractor.SniffFailure
 import io.skjaere.usenet.core.ProbeResult
 import io.skjaere.usenet.core.UnreadableFile
 import io.skjaere.usenet.core.UsenetError
-import org.junit.Test
+import org.junit.jupiter.api.Test
 import java.io.IOException
 import kotlin.test.assertEquals
 import kotlin.test.assertSame

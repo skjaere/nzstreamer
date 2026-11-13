@@ -4,8 +4,8 @@ import io.skjaere.yenc.RapidYencKernel
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import org.junit.After
-import org.junit.Test
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Test
 import java.util.concurrent.Executors
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -19,7 +19,7 @@ class NativeFactsTest {
     private val fakeMain = Executors.newSingleThreadExecutor { Thread(it, "fake-main") }.asCoroutineDispatcher()
     private val fakeIo = Executors.newSingleThreadExecutor { Thread(it, "fake-io") }.asCoroutineDispatcher()
 
-    @After
+    @AfterEach
     fun stop() {
         fakeMain.close()
         fakeIo.close()

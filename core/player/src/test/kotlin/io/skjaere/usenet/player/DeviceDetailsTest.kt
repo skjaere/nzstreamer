@@ -4,9 +4,9 @@ import androidx.media3.common.C
 import androidx.media3.common.ColorInfo
 import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
-import org.junit.After
-import org.junit.Before
-import org.junit.Test
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
 import java.util.Locale
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -19,10 +19,10 @@ import kotlin.test.assertNull
 class DeviceDetailsTest {
     private val saved = Locale.getDefault()
 
-    @Before
+    @BeforeEach
     fun pin() = Locale.setDefault(Locale.US)
 
-    @After
+    @AfterEach
     fun unpin() = Locale.setDefault(saved)
 
     private val pq = ColorInfo.Builder().setColorSpace(C.COLOR_SPACE_BT2020).setColorTransfer(C.COLOR_TRANSFER_ST2084).setLumaBitdepth(10).build()
