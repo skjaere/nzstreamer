@@ -63,6 +63,62 @@ content of its own.
 Android 8.0 (API 26) or later; phones, tablets and Android TV / Google TV; arm64-v8a, armeabi-v7a or x86_64.
 English only for now.
 
+## Install
+
+Each release has one APK, `NZStreamer.apk`, for phones, tablets and TVs. This address always gets the newest release's:
+
+```
+https://github.com/skjaere/nzstreamer/releases/latest/download/NZStreamer.apk
+```
+
+It installs as NZStreamer Beta (`app.nzstreamer.beta`), the build every release is made from: Discover is in it, and
+debrid is hidden. It needs Android 8.0 or newer.
+
+### Phones and tablets
+1. Open the address above in the phone's browser, or tap `NZStreamer.apk` on the latest release's page.
+2. Open the download. The first time, Android sends you to Install unknown apps for the browser (or the files app you
+   opened it from): allow it, go back, and tap Install.
+
+### TVs
+1. Install Downloader by AFTVnews: from Google Play on Android TV and Google TV, from the Amazon Appstore on Fire TV.
+2. Open Downloader and type the address above into its text field. A short Downloader code for it may come later.
+3. Let Downloader install unknown apps, then choose Install. On Android TV and Google TV, choose Settings in the message
+   that comes up after the download, and set Downloader to Allowed. On Fire TV, allow it before the download, under
+   Settings, My Fire TV, Developer Options, Install unknown apps.
+
+If that setting isn't there, turn on the TV's developer options first. On Google TV: Settings, System, About, then
+select Android TV OS build until it says you are a developer. On Fire TV: Settings, My Fire TV, About, then select the
+first item, the device's name, about seven times; Developer Options shows one menu back.
+
+### Staying up to date
+Obtainium installs apps from their releases and keeps them up to date. Get it from its GitHub releases, F-Droid or
+IzzyOnDroid. It runs on TVs too, where you install it with Downloader.
+
+1. In Obtainium, add an app with this repository's address, `https://github.com/skjaere/nzstreamer`.
+2. Install NZStreamer from Obtainium, not from the browser.
+
+Obtainium then checks for new releases in the background. On Android 12 and newer it installs them in the background
+too, as long as it installed the version you have and its background updates are on. On older Android it tells you
+about a new release, and you confirm the install. This goes for TV boxes as well.
+
+### Checking the APK
+Every release is signed with one key, whose certificate's SHA-256 digest is in
+[`tools/beta-cert.sha256`](tools/beta-cert.sha256). On a computer with the Android SDK's build-tools, in the folder
+that holds `NZStreamer.apk` and the release's `NZStreamer.apk.sha256`:
+
+```sh
+sha256sum -c NZStreamer.apk.sha256
+apksigner verify --print-certs NZStreamer.apk
+```
+
+The first says the download is whole (on macOS, `shasum -a 256 -c NZStreamer.apk.sha256`). In what the second prints,
+each line with `certificate SHA-256 digest:` in it must end in the digest that `tools/beta-cert.sha256` holds. Newer
+build-tools print one such line for each signature scheme; a second signer would show a second digest.
+
+On the phone, AppVerifier (from Accrescent or its GitHub releases) shows an installed app's package name and signing
+certificate digest: they must be `app.nzstreamer.beta` and the digest in `tools/beta-cert.sha256`. AppVerifier writes
+the digest in capitals, with a colon between each pair of digits.
+
 ## Building from source
 
 You need:
