@@ -7,6 +7,7 @@ import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLServerSocket
@@ -29,6 +30,12 @@ import kotlin.test.assertTrue
  * [affected] of every [outOf] connections can die, by accept order from 0 (K of M): connection i when
  * `i % outOf < affected`. On loopback, as through a NAT that dropped the flow, a silent
  * connection's writes are still taken: the client sees no answer, not an error.
+ *
+ * With [holdStatsFor], STAT answers wait until that many STATs have come, over all connections, as a slow server's
+ * answers come after a client has sent all it means to. A client that stops at the first article missing has then sent
+ * every STAT it would, and each is recorded, before it sees an answer. A connection reads on while its answers wait, and
+ * answers a command other than a STAT only after them. They wait [holdStatsMs] at most: [statHoldTimedOut] then says how
+ * many STATs came. Not for use with [idleAfterMs].
  */
 class FakeNntpServer(
     private val password: String = "secret",
@@ -40,6 +47,8 @@ class FakeNntpServer(
     private val onIdle: OnIdle = OnIdle.SILENT,
     private val affected: Int = 1,
     private val outOf: Int = 1,
+    private val holdStatsFor: Int = 0,
+    private val holdStatsMs: Long = 10_000,
 ) : AutoCloseable {
     /** How a connection dies once idle ([idleAfterMs]). */
     enum class OnIdle {
@@ -86,6 +95,16 @@ class FakeNntpServer(
     /** Commands read and dropped on connections gone silent. */
     val dropped = AtomicInteger()
 
+    // The STATs still to come before held answers are let go, and the gate that lets them go (holdStatsFor).
+    private val statsToCome = CountDownLatch(holdStatsFor)
+    private val statsLetGo = CountDownLatch(if (holdStatsFor > 0) 1 else 0)
+    private val holdTimerStarted = AtomicBoolean()
+
+    /** Set when held STAT answers were let go after [holdStatsMs], before [holdStatsFor] STATs came: says how many came. */
+    @Volatile
+    var statHoldTimedOut: String? = null
+        private set
+
     /** Like an account that ran out: logins still work, articles are refused. */
     @Volatile
     var refusing = false
@@ -95,6 +114,7 @@ class FakeNntpServer(
     var loginAnswer: String? = null
 
     init {
+        require(holdStatsFor == 0 || idleAfterMs == null) { "Held answers don't count for the idle rule" }
         thread(isDaemon = true, name = "fake-nntp-accept") {
             generateSequence { runCatching { server.accept() }.getOrNull() }.forEach { socket ->
                 val index = connections.getAndIncrement()
@@ -116,10 +136,34 @@ class FakeNntpServer(
             val reader = it.getInputStream().bufferedReader(Charsets.ISO_8859_1)
             val out = it.getOutputStream()
             var lastAnswerEnd = System.nanoTime()
-            fun reply(line: String) {
-                out.write("$line\r\n".toByteArray(Charsets.ISO_8859_1))
+            // This connection's answers that wait for the STATs to come (holdStatsFor), in order. Writes go under its lock.
+            val owed = mutableListOf<String>()
+            fun write(line: String) = out.write("$line\r\n".toByteArray(Charsets.ISO_8859_1))
+            fun writeOwed() = synchronized(owed) {
+                owed.forEach(::write)
+                owed.clear()
+                out.flush()
+            }
+            fun reply(line: String) = synchronized(owed) {
+                owed.forEach(::write)
+                owed.clear()
+                write(line)
                 out.flush()
                 lastAnswerEnd = System.nanoTime()
+            }
+            // Whether a STAT's answer waits; one that does is written once the answers are let go.
+            fun held(answer: String): Boolean = synchronized(owed) {
+                if (statsLetGo.count == 0L || statsToCome.count == 0L) return@synchronized false
+                if (owed.isEmpty()) {
+                    thread(isDaemon = true, name = "fake-nntp-held") {
+                        statsLetGo.await()
+                        runCatching { writeOwed() }
+                    }
+                }
+                owed += answer
+                statsToCome.countDown()
+                startHoldTimer()
+                true
             }
             if (greet) reply("200 fake server ready")
             var silent = false
@@ -146,7 +190,17 @@ class FakeNntpServer(
                     break
                 }
                 received += command
-                if (refusing && (command.startsWith("STAT ") || command.startsWith("BODY "))) {
+                if (command.startsWith("STAT ")) {
+                    val answer = if (refusing) "502 access denied" else answer(command)
+                    if (!held(answer)) reply(answer)
+                    continue
+                }
+                // Any other command comes after this connection's held answers.
+                if (synchronized(owed) { owed.isNotEmpty() }) {
+                    statsLetGo.await()
+                    writeOwed()
+                }
+                if (refusing && command.startsWith("BODY ")) {
                     reply("502 access denied")
                     continue
                 }
@@ -175,6 +229,17 @@ class FakeNntpServer(
         // The client went away, or refused a TLS handshake.
     } finally {
         disconnected.countDown()
+    }
+
+    /** Lets the held STAT answers go once [holdStatsFor] STATs have come, or after [holdStatsMs]. Started by the first held. */
+    private fun startHoldTimer() {
+        if (!holdTimerStarted.compareAndSet(false, true)) return
+        thread(isDaemon = true, name = "fake-nntp-hold") {
+            if (!statsToCome.await(holdStatsMs, TimeUnit.MILLISECONDS)) {
+                statHoldTimedOut = "${holdStatsFor - statsToCome.count} of the $holdStatsFor STATs the answers waited for came in $holdStatsMs ms"
+            }
+            statsLetGo.countDown()
+        }
     }
 
     /** Whether connection [index], whose last answer ended at [lastAnswerEnd], is dead for a command now. */

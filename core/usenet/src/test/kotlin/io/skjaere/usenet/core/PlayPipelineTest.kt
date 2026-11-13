@@ -1071,11 +1071,14 @@ class PlayPipelineTest {
         // A sample of one is the first and last article of each volume.
         val sampled = volumes.files.flatMap { listOf(it.segments.first(), it.segments.last()) }.map { it.articleId }
         mapOf(true to articlesOf(volumes), false to sampled).forEach { (checkAll, expected) ->
-            // The fake server answers every STAT with 430 and records it.
-            FakeNntpServer().use { server ->
+            // The fake server answers every STAT with 430 and records it. Its answers wait until every STAT expected has
+            // come: the check stops at the first article missing, and an answer that came sooner could stop it before it
+            // sent the rest, or before the server had read them.
+            FakeNntpServer(holdStatsFor = expected.size).use { server ->
                 UsenetEngine().use { engine ->
                     engine.configure(EngineSettings(listOf(server.provider())))
                     val result = EngineAvailabilityBackend(engine, samples = 1, checkAll = { checkAll }).verify(volumes) { _, _ -> }
+                    assertNull(server.statHoldTimedOut, "checkAll=$checkAll")
                     assertIs<VerificationResult.MissingArticles>(result)
                     assertEquals(expected.map { "STAT <$it>" }.sorted(), server.commands.filter { it.startsWith("STAT ") }.sorted(), "checkAll=$checkAll")
                 }
