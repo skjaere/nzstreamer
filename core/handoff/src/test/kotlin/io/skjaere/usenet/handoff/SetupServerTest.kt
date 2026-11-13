@@ -165,8 +165,21 @@ class SetupServerTest {
         return Answer(status, headers, text.substringAfter("\r\n\r\n"))
     }
 
-    /** Sends [request] whole and reads the answer. */
+    /**
+     * Sends [request] whole and reads the answer. One turned away busy goes again: a connection gives its slot back a
+     * moment after its answer was read, once its thread lets it go, and the request turned away was never read.
+     */
     private fun send(port: Int, request: ByteArray, from: String = "127.0.0.1"): Answer? {
+        val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while (true) {
+            val answer = sendOnce(port, request, from)
+            if (answer?.status != 503 || System.nanoTime() > until) return answer
+            Thread.sleep(20)
+        }
+    }
+
+    /** [send]'s one try, on a connection of its own. */
+    private fun sendOnce(port: Int, request: ByteArray, from: String): Answer? {
         val socket = connect(port, from)
         try {
             socket.getOutputStream().write(request)
@@ -222,8 +235,25 @@ class SetupServerTest {
 
     private val testing = pressed(1, "test", *providerCard)
 
-    /** A request for a test of [body] on a connection of its own, not yet answered. */
-    private fun startTest(port: Int, body: String = testing): Socket = connect(port).also { it.getOutputStream().write(request(port, method = "POST", body = body)) }
+    /**
+     * A request for a test of [body] on a connection of its own, not yet answered, once the tester was asked for it. One
+     * turned away busy goes again, as [send]'s does.
+     */
+    private fun startTest(port: Int, body: String = testing): Socket {
+        val asked = tester.calls.size
+        val until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (true) {
+            val socket = connect(port).also { it.getOutputStream().write(request(port, method = "POST", body = body)) }
+            // Taken, the tester is asked before any answer comes; turned away, a 503 comes at once.
+            while (tester.calls.size == asked && socket.getInputStream().available() == 0) {
+                assertTrue(System.nanoTime() < until, "the tester wasn't asked")
+                Thread.sleep(5)
+            }
+            if (tester.calls.size > asked) return socket
+            assertEquals(503, answer(socket)?.status, "a test's request answered before the tester was asked")
+            Thread.sleep(20)
+        }
+    }
 
     /** Events that come with every request from the owner, or every form read: tests that look for others skip them. */
     private fun quiet(event: SetupEvent) = event is SetupEvent.DeadlineMoved || event == SetupEvent.FormRead
