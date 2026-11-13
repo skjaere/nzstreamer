@@ -78,9 +78,14 @@ internal class LinkConnection(
         return true
     }
 
-    /** Closes it now for [reason], unless it closed already; returns at once. */
+    /**
+     * Closes it now for [reason], unless it closed already; returns at once. Once it is ending ([finish], [endWith]), the
+     * peer leaving is no reason of its own: the peer leaves on the last word, and may be seen to go before the writer
+     * closes it, so it closes for the ending's reason.
+     */
     fun close(reason: LinkClose) {
-        if (!why.compareAndSet(null, reason)) return
+        val given = if (reason == LinkClose.PeerLeft) ending.get() ?: reason else reason
+        if (!why.compareAndSet(null, given)) return
         // The plain socket first: that ends a read or write under way at once, where an SSLSocket's own close may wait on
         // them, and owes a peer nothing more, not even a close_notify.
         plain.closeQuietly()

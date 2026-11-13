@@ -107,4 +107,28 @@ class LinkConnectionTest {
         assertTrue(took in 250..2_000, "closed after $took ms")
         assertEquals(LinkClose.Closed, connection.closeReason)
     }
+
+    /**
+     * Remove's refusal and Forget's Unpair (L30): the peer leaves on reading that last word, and its link's reader may see
+     * it go before the writer, which wrote the word, closes the connection. Here the writer never runs, so the reader sees
+     * the peer go first every time. This end still closed it, as both promise their handler.
+     */
+    @Test
+    fun `a peer that leaves on the last word leaves a connection this end closed`() {
+        val ends = mapOf<String, (LinkConnection) -> Unit>(
+            "endWith" to { c -> c.endWith(Refused(Refusal.NotPaired), LinkClose.Closed) },
+            "finish" to { c -> c.finish(LinkMessage.Unpair, LinkClose.Closed) },
+        )
+        for ((name, end) in ends) {
+            val (connection, ssl, other) = tlsUp()
+            assertTrue(connection.secured(ssl))
+            end(connection)
+            other.close()
+            // As a link's thread does with what it read.
+            val read = assertIs<LinkConnection.Next.Ended>(connection.next(), name)
+            assertEquals(LinkClose.PeerLeft, read.why, name)
+            connection.close(read.why)
+            assertEquals(LinkClose.Closed, connection.closeReason, name)
+        }
+    }
 }
