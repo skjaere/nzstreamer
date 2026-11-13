@@ -2,6 +2,7 @@ package io.skjaere.usenet.app.search
 
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.ktor.client.HttpClient
@@ -62,6 +63,8 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -189,8 +192,22 @@ class SearchViewModelTest {
             return this
         }
 
+        private val made = mutableListOf<SearchViewModel>()
+
         fun vm(initial: SearchRequest? = null): SearchViewModel =
             ViewModelProvider(store, viewModelFactory { initializer { SearchViewModel(deps, initial) } })[SearchViewModel::class.java]
+                .also { if (it !in made) made += it }
+
+        /**
+         * The view models cleared, and their coroutines waited for while Main is still the test's. A search on a thread of
+         * its own (the [Api]'s) ends there and resumes its collector on Main: after the test has reset Main, that throws,
+         * and a later test fails for it.
+         */
+        suspend fun clear() {
+            val jobs = made.map { it.viewModelScope.coroutineContext.job }
+            store.clear()
+            jobs.joinAll()
+        }
     }
 
     private fun TestScope.fixture() = Fixture().start(this)
@@ -425,14 +442,22 @@ class SearchViewModelTest {
     /** Real time for the searches' HTTP calls, which run off the test's clock. */
     private suspend fun meanwhile() = withContext(Dispatchers.Default) { delay(500) }
 
+    /** A test over [api]'s searches, on Dispatchers.IO: the view model is cleared at its end, its searches ended with it. */
+    private fun apiTest(api: Api = Api(), body: suspend TestScope.(Api, Fixture) -> Unit) = runTest {
+        val f = Fixture().start(this, api.search)
+        try {
+            body(api, f)
+        } finally {
+            f.clear()
+        }
+    }
+
     /**
      * The preview's searches go through MultiIndexerSearch, whose answers are reused for 15 minutes: back to words
      * searched a moment ago, the indexer isn't asked again. Its API calls, counted at the HTTP client.
      */
     @Test
-    fun `the preview's searches of the same words within 15 minutes call the indexer's API once`() = runTest {
-        val api = Api()
-        val f = Fixture().start(this, api.search)
+    fun `the preview's searches of the same words within 15 minutes call the indexer's API once`() = apiTest { api, f ->
         val vm = f.vm()
         suspend fun answered(text: String) {
             type(vm, text, ms = 1_001)
@@ -452,9 +477,7 @@ class SearchViewModelTest {
      * indexer is asked once, its answer to the first serving the second (it counts every call against a daily limit).
      */
     @Test
-    fun `Search indexers over the preview's own search of the words still on its way asks the indexer once`() = runTest {
-        val api = Api().apply { answer = CompletableDeferred() }
-        val f = Fixture().start(this, api.search)
+    fun `Search indexers over the preview's own search of the words still on its way asks the indexer once`() = apiTest(Api().apply { answer = CompletableDeferred() }) { api, f ->
         val vm = f.vm()
         type(vm, "quiet marsh", ms = 1_001)
         api.reached.await()
@@ -471,9 +494,7 @@ class SearchViewModelTest {
 
     /** The field tapped again while Search indexers still waits on a slow indexer: the preview's own search after the pause doesn't ask it again. */
     @Test
-    fun `the preview's own search after Search indexers of the same words still on its way asks the indexer once`() = runTest {
-        val api = Api().apply { answer = CompletableDeferred() }
-        val f = Fixture().start(this, api.search)
+    fun `the preview's own search after Search indexers of the same words still on its way asks the indexer once`() = apiTest(Api().apply { answer = CompletableDeferred() }) { api, f ->
         val vm = f.vm()
         type(vm, "quiet marsh", ms = 500)
         vm.searchIndexers()
