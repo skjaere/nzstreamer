@@ -66,17 +66,19 @@ English only for now.
 
 ## Install
 
-Each release has one APK, `NZStreamer.apk`, for phones, tablets and TVs. This address always gets the newest release's:
+Each release has one APK, `NZStreamer.apk`, for phones, tablets and TVs. This address always gets the newest release's
+APK:
 
 ```
 https://github.com/skjaere/nzstreamer/releases/latest/download/NZStreamer.apk
 ```
 
-It installs as NZStreamer Beta (`app.nzstreamer.beta`), the build every release is made from: Discover is in it, and
-debrid is hidden. It needs Android 8.0 or newer.
+It installs as NZStreamer Beta (`app.nzstreamer.beta`). Discover is in it, and debrid is hidden. It needs Android 8.0
+or newer.
 
 ### Phones and tablets
-1. Open the address above in the phone's browser, or tap `NZStreamer.apk` on the latest release's page.
+1. Open the address above in the phone's browser, or tap `NZStreamer.apk` on
+   [the latest release's page](https://github.com/skjaere/nzstreamer/releases/latest).
 2. Open the download. The first time, Android sends you to Install unknown apps for the browser (or the files app you
    opened it from): allow it, go back, and tap Install.
 
@@ -94,7 +96,7 @@ Amazon Appstore alone, so it can't install NZStreamer. On a smart TV with Fire T
    the first item, the device's name, about seven times; Developer Options shows one menu back.
 2. Install Downloader by AFTVnews: from Google Play on Android TV and Google TV, from the Amazon Appstore on Fire TV.
    On Fire TV, then allow it under Settings, My Fire TV, Developer Options, Install unknown apps.
-3. Open Downloader and type the address above into its text field. A short Downloader code for it may come later.
+3. Open Downloader and type the address above into its text field.
 4. Let Downloader install unknown apps, then choose Install. On Android TV and Google TV, choose Settings in the message
    that comes up after the download, and set Downloader to Allowed.
 
@@ -115,8 +117,7 @@ itself.
 
 1. In Obtainium, add an app with this repository's address, `https://github.com/skjaere/nzstreamer`.
 2. Install NZStreamer from Obtainium. If you installed it from the browser or Downloader already, keep it: removing it
-   would remove its settings. Obtainium then asks you to confirm its first update, as it didn't install the version you
-   have.
+   would remove its settings. Obtainium asks you to confirm its first update, as it didn't install the version you have.
 
 Obtainium then checks for new releases in the background. On Android 12 and newer it installs them in the background
 too, as long as it installed the version you have and its background updates are on. On older Android it tells you
