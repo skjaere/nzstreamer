@@ -32,7 +32,8 @@ content of its own.
 ### Player
 - Audio and subtitle choices remembered per show; preferred audio languages; subtitles when the audio isn't your
   first language; forced subtitles.
-- Skip intro and recap from the file's chapters; optional intro and credits times from TheIntroDB (off by default).
+- Skip intro and recap from the file's chapters; optional intro and credits times from TheIntroDB (off by default:
+  see Privacy).
 - Next-episode card and autoplay; previous and next episode.
 - File details: codecs, HDR and Dolby Vision profile, bitrate.
 - Says when the stream is slower than the video needs, and asks what to do when a release turns out to miss parts.
@@ -51,6 +52,13 @@ content of its own.
 ### Privacy
 - No account, analytics, ads or server of its own. Passwords and keys are stored encrypted with the Android Keystore.
   Logs leave the device only when you share them.
+- What leaves the device goes to your own providers, indexers and services, to TMDB with your own key, to TheIntroDB
+  while its switch is on, and to Google while its Cast software runs. Settings › Privacy in the app says what each one
+  gets.
+- TheIntroDB is off by default, because turning it on tells a third party what you watch. With its switch on, each
+  episode you start sends TheIntroDB the show's TMDB id, the season and episode, and the file's length, from your
+  internet address. Its terms say it keeps internet addresses for up to 30 days, so together that is a record of the
+  episodes watched from your connection. Films, release names and your providers or indexers are never sent to it.
 
 ### Not in every build
 - Discover: TMDB's lists of shows and movies (trending, popular, top rated, airing, upcoming and more), filtered by
