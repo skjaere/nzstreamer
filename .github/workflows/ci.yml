@@ -33,7 +33,8 @@ jobs:
     timeout-minutes: 60
     # glibc's malloc keeps an arena for each of the Gradle daemon's busy threads. Two arenas took the daemon of a
     # check running every task with two workers and a 3 GB heap from 5.4 to 4.6 GiB, and the build's processes from 6.6
-    # to 5.7 GiB together, in the same time. Its heap and Metaspace were the same.
+    # to 5.7 GiB together, in the same time. Its heap and Metaspace were the same. The memory figures for the flags
+    # below were measured with it.
     env:
       MALLOC_ARENA_MAX: "2"
     steps:
@@ -97,11 +98,12 @@ jobs:
 
       # GitHub's runner for a public repository has 4 CPUs and 16 GB. Four workers, one for each CPU, and one Gradle
       # daemon with a 4 GB heap, the Kotlin compiler inside it rather than in a daemon of its own. Each test task runs
-      # in one test JVM with Gradle's default heap of 512 MB, so at most four test JVMs run at once. On four CPUs with no
-      # Gradle cache, these flags kept the CPUs busy, and the build's processes peaked at 7.3 GB together: the daemon
-      # 5.7 GB, four test JVMs 1.5 GB. Two workers and a 3 GB heap took 15 minutes there, these 10. The beta step takes
-      # the same flags, so it reuses this daemon rather than start a second. JitPack can be slow to answer: longer
-      # HTTP timeouts.
+      # in one test JVM with Gradle's default heap of 512 MB, so at most four test JVMs run at once. On four CPUs with
+      # no Gradle cache, these flags kept the CPUs busy. Two workers and a 3 GB heap took 15 minutes there, these 10.
+      # The build's processes together peaked at 7.2 GiB (PSS). Each part's own peak came at another time: the daemon's
+      # at 5.6 GiB, four test JVMs' at 1.4 GiB, and that of the other processes the build starts at 1.5 GiB. Even all at
+      # once, that is 8.5 GiB: room on 16 GB. The beta step takes the same flags, so it reuses this daemon rather than
+      # start a second. JitPack can be slow to answer: longer HTTP timeouts.
       - name: Gradle check
         run: |
           ./gradlew check --continue \
