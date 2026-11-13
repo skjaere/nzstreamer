@@ -80,15 +80,17 @@ debrid is hidden. It needs Android 8.0 or newer.
    opened it from): allow it, go back, and tap Install.
 
 ### TVs
-1. Install Downloader by AFTVnews: from Google Play on Android TV and Google TV, from the Amazon Appstore on Fire TV.
-2. Open Downloader and type the address above into its text field. A short Downloader code for it may come later.
-3. Let Downloader install unknown apps, then choose Install. On Android TV and Google TV, choose Settings in the message
-   that comes up after the download, and set Downloader to Allowed. On Fire TV, allow it before the download, under
-   Settings, My Fire TV, Developer Options, Install unknown apps.
+1. On Google TV and Fire TV, turn on the TV's developer options first. On Google TV: Settings, System, About, then
+   select Android TV OS build until it says you are a developer. On Fire TV: Settings, My Fire TV, About, then select
+   the first item, the device's name, about seven times; Developer Options shows one menu back.
+2. Install Downloader by AFTVnews: from Google Play on Android TV and Google TV, from the Amazon Appstore on Fire TV.
+   On Fire TV, then allow it under Settings, My Fire TV, Developer Options, Install unknown apps.
+3. Open Downloader and type the address above into its text field. A short Downloader code for it may come later.
+4. Let Downloader install unknown apps, then choose Install. On Android TV and Google TV, choose Settings in the message
+   that comes up after the download, and set Downloader to Allowed.
 
-If that setting isn't there, turn on the TV's developer options first. On Google TV: Settings, System, About, then
-select Android TV OS build until it says you are a developer. On Fire TV: Settings, My Fire TV, About, then select the
-first item, the device's name, about seven times; Developer Options shows one menu back.
+If Downloader says Unknown Sources is disabled in place of that message, the developer options aren't on: do step 1,
+then download again.
 
 ### Staying up to date
 Obtainium installs apps from their releases and keeps them up to date. Get it from its GitHub releases, F-Droid or
