@@ -131,4 +131,28 @@ class LinkConnectionTest {
             assertEquals(LinkClose.Closed, connection.closeReason, name)
         }
     }
+
+    /**
+     * The same two ends with the peer gone before the last word could be written: the writer's write fails. This end
+     * still closed it, for the ending's reason, as both promise their handler.
+     */
+    @Test
+    fun `a last word the writer can't write leaves a connection this end closed`() {
+        val ends = mapOf<String, (LinkConnection) -> Unit>(
+            "endWith" to { c -> c.endWith(Refused(Refusal.NotPaired), LinkClose.Closed) },
+            "finish" to { c -> c.finish(LinkMessage.Unpair, LinkClose.Closed) },
+        )
+        for ((name, end) in ends) {
+            val (connection, ssl, _) = tlsUp()
+            assertTrue(connection.secured(ssl))
+            // Nothing more goes out on it: the writer's write fails, as it does once the peer is gone.
+            connection.plain.shutdownOutput()
+            end(connection)
+            // It may close before this returns: no answer from it is looked at.
+            connection.startWriter()
+            // Well within endWith's own deadline, which would close it for its reason whatever the writer did.
+            eventually("$name: still open once its writer failed") { connection.isClosed }
+            assertEquals(LinkClose.Closed, connection.closeReason, name)
+        }
+    }
 }

@@ -80,8 +80,9 @@ internal class LinkConnection(
 
     /**
      * Closes it now for [reason], unless it closed already; returns at once. Once it is ending ([finish], [endWith]), the
-     * peer leaving is no reason of its own: the peer leaves on the last word, and may be seen to go before the writer
-     * closes it, so it closes for the ending's reason.
+     * peer leaving is no reason of its own: it closes for the ending's reason. The peer may leave on the last word, and be
+     * seen to go before the writer closes it. It may have gone before the word went out, and the writer's write fails.
+     * Either way this end closed it.
      */
     fun close(reason: LinkClose) {
         val given = if (reason == LinkClose.PeerLeft) ending.get() ?: reason else reason
