@@ -106,8 +106,8 @@ then download again. If Play Protect blocks the install, choose Details, then In
 
 ### Staying up to date
 Obtainium installs apps from their releases and keeps them up to date. Get it from its GitHub releases, F-Droid or
-IzzyOnDroid. It runs on TVs too: in Downloader, type this address, which gets the APK of Obtainium's newest release
-that runs on every device:
+IzzyOnDroid. It runs on TVs too: in Downloader, type the code `4982362`, Downloader's short code for this address,
+which gets the APK of Obtainium's newest release that runs on every device:
 
 ```
 https://github.com/ImranR98/Obtainium/releases/latest/download/app-release.apk
