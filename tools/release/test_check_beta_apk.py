@@ -137,6 +137,30 @@ class CheckBetaApkTest(unittest.TestCase):
         self.assertEqual([f"apksigner verify --print-certs {staged}", f"aapt2 dump badging {staged}"], calls)
         self.assertIn("NZStreamer-Beta-0.1.0.apk", done.stdout)
 
+    def test_a_name_given_is_the_staged_copys_and_its_sha256_names_it(self):
+        done = self.run_check("--name", "NZStreamer.apk")
+        self.assertPasses(done)
+        staged = os.path.join(self.out, "NZStreamer.apk")
+        with open(staged, "rb") as f:
+            self.assertEqual(self.apk_bytes, f.read())
+        with open(staged + ".sha256") as f:
+            self.assertEqual(f"{hashlib.sha256(self.apk_bytes).hexdigest()}  NZStreamer.apk\n", f.read())
+        self.assertEqual({"NZStreamer.apk", "NZStreamer.apk.sha256"}, set(os.listdir(self.out)))
+        with open(self.log) as f:
+            calls = f.read().splitlines()
+        self.assertEqual([f"apksigner verify --print-certs {staged}", f"aapt2 dump badging {staged}"], calls)
+        self.assertIn("NZStreamer.apk passes", done.stdout)
+
+    def test_the_sha256_file_checks_its_apk_with_sha256sum(self):
+        for name in (None, "NZStreamer.apk"):
+            with self.subTest(name=name):
+                shutil.rmtree(self.out, ignore_errors=True)
+                self.assertPasses(self.run_check(*(("--name", name) if name else ())))
+                sha256, = (entry for entry in os.listdir(self.out) if entry.endswith(".sha256"))
+                checked = subprocess.run(["sha256sum", "-c", sha256], cwd=self.out, capture_output=True, text=True,
+                                         timeout=60)
+                self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+
     def test_a_local_beta_carries_its_code_in_its_name(self):
         self.write("badging.txt", badging(code="10001", name="0.1.0-beta.10001"))
         self.assertPasses(self.run_check(code="10001", version="0.1.0-beta.10001"))
@@ -260,6 +284,12 @@ class CheckBetaApkTest(unittest.TestCase):
                                              "--out", self.out],
             "an unknown option": ["--digest-file", self.digest_file, "--code", "10000", "--version", "0.1.0",
                                   "--out", self.out, "--clobber"],
+            "a name with no value": ["--digest-file", self.digest_file, "--code", "10000", "--version", "0.1.0",
+                                     "--out", self.out, "--name"],
+            **{f"the name {name!r}": ["--digest-file", self.digest_file, "--code", "10000", "--version", "0.1.0",
+                                      "--out", self.out, "--name", name]
+               for name in ("", "NZStreamer", "NZStreamer.zip", ".apk", "-x.apk", "apk/NZStreamer.apk",
+                            "../NZStreamer.apk", "NZ Streamer.apk")},
         }.items():
             with self.subTest(case):
                 done = subprocess.run(["bash", SCRIPT, *args], cwd=self.root, env=self.env, capture_output=True,

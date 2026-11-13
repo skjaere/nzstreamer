@@ -1,6 +1,6 @@
 # A release's APK: the beta at the release's own versionCode, built from the release's tag with the beta key, checked
-# as the site's publish script checks a beta, attached to the release's draft with its .sha256 and the licence files,
-# and the release then published with a licence footer in its notes.
+# as the site's publish script checks a beta, attached to the release's draft as NZStreamer.apk with its .sha256 and
+# the licence files, and the release then published with a licence footer in its notes.
 # release-please.yml calls it once it has made a release's draft. Run it by hand from main for a tag whose draft is
 # there, with publish off to look at the draft first. Nothing a pull request does can start it: it has no pull request
 # trigger, and its job runs in the release-signing environment, which holds the key's secrets and takes main alone. Every
@@ -196,7 +196,8 @@ jobs:
         run: rm -rf "$RUNNER_TEMP/beta"
 
       # Signed by the beta key alone (tools/beta-cert.sha256), the release's package, code and name, the secret check
-      # passed on these bytes, the two tests run in full. Stages the APK and its .sha256 for the upload.
+      # passed on these bytes, the two tests run in full. Stages the APK as NZStreamer.apk, and its .sha256, for the
+      # upload.
       - name: Check the APK
         env:
           CODE: ${{ steps.v.outputs.code }}
@@ -208,15 +209,16 @@ jobs:
             flags=(--canaries)
           fi
           bash tools/release/check-beta-apk.sh --digest-file tools/beta-cert.sha256 --code "$CODE" --version "$VERSION" \
-            --out "$RUNNER_TEMP/apk" "${flags[@]}"
+            --out "$RUNNER_TEMP/apk" --name NZStreamer.apk "${flags[@]}"
 
-      # No --clobber: a file already there fails the upload, so bytes once attached are never replaced.
+      # Every release's APK has the one name, so releases/latest/download/NZStreamer.apk always gets the newest. Its
+      # .sha256 names it, so sha256sum -c checks the download. One APK alone: an app that updates from the releases would
+      # ask which to take. No --clobber: a file already there fails the upload, so bytes once attached are never replaced.
       - name: Attach the APK and the licence files
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.v.outputs.version }}
         run: |
-          name=NZStreamer-Beta-$VERSION.apk
+          name=NZStreamer.apk
           gh release upload "$TAG" -R "$GITHUB_REPOSITORY" "$RUNNER_TEMP/apk/$name" "$RUNNER_TEMP/apk/$name.sha256" \
             LICENSE.md THIRD_PARTY_NOTICES.md LICENSES/Apache-2.0.txt
 

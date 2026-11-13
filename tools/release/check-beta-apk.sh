@@ -1,13 +1,16 @@
 #!/bin/bash
 # Checks a beta the build just made, and stages a copy of it for a release:
-#   tools/release/check-beta-apk.sh --digest-file <file> --code <N> --version <versionName> --out <folder> [--canaries]
+#   tools/release/check-beta-apk.sh --digest-file <file> --code <N> --version <versionName> --out <folder> \
+#       [--name <file name>] [--canaries]
 # Run it in the repository's top folder after
 #   ./gradlew -PbetaBuild=<N> -PexpectHideDebrid=true ... \
 #       :app:assembleBeta :app:testBetaUnitTest --tests '*HiddenBuildTest' --tests '*VersionCodeTest'
 # The release workflow runs it with tools/beta-cert.sha256, the beta key's certificate digest; CI runs it on a beta
 # signed with a throwaway key, with that key's digest.
 # It copies the APK the build's metadata names into <folder>, which must not exist yet, as
-# NZStreamer-Beta-<versionName>.apk with its .sha256 beside it, and from then on reads only that copy. It fails unless:
+# NZStreamer-Beta-<versionName>.apk, or as the --name given, a file name that ends in .apk (the release workflow gives
+# NZStreamer.apk). The .sha256 beside it names the copy by its file name alone, so sha256sum -c checks it in any folder
+# that holds the two. From then on the check reads only that copy. It fails unless:
 # - checkBetaHasNoDevSettings passed on those bytes: its report says so, its control shows that it read the dex, and it
 #   holds the copy's SHA-256 (with --canaries, it also counts the extra entries it looked for);
 # - HiddenBuildTest and VersionCodeTest each ran in that build, none skipped, failed or in error;
@@ -29,7 +32,7 @@ fail() {
 }
 usage() {
     echo "check-beta-apk: $*" >&2
-    echo "usage: tools/release/check-beta-apk.sh --digest-file <file> --code <N> --version <versionName> --out <folder> [--canaries]" >&2
+    echo "usage: tools/release/check-beta-apk.sh --digest-file <file> --code <N> --version <versionName> --out <folder> [--name <file name>] [--canaries]" >&2
     exit 2
 }
 warn() {
@@ -40,16 +43,17 @@ warn() {
     fi
 }
 
-digest_file='' code='' version='' out='' canaries=false
+digest_file='' code='' version='' out='' name='' named=false canaries=false
 while (($#)); do
     case $1 in
-        --digest-file | --code | --version | --out)
+        --digest-file | --code | --version | --out | --name)
             (($# >= 2)) || usage "$1 needs a value"
             case $1 in
                 --digest-file) digest_file=$2 ;;
                 --code) code=$2 ;;
                 --version) version=$2 ;;
                 --out) out=$2 ;;
+                --name) name=$2 named=true ;;
             esac
             shift 2
             ;;
@@ -60,6 +64,11 @@ done
 [[ -n $digest_file && -n $code && -n $version && -n $out ]] || usage "--digest-file, --code, --version and --out are all needed"
 [[ $code =~ ^[1-9][0-9]{0,9}$ ]] || usage "--code takes a versionCode, not '$code'"
 [[ $version =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]] || usage "--version takes a versionName, not '$version'"
+if $named; then
+    [[ $name =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*\.apk$ ]] || usage "--name takes a file name that ends in .apk, not '$name'"
+else
+    name=NZStreamer-Beta-$version.apk
+fi
 [[ -f $digest_file ]] || usage "no digest file at $digest_file"
 expected=$(tr -d '[:space:]' <"$digest_file")
 [[ $expected =~ ^[0-9a-f]{64}$ ]] || usage "$digest_file holds no SHA-256 digest (64 lower-case hex digits)"
@@ -82,7 +91,6 @@ print(names[0])
 [[ ! -e $out ]] || fail "$out exists: give a new folder, so no earlier file can pass for this build's"
 mkdir -p -- "$out"
 out=$(cd -- "$out" && pwd)
-name=NZStreamer-Beta-$version.apk
 staged=$out/$name
 cp -- "$APK_DIR/$built" "$staged"
 sha=$(sha256sum -- "$staged" | cut -d' ' -f1)

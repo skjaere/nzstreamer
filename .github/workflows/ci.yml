@@ -109,7 +109,7 @@ jobs:
 
       # The release's own beta (version.txt's code, -PbetaRelease=true), built as release-apk.yml builds it but signed with
       # a key made here and dropped after: debrid hidden, HiddenBuildTest and VersionCodeTest run in full, and the APK
-      # passes the release's checks against this key's certificate.
+      # passes the release's checks against this key's certificate, staged under the release's name.
       - name: A beta as the release builds it, with a throwaway key
         run: |
           umask 077
@@ -135,7 +135,7 @@ jobs:
             -PbetaBuild="$code" -PbetaRelease=true -PexpectHideDebrid=true \
             :app:assembleBeta :app:testBetaUnitTest --tests '*HiddenBuildTest' --tests '*VersionCodeTest'
           bash tools/release/check-beta-apk.sh --digest-file "$dir/cert.sha256" --code "$code" --version "$version" \
-            --out "$dir/apk"
+            --out "$dir/apk" --name NZStreamer.apk
 
       - name: Remove the throwaway key
         if: always()
