@@ -38,7 +38,8 @@ subprojects {
 // about 15 s on CI. A test runs on a thread of its own: at the limit JUnit gives up on that thread and fails the test with
 // its stack, so a hang names its test and where it was stuck, and the tests after it still run. The limit is off while a
 // debugger is attached. A test task has 30 minutes: that limit catches a hang outside any test. A failure's whole stack
-// goes to the build's output, so CI's log shows where a test was stuck.
+// goes to the build's output, so CI's log shows where a test was stuck. The runs by hand that a -P property turns on
+// (serveSpike, serveProbe, debridLive, linkPeer) take as long as they need: their modules turn both limits off for them.
 subprojects {
     tasks.withType<Test>().configureEach {
         systemProperty("junit.jupiter.execution.timeout.default", "2m")

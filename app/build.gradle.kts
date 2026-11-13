@@ -386,6 +386,9 @@ android {
         }
         if ("serveSpike" in serveSpike) {
             serveSpike.forEach { (name, value) -> it.systemProperty(name, value) }
+            // A run by hand takes as long as it needs, so the root build's limits are off for it.
+            it.systemProperty("junit.jupiter.execution.timeout.mode", "disabled")
+            it.timeout.unset()
             it.outputs.upToDateWhen { false }
             it.outputs.cacheIf { false }
             it.testLogging {

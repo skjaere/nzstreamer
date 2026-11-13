@@ -27,6 +27,9 @@ tasks.test {
     useJUnitPlatform()
     if (linkPeer != null) {
         systemProperty("linkPeer", linkPeer)
+        // A run by hand takes as long as it needs, so the root build's limits are off for it.
+        systemProperty("junit.jupiter.execution.timeout.mode", "disabled")
+        timeout.unset()
         outputs.upToDateWhen { false }
         outputs.cacheIf { false }
         testLogging {

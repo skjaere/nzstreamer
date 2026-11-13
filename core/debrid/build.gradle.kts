@@ -44,6 +44,9 @@ tasks.test {
     useJUnitPlatform()
     if (debridLive) {
         val test = this
+        // A run by hand takes as long as it needs, so the root build's limits are off for it.
+        systemProperty("junit.jupiter.execution.timeout.mode", "disabled")
+        timeout.unset()
         val localProperties = rootProject.file("local.properties")
         outputs.upToDateWhen { false }
         outputs.cacheIf { false }
