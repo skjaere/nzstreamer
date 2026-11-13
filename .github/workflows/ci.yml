@@ -25,9 +25,10 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     # With the flags below, a check with no Gradle cache took 10 minutes on four CPUs that build it a fifth faster than
-    # this runner does. A test task stops at 30 minutes (the root build.gradle.kts). An hour leaves room for such a run
-    # with a hung test task: the build fails that task, and the reports are uploaded. A job that reaches its limit is
-    # cancelled, and a cancelled job uploads no reports.
+    # this runner does: about 13 minutes here, after about 2 minutes of setup. A test task stops at 15 minutes (the root
+    # build.gradle.kts). An Android module runs its debug and its release unit tests one after the other, so a hang in
+    # both takes 30 minutes. An hour leaves room for that: the build fails those tasks, and the reports are uploaded. A
+    # job that reaches its limit is cancelled, and its reports are uploaded all the same.
     timeout-minutes: 60
     # glibc's malloc keeps an arena for each of the Gradle daemon's busy threads. Two arenas took the daemon of a
     # check running every task with two workers and a 3 GB heap from 5.4 to 4.6 GiB, and the build's processes from 6.6
@@ -141,8 +142,9 @@ jobs:
         if: always()
         run: rm -rf "$RUNNER_TEMP/throwaway-beta"
 
+      # Also when the job is cancelled, at its limit say: the tasks that ended have their reports.
       - name: Upload the reports
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: reports

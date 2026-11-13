@@ -206,7 +206,7 @@ into a release build, so don't share a debug APK built with them.
 - Lint's TV checks are errors. `app/lint-baseline.xml` holds the issues there were when they were turned on, so
   only new ones fail.
 
-Each unit test has 2 minutes and each test task 30 minutes, in every module (the root `build.gradle.kts` sets both). A
+Each unit test has 2 minutes and each test task 15 minutes, in every module (the root `build.gradle.kts` sets both). A
 test that hangs fails with its name and its thread's stack, and the tests after it still run. For a test in
 `runBlocking`, that stack ends at its `runBlocking` line, not at the call the coroutine waits in. The test's limit is off
 while a debugger is attached. The runs against a device, a TV or an account that a `-P` property turns on
