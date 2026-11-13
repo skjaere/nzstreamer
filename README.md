@@ -208,9 +208,10 @@ into a release build, so don't share a debug APK built with them.
 
 Each unit test has 2 minutes and each test task 15 minutes, in every module (the root `build.gradle.kts` sets both). A
 test that hangs fails with its name and its thread's stack, and the tests after it still run. For a test in
-`runBlocking`, that stack ends at its `runBlocking` line, not at the call the coroutine waits in. The test's limit is off
-while a debugger is attached. The runs against a device, a TV or an account that a `-P` property turns on
-(`serveSpike`, `serveProbe`, `debridLive` and `linkPeer`) have neither limit: they take as long as they need.
+`runBlocking`, that stack ends at its `runBlocking` line, not at the call the coroutine waits in. The test's limit is
+off while a debugger is attached. A test task stopped at its limit writes no report, and the log names the tests it was
+running, as skipped. The runs against a device, a TV or an account that a `-P` property turns on (`serveSpike`,
+`serveProbe`, `debridLive` and `linkPeer`) have neither limit: they take as long as they need.
 
 ### Device tests
 Instrumented tests run on an emulator or a device: `./gradlew :app:connectedDebugAndroidTest`. The tests that stream

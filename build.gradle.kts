@@ -39,9 +39,10 @@ subprojects {
 // the thread's stack, and the tests after it still run. So a hang names its test and the line its thread waits at. For a
 // test in runBlocking, that is its runBlocking line: the stack doesn't show the call the coroutine is suspended in. The
 // limit is off while a debugger is attached. A test task has 15 minutes, over ten times the slowest task's time: that
-// limit catches a hang outside any test. A failure's whole stack goes to the build's output, so CI's log shows it. The
-// runs by hand that a -P property turns on (serveSpike, serveProbe, debridLive, linkPeer) take as long as they need:
-// their modules turn both limits off for them.
+// limit catches a hang outside any test. A task stopped there writes no report, and the tests it was running end as
+// skipped: skipped tests are logged, so the log names them. A failure's whole stack goes to the build's output, so CI's
+// log shows it. The runs by hand that a -P property turns on (serveSpike, serveProbe, debridLive, linkPeer) take as long
+// as they need: their modules turn both limits off for them.
 subprojects {
     tasks.withType<Test>().configureEach {
         systemProperty("junit.jupiter.execution.timeout.default", "2m")
@@ -49,5 +50,6 @@ subprojects {
         systemProperty("junit.jupiter.execution.timeout.mode", "disabled_on_debug")
         timeout.set(Duration.ofMinutes(15))
         testLogging.exceptionFormat = TestExceptionFormat.FULL
+        testLogging.events("failed", "skipped")
     }
 }

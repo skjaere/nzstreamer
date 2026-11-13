@@ -27,8 +27,9 @@ jobs:
     # With the flags below, a check with no Gradle cache took 10 minutes on four CPUs that build it a fifth faster than
     # this runner does: about 13 minutes here, after about 2 minutes of setup. A test task stops at 15 minutes (the root
     # build.gradle.kts). An Android module runs its debug and its release unit tests one after the other, so a hang in
-    # both takes 30 minutes. An hour leaves room for that: the build fails those tasks, and the reports are uploaded. A
-    # job that reaches its limit is cancelled, and its reports are uploaded all the same.
+    # both takes 30 minutes. An hour leaves room for that. A task stopped at its limit writes no report, but the log
+    # names the tests it was running, as skipped. The other tasks' reports are uploaded, also when the job reaches its
+    # limit and is cancelled.
     timeout-minutes: 60
     # glibc's malloc keeps an arena for each of the Gradle daemon's busy threads. Two arenas took the daemon of a
     # check running every task with two workers and a 3 GB heap from 5.4 to 4.6 GiB, and the build's processes from 6.6
