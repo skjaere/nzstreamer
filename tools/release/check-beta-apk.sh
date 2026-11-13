@@ -8,9 +8,10 @@
 # The release workflow runs it with tools/beta-cert.sha256, the beta key's certificate digest; CI runs it on a beta
 # signed with a throwaway key, with that key's digest.
 # It copies the APK the build's metadata names into <folder>, which must not exist yet, as
-# NZStreamer-Beta-<versionName>.apk, or as the --name given, a file name that ends in .apk (the release workflow gives
-# NZStreamer.apk). The .sha256 beside it names the copy by its file name alone, so sha256sum -c checks it in any folder
-# that holds the two. From then on the check reads only that copy. It fails unless:
+# NZStreamer-Beta-<versionName>.apk, or as the --name given: a file name of letters, digits and . _ + -, starting with a
+# letter or digit and ending in .apk (the release workflow gives NZStreamer.apk). The .sha256 beside it names the copy
+# by its file name alone, so sha256sum -c checks it in any folder that holds the two. From then on the check reads only
+# that copy. It fails unless:
 # - checkBetaHasNoDevSettings passed on those bytes: its report says so, its control shows that it read the dex, and it
 #   holds the copy's SHA-256 (with --canaries, it also counts the extra entries it looked for);
 # - HiddenBuildTest and VersionCodeTest each ran in that build, none skipped, failed or in error;
@@ -65,7 +66,7 @@ done
 [[ $code =~ ^[1-9][0-9]{0,9}$ ]] || usage "--code takes a versionCode, not '$code'"
 [[ $version =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]] || usage "--version takes a versionName, not '$version'"
 if $named; then
-    [[ $name =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*\.apk$ ]] || usage "--name takes a file name that ends in .apk, not '$name'"
+    [[ $name =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*\.apk$ ]] || usage "--name takes a file name of letters, digits and . _ + -, starting with a letter or digit and ending in .apk, not '$name'"
 else
     name=NZStreamer-Beta-$version.apk
 fi

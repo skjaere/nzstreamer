@@ -296,6 +296,10 @@ class CheckBetaApkTest(unittest.TestCase):
                                       text=True, timeout=60)
                 self.assertEqual(2, done.returncode, done.stdout + done.stderr)
                 self.assertFalse(os.path.exists(self.out))
+                if case.startswith("the name "):
+                    # The message states the whole rule: most of these names end in .apk and break another part.
+                    self.assertIn("--name takes a file name of letters, digits and . _ + -, starting with a letter or "
+                                  "digit and ending in .apk, not ", done.stderr)
 
 
 if __name__ == "__main__":
