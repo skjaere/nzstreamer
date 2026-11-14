@@ -38,3 +38,20 @@ python3 -I -B tools/screens/test_art.py
 It needs Python 3 and Pillow (10 or newer). Another Pillow or libjpeg may draw a few pixels differently. The test
 checks that a seed always draws the same bytes and that the assets hold exactly the images
 the catalogue names.
+
+## Releases and lookups
+
+mock-seed serves the catalogue's releases as a Newznab indexer, with the mock NNTP server running (see the main
+README's device tests):
+
+```sh
+./gradlew :tools:mock-seed:run --args="indexer --catalog screens --video <clip> --port <port>"
+```
+
+Give the clip's full path: Gradle runs the tool from the repository's top folder. Every release lists a size of its
+own. Only the two the screenshots play (`ScreensCatalog.PLAYABLE`) carry the clip; the others are seeded with every
+article missing, so a play of one fails at once rather than show the clip under another release's name.
+
+On the device, `ScreensTitles` reads the same catalogue and builds a strict `FakeTmdb` from it: searches are answered
+from the catalogue alone, a lookup of any other title, season or key fails the run, and nothing goes to TMDB. `ScaleImages.screens` answers the pictures'
+paths with the images above, and fails the run on a path it has no image for. Both live in `app/src/androidTest`.

@@ -15,6 +15,8 @@ dependencies {
     implementation(libs.kotlin.compression.utils)
     implementation(libs.rapidyenc.wrapper)
     implementation(libs.kotlinx.coroutines.core)
+    // The README screens catalogue (indexer --catalog screens) is JSON.
+    implementation(libs.kotlinx.serialization.json)
     runtimeOnly(libs.slf4j.simple)
 
     // The fake indexer is tested with the app's own client, and the debrid fake with the app's service clients.
@@ -27,6 +29,9 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+    // ScreensCatalogTest reads the screens catalogue from the app's androidTest assets.
+    inputs.file(rootProject.file("app/src/androidTest/assets/screens/catalog.json"))
+        .withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("screensCatalog")
 }
 
 application {

@@ -110,7 +110,7 @@ class FakeIndexerServer(
     }
 
     private fun item(release: FakeRelease, nzb: String, host: String): String {
-        val size = Regex("""bytes="(\d+)"""").findAll(nzb).sumOf { it.groupValues[1].toLong() }
+        val size = release.sizeBytes ?: Regex("""bytes="(\d+)"""").findAll(nzb).sumOf { it.groupValues[1].toLong() }
         val date = now.minusDays(release.ageDays.toLong()).format(DateTimeFormatter.RFC_1123_DATE_TIME)
         val link = xmlText("http://$host/api?t=get&id=${release.guid}&apikey=$apiKey")
         val attrs = listOfNotNull(

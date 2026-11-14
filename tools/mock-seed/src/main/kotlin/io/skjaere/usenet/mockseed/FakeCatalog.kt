@@ -26,6 +26,8 @@ data class FakeRelease(
     val language: String? = null,
     /** Which clip the files contain. */
     val clip: Clip = Clip.Default,
+    /** The size the listing gives, as a real release of its kind would have; null for the NZB's own, its segments' sum. */
+    val sizeBytes: Long? = null,
 )
 
 enum class Clip {

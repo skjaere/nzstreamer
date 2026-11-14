@@ -22,6 +22,7 @@ import kotlin.system.exitProcess
  *   verify --nzb <nzb> --video <file> [--host localhost] [--port 1119]
  *   probe  --host <host> --port <port> [--tls true]
  *   indexer [--video build/sample.mkv] [--eac3-video build/sample-eac3.mkv] [--mock http://localhost:8081] [--port 8089] [--apikey fake-indexer-key] [--grab-limit <n>] [--api-limit <n>]
+ *   indexer --catalog screens --video <clip> [--mock http://localhost:8081] [--port 8089] [--apikey fake-indexer-key] [--segment 750000] [--catalog-file app/src/androidTest/assets/screens/catalog.json]
  *   torznab [--port 8096] [--apikey fake-torznab-key] [--extra-hash <hex> --extra-title <title>] [--fail 429-900] [--delay-ms <n>]
  *   debrid  [--port 8097] [--torbox-key fake-torbox-key] [--premiumize-key fake-premiumize-key] [--media build]
  */
@@ -32,7 +33,11 @@ fun main(args: Array<String>) {
         "seed" -> seed(options)
         "verify" -> verify(options)
         "probe" -> probe(options)
-        "indexer" -> indexer(options)
+        "indexer" -> when (options["catalog"]) {
+            null -> indexer(options)
+            "screens" -> serveScreens(options)
+            else -> usage()
+        }
         "torznab" -> serveTorznab(options)
         "debrid" -> serveDebrid(options)
         else -> usage()
@@ -46,6 +51,7 @@ private fun usage(): Nothing {
         verify --nzb <nzb> --video <file> [--host localhost] [--port 1119]
         probe  --host <host> --port <port> [--tls true]
         indexer [--video build/sample.mkv] [--eac3-video build/sample-eac3.mkv] [--mock http://localhost:8081] [--port 8089] [--apikey fake-indexer-key] [--grab-limit <n>] [--api-limit <n>]
+        indexer --catalog screens --video <clip> [--mock http://localhost:8081] [--port 8089] [--apikey fake-indexer-key] [--segment 750000] [--catalog-file app/src/androidTest/assets/screens/catalog.json]
         torznab [--port 8096] [--apikey fake-torznab-key] [--extra-hash <hex> --extra-title <title>] [--fail 429-900] [--delay-ms <n>]
         debrid  [--port 8097] [--torbox-key fake-torbox-key] [--premiumize-key fake-premiumize-key] [--media build]
         """.trimIndent()
@@ -172,6 +178,44 @@ private fun indexer(options: Map<String, String>) {
     println("Fake indexer on http://localhost:${server.port}/api (emulator: http://10.0.2.2:${server.port}), API key $apiKey")
     println("Show ids: ${FakeCatalog.HARBOR_LIGHTS}; movie ids: ${FakeCatalog.COPPER_CROWN}. Ctrl+C to stop.")
     Thread.currentThread().join()
+}
+
+private fun serveScreens(options: Map<String, String>) {
+    val server = try {
+        screensIndexer(options)
+    } catch (e: IllegalArgumentException) {
+        System.err.println(e.message)
+        usage()
+    }
+    server.use { Thread.currentThread().join() }
+}
+
+/**
+ * The README screenshots' indexer ([ScreensCatalog]): the clip seeded under each of its releases, whole for the ones
+ * the screenshots play and with every article missing for the others, and served as a Newznab API (emulator:
+ * http://10.0.2.2:<port>). tools/screens/make-clip.sh makes the clip. Throws IllegalArgumentException for options it
+ * can't take.
+ */
+internal fun screensIndexer(options: Map<String, String>, log: (String) -> Unit = ::println): FakeIndexerServer {
+    val clip = File(options["video"] ?: throw IllegalArgumentException("--catalog screens takes --video <clip>; tools/screens/make-clip.sh makes one"))
+    require(clip.isFile) { "${clip.path} missing; tools/screens/make-clip.sh makes it" }
+    val catalog = File(options["catalog-file"] ?: ScreensCatalog.FILE)
+    require(catalog.isFile) { "${catalog.path} missing: run from the repository's top folder, or give --catalog-file" }
+    val segment = options["segment"]?.let { requireNotNull(it.toIntOrNull()?.takeIf { size -> size > 0 }) { "--segment takes a size in bytes" } } ?: 750_000
+    val data = clip.readBytes()
+    val parts = (data.size + segment - 1) / segment
+    val seeder = MockSeeder(mockHttpUrl = options["mock"] ?: "http://localhost:8081", segmentSize = segment)
+    val releases = ScreensCatalog.releases(catalog).map { release ->
+        release to seeder.seed(release.fileNames.map { SeedFile(it, data) }, tag = release.guid, missingParts = ScreensCatalog.missingParts(release, parts))
+    }
+    val apiKey = options["apikey"] ?: "fake-indexer-key"
+    val server = FakeIndexerServer(releases, apiKey, port = options["port"]?.toInt() ?: 8089)
+    releases.forEach { (release, _) ->
+        val seeded = if (release.guid in ScreensCatalog.PLAYABLE) "seeded whole" else "listed, every article missing"
+        log("  ${release.guid.padEnd(30)} ${release.title}  ($seeded)")
+    }
+    log("Fake indexer (screens) on http://localhost:${server.port}/api (emulator: http://10.0.2.2:${server.port}), API key $apiKey. Ctrl+C to stop.")
+    return server
 }
 
 private fun serveTorznab(options: Map<String, String>) {
