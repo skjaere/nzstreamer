@@ -23,6 +23,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
+import io.skjaere.usenet.app.BuildConfig
 import io.skjaere.usenet.app.ImmersiveHintSeen
 import io.skjaere.usenet.app.MainActivity
 import io.skjaere.usenet.app.PlayerActivity
@@ -63,7 +64,8 @@ import kotlin.math.abs
 /**
  * The README's screenshots, staged over invented titles and taken on the emulators (tools/screens/capture.sh runs it):
  * P1-P5 on a phone, T1-T4 on a TV, each test skipped on the other. Skipped unless the instrumentation argument
- * `screens=true` is given, so no other run of the device tests takes it.
+ * `screens=true` is given, so no other run of the device tests takes it; given it, any build but the bench build with
+ * debrid hidden fails the run ([ScreensRun]).
  *
  * Everything shown is staged ([ScreensStage]): the screens catalogue's shows and films, answered by its strict FakeTmdb,
  * their pictures drawn by tools/screens/art.py, and their releases served by mock-seed's `indexer --catalog screens`
@@ -96,6 +98,7 @@ class ReadmeScreensTest {
         val arguments = InstrumentationRegistry.getArguments()
         assumeTrue("the README screenshots run with the instrumentation argument screens=true alone", arguments.getString("screens") == "true")
         assumeTrue("the screenshots are taken on Android 12 or later", Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+        ScreensRun.buildProblem(BuildConfig.BUILD_TYPE, BuildConfig.HIDE_DEBRID)?.let { throw IllegalStateException(it) }
         val indexer = requireNotNull(arguments.getString("screensIndexer")) { "screensIndexer: the screens indexer's address, as http://10.0.2.2:<port>" }
         val key = arguments.getString("screensIndexerKey") ?: DEFAULT_INDEXER_KEY
         stage = ScreensStage(ScreensTitles(), indexer, key).open()
