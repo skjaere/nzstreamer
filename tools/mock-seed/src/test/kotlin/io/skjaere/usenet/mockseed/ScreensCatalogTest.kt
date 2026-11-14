@@ -17,6 +17,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.random.Random
 import kotlin.test.assertContains
@@ -147,6 +148,37 @@ class ScreensCatalogTest {
         assertContains(refused("video" to File(dir, "none.mkv").path), "none.mkv missing")
         assertContains(refused("video" to clip.path, "segment" to "a lot"), "--segment")
         assertContains(refused("video" to clip.path, "segment" to "0"), "--segment")
+    }
+
+    @Test
+    fun `the command takes a port of its own, given, and fails on a taken one before it seeds anything`(@TempDir dir: File) {
+        val posted = CopyOnWriteArrayList<String>()
+        val mock = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0).apply {
+            createContext("/mocks/") { exchange ->
+                posted += exchange.requestURI.path
+                exchange.sendResponseHeaders(200, -1)
+                exchange.close()
+            }
+            start()
+        }
+        val taken = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        try {
+            val clip = File(dir, "clip.mkv").apply { writeBytes(Random(7).nextBytes(350_000)) }
+            val options = mapOf(
+                "catalog" to "screens", "video" to clip.path, "mock" to "http://127.0.0.1:${mock.address.port}", "segment" to "100000",
+                "catalog-file" to catalog.path,
+            )
+            fun refused(vararg port: Pair<String, String>) = assertFailsWith<IllegalArgumentException> { screensIndexer(options + port, log = {}).close() }.message!!
+            // None given would be the device tests' fake indexer's, 8089, or a port beside it.
+            assertContains(refused(), "--port")
+            assertContains(refused("port" to "8089"), "--port")
+            assertContains(refused("port" to "8092"), "--port")
+            assertContains(refused("port" to "${taken.localPort}"), "${taken.localPort} is taken")
+            assertEquals(emptyList(), posted, "nothing seeded")
+        } finally {
+            taken.close()
+            mock.stop(0)
+        }
     }
 
     private fun fakeNzb(guid: String) =

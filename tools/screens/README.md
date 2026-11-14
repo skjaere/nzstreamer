@@ -48,8 +48,9 @@ README's device tests):
 ./gradlew :tools:mock-seed:run --args="indexer --catalog screens --video <clip> --port <port>"
 ```
 
-Give the clip's full path: Gradle runs the tool from the repository's top folder. Every release lists a size of its
-own. Only the two the screenshots play (`ScreensCatalog.PLAYABLE`) carry the clip; the others are seeded with every
+Give the clip's full path, as Gradle runs the tool from the repository's top folder, and a port of 8093 or above: 8089
+is the device tests' fake indexer's. The port is taken before the clip is seeded, so one in use fails at once. Every
+release lists a size of its own. Only the two the screenshots play (`ScreensCatalog.PLAYABLE`) carry the clip; the others are seeded with every
 article missing, so a play of one fails at once rather than show the clip under another release's name.
 
 On the device, `ScreensTitles` reads the same catalogue and builds a strict `FakeTmdb` from it: searches are answered

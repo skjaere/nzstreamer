@@ -11,15 +11,18 @@ import java.util.concurrent.atomic.AtomicInteger
 /**
  * A minimal Newznab API over [releases] (`caps`, `search`, `tvsearch`, `movie`, `get`),
  * answering the way common indexers do: XML, error documents with Newznab codes, API and
- * grab counters. Development only.
+ * grab counters. Its port is taken when it is made; [serve] can give it its releases later,
+ * once they are seeded. Development only.
  */
 class FakeIndexerServer(
-    private val releases: List<Pair<FakeRelease, String>>,
+    releases: List<Pair<FakeRelease, String>>,
     private val apiKey: String,
     port: Int,
     private val grabLimit: Int? = null,
     private val apiLimit: Int = 1000,
 ) : AutoCloseable {
+    @Volatile
+    private var releases: List<Pair<FakeRelease, String>> = releases
     private val server = HttpServer.create(InetSocketAddress(port), 0)
     private val apiCalls = AtomicInteger()
     private val grabs = AtomicInteger()
@@ -31,6 +34,11 @@ class FakeIndexerServer(
         server.createContext("/api") { exchange -> exchange.use { handle(it) } }
         server.executor = Executors.newFixedThreadPool(4)
         server.start()
+    }
+
+    /** Lists [releases] from now on, in place of the ones it had. */
+    fun serve(releases: List<Pair<FakeRelease, String>>) {
+        this.releases = releases
     }
 
     override fun close() {

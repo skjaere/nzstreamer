@@ -14,6 +14,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.net.BindException
 import kotlin.system.exitProcess
 
 /**
@@ -22,7 +23,7 @@ import kotlin.system.exitProcess
  *   verify --nzb <nzb> --video <file> [--host localhost] [--port 1119]
  *   probe  --host <host> --port <port> [--tls true]
  *   indexer [--video build/sample.mkv] [--eac3-video build/sample-eac3.mkv] [--mock http://localhost:8081] [--port 8089] [--apikey fake-indexer-key] [--grab-limit <n>] [--api-limit <n>]
- *   indexer --catalog screens --video <clip> [--mock http://localhost:8081] [--port 8089] [--apikey fake-indexer-key] [--segment 750000] [--catalog-file app/src/androidTest/assets/screens/catalog.json]
+ *   indexer --catalog screens --video <clip> --port <8093 or above> [--mock http://localhost:8081] [--apikey fake-indexer-key] [--segment 750000] [--catalog-file app/src/androidTest/assets/screens/catalog.json]
  *   torznab [--port 8096] [--apikey fake-torznab-key] [--extra-hash <hex> --extra-title <title>] [--fail 429-900] [--delay-ms <n>]
  *   debrid  [--port 8097] [--torbox-key fake-torbox-key] [--premiumize-key fake-premiumize-key] [--media build]
  */
@@ -51,7 +52,7 @@ private fun usage(): Nothing {
         verify --nzb <nzb> --video <file> [--host localhost] [--port 1119]
         probe  --host <host> --port <port> [--tls true]
         indexer [--video build/sample.mkv] [--eac3-video build/sample-eac3.mkv] [--mock http://localhost:8081] [--port 8089] [--apikey fake-indexer-key] [--grab-limit <n>] [--api-limit <n>]
-        indexer --catalog screens --video <clip> [--mock http://localhost:8081] [--port 8089] [--apikey fake-indexer-key] [--segment 750000] [--catalog-file app/src/androidTest/assets/screens/catalog.json]
+        indexer --catalog screens --video <clip> --port <8093 or above> [--mock http://localhost:8081] [--apikey fake-indexer-key] [--segment 750000] [--catalog-file app/src/androidTest/assets/screens/catalog.json]
         torznab [--port 8096] [--apikey fake-torznab-key] [--extra-hash <hex> --extra-title <title>] [--fail 429-900] [--delay-ms <n>]
         debrid  [--port 8097] [--torbox-key fake-torbox-key] [--premiumize-key fake-premiumize-key] [--media build]
         """.trimIndent()
@@ -193,8 +194,9 @@ private fun serveScreens(options: Map<String, String>) {
 /**
  * The README screenshots' indexer ([ScreensCatalog]): the clip seeded under each of its releases, whole for the ones
  * the screenshots play and with every article missing for the others, and served as a Newznab API (emulator:
- * http://10.0.2.2:<port>). tools/screens/make-clip.sh makes the clip. Throws IllegalArgumentException for options it
- * can't take.
+ * http://10.0.2.2:<port>). tools/screens/make-clip.sh makes the clip. Its port is given, 8093 or above (0 for any free
+ * one), never the device tests' fake indexer's 8089 or the ports beside it, and taken before anything is seeded, so a
+ * port in use fails at once. Throws IllegalArgumentException for options it can't take and for a taken port.
  */
 internal fun screensIndexer(options: Map<String, String>, log: (String) -> Unit = ::println): FakeIndexerServer {
     val clip = File(options["video"] ?: throw IllegalArgumentException("--catalog screens takes --video <clip>; tools/screens/make-clip.sh makes one"))
@@ -202,14 +204,27 @@ internal fun screensIndexer(options: Map<String, String>, log: (String) -> Unit 
     val catalog = File(options["catalog-file"] ?: ScreensCatalog.FILE)
     require(catalog.isFile) { "${catalog.path} missing: run from the repository's top folder, or give --catalog-file" }
     val segment = options["segment"]?.let { requireNotNull(it.toIntOrNull()?.takeIf { size -> size > 0 }) { "--segment takes a size in bytes" } } ?: 750_000
-    val data = clip.readBytes()
-    val parts = (data.size + segment - 1) / segment
-    val seeder = MockSeeder(mockHttpUrl = options["mock"] ?: "http://localhost:8081", segmentSize = segment)
-    val releases = ScreensCatalog.releases(catalog).map { release ->
-        release to seeder.seed(release.fileNames.map { SeedFile(it, data) }, tag = release.guid, missingParts = ScreensCatalog.missingParts(release, parts))
+    val port = requireNotNull(options["port"]?.toIntOrNull()?.takeIf { it == 0 || it in 8093..65535 }) {
+        "--catalog screens takes --port <port>, 8093 or above: 8089 is the device tests' fake indexer, and the ports beside it are left to it"
     }
     val apiKey = options["apikey"] ?: "fake-indexer-key"
-    val server = FakeIndexerServer(releases, apiKey, port = options["port"]?.toInt() ?: 8089)
+    val server = try {
+        FakeIndexerServer(emptyList(), apiKey, port)
+    } catch (e: BindException) {
+        throw IllegalArgumentException("port $port is taken", e)
+    }
+    val releases = try {
+        val data = clip.readBytes()
+        val parts = (data.size + segment - 1) / segment
+        val seeder = MockSeeder(mockHttpUrl = options["mock"] ?: "http://localhost:8081", segmentSize = segment)
+        ScreensCatalog.releases(catalog).map { release ->
+            release to seeder.seed(release.fileNames.map { SeedFile(it, data) }, tag = release.guid, missingParts = ScreensCatalog.missingParts(release, parts))
+        }
+    } catch (t: Throwable) {
+        server.close()
+        throw t
+    }
+    server.serve(releases)
     releases.forEach { (release, _) ->
         val seeded = if (release.guid in ScreensCatalog.PLAYABLE) "seeded whole" else "listed, every article missing"
         log("  ${release.guid.padEnd(30)} ${release.title}  ($seeded)")
