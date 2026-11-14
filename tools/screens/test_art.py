@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Tests of tools/screens/art.py: a seed always draws the same picture, and the assets hold exactly the
-images the screens catalogue names. Needs Pillow.
+images the screens catalogue names, each the one art.py draws for it. Needs Pillow.
 
   python3 -I -B tools/screens/test_art.py
 """
+import io
 import json
 import os
 import sys
@@ -11,8 +12,18 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import art  # noqa: E402
+from PIL import Image, ImageChops, ImageStat  # noqa: E402
 
 MOTIFS = ("harbour", "lighthouse", "island", "rail", "town", "fen", "canal", "hills")
+
+# How far, on average over its pixels and channels (0 to 255), a picture in the assets may be from art.py's drawing of
+# it. Another Pillow or libjpeg encodes a few pixels differently (the same picture saved at quality 70 rather than 85 is
+# about 1 away); another picture is 30 or more.
+MAX_MEAN_DIFFERENCE = 3
+
+
+def mean_difference(a, b):
+    return sum(ImageStat.Stat(ImageChops.difference(a, b)).mean) / 3
 
 
 class SeedTest(unittest.TestCase):
@@ -54,6 +65,20 @@ class CatalogueTest(unittest.TestCase):
     def test_the_assets_hold_every_image_the_catalogue_names_and_no_other(self):
         on_disk = {p.name for p in art.ASSETS.iterdir()} - {"catalog.json"}
         self.assertEqual(set(art.images(self.catalog)), on_disk)
+
+    def test_every_image_in_the_assets_is_the_one_art_draws_for_it(self):
+        for name, draw in sorted(art.images(self.catalog).items()):
+            with self.subTest(name):
+                drawn = Image.open(io.BytesIO(art.encode(draw()))).convert("RGB")
+                with Image.open(art.ASSETS / name) as stored:
+                    self.assertEqual("JPEG", stored.format)
+                    stored = stored.convert("RGB")
+                self.assertEqual(drawn.size, stored.size)
+                self.assertLess(mean_difference(drawn, stored), MAX_MEAN_DIFFERENCE)
+
+    def test_another_picture_is_far_past_the_difference_allowed(self):
+        with Image.open(art.ASSETS / "kelpmoor-poster.jpg") as one, Image.open(art.ASSETS / "tidewick-poster.jpg") as other:
+            self.assertGreater(mean_difference(one.convert("RGB"), other.convert("RGB")), 5 * MAX_MEAN_DIFFERENCE)
 
     def test_every_title_has_a_motif_of_its_own_choosing(self):
         for title in self.catalog["shows"] + self.catalog["movies"]:
