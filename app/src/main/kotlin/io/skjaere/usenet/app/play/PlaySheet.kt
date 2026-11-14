@@ -2,6 +2,7 @@ package io.skjaere.usenet.app.play
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.preferKeepClear
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.rememberScrollState
@@ -54,6 +55,7 @@ import io.skjaere.usenet.app.ui.FormFactor
 import io.skjaere.usenet.app.ui.LocalFormFactor
 import io.skjaere.usenet.app.ui.TvSafeArea
 import io.skjaere.usenet.app.ui.focusOutline
+import io.skjaere.usenet.app.ui.pagesThrough
 import io.skjaere.usenet.app.ui.tryFocus
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.skjaere.usenet.app.SearchRoute
@@ -877,11 +879,19 @@ internal fun failedHeader(s: PlayState.Failed): String = when {
     else -> "Couldn't start playback. Each release tried failed:"
 }
 
-/** [onSearch]: what the sheet's Search does, when it offers one ([PlayState.Failed.searchRoute]). */
+/**
+ * [onSearch]: what the sheet's Search does, when it offers one ([PlayState.Failed.searchRoute]). On a TV, releases more
+ * than the screen holds are a stop for the remote's focus, read a page at a time ([pagesThrough]): nothing else above the
+ * buttons takes the focus, so Up from them would leave the first releases, the best ranked, out of reach.
+ */
 @Composable
 private fun FailedSheet(s: PlayState.Failed, tv: Boolean, from: StartedFrom?, onSearch: (() -> Unit)?, onClose: () -> Unit) {
     val first = rememberFirstOnTv(tv)
-    Column(Modifier.navigationBarsPadding().padding(bottom = sheetBottom(tv)).verticalScroll(rememberScrollState())) {
+    val scroll = rememberScrollState()
+    val overflows = tv && scroll.viewportSize > 0 && scroll.maxValue > 0
+    // Its focused button is at its end, focused before the sheet was laid out: the focus didn't bring it into view.
+    LaunchedEffect(overflows) { if (overflows) scroll.scrollTo(scroll.maxValue) }
+    Column(Modifier.navigationBarsPadding().padding(bottom = sheetBottom(tv)).verticalScroll(scroll)) {
         SheetTitle(s.title, s.subtitle)
         FromLine(from)
         Text(
@@ -889,19 +899,22 @@ private fun FailedSheet(s: PlayState.Failed, tv: Boolean, from: StartedFrom?, on
             style = AppType.secondary, color = colors.textSecondary, modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 10.dp),
         )
         GroupCard {
-            s.failures.forEachIndexed { i, (release, reason) ->
-                if (i > 0) InsetDivider()
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("✕ $reason", style = AppType.secondary, color = colors.warn)
-                    Text(release, style = AppType.release, color = colors.muted)
+            val stop = Modifier.pagesThrough(scroll.viewportSize).focusOutline(RoundedCornerShape(16.dp), color = colors.text, fill = false).focusable()
+            Column(if (overflows) stop else Modifier) {
+                s.failures.forEachIndexed { i, (release, reason) ->
+                    if (i > 0) InsetDivider()
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("✕ $reason", style = AppType.secondary, color = colors.warn)
+                        Text(release, style = AppType.release, color = colors.muted)
+                    }
                 }
-            }
-            // Skipped, not tried: muted, without the cross.
-            s.missing.forEachIndexed { i, (release, line) ->
-                if (i > 0 || s.failures.isNotEmpty()) InsetDivider()
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(line, style = AppType.secondary, color = colors.muted)
-                    Text(release, style = AppType.release, color = colors.muted)
+                // Skipped, not tried: muted, without the cross.
+                s.missing.forEachIndexed { i, (release, line) ->
+                    if (i > 0 || s.failures.isNotEmpty()) InsetDivider()
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(line, style = AppType.secondary, color = colors.muted)
+                        Text(release, style = AppType.release, color = colors.muted)
+                    }
                 }
             }
         }

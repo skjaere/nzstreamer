@@ -39,6 +39,8 @@ import io.skjaere.usenet.core.PipelineStep
 import io.skjaere.usenet.core.StepStatus
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -369,6 +371,28 @@ class PlaySheetTvTest {
     fun aFailedPlayFocusesItsSearch() {
         state = PlayState.Failed("Harbor Lights", "S02E06", listOf("Harbor.Lights.S02E06.720p.HDTV.x264-NZST" to "Articles missing"), notTried = 0, search = "harbor lights s02e06")
         show()
+        waitForFocusOn("Search “harbor lights s02e06”")
+    }
+
+    /**
+     * On a real TV (tv36), a play whose ten releases all failed lists more than the screen holds, above Search, which has
+     * the focus at the bottom: Up reads up through the list to its first release, the best ranked, and Down goes back
+     * through it to Search.
+     */
+    @Test
+    fun upFromSearchReadsAFailedPlaysReleasesToTheFirst() {
+        assumeTv()
+        val failures = (1..10).map { "Harbor.Lights.S02E06.2160p.WEB-DL.DV.H.265-NZST$it" to "No video this device can play: 2160p Dolby Vision profile 7" }
+        state = PlayState.Failed("Harbor Lights", "S02E06", failures, notTried = 0, search = "harbor lights s02e06")
+        show()
+        waitForFocusOn("Search “harbor lights s02e06”")
+        val first = compose.onNodeWithText(failures.first().first)
+        // Wholly on screen: none of it clipped away by the sheet's scrolling.
+        fun shown() = first.fetchSemanticsNode().let { it.boundsInRoot.height >= it.size.height - 1 }
+        assertFalse("the first release is on screen before any Up", shown())
+        repeat(10) { if (!shown()) press(KeyEvent.KEYCODE_DPAD_UP) }
+        assertTrue("the first release never came on screen", shown())
+        repeat(10) { if (runCatching { compose.onNodeWithText("Search “harbor lights s02e06”").assertIsFocused() }.isFailure) press(KeyEvent.KEYCODE_DPAD_DOWN) }
         waitForFocusOn("Search “harbor lights s02e06”")
     }
 
