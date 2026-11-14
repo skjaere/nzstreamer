@@ -55,3 +55,25 @@ article missing, so a play of one fails at once rather than show the clip under 
 On the device, `ScreensTitles` reads the same catalogue and builds a strict `FakeTmdb` from it: searches are answered
 from the catalogue alone, a lookup of any other title, season or key fails the run, and nothing goes to TMDB. `ScaleImages.screens` answers the pictures'
 paths with the images above, and fails the run on a path it has no image for. Both live in `app/src/androidTest`.
+
+## Taking the screenshots
+
+`ReadmeScreensTest` (`app/src/androidTest`, in the `screens` package) stages each screen over the catalogue and
+saves it, as `screencap` takes it, with every word on it in a text file beside it. It runs only with the
+instrumentation argument `screens=true`, so other device runs skip it. Before anything shows, it fails if the app
+holds a provider or indexer on any host but the emulator's, or a debrid account, and it saves an invented TMDB key
+that TMDB would refuse. After the last screen it puts the app's settings and library back as they were, and it fails
+if a title or picture was asked for that the catalogue doesn't have.
+
+`capture.sh` runs it on an emulator, with the mock NNTP server running:
+
+```sh
+tools/screens/capture.sh phone --clip <clip.mkv> --out <dir>
+tools/screens/capture.sh tv --clip <clip.mkv> --out <dir>
+```
+
+The phone's screens are taken on the emulator whose AVD is named `phone34`, the TV's on the one named `tv36`
+(Android 12 or later); no other device is used. The script starts its own screens indexer on a free port from 8093
+and stops it after. On the emulator it clears the app's data, sets the device's name and, on a phone, the status
+bar's demo mode, and puts both back when it ends, also after a failure. It runs the bench build
+(`-PbenchBuild=true -PhideDebrid=true`), which has no developer settings, and pulls the screens into `<dir>`.
