@@ -1223,6 +1223,8 @@ class SetupServerTest {
     fun `a test doesn't count as a wrong try`() {
         val port = start()
         repeat(6) { assertEquals(303, postOnly(port, testing).status) }
+        // A test's end reaches the TV only once its answer is out: wait for the sixth, so none comes after the clear.
+        assertEquals(6, generateSequence { nextEvent() }.filterIsInstance<SetupEvent.TestFinished>().take(6).count())
         events.clear()
         val wrong = SetupToken.generate()
         for (count in 1..4) {
