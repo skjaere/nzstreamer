@@ -1,6 +1,6 @@
 # NZStreamer
 
-[![CI](https://github.com/skjaere/nzstreamer/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/skjaere/nzstreamer/actions/workflows/ci.yml)
+[![CI](https://github.com/skjaere/nzstreamer/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/skjaere/nzstreamer/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/skjaere/nzstreamer/branch/main/graph/badge.svg)](https://codecov.io/gh/skjaere/nzstreamer)
 [![Latest release](https://img.shields.io/github/v/release/skjaere/nzstreamer)](https://github.com/skjaere/nzstreamer/releases)
 [![Licence](https://img.shields.io/badge/licence-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE.md)
