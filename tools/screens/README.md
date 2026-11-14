@@ -77,3 +77,6 @@ The phone's screens are taken on the emulator whose AVD is named `phone34`, the 
 and stops it after. On the emulator it clears the app's data, sets the device's name and, on a phone, the status
 bar's demo mode, and puts both back when it ends, also after a failure. It runs the bench build
 (`-PbenchBuild=true -PhideDebrid=true`), which has no developer settings, and pulls the screens into `<dir>`.
+
+The main README's images, in `.github/readme/`, are these screens saved again as lossless WebP from their pixels
+alone, so they carry no metadata. Every word on them was read in the text files against the catalogue's names.
