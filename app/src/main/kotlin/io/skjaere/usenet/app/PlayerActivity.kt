@@ -3556,11 +3556,10 @@ class PlayerActivity : ComponentActivity() {
         )
     }
 
-    /** Where the user left off, unless finished or under a minute in. */
+    /** Where the user left off ([WatchSaver.resumeAt]). */
     private suspend fun savedPosition(): Long {
         val key = launch?.watchKey ?: return 0
-        val state = container.library.state(key).first() ?: return 0
-        return state.positionMs.takeIf { !state.watched && it >= 60_000 } ?: 0
+        return WatchSaver.resumeAt(container.library.state(key).first())
     }
 
     private fun saveProgress(position: Long, duration: Long) {

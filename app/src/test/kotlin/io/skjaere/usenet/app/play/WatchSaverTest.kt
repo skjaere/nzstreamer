@@ -11,6 +11,7 @@ import io.skjaere.usenet.debrid.ServiceListing
 import io.skjaere.usenet.newznab.NewznabItem
 import io.skjaere.usenet.releases.Availability
 import io.skjaere.usenet.releases.ReleaseFacts
+import io.skjaere.usenet.data.LibraryRepository
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.data.WatchState
@@ -32,6 +33,10 @@ class WatchSaverTest {
         UsenetUris.build("nzb-hl", 0, release.fileName, release.fileSize), "Harbor Lights", "S02E04 · Low Water", WatchKey.episode(900002, 2, 4),
         WatchTarget(WatchKind.Episode, "Harbor Lights S02E04", showTmdbId = 900002, season = 2, episode = 4), release,
         replaces = listOf(WatchKey.release("nzb-other", 1)),
+    )
+    private val left = WatchState(
+        WatchKey.episode(900002, 2, 4), WatchKind.Episode, showTmdbId = 900002, season = 2, episode = 4, title = "Harbor Lights S02E04",
+        positionMs = 90_000, durationMs = 3_120_000, lastPlayedAt = 1_000, updatedAt = 1_000,
     )
 
     @Test
@@ -68,6 +73,25 @@ class WatchSaverTest {
         assertNull(WatchSaver.of(launch, 1_930_000, durationMs = 0, releaseFailed = false))
         assertNull(WatchSaver.of(launch, 1_930_000, durationMs = -1, releaseFailed = false))
         assertNull(WatchSaver.of(launch, 1_930_000, durationMs = Long.MIN_VALUE + 1, releaseFailed = false))
+    }
+
+    /** L61: a play starts where its watch was left, here or cast, unless watched or under a minute in; without a row, at 0. */
+    @Test
+    fun `a play starts where its watch was left`() {
+        assertEquals(90_000, WatchSaver.resumeAt(left))
+        assertEquals(LibraryRepository.MIN_RESUME_MS, WatchSaver.resumeAt(left.copy(positionMs = LibraryRepository.MIN_RESUME_MS)))
+        assertEquals(0, WatchSaver.resumeAt(left.copy(positionMs = LibraryRepository.MIN_RESUME_MS - 1)))
+        assertEquals(0, WatchSaver.resumeAt(left.copy(watched = true)))
+        assertEquals(0, WatchSaver.resumeAt(null))
+    }
+
+    /**
+     * A tombstone is no place to start from: its row was removed (an undo of what made it, or another release taking its
+     * progress over), and the play starts from the beginning, as without a row, not where the removed row was left.
+     */
+    @Test
+    fun `a play whose watch row was removed starts from the beginning`() {
+        assertEquals(0, WatchSaver.resumeAt(left.copy(deleted = true)))
     }
 
     /**

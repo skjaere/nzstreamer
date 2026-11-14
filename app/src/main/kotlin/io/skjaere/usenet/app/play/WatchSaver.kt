@@ -2,6 +2,7 @@ package io.skjaere.usenet.app.play
 
 import io.skjaere.usenet.app.AppContainer
 import io.skjaere.usenet.app.saveOrLog
+import io.skjaere.usenet.data.LibraryRepository
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchState
 import kotlinx.coroutines.launch
@@ -15,9 +16,17 @@ data class WatchSave(val template: WatchState, val positionMs: Long, val duratio
 
 /**
  * How a play's progress is saved (L61, L90): the player's, here or a Cast device's, by its launch. The library's 90 % rule
- * then decides whether it was watched.
+ * then decides whether it was watched. A play starts from it again where nothing else says where ([resumeAt]).
  */
 object WatchSaver {
+    /**
+     * Where a play of the watch saved as [state] starts, here or cast: where it was left, unless watched or under a minute
+     * in. A tombstone is no place: its row was removed (an undo of what made it, or another release taking its progress
+     * over), so the play starts from the beginning, as without a row.
+     */
+    fun resumeAt(state: WatchState?): Long =
+        state?.takeIf { !it.deleted && !it.watched }?.positionMs?.takeIf { it >= LibraryRepository.MIN_RESUME_MS } ?: 0
+
     /**
      * [launch] at [positionMs] of [durationMs], its release left out where it failed there ([releaseFailed]). Null without
      * a length (none known, or Media3's unset time), and for a file Import opened, which saves nothing (L147).

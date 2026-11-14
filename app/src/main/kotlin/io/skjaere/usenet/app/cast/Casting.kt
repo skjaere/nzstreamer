@@ -264,11 +264,8 @@ internal object Casting : CastLoader {
     }
 
     /** Where the play starts: where the release before it failed, else where its watch was left, as the player starts (L61). */
-    private suspend fun startOf(container: AppContainer, launch: PlayerLaunch): Long {
-        launch.startPositionMs?.let { return it }
-        val state = container.library.state(launch.watchKey).first() ?: return 0
-        return state.positionMs.takeIf { !state.watched && it >= RESUME_MIN_MS } ?: 0
-    }
+    private suspend fun startOf(container: AppContainer, launch: PlayerLaunch): Long =
+        launch.startPositionMs ?: WatchSaver.resumeAt(container.library.state(launch.watchKey).first())
 
     /** The outcome of a load with no device to go to: as one whose session went (L60). */
     private fun gone() = CastLoadOutcome.Failed(CastLoadFailure(CastFailKind.CannotReach, sessionEnded = true))
@@ -467,9 +464,6 @@ internal object Casting : CastLoader {
 
     /** The picture's wait, at most: the LOAD doesn't wait longer on TMDB. */
     private const val PICTURE_MS = 5_000L
-
-    /** As the player resumes: a watch left under a minute in starts from the beginning. */
-    private const val RESUME_MIN_MS = 60_000L
 
     private const val JPEG_QUALITY = 90
 }
