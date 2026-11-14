@@ -113,7 +113,8 @@ END=$end_ms
 title=Part 1
 EOF
 
-# The file's own tags come from the chapters file alone, which has none: nothing of the film's goes along.
+# The file's own tags come from the chapters file alone, which has none, and no stream keeps the film's tags (a title
+# or a handler's name): nothing of the film's goes along but its picture.
 ffmpeg -hide_banner -loglevel error -y \
   -f concat -safe 0 -i "$work/passes.txt" \
   -f lavfi -i "anullsrc=channel_layout=stereo:sample_rate=48000" \
@@ -121,7 +122,7 @@ ffmpeg -hide_banner -loglevel error -y \
   -f lavfi -i "anullsrc=channel_layout=stereo:sample_rate=48000" \
   -i "$work/en.srt" -i "$work/fr.srt" -i "$work/es.srt" \
   -i "$work/chapters.txt" \
-  -map 0:v:0 -map 1:a -map 2:a -map 3:a -map 4:s -map 5:s -map 6:s -map_metadata 7 -map_chapters 7 \
+  -map 0:v:0 -map 1:a -map 2:a -map 3:a -map 4:s -map 5:s -map 6:s -map_metadata 7 -map_metadata:s -1 -map_chapters 7 \
   -t "$total" \
   -vf "fps=24,scale=-2:1080:flags=lanczos,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,setsar=1,format=yuv420p" \
   -c:v libx264 -profile:v high -preset slow -crf 22 -g 48 -keyint_min 48 -sc_threshold 0 -threads 4 \
@@ -141,6 +142,13 @@ size=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -o
 [ "$size" = 1920x1080 ] || { echo "the picture is $size, not 1920x1080" >&2; exit 1; }
 chapters=$(ffprobe -v error -show_entries chapter_tags=title -of csv=p=0 "$work/clip.mkv" | paste -sd,)
 [ "$chapters" = "Intro,Part 1" ] || { echo "unexpected chapters: $chapters" >&2; exit 1; }
+# No tag of the film's: the muxer's and encoders' own (encoder, ENCODER, DURATION) and the tracks' languages alone,
+# and none but the first two on the picture.
+other=$(ffprobe -v error -show_entries stream_tags:format_tags -of default=nw=1 "$work/clip.mkv" | sed 's/=.*//' |
+  grep -v -x -E 'TAG:(encoder|ENCODER|DURATION|language)' | sort -u | paste -sd, || true)
+[ -z "$other" ] || { echo "the clip carries other tags: $other" >&2; exit 1; }
+video_tags=$(ffprobe -v error -select_streams v:0 -show_entries stream_tags -of default=nw=1 "$work/clip.mkv" | sed 's/=.*//' | LC_ALL=C sort | paste -sd,)
+[ "$video_tags" = "TAG:DURATION,TAG:ENCODER" ] || { echo "the picture carries other tags: $video_tags" >&2; exit 1; }
 made=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$work/clip.mkv")
 awk -v d="$made" -v m="$MIN_LENGTH" 'BEGIN { exit !(d >= m - 1) }' || { echo "the clip is ${made} s, shorter than ${MIN_LENGTH} s" >&2; exit 1; }
 
