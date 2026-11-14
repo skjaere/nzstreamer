@@ -101,7 +101,9 @@ class ReadmeScreensTest {
         ScreensRun.buildProblem(BuildConfig.BUILD_TYPE, BuildConfig.HIDE_DEBRID)?.let { throw IllegalStateException(it) }
         val indexer = requireNotNull(arguments.getString("screensIndexer")) { "screensIndexer: the screens indexer's address, as http://10.0.2.2:<port>" }
         val key = arguments.getString("screensIndexerKey") ?: DEFAULT_INDEXER_KEY
-        stage = ScreensStage(ScreensTitles(), indexer, key).open()
+        // Kept before it opens, so tearDown closes even a stage that failed to: closing twice does nothing.
+        stage = ScreensStage(ScreensTitles(), indexer, key)
+        stage.open()
         shots = ScreenShots()
     }
 

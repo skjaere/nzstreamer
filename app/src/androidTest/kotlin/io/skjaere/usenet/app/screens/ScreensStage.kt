@@ -63,7 +63,10 @@ class ScreensStage(
     val quillon: ShowDetails get() = titles.show(QUILLON)
     val gullenkiln: ShowDetails get() = titles.show(GULLENKILN)
 
+    /** Stages the app; one that fails part way puts back what it had changed ([close]) and throws. */
     fun open(): ScreensStage = runBlocking {
+        // What a debug build saves at its start first, so it isn't saved after this reads what to put back.
+        container.devSettingsSaved.await()
         saved = settings.settings.first()
         refuseRealAccounts(saved)
         keyBefore = settings.tmdbKey()
@@ -72,7 +75,16 @@ class ScreensStage(
         trackChoiceBefore = library.trackChoice(kelpmoor.tmdbId) != null
         tried = library.triedReleaseEntries()
         opened = true
+        try {
+            stage()
+        } catch (t: Throwable) {
+            runCatching { close() }.exceptionOrNull()?.let(t::addSuppressed)
+            throw t
+        }
+        this@ScreensStage
+    }
 
+    private suspend fun stage() {
         tmdb = titles.fakeTmdb()
         images = ScaleImages.screens(InstrumentationRegistry.getInstrumentation().targetContext).also { it.install() }
 
@@ -93,7 +105,6 @@ class ScreensStage(
         watch()
         recent()
         container.refresher.refreshNow(titles.shows.keys.map(TitleKey::show) + titles.movies.keys.map(TitleKey::movie))
-        this@ScreensStage
     }
 
     /**
@@ -199,8 +210,9 @@ class ScreensStage(
                 if (!trackChoiceBefore) library.clearTrackChoice(kelpmoor.tmdbId)
             }
         }
-        attempt { images.restore() }
-        attempt { tmdb.close() }
+        // Set first thing when opening, so unset only when the opening failed before them.
+        if (::images.isInitialized) attempt { images.restore() }
+        if (::tmdb.isInitialized) attempt { tmdb.close() }
         failures.firstOrNull()?.let { first -> failures.drop(1).forEach(first::addSuppressed); throw first }
     }
 
