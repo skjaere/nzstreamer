@@ -82,5 +82,13 @@ and stops it after. On the emulator it clears the app's data, sets the device's 
 bar's demo mode, and puts both back when it ends, also after a failure. It runs the bench build
 (`-PbenchBuild=true -PhideDebrid=true`), which has no developer settings, and pulls the screens into `<dir>`.
 
-The main README's images, in `.github/readme/`, are these screens saved again as lossless WebP from their pixels
-alone, so they carry no metadata. Every word on them was read in the text files against the catalogue's names.
+The main README's images, in `.github/readme/`, are these screens saved again by `webp.py` as lossless WebP from their
+pixels alone, so they carry no metadata, under the names the README shows them by (`p1-home.png` is `phone-home.webp`):
+
+```sh
+python3 -I tools/screens/webp.py <phone's --out> <TV's --out> [--only p4-player t3-player]
+python3 -I -B tools/screens/test_webp.py
+```
+
+The test checks that each image holds its pixels alone. Every word on them was read in the text files against the
+catalogue's names.
