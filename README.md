@@ -295,6 +295,10 @@ off while a debugger is attached. A test task stopped at its limit writes no rep
 running, as skipped. The runs against a device, a TV or an account that a `-P` property turns on (`serveSpike`,
 `serveProbe`, `debridLive` and `linkPeer`) have neither limit: they take as long as they need.
 
+`./gradlew :koverXmlReportUnitTests` writes the coverage of the JVM unit tests of the app and of every `core` and
+`tools` module to one report, `build/reports/kover/reportUnitTests.xml`. For an Android module it takes the debug
+build's tests. CI sends the report to Codecov.
+
 ### Device tests
 Instrumented tests run on an emulator or a device: `./gradlew :app:connectedDebugAndroidTest`. The tests that stream
 need the mock NNTP server, reachable from the emulator at `10.0.2.2:1119`, with test media seeded into it by

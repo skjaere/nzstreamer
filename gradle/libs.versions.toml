@@ -40,6 +40,8 @@ zxing = "3.5.4"
 play-services-cast = "22.3.1"
 play-services-base = "18.7.2"
 mediarouter = "1.8.1"
+# Coverage of the JVM unit tests (the root build.gradle.kts), as the usenet libraries pin it.
+kover = "0.9.11"
 
 [libraries]
 nzb-streamer = { module = "com.github.skjaere:nzb-streamer", version.ref = "nzb-streamer" }
@@ -102,3 +104,4 @@ kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlinx-kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }

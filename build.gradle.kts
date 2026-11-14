@@ -9,6 +9,7 @@ plugins {
     alias(libs.plugins.kotlin.serialization) apply false
     alias(libs.plugins.kotlin.compose) apply false
     alias(libs.plugins.ksp) apply false
+    alias(libs.plugins.kotlinx.kover)
 }
 
 // The usenet libraries' releases pinned in gradle/libs.versions.toml win wherever a library's POM names another version
@@ -51,5 +52,34 @@ subprojects {
         timeout.set(Duration.ofMinutes(15))
         testLogging.exceptionFormat = TestExceptionFormat.FULL
         testLogging.events("failed", "skipped")
+    }
+}
+
+// Coverage, with Kover as the usenet libraries have it. ./gradlew :koverXmlReportUnitTests writes one report,
+// build/reports/kover/reportUnitTests.xml, of the JVM unit tests of the app and of every core and tools module: for an
+// Android module, its debug build's. (Without the colon, each module writes a report of its own too.) CI sends it to
+// Codecov. Kover's agent instruments classes inside a test's JVM, never a compiled class, so no APK or bundle changes.
+// It runs only in the tests the report reads: the release, bench and beta unit tests (HiddenBuildTest among them) run
+// without it.
+kover {
+    merge {
+        subprojects { it.path == ":app" || it.path.startsWith(":core:") || it.path.startsWith(":tools:") }
+        // The root project has no code: its variant gathers the others'.
+        createVariant("unitTests") {
+            val android = listOf("com.android.application", "com.android.library").any(project.pluginManager::hasPlugin)
+            if (project != rootProject) add(if (android) "debug" else "jvm")
+        }
+        instrumentation {
+            disabledForTestTasks.addAll("testReleaseUnitTest", "testBenchUnitTest", "testBetaUnitTest")
+        }
+    }
+}
+// Kover verifies each project's total coverage on check unless told not to. There are no rules to verify, so check
+// writes no report and verifies nothing: it only finds the agent for the tests. The report is asked for by its name.
+allprojects {
+    pluginManager.withPlugin("org.jetbrains.kotlinx.kover") {
+        extensions.configure<kotlinx.kover.gradle.plugin.dsl.KoverProjectExtension> {
+            reports { total { verify { onCheck = false } } }
+        }
     }
 }

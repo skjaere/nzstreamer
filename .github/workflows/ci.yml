@@ -1,6 +1,7 @@
 # CI, on every push to main and every pull request: the public privacy scan (on a push, also who made each pushed
-# commit), the Python tools' tests and the CLA workflow's check, ./gradlew check, and a beta built as the release
-# workflow builds one, signed with a throwaway key. It holds no secret, and its token only reads.
+# commit), the Python tools' tests and the CLA workflow's check, ./gradlew check and the unit tests' coverage, and a
+# beta built as the release workflow builds one, signed with a throwaway key. Its token only reads. Its one secret,
+# Codecov's upload token, reaches only the last steps, which send the coverage report to Codecov.
 name: CI
 
 on:
@@ -119,6 +120,16 @@ jobs:
             -Pkotlin.compiler.execution.strategy=in-process \
             -Dorg.gradle.internal.http.socketTimeout=300000 -Dorg.gradle.internal.http.connectionTimeout=300000
 
+      # The coverage of the unit tests check ran, as the root build.gradle.kts sets it up. Their results are up to
+      # date, so this only writes the report, build/reports/kover/reportUnitTests.xml. With check's flags, it runs in
+      # check's daemon.
+      - name: Coverage report
+        run: |
+          ./gradlew :koverXmlReportUnitTests \
+            -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8" --max-workers=2 \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.internal.http.socketTimeout=300000 -Dorg.gradle.internal.http.connectionTimeout=300000
+
       # The release's own beta (version.txt's code, -PbetaRelease=true), built as release-apk.yml builds it but signed with
       # a key made here and dropped after: debrid hidden, HiddenBuildTest and VersionCodeTest run in full, and the APK
       # passes the release's checks against this key's certificate, staged under the release's name.
@@ -152,6 +163,32 @@ jobs:
       - name: Remove the throwaway key
         if: always()
         run: rm -rf "$RUNNER_TEMP/throwaway-beta"
+
+      # Codecov's upload token is empty in a pull request from a fork, which gets no secrets. A step's condition can't
+      # read a secret, so this step says whether the token is set, never what it is.
+      - name: Codecov token
+        id: codecov
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        run: |
+          if [[ -n $CODECOV_TOKEN ]]; then
+            echo "token=set" >>"$GITHUB_OUTPUT"
+          else
+            echo "token=empty" >>"$GITHUB_OUTPUT"
+          fi
+
+      # The coverage report to Codecov, after every build: the action writes the token into GITHUB_ENV, where each later
+      # step would have it. An upload that fails never fails the run.
+      - name: Coverage to Codecov
+        if: steps.codecov.outputs.token == 'set'
+        continue-on-error: true
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        with:
+          files: build/reports/kover/reportUnitTests.xml
+          disable_search: true
+          fail_ci_if_error: false
 
       # Also when the job is cancelled, at its limit say: the tasks that ended have their reports.
       - name: Upload the reports
