@@ -22,6 +22,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -378,8 +379,10 @@ class UsenetEngine(
         // before the result gets back to it, and the streamer would be left open.
         var returned: NzbStreamer? = null
         val built = try {
-            // The build blocks, so it runs to the end either way.
+            // The build blocks, so it runs to the end either way. withContext returns one that was over before the caller
+            // suspended for it even to a caller cancelled meanwhile (backlog 337), so the cancellation is checked after it.
             withContext(NonCancellable + ioDispatcher) { factory(serving).also { returned = it } }
+                .also { currentCoroutineContext().ensureActive() }
         } catch (e: CancellationException) {
             // The state first: the release throws the caller's cancellation again when it returns.
             _state.value = before

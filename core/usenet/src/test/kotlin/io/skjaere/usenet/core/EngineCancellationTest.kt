@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
@@ -14,9 +15,11 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -124,6 +127,43 @@ class EngineCancellationTest {
         assertIs<CancellationException>(withTimeout(10_000) { thrown.await() })
         job.join()
         assertEquals(failed, engine.state.value)
+    }
+
+    @Test
+    fun `a cancelled streamer call whose build ends before it waits still puts back the state and closes the streamer`() = runBlocking<Unit> {
+        val builds = AtomicInteger()
+        val closed = AtomicInteger()
+        val caller = AtomicReference<Job>()
+        val engine = UsenetEngine(
+            factory = { settings ->
+                if (builds.incrementAndGet() == 1) throw IllegalStateException("no selector")
+                // The caller is cancelled while its build runs.
+                caller.getAndSet(null)?.cancel()
+                UsenetEngine.defaultStreamer(settings)
+            },
+            release = { closed.incrementAndGet(); it.close() },
+            // Runs the build in place, on the caller's thread: it is over before withContext gets to suspend the caller, as a
+            // build on an IO thread is when it ends before the caller has suspended (backlog 337).
+            ioDispatcher = Executor(Runnable::run).asCoroutineDispatcher(),
+        ).also { engines += it }
+        engine.configure(EngineSettings(listOf(ProviderConfig("p", "p", "127.0.0.1", 1, "", "", useTls = false))))
+        assertIs<UsenetException>(runCatching { engine.streamer() }.exceptionOrNull())
+        val failed = assertIs<EngineState.Error>(engine.state.value)
+
+        val (job, thrown) = call {
+            caller.set(currentCoroutineContext().job)
+            engine.streamer()
+        }
+        assertIs<CancellationException>(withTimeout(10_000) { thrown.await() })
+        job.join()
+        assertEquals(failed, engine.state.value)
+        assertEquals(1, closed.get(), "the streamer built for the cancelled call was left open")
+
+        // The next call builds again and keeps that one.
+        val streamer = engine.streamer()
+        assertIs<EngineState.Ready>(engine.state.value)
+        assertEquals(3, builds.get())
+        assertTrue(streamer === engine.streamer())
     }
 
     @Test
