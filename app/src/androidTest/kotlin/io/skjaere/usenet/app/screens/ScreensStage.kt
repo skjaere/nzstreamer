@@ -16,6 +16,7 @@ import io.skjaere.usenet.data.TitleType
 import io.skjaere.usenet.data.TriedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
+import io.skjaere.usenet.data.WatchSnapshot
 import io.skjaere.usenet.data.WatchState
 import io.skjaere.usenet.data.WatchTitle
 import io.skjaere.usenet.metadata.ShowDetails
@@ -33,10 +34,11 @@ import java.net.URI
  * [open] first checks what the device has saved: a provider, indexer or torrent indexer anywhere but the emulator's host,
  * or a debrid account, fails the run before anything shows, so no real account reaches a screenshot. The TMDB key is the
  * invented one, which TMDB would refuse, checked once saved. [close] puts everything back: the settings and the TMDB key as they were, the titles it collected
- * out of the collection, the episodes it marked or played unwatched with no position again, its searches gone, the
- * releases it tried as they were and the show's track choice cleared. TMDB's stored facts for the invented titles stay, as
- * they do for any title taken out of the collection, until the app prunes them. Then the fake and the loader fail the run
- * if anything was asked for that the catalogue doesn't have.
+ * out of the collection, the watch rows of the three shows' episodes as they were (one that it or a screenshot's play
+ * made is removed, as the app's own undo of a mark removes it), its searches gone, the releases it tried as they were
+ * and the show's track choice cleared. What the app keeps of a removed title stays, as it does for any title taken out
+ * of the collection: its tombstone, and TMDB's stored facts until the app prunes them. Then the fake and the loader fail
+ * the run if anything was asked for that the catalogue doesn't have.
  */
 class ScreensStage(
     val titles: ScreensTitles,
@@ -52,6 +54,7 @@ class ScreensStage(
     private var moviesBefore: Set<Int> = emptySet()
     private var trackChoiceBefore = false
     private var tried: List<TriedRelease> = emptyList()
+    private var watchBefore: Map<String, WatchState?> = emptyMap()
     private val searches = mutableListOf<String>()
     private var opened = false
     lateinit var tmdb: FakeTmdb
@@ -74,6 +77,7 @@ class ScreensStage(
         moviesBefore = library.collectedMovieIds.first()
         trackChoiceBefore = library.trackChoice(kelpmoor.tmdbId) != null
         tried = library.triedReleaseEntries()
+        watchBefore = everyEpisode().associate { it.key to library.state(it.key).first() }
         opened = true
         try {
             stage()
@@ -186,6 +190,16 @@ class ScreensStage(
         show.seasons.flatMap { s -> episodes(show, s.number, 1..s.episodeCount) }
     }
 
+    /**
+     * The watch row [key] as it was ([was]): undone as the app undoes a mark, the row as it was coming back, or one that
+     * wasn't there removed.
+     */
+    private suspend fun putBack(key: String, was: WatchState?) {
+        val now = library.state(key).first() ?: return
+        if (now == was || (was == null && now.deleted)) return
+        library.undoMarks(WatchSnapshot(before = listOfNotNull(was), created = if (was == null) listOf(key) else emptyList(), at = now.updatedAt))
+    }
+
     override fun close() {
         if (!opened) return
         opened = false
@@ -203,7 +217,7 @@ class ScreensStage(
         restore { if (saved.indexers.none { it.id == INDEXER_ID }) settings.deleteIndexer(INDEXER_ID) }
         restore { settings.restore(saved) }
         restore { settings.setTmdbKey(keyBefore) }
-        restore { library.markEpisodes(everyEpisode(), watched = false) }
+        watchBefore.forEach { (key, was) -> restore { putBack(key, was) } }
         restore { library.removeTitles(shows = titles.shows.keys - showsBefore, movies = titles.movies.keys - moviesBefore) }
         searches.forEach { search -> restore { library.removeSearch(search) } }
         restore { library.restoreTriedReleases(tried) }

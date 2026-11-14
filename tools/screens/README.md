@@ -63,8 +63,11 @@ paths with the images above, and fails the run on a path it has no image for. Bo
 saves it, as `screencap` takes it, with every word on it in a text file beside it. It runs only with the
 instrumentation argument `screens=true`, so other device runs skip it. Before anything shows, it fails if the app
 holds a provider or indexer on any host but the emulator's, or a debrid account, and it saves an invented TMDB key
-that TMDB would refuse. After the last screen it puts the app's settings and library back as they were, and it fails
-if a title or picture was asked for that the catalogue doesn't have.
+that TMDB would refuse. After each screen it puts back what it changed: the settings and the key, and in the library
+the titles it collected, the watch rows of the shows it marked or played, its searches, the releases it tried and the
+track choice. A collected title leaves what the app keeps of any title taken out of the collection: its tombstone, and
+TMDB's facts until the app prunes them. It fails if a title or picture was asked for that the catalogue doesn't have.
+`ScreensStageTest`, which `capture.sh` runs first, checks that putting back, also after a stage fails part way.
 
 `capture.sh` runs it on an emulator, with the mock NNTP server running:
 

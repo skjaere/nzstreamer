@@ -9,7 +9,8 @@
 #   --port    the screens indexer's port on this computer, 8093 or above but not 8096 or 8097 (default: the first free
 #             one from 8093). 8089 is the device tests' fake indexer, and the ports beside it are left to it; 8096 and
 #             8097 are mock-seed's torznab and debrid fakes' own.
-#   --test    one test of the class alone, as p1Home.
+#   --test    one test of ReadmeScreensTest alone, as p1Home; else ScreensStageTest runs first, which checks that the
+#             staging puts the app back.
 #
 # The emulator is found by its AVD name among the running emulators; any other device (another emulator, or a phone
 # or a TV box on USB or the network) is never used, and nothing runs without the emulator. The mock NNTP server must be running on
@@ -60,6 +61,7 @@ TEST_APP=$APP.test
 # Android's "Viewing full screen" hint, which the test marks as seen while it runs.
 IMMERSIVE=immersive_mode_confirmations
 CLASS=io.skjaere.usenet.app.screens.ReadmeScreensTest
+STAGE_CLASS=io.skjaere.usenet.app.screens.ScreensStageTest
 DEVICE_DIR=/data/local/tmp/readme-screens
 KEY=readme-screens-key
 if [ -n "${ANDROID_HOME:-}" ] && [ -x "$ANDROID_HOME/platform-tools/adb" ]; then ADB=$ANDROID_HOME/platform-tools/adb; else ADB=adb; fi
@@ -179,7 +181,7 @@ if [ "$kind" = phone ]; then
   demo status -e volume hide -e bluetooth hide -e location hide -e alarm hide -e zen hide -e sync hide -e mute hide -e speakerphone hide
 fi
 
-test=$CLASS${only:+#$only}
+if [ -n "$only" ]; then test=$CLASS#$only; else test=$STAGE_CLASS,$CLASS; fi
 set +e
 test_began=true
 (cd "$root" && ANDROID_SERIAL=$serial ./gradlew :app:connectedBenchAndroidTest -PbenchBuild=true -PhideDebrid=true \

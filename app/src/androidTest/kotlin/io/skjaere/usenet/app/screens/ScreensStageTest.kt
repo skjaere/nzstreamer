@@ -5,6 +5,11 @@ import androidx.test.platform.app.InstrumentationRegistry
 import coil3.SingletonImageLoader
 import io.skjaere.usenet.app.TmdbLookup
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.data.WatchKind
+import io.skjaere.usenet.data.WatchSnapshot
+import io.skjaere.usenet.data.WatchState
+import io.skjaere.usenet.data.WatchTitle
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -25,6 +30,7 @@ import org.junit.runner.RunWith
 class ScreensStageTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
     private val settings = context.container.settings
+    private val library = context.container.library
 
     @Before
     fun screensOnly() {
@@ -52,6 +58,50 @@ class ScreensStageTest {
             if (saved.indexers.none { it.id == ScreensStage.INDEXER_ID }) settings.deleteIndexer(ScreensStage.INDEXER_ID)
             settings.restore(saved)
             settings.setTmdbKey(key)
+        }
+    }
+
+    @Test
+    fun aClosedStageLeavesTheWatchRowsOfTheShowsItMarkedAsTheyWere() = runBlocking<Unit> {
+        context.container.devSettingsSaved.await()
+        val titles = ScreensTitles()
+        val episodes = listOf(ScreensStage.KELPMOOR, ScreensStage.QUILLON, ScreensStage.GULLENKILN).map(titles::show).flatMap { show ->
+            show.seasons.flatMap { season -> (1..season.episodeCount).map { WatchKey.episode(show.tmdbId, season.number, it) } }
+        }
+        val kelpmoor = titles.show(ScreensStage.KELPMOOR)
+        val runtime = kelpmoor.episodeRuntimeMinutes!! * 60_000L
+        fun played(number: Int, at: Long) = runBlocking {
+            val template = WatchState(
+                WatchKey.episode(kelpmoor.tmdbId, 1, number), WatchKind.Episode, showTmdbId = kelpmoor.tmdbId, season = 1, episode = number,
+                title = WatchTitle.episode(kelpmoor.name, 1, number), updatedAt = 0,
+            )
+            library.recordProgress(template, at, runtime)
+        }
+        // A row the device had already: the second episode stopped five minutes in, which the stage marks watched.
+        val had = WatchKey.episode(kelpmoor.tmdbId, 1, 2)
+        played(2, 5 * 60_000L)
+        val before = episodes.associateWith { library.state(it).first() }
+        try {
+            val stage = ScreensStage(titles, "http://${ScreensStage.HOST}:8093", "screens-stage-test")
+            stage.open()
+            try {
+                assertEquals("marked by the stage", true, library.state(had).first()?.watched)
+                // As a screenshot's play does: a stamp on an episode the stage marked, and a row of its own on one it didn't.
+                played(4, 90_000L)
+                played(5, 90_000L)
+            } finally {
+                stage.close()
+            }
+            episodes.forEach { key ->
+                val after = library.state(key).first()
+                when (val was = before.getValue(key)) {
+                    null -> assertTrue("$key: none before, none after but a tombstone; $after", after == null || after.deleted)
+                    else -> assertEquals(key, was, after?.copy(updatedAt = was.updatedAt))
+                }
+            }
+        } finally {
+            // The row this test made, removed as the stage removes its own.
+            library.state(had).first()?.let { library.undoMarks(WatchSnapshot(emptyList(), listOf(had), it.updatedAt)) }
         }
     }
 }
