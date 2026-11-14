@@ -6,8 +6,9 @@
 #   phone|tv  which screens: the phone's on the emulator whose AVD is phone34, the TV's on the one whose AVD is tv36.
 #   --clip    the player's clip, as make-clip.sh makes it.
 #   --out     gets each screen's PNG and the words on it (.txt): a new or empty folder.
-#   --port    the screens indexer's port on this computer, 8093 or above (default: the first free one from 8093).
-#             8089 is the device tests' fake indexer, and the ports beside it are left to it.
+#   --port    the screens indexer's port on this computer, 8093 or above but not 8096 or 8097 (default: the first free
+#             one from 8093). 8089 is the device tests' fake indexer, and the ports beside it are left to it; 8096 and
+#             8097 are mock-seed's torznab and debrid fakes' own.
 #   --test    one test of the class alone, as p1Home.
 #
 # The emulator is found by its AVD name among the running emulators; any other device (another emulator, or a phone
@@ -39,8 +40,11 @@ done
 if [ -z "$clip" ] || [ -z "$out" ]; then usage; fi
 [ -f "$clip" ] || { echo "no such clip: $clip (tools/screens/make-clip.sh makes it)" >&2; exit 2; }
 [[ $only =~ ^[A-Za-z0-9_]*$ ]] || { echo "--test takes a test method's name, as p1Home" >&2; exit 2; }
+# mock-seed's torznab and debrid fakes' own ports, which a screens indexer never takes.
+fakes_ports() { [ "$1" = 8096 ] || [ "$1" = 8097 ]; }
 if [ -n "$port" ]; then
-  [[ $port =~ ^[0-9]{4,5}$ ]] && [ "$port" -ge 8093 ] && [ "$port" -le 65535 ] || { echo "--port takes a port from 8093 up" >&2; exit 2; }
+  [[ $port =~ ^[0-9]{4,5}$ ]] && [ "$port" -ge 8093 ] && [ "$port" -le 65535 ] && ! fakes_ports "$port" ||
+    { echo "--port takes a port from 8093 up, but not 8096 or 8097" >&2; exit 2; }
 fi
 clip=$(cd "$(dirname "$clip")" && pwd)/$(basename "$clip")
 # A new or empty folder, so no screen from an earlier run is taken for one of this run's.
@@ -77,7 +81,7 @@ fi
 
 if [ -z "$port" ]; then
   port=8093
-  while listening "$port"; do port=$((port + 1)); done
+  while listening "$port" || fakes_ports "$port"; do port=$((port + 1)); done
 elif listening "$port"; then
   echo "port $port is taken" >&2; exit 2
 fi
@@ -123,12 +127,14 @@ trap 'exit 130' INT TERM
   --catalog-file "$root/app/src/androidTest/assets/screens/catalog.json" > "$out/indexer.log" 2>&1 &
 indexer_pid=$!
 echo "capture: seeding the clip and starting the screens indexer on port $port"
+# Ready when it says so itself, once the clip is seeded: a port that only listens may be another program's.
+ready="Fake indexer (screens) on http://localhost:$port/"
 for _ in $(seq 1 600); do
-  listening "$port" && break
   kill -0 "$indexer_pid" 2>/dev/null || { echo "the screens indexer stopped: see $out/indexer.log" >&2; exit 1; }
+  grep -q -F "$ready" "$out/indexer.log" && break
   sleep 1
 done
-listening "$port" || { echo "the screens indexer didn't start in 10 minutes: see $out/indexer.log" >&2; exit 1; }
+grep -q -F "$ready" "$out/indexer.log" || { echo "the screens indexer didn't start in 10 minutes: see $out/indexer.log" >&2; exit 1; }
 
 # The emulator as the screenshots have it.
 if [ -n "$(shell pm path "$APP")" ]; then shell pm clear "$APP" >/dev/null; fi
