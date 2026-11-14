@@ -70,21 +70,37 @@ class ScaleImagesTest {
     fun aPathNoAssetAnswersFailsItsLoadAndTheRestore() {
         val app = SingletonImageLoader.get(context)
         val images = ScaleImages.screens(context).also { it.install() }
-        assertTrue(images.load("https://image.tmdb.org/t/p/w342/nzs/not-in-the-catalogue.jpg") is ErrorResult)
-        assertTrue("a TMDB path of its own, not the catalogue's", images.load("https://image.tmdb.org/t/p/w342/q7Zr2x.jpg") is ErrorResult)
-        assertTrue("the catalogue itself is no picture", images.load("https://image.tmdb.org/t/p/w342/nzs/catalog.json") is ErrorResult)
-        val failure = assertThrows(AssertionError::class.java) { images.restore() }
-        listOf("/nzs/not-in-the-catalogue.jpg", "/q7Zr2x.jpg", "/nzs/catalog.json").forEach { assertTrue(failure.message!!, failure.message!!.contains(it)) }
-        assertSame("the app's loader is back all the same", app, SingletonImageLoader.get(context))
+        try {
+            assertTrue(images.load("https://image.tmdb.org/t/p/w342/nzs/not-in-the-catalogue.jpg") is ErrorResult)
+            assertTrue("a TMDB path of its own, not the catalogue's", images.load("https://image.tmdb.org/t/p/w342/q7Zr2x.jpg") is ErrorResult)
+            assertTrue("the catalogue itself is no picture", images.load("https://image.tmdb.org/t/p/w342/nzs/catalog.json") is ErrorResult)
+            val failure = assertThrows(AssertionError::class.java) { images.restore() }
+            listOf("/nzs/not-in-the-catalogue.jpg", "/q7Zr2x.jpg", "/nzs/catalog.json").forEach { assertTrue(failure.message!!, failure.message!!.contains(it)) }
+            assertSame("the app's loader is back all the same", app, SingletonImageLoader.get(context))
+        } finally {
+            backAfterAFailure(images)
+        }
     }
 
     @Test
     fun anotherHostIsRefusedAndFailsTheRestore() {
         val images = ScaleImages.screens(context).also { it.install() }
-        assertTrue(images.load("https://images.example/t/p/w342/nzs/kelpmoor-poster.jpg") is ErrorResult)
-        assertEquals(1, images.refused.get())
-        val failure = assertThrows(AssertionError::class.java) { images.restore() }
-        assertTrue(failure.message!!, failure.message!!.contains("images.example"))
+        try {
+            assertTrue(images.load("https://images.example/t/p/w342/nzs/kelpmoor-poster.jpg") is ErrorResult)
+            assertEquals(1, images.refused.get())
+            val failure = assertThrows(AssertionError::class.java) { images.restore() }
+            assertTrue(failure.message!!, failure.message!!.contains("images.example"))
+        } finally {
+            backAfterAFailure(images)
+        }
+    }
+
+    /**
+     * The app's loader back, also when an assertion failed before the test's own restore: the classes after this one load
+     * through it. Once restored, a restore puts nothing back again; its failure here was the test's to check.
+     */
+    private fun backAfterAFailure(images: ScaleImages) {
+        runCatching { images.restore() }
     }
 
     @Test
