@@ -62,14 +62,14 @@ class FakeDiscover(
         val LANGUAGES = listOf(Language("en", "English"), Language("ko", "Korean"), Language("fr", "French"))
 
         private val NAMES = listOf(
-            "Harbor Lights", "Lantern Row", "The Quiet Orbit", "Saltmarsh", "Northbound", "Ferrous", "Kestrel Hall", "Glasshouse",
-            "Drift Season", "The Long Field", "Paper Moons", "Ninefold", "Coldwater", "Signal Hill", "Amber Line", "Hollow Pines",
-            "Copper Crown", "A Slow Tide", "Under Brass", "The Ninth Lamp",
+            "Harbor Lights", "Lantern Row", "The Quiet Orbit", "Tarnwick", "Quayborne", "Ferrous", "Kestrel Hall", "Pebblereach",
+            "Drift Season", "The Long Field", "Paper Gulls", "Sevenreach", "Coldwick Ferry", "Signal Moss", "Amber Line", "Hollow Larches",
+            "Tin Mitre", "A Slow Tide", "Under Brass", "The Ninth Lamp",
         )
 
         /**
          * [query]'s page [from] of [total]: [size] invented titles (at most 20), their ids apart for each list and page
-         * (970 000 and up, far from the fake catalogue's), named from the mockups' invented names, the page's number after each.
+         * (970 000 and up, far from the fake catalogue's), named from invented names, the page's number after each.
          */
         fun page(query: DiscoverQuery, from: Int, total: Int, capped: Boolean = false, size: Int = 20): DiscoverPage =
             DiscoverPage((0 until size).map { title(query.type, id(query.list, from, it), "${NAMES[it]} $from") }, from, total, capped)

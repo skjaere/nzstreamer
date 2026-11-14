@@ -78,7 +78,7 @@ class DiscoverListPhoneTest {
         listOf(360.dp, 390.dp).forEach { width ->
             phone = width
             compose.waitForIdle()
-            val tops = listOf("Harbor Lights 1", "Lantern Row 1", "The Quiet Orbit 1", "Saltmarsh 1").map { name ->
+            val tops = listOf("Harbor Lights 1", "Lantern Row 1", "The Quiet Orbit 1", "Tarnwick 1").map { name ->
                 compose.onNode(hasContentDescription("$name, 2021, show")).fetchSemanticsNode().boundsInRoot.top
             }
             assertEquals("the first line at $width: three posters", 1, tops.take(3).distinct().size)
