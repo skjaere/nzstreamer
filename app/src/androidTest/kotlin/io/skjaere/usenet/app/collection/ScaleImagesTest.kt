@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.collection
 
+import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import coil3.SingletonImageLoader
@@ -22,7 +23,8 @@ import org.junit.runner.RunWith
  * names is answered with its own picture from the androidTest assets, and a path no asset answers, or an address that
  * isn't TMDB's image host, fails its load and then the loader's [ScaleImages.restore], so the run fails rather than
  * show a gap. The scale tests' loader, one poster for every path, is unchanged. Nothing reaches the network: the
- * other host is an example.* name the loader refuses before any fetch.
+ * other host is an example.* name the loader refuses before any fetch. A request counts as in flight from its start
+ * until its picture comes, it fails or it is cancelled, as a screenshot waits for every picture on its screen.
  */
 @RunWith(AndroidJUnit4::class)
 class ScaleImagesTest {
@@ -83,5 +85,33 @@ class ScaleImagesTest {
         assertEquals(1, images.refused.get())
         val failure = assertThrows(AssertionError::class.java) { images.restore() }
         assertTrue(failure.message!!, failure.message!!.contains("images.example"))
+    }
+
+    @Test
+    fun aRequestIsInFlightUntilItsPictureComesOrItIsCancelled() {
+        val images = ScaleImages(context, latencyMs = 2_000).also { it.install() }
+        try {
+            assertEquals(0, images.inFlight)
+            val first = images.loader.enqueue(request("https://image.tmdb.org/t/p/w185/first.jpg"))
+            val second = images.loader.enqueue(request("https://image.tmdb.org/t/p/w185/second.jpg"))
+            awaitInFlight(images, 2)
+            second.dispose()
+            awaitInFlight(images, 1)
+            assertTrue(runBlocking { first.job.await() } is SuccessResult)
+            assertEquals(0, images.inFlight)
+            assertEquals(1, images.cancelled.get())
+        } finally {
+            images.restore()
+        }
+    }
+
+    private fun request(url: String) = ImageRequest.Builder(context).data(url).size(Size.ORIGINAL)
+        .memoryCachePolicy(CachePolicy.DISABLED).diskCachePolicy(CachePolicy.DISABLED).build()
+
+    /** Waits up to a second for [images] to have [count] requests in flight. */
+    private fun awaitInFlight(images: ScaleImages, count: Int) {
+        val until = SystemClock.uptimeMillis() + 1_000
+        while (images.inFlight != count && SystemClock.uptimeMillis() < until) SystemClock.sleep(10)
+        assertEquals(count, images.inFlight)
     }
 }

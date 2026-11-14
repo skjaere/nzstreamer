@@ -33,7 +33,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * there is no test orchestrator, and later classes check the app's. With [assetFor], [restore] then fails if a path was
  * unknown or an address refused, so a screenshot never shows a gap where a picture should be. It counts what it fetched,
  * what came from its memory cache, what was cancelled or failed, and when each address's image first came ([shown], in
- * elapsedRealtimeNanos).
+ * elapsedRealtimeNanos). [inFlight] says how many requests have started and not yet ended, as a screenshot waits for
+ * every picture on the screen.
  */
 class ScaleImages(
     private val context: Context,
@@ -49,6 +50,11 @@ class ScaleImages(
     val failed = AtomicInteger()
     val refused = AtomicInteger()
     val shown = ConcurrentHashMap<String, Long>()
+    // Requests started and not yet ended, by address. Coil may cancel a request it never started: that never counts below none.
+    private val started = ConcurrentHashMap<String, AtomicInteger>()
+
+    /** Requests started and not yet ended: shown, failed or cancelled. */
+    val inFlight: Int get() = started.values.sumOf { it.get() }
 
     /** TMDB paths no asset answered, and the addresses refused, in order. */
     val unknown = ConcurrentLinkedQueue<String>()
@@ -106,17 +112,28 @@ class ScaleImages(
     }
 
     private inner class Events : coil3.EventListener() {
+        override fun onStart(request: ImageRequest) {
+            started.getOrPut(request.data.toString()) { AtomicInteger() }.incrementAndGet()
+        }
+
+        private fun ended(request: ImageRequest) {
+            started[request.data.toString()]?.updateAndGet { maxOf(0, it - 1) }
+        }
+
         override fun onSuccess(request: ImageRequest, result: SuccessResult) {
             if (result.dataSource == DataSource.MEMORY_CACHE) fromMemory.incrementAndGet()
             shown.putIfAbsent(request.data.toString(), SystemClock.elapsedRealtimeNanos())
+            ended(request)
         }
 
         override fun onCancel(request: ImageRequest) {
             cancelled.incrementAndGet()
+            ended(request)
         }
 
         override fun onError(request: ImageRequest, result: ErrorResult) {
             failed.incrementAndGet()
+            ended(request)
         }
     }
 
