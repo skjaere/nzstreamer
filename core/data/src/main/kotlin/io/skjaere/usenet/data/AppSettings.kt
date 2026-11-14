@@ -138,9 +138,11 @@ data class PlaybackPrefs(
     /**
      * How many releases a play tries before it gives up, from either source (L205): each Usenet one
      * an NZB download that counts against the indexer's allowance, each torrent calls to the user's
-     * debrid service rather than a grab; one of [RELEASES_TO_TRY] (read through [attempts]).
+     * debrid service rather than a grab; one of [RELEASES_TO_TRY] (read through [attempts]). 10 on a new install, and in
+     * a settings file without the field; one that has it keeps its value, as every field is written (defaults too), so an
+     * install that saved its settings while the default was 3 keeps 3 until another is chosen.
      */
-    val releasesToTry: Int = 3,
+    val releasesToTry: Int = 10,
     /**
      * "Maximum bitrate": the speed this device can stream at, in Mbps, one of [MAX_BITRATES_MBPS]; null when not set.
      * Releases estimated above it are tried last ([RankingPrefs.maxBitrate]).

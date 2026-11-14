@@ -41,8 +41,9 @@ import org.junit.runner.RunWith
 /**
  * Settings › Quality and languages' maximum bitrate, picked by touch, and under it the maximum when casting, a choice of
  * its own with its explanation; each has twelve cells in three full rows of four, which a remote goes straight through at
- * a TV's size (W102, L309); on a TV's layouts the frame-rate switch last in Behaviour, a phone's keeping its four rows.
- * The settings are put back as they were afterwards.
+ * a TV's size (W102, L309); on a TV's layouts the frame-rate switch last in Behaviour, a phone's keeping its four rows;
+ * Releases to try's four choices, 10 chosen until another is. The playback settings start as a new install's, and the
+ * settings are put back as they were afterwards.
  */
 @RunWith(AndroidJUnit4::class)
 class PlaybackScreenDeviceTest {
@@ -107,6 +108,26 @@ class PlaybackScreenDeviceTest {
         compose.onNode(forty).assertIsNotSelected()
         compose.onNode(five).assertIsNotSelected()
         compose.onNode(oneFifty).assertIsNotSelected()
+    }
+
+    /** Releases to try: 1, 3, 5 and 10 in one row, 10 chosen on a new install; 3 picked by touch is saved and shown chosen. */
+    @Test
+    fun releasesToTryOffersFourChoicesWithTenChosenUntilAnotherIs() = runBlocking<Unit> {
+        compose.setContent { AppTheme { PlaybackScreen(onBack = {}) } }
+        val cells = listOf("Try 1 release", "Try up to 3 releases", "Try up to 5 releases", "Try up to 10 releases").map(::hasContentDescription)
+        val (three, ten) = cells[1] to cells[3]
+        compose.waitUntil(5_000) { exists(ten) }
+        compose.onNode(ten).performScrollTo().assertIsSelected()
+        cells.dropLast(1).forEach { compose.onNode(it).assertIsNotSelected() }
+        val places = cells.map { compose.onNode(it).fetchSemanticsNode().positionInRoot }
+        assertEquals("one row: $places", 1, places.map { it.y }.distinct().size)
+        assertTrue("in order: $places", places.map { it.x }.zipWithNext().all { (a, b) -> a < b })
+
+        compose.onNode(three).performClick()
+        compose.waitForIdle()
+        withTimeout(5_000) { settings.playback.first { it.releasesToTry == 3 } }
+        compose.waitUntil(5_000) { runCatching { compose.onNode(three).assertIsSelected() }.isSuccess }
+        compose.onNode(ten).assertIsNotSelected()
     }
 
     /**

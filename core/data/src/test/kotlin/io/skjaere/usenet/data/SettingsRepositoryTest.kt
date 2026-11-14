@@ -722,17 +722,44 @@ class SettingsRepositoryTest {
     }
 
     @Test
-    fun `releases to try are 3 until chosen, also in settings saved before the choice existed, and stay within 1 to 10`() = runBlocking<Unit> {
+    fun `releases to try are 10 until chosen, also in settings saved before the choice existed, and stay within 1 to 10`() = runBlocking<Unit> {
         val serializer = JsonFileSerializer(AppSettings.serializer(), AppSettings())
         val older = """{"schemaVersion":1,"playback":{"quality":"Auto","autoPlayNext":true,"updatedAt":5}}"""
-        assertEquals(3, serializer.readFrom(older.byteInputStream()).playback.attempts)
-        assertEquals(3, repository.playback.first().attempts)
-        repository.updatePlayback { it.copy(releasesToTry = 10) }
+        assertEquals(10, serializer.readFrom(older.byteInputStream()).playback.attempts)
         assertEquals(10, repository.playback.first().attempts)
+        // Defaults are written too (encodeDefaults): a new file holds 10 from its first write.
+        repository.updatePlayback { it.copy(autoPlayNext = false) }
         assertTrue(""""releasesToTry":10""" in File(dir, "settings.json").readText())
+        repository.updatePlayback { it.copy(releasesToTry = 3) }
+        assertEquals(3, repository.playback.first().attempts)
+        assertTrue(""""releasesToTry":3""" in File(dir, "settings.json").readText())
         // A value no version offers is held to the choices' range rather than trusted.
         assertEquals(listOf(1, 1, 10), listOf(0, -4, 99).map { PlaybackPrefs(releasesToTry = it).attempts })
         assertEquals(listOf(1, 3, 5, 10), PlaybackPrefs.RELEASES_TO_TRY)
+    }
+
+    /**
+     * Every field is written, defaults too (encodeDefaults), so a file saved while 3 was the default holds 3 as a choice
+     * would: it stays 3. A file without the field (from before it, or never saved) takes the default, now 10.
+     */
+    @Test
+    fun `releases to try saved in an existing install's settings stay as they were, 3 included`() = runBlocking<Unit> {
+        File(dir, "settings.json").writeText(
+            """{"schemaVersion":2,"playback":{"quality":"Auto","autoPlayNext":false,"releasesToTry":3,"updatedAt":5}}""",
+        )
+        assertEquals(3, repository.playback.first().attempts)
+        // Another setting saved writes it back as it was.
+        repository.updatePlayback { it.copy(autoPlayNext = true) }
+        assertEquals(3, repository.playback.first().releasesToTry)
+        assertTrue(""""releasesToTry":3""" in File(dir, "settings.json").readText())
+    }
+
+    @Test
+    fun `settings saved before releases to try existed take 10, and hold it once written back`() = runBlocking<Unit> {
+        File(dir, "settings.json").writeText("""{"schemaVersion":2,"playback":{"quality":"Auto","autoPlayNext":false,"updatedAt":5}}""")
+        assertEquals(10, repository.playback.first().attempts)
+        repository.updatePlayback { it.copy(autoPlayNext = true) }
+        assertTrue(""""releasesToTry":10""" in File(dir, "settings.json").readText())
     }
 
     @Test
