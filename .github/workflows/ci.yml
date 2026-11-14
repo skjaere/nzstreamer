@@ -130,7 +130,8 @@ jobs:
 
       # The coverage of the unit tests check ran, as the root build.gradle.kts sets it up. Their results are up to
       # date, so this only writes the report, build/reports/kover/reportUnitTests.xml. With check's flags, it runs in
-      # check's daemon.
+      # check's daemon. Its cost, measured on a desktop over the same 6865 tests: Kover's agent takes the unit tests from
+      # about 100 s to 118 s and check from 184 s to 207 s, and this step adds about 2 s.
       - name: Coverage report
         run: |
           ./gradlew :koverXmlReportUnitTests \
