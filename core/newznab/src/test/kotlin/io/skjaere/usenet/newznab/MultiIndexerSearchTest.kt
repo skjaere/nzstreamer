@@ -60,6 +60,13 @@ class MultiIndexerSearchTest {
     // for the healthy fakes on a cold, busy JVM (300 ms made them time out under parallel builds).
     private fun search(timeoutMs: Long = 15_000) = MultiIndexerSearch(fake.client, CapsCache(fake.client), timeoutMs)
 
+    /**
+     * A cache that holds [good]'s caps already, for the tests with a 1 s timeout. A search's timeout covers its caps
+     * too, and a cold, busy JVM can take longer than that over them: the search would then time out before its request
+     * reached the indexer, and the test would wait for that request forever.
+     */
+    private suspend fun capsOfGood(indexers: FakeIndexers) = CapsCache(indexers.client).also { it.get(good) }
+
     /** By tvdb id where supported, else by name. */
     private val plan: (IndexerCaps) -> SearchQuery? = { caps ->
         when {
@@ -123,9 +130,9 @@ class MultiIndexerSearchTest {
             }
         }
         val received = mutableListOf<IndexerOutcome>()
-        val multi = MultiIndexerSearch(hanging.client, CapsCache(hanging.client), perIndexerTimeoutMs = 1_000)
+        val multi = MultiIndexerSearch(hanging.client, capsOfGood(hanging), perIndexerTimeoutMs = 1_000)
         val collector = launch { multi.search(listOf(good), plan = plan).collect { received += it } }
-        searching.await()
+        withTimeout(5_000) { searching.await() }
         collector.cancelAndJoin()
 
         assertTrue(collector.isCancelled)
@@ -177,9 +184,9 @@ class MultiIndexerSearchTest {
             searching.complete(Unit)
             awaitCancellation()
         }
-        val multi = MultiIndexerSearch(hanging.client, CapsCache(hanging.client), perIndexerTimeoutMs = 1_000)
+        val multi = MultiIndexerSearch(hanging.client, capsOfGood(hanging), perIndexerTimeoutMs = 1_000)
         val dropped = launch { multi.search(listOf(good), plan = plan).collect() }
-        searching.await()
+        withTimeout(5_000) { searching.await() }
         dropped.cancelAndJoin()
         // Started well after the request, so the request's own timeout runs out first.
         delay(500)
