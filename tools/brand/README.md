@@ -14,7 +14,7 @@
   `splash_mark_duration` (the splash theme's animation duration);
 - `drawable/splash_mark.xml`: the splash's icon before Android 12, which the library draws still: the
   mark as the launcher icon has it;
-- `.github/readme/logo-on-dark.png`, `logo-on-light.png`: the README's logo, the mark beside the name as
+- `.github/brand/logo-on-dark.png`, `logo-on-light.png`: the README's logo, the mark beside the name as
   the banner has them on a clear ground, the name light for GitHub's dark theme and dark for its light one.
 
 The mark's outline and the colours are defined once in the script. Change them there and run it

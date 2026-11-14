@@ -369,10 +369,10 @@ def main():
     write(RES / "drawable/splash_mark.xml", vector(ACCENT, data))
     write(RES / "values/splash_mark.xml", splash_values())
     # The README's logo, for each of GitHub's themes.
-    readme = ROOT / ".github/readme"
-    readme.mkdir(parents=True, exist_ok=True)
-    logo(LOGO_HEIGHT, TEXT).save(readme / "logo-on-dark.png", optimize=True)
-    logo(LOGO_HEIGHT, BACKGROUND).save(readme / "logo-on-light.png", optimize=True)
+    brand = ROOT / ".github/brand"
+    brand.mkdir(parents=True, exist_ok=True)
+    logo(LOGO_HEIGHT, TEXT).save(brand / "logo-on-dark.png", optimize=True)
+    logo(LOGO_HEIGHT, BACKGROUND).save(brand / "logo-on-light.png", optimize=True)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 <h1 align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/logo-on-dark.png">
-    <img alt="NZStreamer" src=".github/readme/logo-on-light.png" width="600">
+    <source media="(prefers-color-scheme: dark)" srcset=".github/brand/logo-on-dark.png">
+    <img alt="NZStreamer" src=".github/brand/logo-on-light.png" width="600">
   </picture>
 </h1>
 
