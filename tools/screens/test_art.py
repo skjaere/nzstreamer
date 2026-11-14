@@ -26,6 +26,17 @@ def mean_difference(a, b):
     return sum(ImageStat.Stat(ImageChops.difference(a, b)).mean) / 3
 
 
+def metadata_segments(jpeg):
+    """The markers of a JPEG's segments before its picture's data that hold metadata: APP1 to APP15 and comments."""
+    found, at = [], 2
+    while at + 4 <= len(jpeg) and jpeg[at] == 0xFF and jpeg[at + 1] != 0xDA:
+        marker = jpeg[at + 1]
+        if 0xE1 <= marker <= 0xEF or marker == 0xFE:
+            found.append(marker)
+        at += 2 + int.from_bytes(jpeg[at + 2:at + 4], "big")
+    return found
+
+
 class SeedTest(unittest.TestCase):
     def test_a_seed_draws_the_same_bytes_every_time_and_another_seed_other_bytes(self):
         draws = {
@@ -55,8 +66,17 @@ class SeedTest(unittest.TestCase):
     def test_a_jpeg_carries_no_metadata(self):
         data = art.encode(art.scene(art.STILL, "fen", 3))
         self.assertTrue(data.startswith(b"\xff\xd8\xff\xe0"), "a JFIF header first")
-        for marker in (b"Exif", b"http://ns.adobe.com/xap", b"ICC_PROFILE"):
+        # JFIF's own APP0 alone: no EXIF or XMP (APP1), ICC profile (APP2), other application segment or comment.
+        self.assertEqual([], metadata_segments(data))
+        for marker in (b"Exif", b"ICC_PROFILE"):
             self.assertNotIn(marker, data)
+
+    def test_the_segment_check_finds_exif_and_a_comment(self):
+        exif = Image.Exif()
+        exif[0x010F] = "Invented maker"
+        out = io.BytesIO()
+        art.scene(art.STILL, "fen", 3).save(out, "JPEG", quality=art.QUALITY, exif=exif, comment=b"invented")
+        self.assertEqual([0xE1, 0xFE], sorted(metadata_segments(out.getvalue())))
 
 
 class CatalogueTest(unittest.TestCase):
