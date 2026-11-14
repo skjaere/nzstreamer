@@ -11,7 +11,7 @@ This repository's own code and files are under the PolyForm Noncommercial Licens
 
 ## Sora
 
-- What: the font `app/src/main/res/font/sora.ttf` (Sora 2.000, variable), unmodified. `tools/brand/generate.py` draws the TV banner's wordmark with it; the banner images themselves are this project's.
+- What: the font `app/src/main/res/font/sora.ttf` (Sora 2.000, variable), unmodified. `tools/brand/generate.py` draws the TV banner's wordmark with it, and `tools/screens/art.py` the titles on the README screenshots' posters (`app/src/androidTest/assets/screens/`); those images themselves are this project's.
 - Where from: <https://github.com/sora-xor/sora-font>.
 - Copyright 2019 The Sora Project Authors.
 - Licence: SIL Open Font License 1.1 (SPDX `OFL-1.1`). The full text is in [app/src/main/assets/licenses/sora-OFL.txt](app/src/main/assets/licenses/sora-OFL.txt), which the app ships.

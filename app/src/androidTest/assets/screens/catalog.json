@@ -1,0 +1,216 @@
+{
+  "about": "The README screenshots' invented titles: tools/screens/art.py draws their images beside this file, mock-seed's indexer --catalog screens lists their releases, and the device tests answer TMDB's lookups for them. Every name was made up for them. TMDB ids: shows from 990001, films from 9900101, past both of TMDB's ranges; TVDB and TVmaze ids from 9900001 and IMDb ids from tt99000001, past theirs. Days are counted from the day of the run: -7 aired a week ago.",
+  "shows": [
+    {
+      "slug": "kelpmoor",
+      "name": "Kelpmoor",
+      "ids": { "tmdb": 990001, "tvdb": 9900001, "imdb": "tt99000001", "tvmaze": 9900001 },
+      "overview": "A harbour town's dock crew keeps the quay running through a season of storms, debts and late arrivals.",
+      "status": "Returning Series",
+      "runtime": 48,
+      "backdrop": true,
+      "seasons": [
+        {
+          "number": 1,
+          "episodes": [
+            { "name": "The Saltreach Bell", "aired": -420, "overview": "The first boat of the season comes in a day early, and nobody is ready." },
+            { "name": "Nine Sacks Short", "aired": -413, "overview": "A cargo is counted three times and comes out short every time." },
+            { "name": "Gullhaven Morning", "aired": -406, "overview": "Fog closes the harbour, and the crew waits it out in the net loft." },
+            { "name": "A Ledger of Tides", "aired": -399, "overview": "The harbour's old tide book turns up with pages missing." },
+            { "name": "Brinefall", "aired": -392, "overview": "A storm surge floods the lower quay the night before an inspection." },
+            { "name": "The Lamp on the Breakwater", "aired": -385, "overview": "The breakwater light goes dark, and someone has to row out to it." }
+          ]
+        },
+        {
+          "number": 2,
+          "episodes": [
+            { "name": "Kelpmoor Rising", "aired": -21, "overview": "A new harbour master arrives with plans for the old quay." },
+            { "name": "Driftwood Accounts", "aired": -14, "overview": "The crew sells what the winter washed up, and argues over the takings." },
+            { "name": "The Tarry Knot", "aired": -7, "overview": "A knot nobody can untie holds up the morning's loading." }
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "quillon-station",
+      "name": "Quillon Station",
+      "ids": { "tmdb": 990002, "tvdb": 9900002, "imdb": "tt99000002", "tvmaze": 9900002 },
+      "overview": "At a junction on a quiet branch line, the station staff keep the trains running and their secrets in the timetable.",
+      "status": "Ended",
+      "runtime": 44,
+      "backdrop": true,
+      "seasons": [
+        {
+          "number": 1,
+          "episodes": [
+            { "name": "The Quillon Timetable", "aired": -900, "overview": "A timetable with one train too many is pinned up overnight." },
+            { "name": "Signal Fault at Brackenwick", "aired": -893, "overview": "The signals fail at the next junction, and the station fills up." },
+            { "name": "The Pennoch Spur", "aired": -886, "overview": "A siding closed for years turns out to be in use." },
+            { "name": "Points and Lanterns", "aired": -879, "overview": "The last night shift before the line's new signal box opens." }
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "the-gullenkiln-archive",
+      "name": "The Gullenkiln Archive",
+      "ids": { "tmdb": 990003, "tvdb": 9900003, "imdb": "tt99000003", "tvmaze": 9900003 },
+      "overview": "A small team catalogues a glassworks' papers and finds that some of the records were never meant to be kept.",
+      "status": "Returning Series",
+      "runtime": 52,
+      "backdrop": true,
+      "seasons": [
+        {
+          "number": 1,
+          "episodes": [
+            { "name": "Catalogue Number One", "aired": -23, "overview": "The first box is opened, and its list doesn't match what is inside." },
+            { "name": "The Folio in the Kiln", "aired": -16, "overview": "A bound folio is found bricked into a cold kiln." },
+            { "name": "Ashes and Vellum", "aired": -9, "overview": "A fire in the reading room spares one shelf, and only one." },
+            { "name": "The Glassblower's Index", "aired": -2, "overview": "An index of names leads the team to the works' last owner." }
+          ]
+        }
+      ]
+    },
+    {
+      "slug": "thimbleport",
+      "name": "Thimbleport",
+      "ids": { "tmdb": 990004, "tvdb": 9900004, "imdb": "tt99000004", "tvmaze": 9900004 },
+      "overview": "A seaside town's sewing circle settles its quarrels one commission at a time.",
+      "status": "Ended",
+      "runtime": 30,
+      "seasons": [ { "number": 1, "episodes": 8, "aired": -2600 }, { "number": 2, "episodes": 8, "aired": -2200 } ]
+    },
+    {
+      "slug": "brasswick-tide",
+      "name": "Brasswick Tide",
+      "ids": { "tmdb": 990005, "tvdb": 9900005, "imdb": "tt99000005", "tvmaze": 9900005 },
+      "overview": "Two lock keepers on a tidal river disagree about nearly everything except the water.",
+      "status": "Ended",
+      "runtime": 45,
+      "seasons": [ { "number": 1, "episodes": 6, "aired": -1900 } ]
+    },
+    {
+      "slug": "the-lamplighters-ledger",
+      "name": "The Lamplighter's Ledger",
+      "ids": { "tmdb": 990006, "tvdb": 9900006, "imdb": "tt99000006", "tvmaze": 9900006 },
+      "overview": "In a city of gas lamps, a lamplighter's notebook keeps track of more than the lamps.",
+      "status": "Ended",
+      "runtime": 50,
+      "seasons": [ { "number": 1, "episodes": 6, "aired": -2100 } ]
+    },
+    {
+      "slug": "tidewick",
+      "name": "Tidewick",
+      "ids": { "tmdb": 990007, "tvdb": 9900007, "imdb": "tt99000007", "tvmaze": 9900007 },
+      "overview": "A ferry crew of four, two crossings a day and a town that depends on both.",
+      "status": "Returning Series",
+      "runtime": 25,
+      "seasons": [ { "number": 1, "episodes": 10, "aired": -700 }, { "number": 2, "episodes": 10, "aired": -300 } ]
+    },
+    {
+      "slug": "pellowby-lane",
+      "name": "Pellowby Lane",
+      "ids": { "tmdb": 990008, "tvdb": 9900008, "imdb": "tt99000008", "tvmaze": 9900008 },
+      "overview": "The residents of a narrow street share a courtyard, a boiler and very little else.",
+      "status": "Ended",
+      "runtime": 40,
+      "seasons": [ { "number": 1, "episodes": 8, "aired": -3000 } ]
+    },
+    {
+      "slug": "copperfen",
+      "name": "Copperfen",
+      "ids": { "tmdb": 990009, "tvdb": 9900009, "imdb": "tt99000009", "tvmaze": 9900009 },
+      "overview": "Surveyors mapping a wetland for a new canal find the water has plans of its own.",
+      "status": "Ended",
+      "runtime": 47,
+      "seasons": [ { "number": 1, "episodes": 6, "aired": -1200 } ]
+    },
+    {
+      "slug": "the-corrandine-papers",
+      "name": "The Corrandine Papers",
+      "ids": { "tmdb": 990010, "tvdb": 9900010, "imdb": "tt99000010", "tvmaze": 9900010 },
+      "overview": "A translator is hired to read a family's letters and is asked to leave some of them out.",
+      "status": "Returning Series",
+      "runtime": 55,
+      "seasons": [ { "number": 1, "episodes": 6, "aired": -500 } ]
+    },
+    {
+      "slug": "fathomhill",
+      "name": "Fathomhill",
+      "ids": { "tmdb": 990011, "tvdb": 9900011, "imdb": "tt99000011", "tvmaze": 9900011 },
+      "overview": "A diving school on a quiet bay takes on one student too many.",
+      "status": "Ended",
+      "runtime": 42,
+      "seasons": [ { "number": 1, "episodes": 8, "aired": -1600 } ]
+    },
+    {
+      "slug": "glimmerholt",
+      "name": "Glimmerholt",
+      "ids": { "tmdb": 990012, "tvdb": 9900012, "imdb": "tt99000012", "tvmaze": 9900012 },
+      "overview": "A glassblowing village through the year of its biggest order.",
+      "status": "Returning Series",
+      "runtime": 36,
+      "seasons": [ { "number": 1, "episodes": 8, "aired": -800 } ]
+    },
+    {
+      "slug": "the-gannet-register",
+      "name": "The Gannet Register",
+      "ids": { "tmdb": 990013, "tvdb": 9900013, "imdb": "tt99000013", "tvmaze": 9900013 },
+      "overview": "Bird counters on a windswept island keep a record that someone keeps changing.",
+      "status": "Ended",
+      "runtime": 44,
+      "seasons": [ { "number": 1, "episodes": 6, "aired": -2300 } ]
+    },
+    {
+      "slug": "lowhatch",
+      "name": "Lowhatch",
+      "ids": { "tmdb": 990014, "tvdb": 9900014, "imdb": "tt99000014", "tvmaze": 9900014 },
+      "overview": "The crew of an old barge turned floating bookshop work their way along the canals.",
+      "status": "Returning Series",
+      "runtime": 28,
+      "seasons": [ { "number": 1, "episodes": 8, "aired": -150 } ]
+    }
+  ],
+  "movies": [
+    {
+      "slug": "the-ninth-bollard",
+      "title": "The Ninth Bollard",
+      "ids": { "tmdb": 9900101, "imdb": "tt99000101" },
+      "year": 2022,
+      "released": "2022-03-18",
+      "overview": "On the last night before a harbour closes, its night watchman counts the moorings and finds one boat too many.",
+      "runtime": 104,
+      "backdrop": true
+    },
+    {
+      "slug": "pellucid-shore",
+      "title": "Pellucid Shore",
+      "ids": { "tmdb": 9900102, "imdb": "tt99000102" },
+      "year": 2019,
+      "released": "2019-09-06",
+      "overview": "A lighthouse keeper's daughter comes back to the coast she left as a child.",
+      "runtime": 97,
+      "backdrop": true
+    },
+    {
+      "slug": "ostlers-landing",
+      "title": "Ostler's Landing",
+      "ids": { "tmdb": 9900103, "imdb": "tt99000103" },
+      "year": 2024,
+      "released": "2024-05-24",
+      "overview": "A coaching inn at a river crossing waits for a stagecoach that is three days late.",
+      "runtime": 112,
+      "backdrop": true
+    },
+    {
+      "slug": "cindermoor",
+      "title": "Cindermoor",
+      "ids": { "tmdb": 9900104, "imdb": "tt99000104" },
+      "year": 2021,
+      "released": "2021-11-12",
+      "overview": "Two rival charcoal burners share a moor, a market and a long winter.",
+      "runtime": 118,
+      "backdrop": true
+    }
+  ]
+}
