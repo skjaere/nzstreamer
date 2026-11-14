@@ -47,9 +47,10 @@ class SaveTest(unittest.TestCase):
             exif = Image.Exif()
             exif[0x010F] = "Invented maker"
             screen.save(screens / "p1-home.png", pnginfo=text, exif=exif, icc_profile=b"invented profile")
-            with Image.open(screens / "p1-home.png") as saved:
-                self.assertIn("Comment", saved.info)
-                self.assertIn("icc_profile", saved.info)
+            # The screen as saved holds a text chunk, EXIF and an ICC profile.
+            png = (screens / "p1-home.png").read_bytes()
+            for chunk in (b"tEXt", b"eXIf", b"iCCP"):
+                self.assertIn(chunk, png)
 
             with contextlib.redirect_stdout(io.StringIO()):
                 webp.main([str(screens), "--to", str(out)])
@@ -59,8 +60,9 @@ class SaveTest(unittest.TestCase):
             self.assertEqual(["VP8L"], webp.chunks(made))
             with Image.open(made) as again:
                 self.assertEqual(screen.convert("RGB").tobytes(), again.convert("RGB").tobytes())
-                self.assertNotIn("icc_profile", again.info)
-                self.assertNotIn("exif", again.info)
+            data = made.read_bytes()
+            for word in (b"Invented", b"invented profile", b"ICCP", b"EXIF", b"XMP "):
+                self.assertNotIn(word, data)
 
     def test_only_takes_the_screens_named_and_fails_on_one_not_there(self):
         with tempfile.TemporaryDirectory() as tmp:

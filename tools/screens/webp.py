@@ -56,7 +56,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("dirs", nargs="+", type=Path, help="capture.sh's --out folders")
     parser.add_argument("--only", nargs="+", choices=sorted(NAMES), help="these screens alone")
-    parser.add_argument("--to", type=Path, default=README_IMAGES)
+    parser.add_argument("--to", dest="folder", type=Path, default=README_IMAGES, help="where the images go")
     args = parser.parse_args(argv)
     wanted = args.only or sorted(NAMES)
     found = {}
@@ -71,10 +71,10 @@ def main(argv=None):
         parser.error("no PNG for " + ", ".join(sorted(set(args.only) - set(found))))
     if not found:
         parser.error("no screen's PNG in " + ", ".join(map(str, args.dirs)))
-    args.to.mkdir(parents=True, exist_ok=True)
+    args.folder.mkdir(parents=True, exist_ok=True)
     total = 0
     for screen, png in sorted(found.items()):
-        out = args.to / f"{NAMES[screen]}.webp"
+        out = args.folder / f"{NAMES[screen]}.webp"
         save(png, out)
         assert chunks(out) == ["VP8L"], out
         size = out.stat().st_size
