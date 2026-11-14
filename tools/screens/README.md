@@ -6,17 +6,19 @@ them, and nothing comes from TMDB.
 ## The player's clip
 
 `make-clip.sh` makes the video the player shows from a silent film in the public domain: an actualité of the 1890s,
-free in the US and wherever the term is the author's life plus 70 years. Only its picture is used. The script loops
-it to a little over five and a half minutes, pillarboxes it to 1920x1080 and adds three silent audio tracks, three
-subtitle tracks with lines written for it, and an "Intro" chapter, so the skip button and the audio and subtitles
-panel have something to show.
+free in the US and wherever the term is the author's life plus 70 years. The copy is one an archive gives, with its
+source and rights stated, never a restoration sold on disc, which its restorer may hold rights in. Only its picture is
+used. The script loops it to a little over five and a half minutes, pillarboxes it to 1920x1080 and adds three silent
+audio tracks, three subtitle tracks with lines written for it, and an "Intro" chapter, so the skip button and the
+audio and subtitles panel have something to show.
 
 ```sh
-tools/screens/make-clip.sh <film> <out dir> [--to <seconds>]
+tools/screens/make-clip.sh <film> <out dir> [--from <seconds>] [--to <seconds>]
 ```
 
-`--to` cuts the film there, for one that ends on black frames. The clip is about 130 MB and stays out of the
-repository, as does the film. It needs ffmpeg and ffprobe, and the same film and ffmpeg give the same bytes.
+`--from` and `--to` keep the part of the copy between them, for one with a title card, black frames or a fade at
+either end. The clip is about 125 MB and stays out of the repository, as does the film. It needs ffmpeg and ffprobe,
+and the same film and ffmpeg give the same bytes.
 
 ## Titles and pictures
 
@@ -50,8 +52,9 @@ README's device tests):
 
 Give the clip's full path, as Gradle runs the tool from the repository's top folder, and a port of 8093 or above: 8089
 is the device tests' fake indexer's. The port is taken before the clip is seeded, so one in use fails at once. Every
-release lists a size of its own. Only the two the screenshots play (`ScreensCatalog.PLAYABLE`) carry the clip; the others are seeded with every
-article missing, so a play of one fails at once rather than show the clip under another release's name.
+release lists a size of its own. Only the two the screenshots play (`ScreensCatalog.PLAYABLE`) carry the clip; the
+others are seeded with every article missing, so a play of one fails at once rather than show the clip under another
+release's name.
 
 On the device, `ScreensTitles` reads the same catalogue and builds a strict `FakeTmdb` from it: searches are answered
 from the catalogue alone, a lookup of any other title, season or key fails the run, and nothing goes to TMDB. `ScaleImages.screens` answers the pictures'

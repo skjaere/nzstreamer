@@ -3,24 +3,32 @@
 # little over five and a half minutes, as the player only takes an intro chapter that ends five minutes or more before
 # the end of the file. The picture is scaled to 1080 lines and pillarboxed to 1920x1080 at 24 fps, in H.264 High. Three
 # silent AAC tracks (English, French and Spanish) and three subtitle tracks in the same languages give the audio and
-# subtitles panel something to list; the lines are written here, the same seven every pass of the film. Chapters:
+# subtitles panel something to list; the lines are written here, the same ones every pass of the film. Chapters:
 # "Intro" (the first 15 s), then "Part 1".
 #
-# Usage: tools/screens/make-clip.sh <film> <out dir> [--to <seconds>]
+# Usage: tools/screens/make-clip.sh <film> <out dir> [--from <seconds>] [--to <seconds>]
 #   <film>     any video ffmpeg reads; only its first video stream is used.
 #   <out dir>  gets clip.mkv; made if missing. Keep it outside the repository.
-#   --to       use the film up to this time (for one that ends on black frames), else all of it.
+#   --from     use the film from this time on, else from its start;
+#   --to       up to this time, else to its end. Together they keep the film's own picture alone, for a copy with a title
+#              card, black frames or a fade at either end.
 # Needs ffmpeg and ffprobe. The same film and ffmpeg give the same bytes.
 set -euo pipefail
 
-usage() { echo "usage: $0 <film> <out dir> [--to <seconds>]" >&2; exit 2; }
-[ $# -eq 2 ] || [ $# -eq 4 ] || usage
-film=$1 out=$2 to=
-if [ $# -eq 4 ]; then
-  [ "$3" = --to ] || usage
-  to=$4
-  [[ $to =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "--to takes seconds, as 42 or 42.4" >&2; exit 2; }
-fi
+usage() { echo "usage: $0 <film> <out dir> [--from <seconds>] [--to <seconds>]" >&2; exit 2; }
+[ $# -ge 2 ] || usage
+film=$1 out=$2 from= to=
+shift 2
+while [ $# -gt 0 ]; do
+  [ $# -ge 2 ] || usage
+  case "$1" in
+    --from) from=$2 ;;
+    --to) to=$2 ;;
+    *) usage ;;
+  esac
+  [[ $2 =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "$1 takes seconds, as 42 or 42.4" >&2; exit 2; }
+  shift 2
+done
 command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null || { echo "ffmpeg and ffprobe are needed" >&2; exit 2; }
 [ -f "$film" ] || { echo "no such film: $film" >&2; exit 2; }
 ffprobe -v error -select_streams v:0 -show_entries stream=codec_type -of csv=p=0 "$film" | grep -qx video ||
@@ -30,11 +38,11 @@ ffprobe -v error -select_streams v:0 -show_entries stream=codec_type -of csv=p=0
 INTRO_END=15
 MIN_LENGTH=$((INTRO_END + 300 + 15))
 
-length=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$film")
-if [ -n "$to" ]; then
-  awk -v t="$to" -v l="$length" 'BEGIN { exit !(t > 0 && t <= l) }' || { echo "--to $to is outside the film (${length} s)" >&2; exit 2; }
-  length=$to
-fi
+film_length=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$film")
+start=${from:-0} end=${to:-$film_length}
+awk -v s="$start" -v e="$end" -v l="$film_length" 'BEGIN { exit !(s >= 0 && s < e && e <= l) }' ||
+  { echo "--from ${from:-0} and --to ${to:-the end} aren't a part of the film (${film_length} s)" >&2; exit 2; }
+length=$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.3f", e - s }')
 awk -v l="$length" -v i="$INTRO_END" 'BEGIN { exit !(l > i + 5) }' || { echo "the film is too short: ${length} s" >&2; exit 2; }
 passes=$(awk -v l="$length" -v m="$MIN_LENGTH" 'BEGIN { n = int(m / l); if (n * l < m) n++; print n }')
 total=$(awk -v l="$length" -v n="$passes" 'BEGIN { printf "%.3f", l * n }')
@@ -42,41 +50,46 @@ total=$(awk -v l="$length" -v n="$passes" 'BEGIN { printf "%.3f", l * n }')
 mkdir -p "$out"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-film_abs=$(realpath "$film")
 
-# The film, pass after pass, through ffmpeg's concat demuxer (its outpoint cuts each pass at --to).
+# The film's picture alone, cut to --from and --to frame by frame (decoded up to there, not sought), into a lossless
+# file of whole frames that the passes below repeat: nothing of the rest of the film, nor its tags, goes along.
+ffmpeg -hide_banner -loglevel error -y -i "$film" -ss "$start" -to "$end" \
+  -map 0:v:0 -map_metadata -1 -map_metadata:s -1 -map_chapters -1 \
+  -c:v ffv1 -level 3 -g 1 -slices 4 -threads 4 -fflags +bitexact -flags:v +bitexact "$work/film.mkv"
+
+# The film, pass after pass, through ffmpeg's concat demuxer.
 for _ in $(seq "$passes"); do
-  printf "file '%s'\n" "${film_abs//\'/\'\\\'\'}"
-  [ -z "$to" ] || printf 'outpoint %s\n' "$to"
+  printf "file '%s'\n" "$work/film.mkv"
 done >"$work/passes.txt"
 
-# Seven lines per pass, 4 s each, every 6 s from 2 s in; written for this clip, in each language.
+# Seven lines per pass, 4 s each, every 6 s from 2 s in, as many as the pass has room for; written for this clip (a
+# crowd on a quay as a guard parade marches past, steamboats on the water behind), in each language.
 EN=(
-  "Morning, everyone. The boat came in early."
-  "Stack the sacks by the wall, out of the steam."
-  "Careful on the plank, it's still wet."
-  "Two more loads and we stop for coffee."
-  "Has anyone seen the harbour master today?"
-  "The tide turns at noon. We have time."
-  "That's the last of them. Well done."
+  "Here they come, right on time."
+  "Stand back a little, let them pass."
+  "Can you see the band from there?"
+  "They march past at noon every day."
+  "Hold my hat, I want a better look."
+  "The boats are out early this morning."
+  "That's the last of them. Shall we go?"
 )
 FR=(
-  "Bonjour à tous. Le bateau est arrivé tôt."
-  "Empilez les sacs contre le mur, loin de la vapeur."
-  "Attention à la planche, elle est encore mouillée."
-  "Encore deux chargements, puis une pause café."
-  "Quelqu'un a vu le capitaine du port aujourd'hui ?"
-  "La marée tourne à midi. On a le temps."
-  "C'est le dernier. Bien joué."
+  "Les voilà, juste à l'heure."
+  "Reculez un peu, laissez-les passer."
+  "Tu vois la fanfare d'ici ?"
+  "Ils défilent à midi tous les jours."
+  "Tiens mon chapeau, je veux mieux voir."
+  "Les bateaux sont sortis tôt ce matin."
+  "Ce sont les derniers. On y va ?"
 )
 ES=(
-  "Buenos días a todos. El barco llegó temprano."
-  "Apilad los sacos junto a la pared, lejos del vapor."
-  "Cuidado con la tabla, todavía está mojada."
-  "Dos cargas más y paramos para el café."
-  "¿Alguien ha visto hoy al capitán del puerto?"
-  "La marea cambia a mediodía. Tenemos tiempo."
-  "Es el último. Buen trabajo."
+  "Ahí vienen, justo a tiempo."
+  "Apartaos un poco, dejadlos pasar."
+  "¿Ves la banda desde ahí?"
+  "Desfilan a mediodía todos los días."
+  "Sujétame el sombrero, quiero verlo mejor."
+  "Los barcos han salido temprano esta mañana."
+  "Son los últimos. ¿Nos vamos?"
 )
 
 # Writes an SRT of the given lines, repeated every pass; a line that would run past its pass is left out.
@@ -113,8 +126,10 @@ END=$end_ms
 title=Part 1
 EOF
 
-# The file's own tags come from the chapters file alone, which has none, and no stream keeps the film's tags (a title
-# or a handler's name): nothing of the film's goes along but its picture.
+# CRF 26 looks the same as finer settings on an old film's picture and keeps the clip near 125 MB: the screens indexer
+# seeds it twice into the mock NNTP server, which holds every article in memory.
+# The file's own tags come from the chapters file alone, which has none, and no stream keeps a tag of its input's (a
+# title or a handler's name): nothing of the film's goes along but its picture.
 ffmpeg -hide_banner -loglevel error -y \
   -f concat -safe 0 -i "$work/passes.txt" \
   -f lavfi -i "anullsrc=channel_layout=stereo:sample_rate=48000" \
@@ -125,7 +140,7 @@ ffmpeg -hide_banner -loglevel error -y \
   -map 0:v:0 -map 1:a -map 2:a -map 3:a -map 4:s -map 5:s -map 6:s -map_metadata 7 -map_metadata:s -1 -map_chapters 7 \
   -t "$total" \
   -vf "fps=24,scale=-2:1080:flags=lanczos,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,setsar=1,format=yuv420p" \
-  -c:v libx264 -profile:v high -preset slow -crf 22 -g 48 -keyint_min 48 -sc_threshold 0 -threads 4 \
+  -c:v libx264 -profile:v high -preset slow -crf 26 -g 48 -keyint_min 48 -sc_threshold 0 -threads 4 \
   -c:a aac -b:a 32k -c:s srt \
   -metadata:s:a:0 language=eng -metadata:s:a:1 language=fre -metadata:s:a:2 language=spa \
   -metadata:s:s:0 language=eng -metadata:s:s:1 language=fre -metadata:s:s:2 language=spa \
