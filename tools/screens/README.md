@@ -37,9 +37,9 @@ python3 -I tools/screens/art.py
 python3 -I -B tools/screens/test_art.py
 ```
 
-It needs Python 3 and Pillow (10 or newer). Another Pillow or libjpeg may draw a few pixels differently. The test
-checks that a seed always draws the same bytes and that the assets hold exactly the images
-the catalogue names.
+It needs Python 3 and Pillow (10 or newer). The test checks that a seed always draws the same bytes, that art.py's
+JPEGs carry no metadata, that the assets hold exactly the images the catalogue names, and that each of them is the
+picture art.py draws for it. Another Pillow or libjpeg may draw a few pixels differently, which the test allows.
 
 ## Releases and lookups
 
