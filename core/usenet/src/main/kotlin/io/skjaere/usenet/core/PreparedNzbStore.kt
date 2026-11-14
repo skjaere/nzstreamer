@@ -13,11 +13,14 @@ import java.util.concurrent.ConcurrentHashMap
  * bytes, title and archive password on disk, so an NZB can be re-prepared after the process
  * is killed.
  *
+ * It keeps the newest [maxEntries]: by default the last 10 played or imported, for Resume and the next episode, and the one
+ * an attempt is reading, which its probe kept and which goes again should the attempt fail ([UsenetTarget.drop]).
+ *
  * Safe to call from the main thread: the files are read and written on [ioDispatcher].
  */
 class PreparedNzbStore(
     private val dir: File,
-    private val maxEntries: Int = 10,
+    private val maxEntries: Int = 10 + 1,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
     private val prepared = ConcurrentHashMap<String, PreparedNzb>()
@@ -31,10 +34,14 @@ class PreparedNzbStore(
 
     fun get(id: String): PreparedNzb? = prepared[id]
 
-    /** Throws [java.io.IOException] if the files can't be written, without adding [nzb] or evicting an entry to make room for it. */
-    suspend fun put(nzb: PreparedNzb, nzbBytes: ByteArray) = mutex.withLock {
+    /**
+     * Keeps [nzb], as the newest: true when the store didn't hold it before. Throws [java.io.IOException] if the files can't
+     * be written, without adding [nzb] or evicting an entry to make room for it.
+     */
+    suspend fun put(nzb: PreparedNzb, nzbBytes: ByteArray): Boolean = mutex.withLock {
         withContext(ioDispatcher) {
             adoptEarlierEntries()
+            val added = nzb.id !in order
             dir.mkdirs()
             File(dir, "${nzb.id}.nzb").writeBytes(nzbBytes)
             File(dir, "${nzb.id}.title").writeText(nzb.title)
@@ -45,6 +52,16 @@ class PreparedNzbStore(
             order.remove(nzb.id)
             order.addLast(nzb.id)
             evictOverflow()
+            added
+        }
+    }
+
+    /** Lets go of the NZB kept as [id], from memory and from disk: one a failed attempt kept ([UsenetTarget.drop]). */
+    suspend fun remove(id: String) = mutex.withLock {
+        withContext(ioDispatcher) {
+            adoptEarlierEntries()
+            order.remove(id)
+            delete(id)
         }
     }
 
@@ -107,12 +124,14 @@ class PreparedNzbStore(
     }
 
     private fun evictOverflow() {
-        while (order.size > maxEntries) {
-            val evicted = order.removeFirst()
-            prepared.remove(evicted)
-            File(dir, "$evicted.nzb").delete()
-            sidecars.forEach { File(dir, "$evicted.$it").delete() }
-        }
+        while (order.size > maxEntries) delete(order.removeFirst())
+    }
+
+    /** [id] out of memory, and its files off disk. Call under [mutex] on [ioDispatcher]. */
+    private fun delete(id: String) {
+        prepared.remove(id)
+        File(dir, "$id.nzb").delete()
+        sidecars.forEach { File(dir, "$id.$it").delete() }
     }
 
     /** [count] NZBs on disk, taking [bytes] with their titles and passwords. */

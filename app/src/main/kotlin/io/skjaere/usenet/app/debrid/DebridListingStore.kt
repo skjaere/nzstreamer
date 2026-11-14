@@ -2,6 +2,7 @@ package io.skjaere.usenet.app.debrid
 
 import androidx.annotation.VisibleForTesting
 import io.skjaere.usenet.app.play.PlayerLaunch
+import io.skjaere.usenet.data.PlaybackPrefs
 import io.skjaere.usenet.debrid.InfoHash
 import io.skjaere.usenet.debrid.Prepared
 import io.skjaere.usenet.player.PlayUris
@@ -27,9 +28,15 @@ import java.security.MessageDigest
  * the service's ids, the service's handle for it, such as TorBox's torrent id). Never a link or a key.
  *
  * A listing is [put] as a play prepares it, in memory; [keep] writes the one that plays to [file], newest last. Files are
- * read and written on [io].
+ * read and written on [io]. Each attempt of a play puts its listing, and its probe keeps it, whether it plays or not, so
+ * [max] is 10 for the releases played before and as many again as a play's attempts ([PlaybackPrefs.RELEASES_TO_TRY]):
+ * a play whose every attempt fails leaves those 10 kept.
  */
-class DebridListingStore(private val file: File, private val max: Int = 10, private val io: CoroutineDispatcher = Dispatchers.IO) {
+class DebridListingStore(
+    private val file: File,
+    private val max: Int = 10 + PlaybackPrefs.RELEASES_TO_TRY.last(),
+    private val io: CoroutineDispatcher = Dispatchers.IO,
+) {
     /** One release's listing from the service account [account], kept as [id], named [title]. */
     @Serializable
     data class Entry(val id: String, val account: String, val title: String, val prepared: Prepared) {

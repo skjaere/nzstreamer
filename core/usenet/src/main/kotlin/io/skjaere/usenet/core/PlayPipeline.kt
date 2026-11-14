@@ -330,6 +330,12 @@ interface PlaybackTarget {
 
     /** Keeps what the data source needs to read [uri] where it finds it. Throws when it can't, as on a full disk. */
     suspend fun keep()
+
+    /**
+     * Lets go of what [keep] kept, for an attempt that failed, unless it was kept before: a play's failed attempts take
+     * none of the places in a store that a Resume needs.
+     */
+    suspend fun drop() = Unit
 }
 
 /**
@@ -840,15 +846,21 @@ class PlayPipeline(
                 } else {
                     with(source) { steps.retarget(candidate, last, pickFile) } ?: return AttemptResult.Failure(last, steps.wholeRelease)
                 }
-                val probed = steps.step(candidate, PipelineStep.ProbeTracks) {
-                    when (val result = steps.guarded { probe.probe(target) }) {
-                        is ProbeResult.Playable -> StepResult.Ok(result)
-                        is ProbeResult.NoPlayableAudio -> StepResult.Fail(AttemptFailure.NoPlayableAudio(result.found))
-                        is ProbeResult.NoPlayableVideo -> StepResult.Fail(AttemptFailure.NoPlayableVideo(result.found))
-                        is ProbeResult.NotForCast -> StepResult.Fail(AttemptFailure.NotForCast(result.extension))
-                        is ProbeResult.CastMiss -> StepResult.Fail(result.failure)
-                        is ProbeResult.Failed -> StepResult.Fail(with(source) { steps.probeFailed(result, target) })
+                val probed = try {
+                    steps.step(candidate, PipelineStep.ProbeTracks) {
+                        when (val result = steps.guarded { probe.probe(target) }) {
+                            is ProbeResult.Playable -> StepResult.Ok(result)
+                            is ProbeResult.NoPlayableAudio -> StepResult.Fail(AttemptFailure.NoPlayableAudio(result.found))
+                            is ProbeResult.NoPlayableVideo -> StepResult.Fail(AttemptFailure.NoPlayableVideo(result.found))
+                            is ProbeResult.NotForCast -> StepResult.Fail(AttemptFailure.NotForCast(result.extension))
+                            is ProbeResult.CastMiss -> StepResult.Fail(result.failure)
+                            is ProbeResult.Failed -> StepResult.Fail(with(source) { steps.probeFailed(result, target) })
+                        }
                     }
+                } catch (e: StepFailed) {
+                    // The probe kept it to read it ([PlaybackTarget.keep]): a target that didn't play lets go of it.
+                    target.drop()
+                    throw e
                 }
                 return AttemptResult.Success(target, probed.video, probed.tracks)
             } catch (e: StepFailed) {

@@ -222,6 +222,24 @@ class PreparedNzbStoreTest {
         assertEquals(2, store.storedFiles().count)
     }
 
+    /** A put says whether the store held the NZB before, an earlier process's included; remove lets go of it everywhere. */
+    @Test
+    fun `a put says whether the NZB is new, and remove takes it out of memory and off disk`() = runBlocking<Unit> {
+        val earlier = leftOver("<a/>".toByteArray(), "A", modified = 1_000_000)
+        val store = PreparedNzbStore(dir)
+        assertFalse(store.put(nzb("<a/>".toByteArray(), "A"), "<a/>".toByteArray()), "an earlier process's is held")
+        val bytes = "<b/>".toByteArray()
+        val nzb = nzb(bytes, "B", password = "secret")
+        assertTrue(store.put(nzb, bytes))
+        assertFalse(store.put(nzb, bytes))
+
+        store.remove(nzb.id)
+        assertNull(store.get(nzb.id))
+        assertNull(store.stored(nzb.id))
+        assertEquals(setOf("$earlier.nzb", "$earlier.title"), dir.list()?.toSet())
+        assertTrue(store.put(nzb, bytes), "new again")
+    }
+
     @Test
     fun `an archive password is kept only as long as its NZB`() = runBlocking<Unit> {
         File(dir.apply { mkdirs() }, "gone.pw").writeText("old")

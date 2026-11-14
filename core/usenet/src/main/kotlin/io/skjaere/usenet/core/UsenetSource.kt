@@ -190,7 +190,8 @@ class UsenetSource(
 
 /**
  * [file] of [prepared], an NZB as its source fetched it ([nzbBytes]) with the archive [password] that came beside it, if
- * one did. Kept in [store], where the player's data source finds the NZB by its id ([UsenetUris]).
+ * one did. Kept in [store], where the player's data source finds the NZB by its id ([UsenetUris]); dropped from it again
+ * when its attempt fails, unless the store held it before.
  */
 class UsenetTarget(
     override val candidate: PlayCandidate,
@@ -203,8 +204,17 @@ class UsenetTarget(
     override val listing: PreparedNzb get() = prepared
     override val uri: String get() = UsenetUris.of(prepared.id, file)
 
+    // Whether [keep] put the NZB in the store, which didn't hold it before: [drop] takes it out again.
+    @Volatile
+    private var added = false
+
     override suspend fun keep() {
-        store.put(prepared, nzbBytes)
+        if (store.put(prepared, nzbBytes)) added = true
+    }
+
+    override suspend fun drop() {
+        if (added) store.remove(prepared.id)
+        added = false
     }
 
     override fun equals(other: Any?) = other is UsenetTarget && candidate == other.candidate && prepared.id == other.prepared.id && file == other.file

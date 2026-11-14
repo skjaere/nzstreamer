@@ -31,6 +31,8 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
+import org.junit.jupiter.api.io.TempDir
+import java.io.File
 import java.net.ConnectException
 import java.net.SocketException
 import java.util.Locale
@@ -862,6 +864,32 @@ class PlayPipelineTest {
         assertEquals(listOf("ProviderDown:0", "Down:1"), exhausted.failedAttempts.map { it.first.id })
         assertEquals(1 to 0, exhausted.notTried to exhausted.skipped)
         assertEquals(listOf("ProviderDown:0"), fetched)
+    }
+
+    @TempDir
+    lateinit var storeDir: File
+
+    /**
+     * The app's probe keeps each attempt's NZB in the store as it reads it ([PlaybackTarget.keep]), where a Resume finds
+     * those of the releases played before. An attempt that fails lets go of what it kept, so a play's failed attempts take
+     * none of their places; an NZB kept before the play stays, failed or not.
+     */
+    @Test
+    fun `failed attempts let go of what they kept, and leave what was kept before the play`() = runTest {
+        val store = PreparedNzbStore(storeDir, ioDispatcher = Dispatchers.Unconfined)
+        val keeping = TrackProbe { target -> target.keep(); probe.probe(target) }
+        val pipeline = usenetPipeline(source, availability, preparer, keeping, maxAttempts = 10, dispatcher = Dispatchers.Unconfined, store = store)
+        // Nine releases played, and one kept as Import keeps an NZB: the store's ten places.
+        val played = (0 until 9).map { PlayCandidate("Good:R$it", "Good $it") }
+        played.forEach { assertIs<PipelineEvent.Succeeded>(pipeline.play(listOf(it)).last()) }
+        val imported = nzbOf("NoVideoDecoder:0")
+        store.put(assertIs<PrepareOutcome.Ready>(preparer.prepare(imported, "NoVideoDecoder 0")).nzb, imported)
+        val before = (played.map { it.id } + "NoVideoDecoder:0").map { PreparedNzb.idFor(nzbOf(it)) }
+
+        val failing = candidates(*Array(10) { Release.NoVideoDecoder })
+        assertEquals(10, assertIs<PipelineEvent.Exhausted>(pipeline.play(failing).last()).failedAttempts.size)
+        assertEquals(before, before.filter { store.stored(it) != null })
+        assertEquals(listOf(PreparedNzb.idFor(imported)), failing.map { PreparedNzb.idFor(nzbOf(it.id)) }.filter { store.stored(it) != null })
     }
 
     /** A file a service lists, as [Cached] opens it. */

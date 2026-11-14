@@ -9,7 +9,7 @@ import kotlin.time.TimeSource
 
 /**
  * A store no test writes to: the pipeline never keeps what plays, and the tests' probes don't either, as the app's
- * does ([PlaybackTarget.keep]).
+ * does ([PlaybackTarget.keep]). A test whose probe keeps passes its own.
  */
 val unusedStore: PreparedNzbStore by lazy { PreparedNzbStore(createTempDirectory("usenet-source").toFile().apply { deleteOnExit() }) }
 
@@ -27,7 +27,8 @@ fun usenetPipeline(
     tried: TriedReleases = TriedReleases.None,
     chooser: FileChooser = FileChooser.None,
     stepWarnAfter: Duration = 20.seconds,
+    store: PreparedNzbStore = unusedStore,
 ): PlayPipeline {
-    val usenet = UsenetSource(source, availability, preparer, unusedStore, providersLeftOut, providerFallback, chooser)
+    val usenet = UsenetSource(source, availability, preparer, store, providersLeftOut, providerFallback, chooser)
     return PlayPipeline({ usenet }, probe, maxAttempts, dispatcher, timeSource, tried, stepWarnAfter)
 }
