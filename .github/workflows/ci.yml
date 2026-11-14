@@ -178,10 +178,12 @@ jobs:
           fi
 
       # The coverage report to Codecov, after every build: the action writes the token into GITHUB_ENV, where each later
-      # step would have it. An upload that fails never fails the run.
+      # step would have it. An upload that fails never fails the run, nor does one that stalls: the step's own time
+      # limit ends it as a failed step, which continue-on-error lets by, long before the job's.
       - name: Coverage to Codecov
         if: steps.codecov.outputs.token == 'set'
         continue-on-error: true
+        timeout-minutes: 5
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
