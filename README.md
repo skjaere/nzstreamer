@@ -73,6 +73,32 @@ Android 8.0 (API 26) or later: phones, tablets, Android TV / Google TV, and Fire
 OS). arm64-v8a, armeabi-v7a or x86_64.
 English only for now.
 
+## Screenshots
+
+On a phone:
+
+<p>
+  <img src=".github/readme/phone-home.webp" width="190" alt="Home on a phone: recent searches, Up next with an episode to resume, a next episode and a new one, and the collection">
+  <img src=".github/readme/phone-show.webp" width="190" alt="A show's page on a phone: poster, seasons, watched episodes and a Resume button">
+  <img src=".github/readme/phone-releases.webp" width="190" alt="An episode's releases, ranked for the phone, each saying why it ranked where it did">
+  <img src=".github/readme/phone-play-on.webp" width="190" alt="The Play on sheet: this phone, a paired TV and a Cast device">
+</p>
+<p>
+  <img src=".github/readme/phone-player.webp" width="784" alt="The player on a phone, with the audio and subtitles panel open">
+</p>
+
+On a TV:
+
+<p>
+  <img src=".github/readme/tv-home.webp" width="390" alt="Home on a TV: Up next with episode stills, and the collection's posters">
+  <img src=".github/readme/tv-collection.webp" width="390" alt="The collection on a TV: shows with filters, sorting and posters">
+  <img src=".github/readme/tv-player.webp" width="390" alt="The player on a TV, offering Skip intro during the intro">
+  <img src=".github/readme/tv-phone-setup.webp" width="390" alt="Set up with your phone on a TV: a QR code and the address to open on the phone">
+</p>
+
+The shows, films, posters and releases in these screenshots are made up for them, and the video frames come from a
+public-domain film of the 1890s. `tools/screens` makes them.
+
 ## Install
 
 Each release has one APK, `NZStreamer.apk`, for phones, tablets and TVs. This address always gets the newest release's
