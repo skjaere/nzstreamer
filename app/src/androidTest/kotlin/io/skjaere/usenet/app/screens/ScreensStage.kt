@@ -197,19 +197,17 @@ class ScreensStage(
                 failures += t
             }
         }
-        attempt {
-            runBlocking {
-                // Its key goes with it: restore puts back the settings' file alone.
-                if (saved.indexers.none { it.id == INDEXER_ID }) settings.deleteIndexer(INDEXER_ID)
-                settings.restore(saved)
-                settings.setTmdbKey(keyBefore)
-                library.markEpisodes(everyEpisode(), watched = false)
-                library.removeTitles(shows = titles.shows.keys - showsBefore, movies = titles.movies.keys - moviesBefore)
-                searches.forEach { library.removeSearch(it) }
-                library.restoreTriedReleases(tried)
-                if (!trackChoiceBefore) library.clearTrackChoice(kelpmoor.tmdbId)
-            }
-        }
+        // Each step on its own, so one that fails leaves the others to put back what they can.
+        fun restore(step: suspend () -> Unit) = attempt { runBlocking { step() } }
+        // Its key goes with it: restore puts back the settings' file alone.
+        restore { if (saved.indexers.none { it.id == INDEXER_ID }) settings.deleteIndexer(INDEXER_ID) }
+        restore { settings.restore(saved) }
+        restore { settings.setTmdbKey(keyBefore) }
+        restore { library.markEpisodes(everyEpisode(), watched = false) }
+        restore { library.removeTitles(shows = titles.shows.keys - showsBefore, movies = titles.movies.keys - moviesBefore) }
+        searches.forEach { search -> restore { library.removeSearch(search) } }
+        restore { library.restoreTriedReleases(tried) }
+        restore { if (!trackChoiceBefore) library.clearTrackChoice(kelpmoor.tmdbId) }
         // Set first thing when opening, so unset only when the opening failed before them.
         if (::images.isInitialized) attempt { images.restore() }
         if (::tmdb.isInitialized) attempt { tmdb.close() }

@@ -109,11 +109,23 @@ class ReadmeScreensTest {
 
     @After
     fun tearDown() {
-        instrumentation.runOnMainSync { players().forEach { it.finish() } }
-        container.playback.cancel()
-        instrumentation.setInTouchMode(true)
-        closing.reversed().forEach { it.close() }
-        if (::stage.isInitialized) stage.close()
+        // A test skipped before its stage was made (no screens=true, an older Android) staged and played nothing.
+        if (!::stage.isInitialized) return
+        // Each step on its own, the stage last of all: one that fails leaves the others to run.
+        val failures = mutableListOf<Throwable>()
+        fun attempt(step: () -> Unit) {
+            try {
+                step()
+            } catch (t: Throwable) {
+                failures += t
+            }
+        }
+        attempt { instrumentation.runOnMainSync { players().forEach { it.finish() } } }
+        attempt { container.playback.cancel() }
+        attempt { instrumentation.setInTouchMode(true) }
+        closing.reversed().forEach { item -> attempt { item.close() } }
+        attempt { stage.close() }
+        failures.firstOrNull()?.let { first -> failures.drop(1).forEach(first::addSuppressed); throw first }
     }
 
     private val tv: Boolean get() = container.television
