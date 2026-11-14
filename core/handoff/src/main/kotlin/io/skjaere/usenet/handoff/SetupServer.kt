@@ -58,7 +58,8 @@ private const val MINUTE = 60_000L
 
 /**
  * What a session tells the app, on the server's own threads: post it to the app's own before doing
- * anything with it, and don't block. Nothing comes after the app's [SetupServer.close].
+ * anything with it, and don't block. They come in the order the session changed, and nothing comes
+ * after the app's [SetupServer.close].
  */
 sealed interface SetupEvent {
     /** The page was opened with the right code, from [peer], which now owns the session. */
@@ -160,8 +161,11 @@ class SetupServer(
 ) : AutoCloseable {
     private enum class Phase { Open, Used, Locked, Expired, Closed }
 
-    /** The answer to one request: a page, or a 303 to [location]; the events it makes, and whether it ends the session. */
-    private class Outcome(val status: Int, val page: String?, val events: List<SetupEvent> = emptyList(), val ends: Boolean = false, val location: String? = null)
+    /**
+     * The answer to one request: a page, or a 303 to [location]; and when it ends the session, [ending], the event that
+     * says so, told once the answer is out. What else it changed was told as it changed.
+     */
+    private class Outcome(val status: Int, val page: String?, val ending: SetupEvent? = null, val location: String? = null)
 
     /**
      * A test from the page under way, of [ticket]: the [future] once the tester has given one; [replaced] once a newer
@@ -196,9 +200,21 @@ class SetupServer(
     @Volatile var deadline: Long = 0
         private set
 
-    /** Held while an event is delivered, so none is delivered once [close] has returned. Taken inside [lock], never around it. */
+    /** Held while events are told and delivered, so none is delivered once [close] has returned. Taken inside [lock], never around it. */
     private val eventLock = Any()
     private var stopped = false
+    /**
+     * What the session told and the app hasn't been given yet, in the order it was told under [lock]: a connection
+     * delivers it all once its answer is out, so one whose thread is held after its answer can't have its events come
+     * after a later request's; the next to deliver takes them along. Under [eventLock].
+     */
+    private val pending = ArrayDeque<SetupEvent>()
+
+    /**
+     * For tests: called on a connection's thread with its peer's address once its answer is written, before it delivers
+     * what was told. A test holds a connection here, as a busy device can hold its thread, while the phone goes on.
+     */
+    @Volatile internal var afterAnswer: (InetSocketAddress) -> Unit = {}
 
     /** Where the page is, once [start] has bound it. */
     val address: SetupAddress get() = listening
@@ -225,7 +241,10 @@ class SetupServer(
 
     /** Ends the session now: no more connections, the open ones closed, no more events. Returns without waiting for anything. */
     override fun close() {
-        synchronized(eventLock) { stopped = true }
+        synchronized(eventLock) {
+            stopped = true
+            pending.clear()
+        }
         synchronized(lock) { end(Phase.Closed) }
         closed = true
         server?.closeQuietly()
@@ -282,19 +301,25 @@ class SetupServer(
         } catch (_: IOException) {
             // Out of time, cut off or closed: no answer.
             null
-        } ?: return
+        }
+        if (outcome == null) {
+            // Unanswered, but what it changed before that is still told.
+            deliver()
+            return
+        }
         try {
             write(client, outcome.status, outcome.page, outcome.location)
             client.shutdownOutput()
         } catch (_: IOException) {
             // The peer went; what it sent still counts.
         }
-        if (outcome.ends) {
+        if (outcome.ending != null) {
             ended = true
             server?.closeQuietly()
         }
+        afterAnswer(client.remoteSocketAddress as InetSocketAddress)
         // Before the drain: the TV may stop the session within it, and what was sent must have reached it by then.
-        outcome.events.forEach(::emit)
+        deliver(outcome.ending)
         try {
             drain(client)
         } catch (_: IOException) {
@@ -303,7 +328,17 @@ class SetupServer(
         client.closeQuietly()
     }
 
-    private fun emit(event: SetupEvent) = synchronized(eventLock) { if (!stopped) onEvent(event) }
+    /** Queues [event] for the app, after what the session told before it. Under [lock], so the order is the session's. */
+    private fun tell(event: SetupEvent) = synchronized(eventLock) { if (!stopped) pending += event }
+
+    /**
+     * Gives the app what was told, in order, then [ending], the event that ended the session, its answer out: nothing is
+     * told after it. Outside [lock].
+     */
+    private fun deliver(ending: SetupEvent? = null) = synchronized(eventLock) {
+        while (!stopped) onEvent(pending.removeFirstOrNull() ?: break)
+        if (!stopped) ending?.let(onEvent)
+    }
 
     /** The answer to the request on [client], or null to close it unanswered. */
     private fun handle(client: Socket, reader: RequestReader): Outcome? {
@@ -338,7 +373,6 @@ class SetupServer(
         val candidate = RequestReader.decodePath(target.substringBefore('?'))?.removePrefix("/")
         if (candidate == null || !SetupToken.isTokenShaped(candidate)) return Outcome(404, SetupPage.notFound)
         val peer = client.inetAddress
-        val events = mutableListOf<SetupEvent>()
         synchronized(lock) {
             when (phase) {
                 Phase.Open -> Unit
@@ -349,83 +383,98 @@ class SetupServer(
             if (now >= deadline) {
                 if (openedAt.let { it != null && now >= it + limits.capMillis }) expiredPage = SetupPage.closedAtCap
                 end(Phase.Expired)
-                return Outcome(410, expiredPage, listOf(SetupEvent.Expired), ends = true)
+                return Outcome(410, expiredPage, ending = SetupEvent.Expired)
             }
             if (!token.matches(candidate)) {
                 // Once the page is open, another device's wrong codes aren't counted: a prank on the network can't close it.
                 if (owner != null && peer != owner) return Outcome(404, SetupPage.notFound)
                 wrongTries++
-                if (wrongTries < limits.wrongTries) return Outcome(404, SetupPage.notFound, listOf(SetupEvent.WrongTry(wrongTries)))
+                if (wrongTries < limits.wrongTries) {
+                    tell(SetupEvent.WrongTry(wrongTries))
+                    return Outcome(404, SetupPage.notFound)
+                }
                 end(Phase.Locked)
-                return Outcome(410, SetupPage.locked, listOf(SetupEvent.Locked), ends = true)
+                return Outcome(410, SetupPage.locked, ending = SetupEvent.Locked)
             }
             when (owner) {
                 null -> {
                     owner = peer
                     openedAt = now
-                    events += SetupEvent.Opened(peer)
+                    tell(SetupEvent.Opened(peer))
                 }
                 peer -> Unit
-                else -> return Outcome(403, SetupPage.otherDevice, listOf(SetupEvent.PeerRefused(peer)))
+                else -> {
+                    tell(SetupEvent.PeerRefused(peer))
+                    return Outcome(403, SetupPage.otherDevice)
+                }
             }
-            used(now)?.let { events += it }
-            if (method == "GET") return Outcome(200, page(now), events)
+            used(now)?.let(::tell)
+            if (method == "GET") return Outcome(200, page(now))
         }
 
         val length = when (val checked = contentLength(headers)) {
-            is Step.Refuse -> return Outcome(checked.status, SetupPage.refused, events)
+            is Step.Refuse -> return Outcome(checked.status, SetupPage.refused)
             is Step.Go -> checked.value
         }
         val type = headers.filter { it.first == "content-type" }
         if (type.size != 1 || !type.single().second.substringBefore(';').trim().equals(FORM_TYPE, ignoreCase = true)) {
-            return Outcome(415, SetupPage.refused, events)
+            return Outcome(415, SetupPage.refused)
         }
         val body = reader.bytes(length) ?: return null
         val run = synchronized(lock) {
             val flow = flow
-            if (phase != Phase.Open || flow == null) return if (phase == Phase.Closed) null else ended(events)
+            if (phase != Phase.Open || flow == null) return if (phase == Phase.Closed) null else ended()
             // Read against the page as it is now, and applied at once: what it may send is what it shows.
             val post = when (val parsed = SetupForm.parse(body, flow.layout())) {
-                is SetupRejection -> return Outcome(400, SetupPage.rejected, events + SetupEvent.Rejected(parsed))
+                is SetupRejection -> {
+                    tell(SetupEvent.Rejected(parsed))
+                    return Outcome(400, SetupPage.rejected)
+                }
                 is SetupPost -> parsed
             }
             val step = flow.step
             when (val applied = flow.apply(post, closingSoon(clock()))) {
                 is Applied.Sent -> {
                     end(Phase.Used)
-                    return Outcome(200, SetupPage.sent, events + SetupEvent.Received(applied.changes, peer), ends = true)
+                    return Outcome(200, SetupPage.sent, ending = SetupEvent.Received(applied.changes, peer))
                 }
                 is Applied.Shown -> {
-                    val told = events + read(flow, step)
+                    read(flow, step)
                     // Next or Back left the step a running test is of: it stops, as a newer test would stop it, so a late
                     // result can't hold up a step the phone has left. Its card keeps what it had. It never finishes, so
                     // the TV is told here, inside the lock, where a newer test's start can't come before it.
                     val stopped = running?.takeIf { flow.step != step }
-                    if (stopped == null) return Outcome(303, null, told, location = location(applied.anchor))
-                    stopped.replaced = true
-                    stopTest()
-                    (told + SetupEvent.TestStopped(stopped.ticket.slot)).forEach(::emit)
+                    if (stopped != null) {
+                        stopped.replaced = true
+                        stopTest()
+                        tell(SetupEvent.TestStopped(stopped.ticket.slot))
+                    }
                     return Outcome(303, null, location = location(applied.anchor))
                 }
                 is Applied.Testing -> {
                     // A newer test replaces the one running, whose page the browser has given up on.
                     running?.let { it.replaced = true }
                     stopTest()
-                    (events + read(flow, step) + SetupEvent.TestStarted(applied.ticket.slot)).forEach(::emit)
+                    read(flow, step)
+                    tell(SetupEvent.TestStarted(applied.ticket.slot))
                     Run(applied.ticket).also { running = it }
                 }
             }
         }
+        // Delivered before the test is waited on: the TV shows it running meanwhile.
+        deliver()
         return test(run)
     }
 
-    /** What a form read tells the TV: that one was, and the step it went to, if it moved from [before]. */
-    private fun read(flow: SetupFlow, before: SetupStep): List<SetupEvent> =
-        listOfNotNull(SetupEvent.FormRead, SetupEvent.StepChanged(flow.step).takeIf { flow.step != before })
+    /** Tells the TV a form was read, and the step it went to, if it moved from [before]. Under [lock]. */
+    private fun read(flow: SetupFlow, before: SetupStep) {
+        tell(SetupEvent.FormRead)
+        if (flow.step != before) tell(SetupEvent.StepChanged(flow.step))
+    }
 
     /**
      * The test [run] is of, on this connection's thread: waited on for at most [SetupLimits.testMillis], its result
-     * written onto its card, and answered with a 303 to the card. Its events go out inside [lock], so a replaced test's
+     * written onto its card, and answered with a 303 to the card. Its events are told inside [lock], so a replaced test's
      * end can't follow a newer one's start. Null to close the connection unanswered: the session closed meanwhile.
      */
     private fun test(run: Run): Outcome? {
@@ -468,21 +517,20 @@ class SetupServer(
             val answered = result ?: SetupResult(SetupOutcome.Failed, words)
             val slot = flow.finish(ticket, answered)
             // The end of a test is use too: the phone was waiting on it.
-            used(clock())?.let(::emit)
-            emit(SetupEvent.TestFinished(ticket.slot, answered.outcome))
+            used(clock())?.let(::tell)
+            tell(SetupEvent.TestFinished(ticket.slot, answered.outcome))
             return Outcome(303, null, location = location(slot?.key ?: SetupFlow.TOP))
         }
     }
 
     /** What a request to a session that has ended is told: used, locked, or closed by time. Under [lock]. */
-    private fun ended(events: List<SetupEvent> = emptyList()) = Outcome(
+    private fun ended() = Outcome(
         410,
         when (phase) {
             Phase.Used -> SetupPage.used
             Phase.Locked -> SetupPage.locked
             else -> expiredPage
         },
-        events,
     )
 
     /** The page as the flow has it now, with the code's time in it. Under [lock]. */

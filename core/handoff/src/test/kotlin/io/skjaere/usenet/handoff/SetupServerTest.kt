@@ -655,6 +655,37 @@ class SetupServerTest {
         refused(port)
     }
 
+    /**
+     * The TV shows the step it was told last, so steps are told in the order the phone took them, and none after what it
+     * sent, however the connections' threads run: here the one that went to step 3 is held once its answer is out, as a
+     * busy device can hold it, while the phone follows it and goes on.
+     */
+    @Test
+    fun `steps are told in the order they were taken, though a connection is held after its answer`() {
+        val server = server()
+        val port = server.start()
+        val held = connect(port)
+        val release = CountDownLatch(1)
+        server.afterAnswer = { peer -> if (peer.port == held.localPort) release.await(5, TimeUnit.SECONDS) }
+        try {
+            post(port, testing)
+            tester.next()
+            post(port, pressed(1, "next", *card("p.pass" to "")))
+            held.getOutputStream().write(request(port, method = "POST", body = pressed(2, "next", "i.name" to "", "i.url" to "", "i.key" to "")))
+            assertEquals(303, assertNotNull(answer(held)).status)
+            assertTrue(post(port, pressed(3, "next", "t.key" to "")).body.contains("Step 4 of 4 · Check and send"))
+            assertEquals(200, postOnly(port, pressed(4, "send")).status)
+            val told = generateSequence { nextEvent() }.takeWhile { it !is SetupEvent.Received }.filterIsInstance<SetupEvent.StepChanged>().toList()
+            assertEquals(
+                listOf(SetupEvent.StepChanged(SetupStep.Indexers), SetupEvent.StepChanged(SetupStep.Tmdb), SetupEvent.StepChanged(SetupStep.Check)),
+                told,
+            )
+        } finally {
+            release.countDown()
+        }
+        assertNoEvents()
+    }
+
     @Test
     fun `Next waits for a card changed since its test, and says why on the page that follows`() {
         val port = start()
