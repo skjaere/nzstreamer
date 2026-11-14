@@ -302,7 +302,7 @@ running, as skipped. The runs against a device, a TV or an account that a `-P` p
 
 `./gradlew :koverXmlReportUnitTests` writes the coverage of the JVM unit tests of the app and of every `core` and
 `tools` module to one report, `build/reports/kover/reportUnitTests.xml`. For an Android module it takes the debug
-build's tests. CI sends the report to Codecov.
+build's tests. CI sends the report to Codecov when the repository has a `CODECOV_TOKEN` secret.
 
 ### Device tests
 Instrumented tests run on an emulator or a device: `./gradlew :app:connectedDebugAndroidTest`. The tests that stream
