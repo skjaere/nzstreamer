@@ -67,12 +67,19 @@ jobs:
           fi
           bash tools/privacy-scan.sh HEAD --since "$since"
 
-      # tools/screens' test draws pictures with Pillow, from Ubuntu's own package when the runner has none.
+      # tools/screens' test draws pictures with Pillow, from Ubuntu's own package when the runner has none. A mirror
+      # caught mid-sync fails apt-get now and then: three tries, a while apart.
       - name: Pillow
         run: |
           python3 -I -c 'import PIL' 2>/dev/null && exit
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends python3-pil >/dev/null
+          for try in 1 2 3; do
+            if sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends python3-pil >/dev/null; then
+              break
+            fi
+            [[ $try == 3 ]] && { echo "::error::apt-get couldn't install python3-pil"; exit 1; }
+            echo "::warning::apt-get failed (try $try of 3); trying again"
+            sleep $((try * 20))
+          done
           python3 -I -c 'import PIL; print("Pillow", PIL.__version__)'
 
       - name: Python tools' tests and the CLA workflow's check
