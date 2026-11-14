@@ -136,10 +136,17 @@ class ScreensCatalogTest {
 
     @Test
     fun `the command refuses to start without a clip, or with a segment size that isn't one`(@TempDir dir: File) {
-        assertFailsWith<IllegalArgumentException> { screensIndexer(mapOf("catalog" to "screens", "port" to "0"), log = {}).close() }
-        assertFailsWith<IllegalArgumentException> { screensIndexer(mapOf("video" to File(dir, "none.mkv").path, "port" to "0"), log = {}).close() }
+        // Each case is otherwise whole (the catalogue given, as the test runs in tools/mock-seed), so each fails for its own
+        // reason. The mock's address is one where nothing listens: a case that got past its check posts nowhere.
+        fun refused(vararg options: Pair<String, String>): String = assertFailsWith<IllegalArgumentException> {
+            val whole = mapOf("catalog" to "screens", "port" to "0", "catalog-file" to catalog.path, "mock" to "http://127.0.0.1:1")
+            screensIndexer(whole + options, log = {}).close()
+        }.message!!
         val clip = File(dir, "clip.mkv").apply { writeBytes(ByteArray(10)) }
-        assertFailsWith<IllegalArgumentException> { screensIndexer(mapOf("video" to clip.path, "segment" to "a lot", "port" to "0"), log = {}).close() }
+        assertContains(refused(), "--video")
+        assertContains(refused("video" to File(dir, "none.mkv").path), "none.mkv missing")
+        assertContains(refused("video" to clip.path, "segment" to "a lot"), "--segment")
+        assertContains(refused("video" to clip.path, "segment" to "0"), "--segment")
     }
 
     private fun fakeNzb(guid: String) =
