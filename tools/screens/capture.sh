@@ -17,8 +17,10 @@
 # it. It starts mock-seed's screens indexer on a free port, which seeds the clip into the mock first, and stops it
 # after. On the emulator it clears the app's data, names the device (a TV "Living room TV", a phone "Phone"), puts the
 # phone's status bar in demo mode (a set clock, full battery and signal, no notifications), runs the bench build's test
-# (-PbenchBuild=true -PhideDebrid=true), pulls what it saved, and puts the name, the demo mode setting and the test's
-# folder back as they were, also when something fails. Gradle's run uninstalls the app and the test APK after.
+# (-PbenchBuild=true -PhideDebrid=true), pulls what it saved, and puts the name, the demo mode setting, the full-screen
+# hint's setting and the test's folder back as they were, also when something fails. Gradle's run uninstalls the app and
+# the test APK after. A run that fails or is stopped part way stops the test on the emulator and uninstalls both itself,
+# so neither the staged app nor anything the test runner set stays behind.
 set -euo pipefail
 
 usage() { echo "usage: $0 phone|tv --clip <clip.mkv> --out <dir> [--port <port>] [--test <method>]" >&2; exit 2; }
@@ -54,6 +56,9 @@ out=$(cd "$out" && pwd)
 root=$(cd "$(dirname "$0")/../.." && pwd)
 
 APP=io.skjaere.usenet
+TEST_APP=$APP.test
+# Android's "Viewing full screen" hint, which the test marks as seen while it runs.
+IMMERSIVE=immersive_mode_confirmations
 CLASS=io.skjaere.usenet.app.screens.ReadmeScreensTest
 DEVICE_DIR=/data/local/tmp/readme-screens
 KEY=readme-screens-key
@@ -86,7 +91,7 @@ elif listening "$port"; then
   echo "port $port is taken" >&2; exit 2
 fi
 
-indexer_pid="" name_before="" demo_before="" demo_on=false
+indexer_pid="" name_before="" demo_before="" demo_on=false immersive_before="" test_began=false
 # shellcheck disable=SC2317 # run by the traps below
 put_back() {
   local status=$?
@@ -94,6 +99,20 @@ put_back() {
   if [ -n "$indexer_pid" ]; then
     kill "$indexer_pid" 2>/dev/null
     wait "$indexer_pid" 2>/dev/null
+  fi
+  # Stopped or failed once the test began: the test may still run on the emulator, and the staged app stays installed
+  # with what the test saved and set. Both stop first, so nothing writes after what follows puts things back, and go.
+  if $test_began && [ "$status" != 0 ]; then
+    shell am force-stop "$TEST_APP"
+    shell am force-stop "$APP"
+    for package in "$TEST_APP" "$APP"; do
+      [ -z "$(shell pm path "$package")" ] || shell pm uninstall "$package" >/dev/null
+    done
+    echo "capture: stopped the test on the emulator and uninstalled the app and its test APK"
+  fi
+  if [ -n "$immersive_before" ] && [ "$(shell settings get secure "$IMMERSIVE")" != "$immersive_before" ]; then
+    if [ "$immersive_before" = null ]; then shell settings delete secure "$IMMERSIVE" >/dev/null
+    else shell settings put secure "$IMMERSIVE" "$(quoted "$immersive_before")"; fi
   fi
   if $demo_on; then
     shell am broadcast -a com.android.systemui.demo -e command exit >/dev/null
@@ -109,7 +128,11 @@ put_back() {
   local left=()
   [ -z "$name_before" ] || [ "$(shell settings get global device_name)" = "$name_before" ] || left+=("the device's name")
   if $demo_on; then [ "$(shell settings get global sysui_demo_allowed)" = "$demo_before" ] || left+=("the demo mode setting"); fi
+  [ -z "$immersive_before" ] || [ "$(shell settings get secure "$IMMERSIVE")" = "$immersive_before" ] || left+=("the full-screen hint's setting")
   [ -z "$(shell ls -d "$DEVICE_DIR" 2>/dev/null)" ] || left+=("$DEVICE_DIR")
+  if $test_began && [ "$status" != 0 ]; then
+    for package in "$TEST_APP" "$APP"; do [ -z "$(shell pm path "$package")" ] || left+=("$package installed"); done
+  fi
   if [ ${#left[@]} -gt 0 ]; then
     echo "capture: not put back: ${left[*]}" >&2
     [ "$status" != 0 ] || status=1
@@ -140,6 +163,7 @@ grep -q -F "$ready" "$out/indexer.log" || { echo "the screens indexer didn't sta
 if [ -n "$(shell pm path "$APP")" ]; then shell pm clear "$APP" >/dev/null; fi
 shell rm -rf "$DEVICE_DIR"
 name_before=$(shell settings get global device_name)
+immersive_before=$(shell settings get secure "$IMMERSIVE")
 if [ "$kind" = tv ]; then shell settings put global device_name "$(quoted "Living room TV")"; else shell settings put global device_name Phone; fi
 if [ "$kind" = phone ]; then
   demo_before=$(shell settings get global sysui_demo_allowed)
@@ -157,6 +181,7 @@ fi
 
 test=$CLASS${only:+#$only}
 set +e
+test_began=true
 (cd "$root" && ANDROID_SERIAL=$serial ./gradlew :app:connectedBenchAndroidTest -PbenchBuild=true -PhideDebrid=true \
   -Pandroid.testInstrumentationRunnerArguments.class="$test" \
   -Pandroid.testInstrumentationRunnerArguments.screens=true \
