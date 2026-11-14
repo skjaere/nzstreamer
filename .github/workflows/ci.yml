@@ -1,7 +1,8 @@
 # CI, on every push to main and every pull request: the public privacy scan (on a push, also who made each pushed
 # commit), the Python tools' tests and the CLA workflow's check, ./gradlew check and the unit tests' coverage, and a
 # beta built as the release workflow builds one, signed with a throwaway key. Its token only reads. Its one secret,
-# Codecov's upload token, reaches only the last steps, which send the coverage report to Codecov.
+# Codecov's upload token, reaches only the steps that send the coverage report to Codecov: the step after them empties
+# it, so no later step, the actions' own post steps included, has it.
 name: CI
 
 on:
@@ -178,7 +179,7 @@ jobs:
           fi
 
       # The coverage report to Codecov, after every build: the action writes the token into GITHUB_ENV, where each later
-      # step would have it. An upload that fails never fails the run, nor does one that stalls: the step's own time
+      # step would have it, until the next step empties it. An upload that fails never fails the run, nor does one that stalls: the step's own time
       # limit ends it as a failed step, which continue-on-error lets by, long before the job's.
       - name: Coverage to Codecov
         if: steps.codecov.outputs.token == 'set'
@@ -191,6 +192,12 @@ jobs:
           files: build/reports/kover/reportUnitTests.xml
           disable_search: true
           fail_ci_if_error: false
+
+      # What the action left in GITHUB_ENV, emptied for every step after this one, the post steps of checkout,
+      # setup-java and setup-gradle included. Whenever the token was set, also when the upload failed or stalled.
+      - name: Codecov token out of the environment
+        if: always() && steps.codecov.outputs.token == 'set'
+        run: echo "CC_TOKEN=" >>"$GITHUB_ENV"
 
       # Also when the job is cancelled, at its limit say: the tasks that ended have their reports.
       - name: Upload the reports
