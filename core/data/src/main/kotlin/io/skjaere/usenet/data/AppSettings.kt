@@ -6,8 +6,11 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class AppSettings(
-    /** The file's version: 2 since the services' order is their place in [services] ([ServicesInOrder]); a new file's. */
-    val schemaVersion: Int = 2,
+    /**
+     * The file's version, a new file's: 3 since a play tries 10 releases where none was chosen ([DefaultReleasesToTry]), 2
+     * since the services' order is their place in [services] ([ServicesInOrder]).
+     */
+    val schemaVersion: Int = 3,
     val indexers: List<IndexerRecord> = emptyList(),
     /**
      * Torrent indexers (Torznab: Prowlarr's or Jackett's), a list apart from [indexers], so what reads the Usenet
@@ -139,8 +142,9 @@ data class PlaybackPrefs(
      * How many releases a play tries before it gives up, from either source (L205): each Usenet one
      * an NZB download that counts against the indexer's allowance, each torrent calls to the user's
      * debrid service rather than a grab; one of [RELEASES_TO_TRY] (read through [attempts]). 10 on a new install, and in
-     * a settings file without the field; one that has it keeps its value, as every field is written (defaults too), so an
-     * install that saved its settings while the default was 3 keeps 3 until another is chosen.
+     * a settings file without the field; one that has it keeps its value, as every field is written (defaults too), but
+     * for the old default, 3, in a file whose playback settings were never changed ([DefaultReleasesToTry]). An install
+     * that changed one while the default was 3 keeps 3 until another is chosen.
      */
     val releasesToTry: Int = 10,
     /**

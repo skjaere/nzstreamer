@@ -489,19 +489,20 @@ class SettingsRepositoryTest {
 
     /**
      * L228, W85: an earlier version kept the services in the order they were signed in to and tried them A to Z; a file it
-     * wrote is sorted A to Z once, as it is first read, and marked version 2, so nobody's first service changes by itself.
+     * wrote is sorted A to Z once, as it is first read, and marked version 2 (3 since [DefaultReleasesToTry]), so nobody's
+     * first service changes by itself.
      */
     @Test
-    fun `a settings file from before the services' order reads them A to Z, once, as version 2`() = runBlocking<Unit> {
+    fun `a settings file from before the services' order reads them A to Z, once, as a later version`() = runBlocking<Unit> {
         File(dir, "settings.json").writeText(
             """{"schemaVersion":1,"indexers":[{"id":"a","name":"A","baseUrl":"https://a.example/api"}],""" +
                 """"services":[{"id":"tb","kind":"TorBox","accountName":"quay.viewer@example.org"},""" +
                 """{"id":"old","kind":"TorBox","enabled":false,"deleted":true},{"id":"pm","kind":"Premiumize","accountName":"customer 900000042"}]}""",
         )
         assertEquals(listOf("pm", "tb"), serviceOrder())
-        assertEquals(2, repository.settings.first().schemaVersion)
+        assertEquals(3, repository.settings.first().schemaVersion)
         assertEquals(listOf("A"), repository.indexers.first().map { it.name }, "the rest as it was")
-        assertTrue("\"schemaVersion\":2" in File(dir, "settings.json").readText(), "written back as version 2")
+        assertTrue("\"schemaVersion\":3" in File(dir, "settings.json").readText(), "written back as version 3")
         // From then on the order is the user's: TorBox moved up stays first.
         repository.moveService("tb", by = -1)
         assertEquals(listOf("tb", "pm"), serviceOrder())
@@ -513,14 +514,14 @@ class SettingsRepositoryTest {
             """{"schemaVersion":2,"services":[{"id":"tb","kind":"TorBox"},{"id":"pm","kind":"Premiumize"}]}""",
         )
         assertEquals(listOf("tb", "pm"), serviceOrder())
-        assertEquals(2, repository.settings.first().schemaVersion)
+        assertEquals(3, repository.settings.first().schemaVersion)
     }
 
     @Test
-    fun `a new settings file is version 2`() = runBlocking<Unit> {
-        assertEquals(2, repository.settings.first().schemaVersion)
+    fun `a new settings file is version 3`() = runBlocking<Unit> {
+        assertEquals(3, repository.settings.first().schemaVersion)
         repository.saveService("TorBox", "TB-1", SignIns(setOf("TB-1"), torBoxAccount)::signIn)
-        assertTrue("\"schemaVersion\":2" in File(dir, "settings.json").readText())
+        assertTrue("\"schemaVersion\":3" in File(dir, "settings.json").readText())
     }
 
     /** L228: the services' order is the list's place, moved as Usenet providers are, tombstones keeping their places. */
@@ -740,7 +741,8 @@ class SettingsRepositoryTest {
 
     /**
      * Every field is written, defaults too (encodeDefaults), so a file saved while 3 was the default holds 3 as a choice
-     * would: it stays 3. A file without the field (from before it, or never saved) takes the default, now 10.
+     * would: with a playback setting changed since (updatedAt), it stays 3. A file without the field (from before it, or
+     * never saved) takes the default, now 10.
      */
     @Test
     fun `releases to try saved in an existing install's settings stay as they were, 3 included`() = runBlocking<Unit> {
@@ -752,6 +754,25 @@ class SettingsRepositoryTest {
         repository.updatePlayback { it.copy(autoPlayNext = true) }
         assertEquals(3, repository.playback.first().releasesToTry)
         assertTrue(""""releasesToTry":3""" in File(dir, "settings.json").readText())
+    }
+
+    /**
+     * Every change to a playback setting stamps playback's updatedAt, so a file with it still at 0 never had one chosen: its
+     * 3 is the old default, not a choice, and it moves to the new default as the file is first read, written back as version
+     * 3. A 3 with a playback setting chosen stays (above).
+     */
+    @Test
+    fun `releases to try never chosen move from the old default 3 to 10`() = runBlocking<Unit> {
+        File(dir, "settings.json").writeText(
+            """{"schemaVersion":2,"playback":{"quality":"P1080","autoPlayNext":false,"releasesToTry":3,"updatedAt":0}}""",
+        )
+        assertEquals(PlaybackPrefs(quality = "P1080", autoPlayNext = false, releasesToTry = 10), repository.playback.first())
+        assertEquals(3, repository.settings.first().schemaVersion)
+        val written = File(dir, "settings.json").readText()
+        assertTrue(""""releasesToTry":10""" in written && "\"schemaVersion\":3" in written, written)
+        // From then on 3 is a choice like any other.
+        repository.updatePlayback { it.copy(releasesToTry = 3) }
+        assertEquals(3, repository.playback.first().attempts)
     }
 
     @Test

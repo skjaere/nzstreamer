@@ -17,3 +17,21 @@ internal object ServicesInOrder : DataMigration<AppSettings> {
 
     override suspend fun cleanUp() = Unit
 }
+
+/**
+ * Version 3: a play tries up to 10 releases by default, where it tried 3. Every field is written, defaults too, so a file
+ * saved while the default was 3 holds 3 whether or not it was chosen. Any change to a playback setting stamps playback's
+ * [PlaybackPrefs.updatedAt], so one still at 0 never had one chosen: its 3 is the old default, and moves to 10. A 3 with a
+ * playback setting chosen stays, as the file can't tell it from a choice; so does any other count.
+ */
+internal object DefaultReleasesToTry : DataMigration<AppSettings> {
+    override suspend fun shouldMigrate(currentData: AppSettings): Boolean = currentData.schemaVersion < 3
+
+    override suspend fun migrate(currentData: AppSettings): AppSettings {
+        val playback = currentData.playback
+        val unchosen = playback.updatedAt == 0L && playback.releasesToTry == 3
+        return currentData.copy(schemaVersion = 3, playback = if (unchosen) playback.copy(releasesToTry = 10) else playback)
+    }
+
+    override suspend fun cleanUp() = Unit
+}

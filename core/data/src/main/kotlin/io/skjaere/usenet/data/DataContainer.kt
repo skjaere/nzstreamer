@@ -43,12 +43,12 @@ class DataContainer(context: Context, scope: CoroutineScope, clock: Clock = Cloc
 
 /**
  * The settings' store over [file], bringing a file an earlier version wrote up to date as it is first read
- * ([ServicesInOrder]). An unreadable file would otherwise fail every read; it starts over instead.
+ * ([ServicesInOrder], [DefaultReleasesToTry]). An unreadable file would otherwise fail every read; it starts over instead.
  */
 internal fun settingsStore(scope: CoroutineScope, file: () -> File): DataStore<AppSettings> = DataStoreFactory.create(
     serializer = JsonFileSerializer(AppSettings.serializer(), AppSettings()),
     corruptionHandler = ReplaceFileCorruptionHandler { AppSettings() },
-    migrations = listOf(ServicesInOrder),
+    migrations = listOf(ServicesInOrder, DefaultReleasesToTry),
     scope = scope,
     produceFile = file,
 )
