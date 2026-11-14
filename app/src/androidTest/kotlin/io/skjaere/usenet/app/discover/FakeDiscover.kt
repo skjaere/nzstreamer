@@ -63,7 +63,7 @@ class FakeDiscover(
 
         private val NAMES = listOf(
             "Harbor Lights", "Lantern Row", "The Quiet Orbit", "Tarnwick", "Quayborne", "Ferrous", "Kestrel Hall", "Pebblereach",
-            "Drift Season", "The Long Field", "Paper Gulls", "Sevenreach", "Coldwick Ferry", "Signal Moss", "Amber Line", "Hollow Larches",
+            "Larkwhistle", "Brindlecote", "Paper Gulls", "Sevenreach", "Coldwick Ferry", "Signal Moss", "Amber Line", "Hollow Larches",
             "Tin Mitre", "A Slow Tide", "Under Brass", "The Ninth Lamp",
         )
 
