@@ -1,38 +1,54 @@
 #!/bin/bash
 # The README screenshots' player clip, made from a silent film in the public domain: its picture alone, looped to a
 # little over five and a half minutes, as the player only takes an intro chapter that ends five minutes or more before
-# the end of the file. The picture is scaled to 1080 lines and pillarboxed to 1920x1080 at 24 fps, in H.264 High. Three
-# silent AAC tracks (English, French and Spanish) and three subtitle tracks in the same languages give the audio and
-# subtitles panel something to list; the lines are written here, the same ones every pass of the film. Chapters:
-# "Intro" (the first 15 s), then "Part 1".
+# the end of the file. The picture (cut first to --crop, if given) is scaled to 1080 lines and pillarboxed to 1920x1080
+# at 24 fps, in H.264 High. Three silent AAC tracks (English, French and Spanish) and three subtitle tracks in the same
+# languages give the audio and subtitles panel something to list; the lines are written here, the same ones every pass
+# of the film. Chapters: "Intro" (the first 15 s), then "Part 1".
 #
-# Usage: tools/screens/make-clip.sh <film> <out dir> [--from <seconds>] [--to <seconds>]
+# Usage: tools/screens/make-clip.sh <film> <out dir> [--from <seconds>] [--to <seconds>] [--crop <w:h:x:y>]
 #   <film>     any video ffmpeg reads; only its first video stream is used.
 #   <out dir>  gets clip.mkv; made if missing. Keep it outside the repository.
 #   --from     use the film from this time on, else from its start;
 #   --to       up to this time, else to its end. Together they keep the film's own picture alone, for a copy with a title
 #              card, black frames or a fade at either end.
+#   --crop     keep this rectangle of the film's frame alone, in its pixels: width:height:x:y, x and y from the top left
+#              corner, as ffmpeg's crop filter takes them; for a copy with black bars or a border around its picture
+#              (ffmpeg's cropdetect finds them). Else the whole frame.
 # Needs ffmpeg and ffprobe. The same film and ffmpeg give the same bytes.
 set -euo pipefail
 
-usage() { echo "usage: $0 <film> <out dir> [--from <seconds>] [--to <seconds>]" >&2; exit 2; }
+usage() { echo "usage: $0 <film> <out dir> [--from <seconds>] [--to <seconds>] [--crop <w:h:x:y>]" >&2; exit 2; }
+seconds() { [[ $2 =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "$1 takes seconds, as 42 or 42.4" >&2; exit 2; }; }
 [ $# -ge 2 ] || usage
-film=$1 out=$2 from= to=
+film=$1 out=$2 from='' to='' crop=''
 shift 2
 while [ $# -gt 0 ]; do
   [ $# -ge 2 ] || usage
   case "$1" in
-    --from) from=$2 ;;
-    --to) to=$2 ;;
+    --from) seconds "$1" "$2"; from=$2 ;;
+    --to) seconds "$1" "$2"; to=$2 ;;
+    --crop)
+      [[ $2 =~ ^[1-9][0-9]*:[1-9][0-9]*:(0|[1-9][0-9]*):(0|[1-9][0-9]*)$ ]] ||
+        { echo "--crop takes width:height:x:y in pixels, as 544:404:88:0" >&2; exit 2; }
+      crop=$2 ;;
     *) usage ;;
   esac
-  [[ $2 =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "$1 takes seconds, as 42 or 42.4" >&2; exit 2; }
   shift 2
 done
-command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null || { echo "ffmpeg and ffprobe are needed" >&2; exit 2; }
+if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+  echo "ffmpeg and ffprobe are needed" >&2; exit 2
+fi
 [ -f "$film" ] || { echo "no such film: $film" >&2; exit 2; }
 ffprobe -v error -select_streams v:0 -show_entries stream=codec_type -of csv=p=0 "$film" | grep -qx video ||
   { echo "$film holds no video stream" >&2; exit 2; }
+if [ -n "$crop" ]; then
+  frame=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x "$film")
+  IFS=: read -r crop_w crop_h crop_x crop_y <<<"$crop"
+  if [ $((crop_x + crop_w)) -gt "${frame%x*}" ] || [ $((crop_y + crop_h)) -gt "${frame#*x}" ]; then
+    echo "--crop $crop doesn't fit in the film's ${frame} frame" >&2; exit 2
+  fi
+fi
 
 # The intro, and how long the file must at least be for the player to offer to skip it.
 INTRO_END=15
@@ -62,34 +78,34 @@ for _ in $(seq "$passes"); do
   printf "file '%s'\n" "$work/film.mkv"
 done >"$work/passes.txt"
 
-# Seven lines per pass, 4 s each, every 6 s from 2 s in, as many as the pass has room for; written for this clip (a
-# crowd on a quay as a guard parade marches past, steamboats on the water behind), in each language.
+# Seven lines per pass, 4 s each, every 5 s from 2 s in, as many as the pass has room for; written for this clip (the
+# audience of a variety show as a trainer sends his dogs over a row of chairs on the stage), in each language.
 EN=(
-  "Here they come, right on time."
-  "Stand back a little, let them pass."
-  "Can you see the band from there?"
-  "They march past at noon every day."
-  "Hold my hat, I want a better look."
-  "The boats are out early this morning."
-  "That's the last of them. Shall we go?"
+  "Oh, it's the act with the dogs."
+  "He's getting the dogs ready."
+  "Is that a cat lying on the chairs?"
+  "Look, they jump right over the chairs!"
+  "How long does it take to teach them that?"
+  "The little black dog wants a turn too."
+  "Clap for them, they've earned it."
 )
 FR=(
-  "Les voilà, juste à l'heure."
-  "Reculez un peu, laissez-les passer."
-  "Tu vois la fanfare d'ici ?"
-  "Ils défilent à midi tous les jours."
-  "Tiens mon chapeau, je veux mieux voir."
-  "Les bateaux sont sortis tôt ce matin."
-  "Ce sont les derniers. On y va ?"
+  "Ah, c'est le numéro des chiens."
+  "Il prépare les chiens."
+  "C'est un chat couché sur les chaises ?"
+  "Regarde, ils sautent par-dessus les chaises !"
+  "Combien de temps pour leur apprendre ça ?"
+  "Le petit chien noir veut son tour aussi."
+  "Applaudis-les, ils l'ont bien mérité."
 )
 ES=(
-  "Ahí vienen, justo a tiempo."
-  "Apartaos un poco, dejadlos pasar."
-  "¿Ves la banda desde ahí?"
-  "Desfilan a mediodía todos los días."
-  "Sujétame el sombrero, quiero verlo mejor."
-  "Los barcos han salido temprano esta mañana."
-  "Son los últimos. ¿Nos vamos?"
+  "Ah, es el número de los perros."
+  "Está preparando a los perros."
+  "¿Eso es un gato tumbado en las sillas?"
+  "¡Mira, saltan por encima de las sillas!"
+  "¿Cuánto se tarda en enseñarles eso?"
+  "El perrito negro también quiere su turno."
+  "Apláudeles, se lo han ganado."
 )
 
 # Writes an SRT of the given lines, repeated every pass; a line that would run past its pass is left out.
@@ -100,7 +116,7 @@ srt() {
     END {
       cue = 0
       for (p = 0; p < n; p++) for (i = 1; i <= NR; i++) {
-        start = 2 + 6 * (i - 1); end = start + 4
+        start = 2 + 5 * (i - 1); end = start + 4
         if (end > l) continue
         cue++
         printf "%d\n%s --> %s\n%s\n\n", cue, stamp(p * l + start), stamp(p * l + end), line[i]
@@ -126,10 +142,13 @@ END=$end_ms
 title=Part 1
 EOF
 
-# CRF 26 looks the same as finer settings on an old film's picture and keeps the clip near 125 MB: the screens indexer
-# seeds it twice into the mock NNTP server, which holds every article in memory.
+# CRF 30 looks the same as finer settings on an old film's picture scaled up from a small copy, and keeps the clip near
+# 110 MB: the screens indexer seeds it twice into the mock NNTP server, which holds every article in memory.
 # The file's own tags come from the chapters file alone, which has none, and no stream keeps a tag of its input's (a
 # title or a handler's name): nothing of the film's goes along but its picture.
+# --crop's rectangle, if given, is cut first, before the picture is scaled, and exactly where given: without exact=1,
+# ffmpeg's crop filter rounds an odd x, y, width or height of a 4:2:0 picture down to an even one.
+picture=${crop:+crop=$crop:exact=1,}
 ffmpeg -hide_banner -loglevel error -y \
   -f concat -safe 0 -i "$work/passes.txt" \
   -f lavfi -i "anullsrc=channel_layout=stereo:sample_rate=48000" \
@@ -139,8 +158,8 @@ ffmpeg -hide_banner -loglevel error -y \
   -i "$work/chapters.txt" \
   -map 0:v:0 -map 1:a -map 2:a -map 3:a -map 4:s -map 5:s -map 6:s -map_metadata 7 -map_metadata:s -1 -map_chapters 7 \
   -t "$total" \
-  -vf "fps=24,scale=-2:1080:flags=lanczos,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,setsar=1,format=yuv420p" \
-  -c:v libx264 -profile:v high -preset slow -crf 26 -g 48 -keyint_min 48 -sc_threshold 0 -threads 4 \
+  -vf "${picture}fps=24,scale=-2:1080:flags=lanczos,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,setsar=1,format=yuv420p" \
+  -c:v libx264 -profile:v high -preset slow -crf 30 -g 48 -keyint_min 48 -sc_threshold 0 -threads 4 \
   -c:a aac -b:a 32k -c:s srt \
   -metadata:s:a:0 language=eng -metadata:s:a:1 language=fre -metadata:s:a:2 language=spa \
   -metadata:s:s:0 language=eng -metadata:s:s:1 language=fre -metadata:s:s:2 language=spa \

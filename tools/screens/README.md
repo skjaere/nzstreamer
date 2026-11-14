@@ -5,20 +5,24 @@ them, and nothing comes from TMDB.
 
 ## The player's clip
 
-`make-clip.sh` makes the video the player shows from a silent film in the public domain: an actualité of the 1890s,
-free in the US and wherever the term is the author's life plus 70 years. The copy is one an archive gives, with its
-source and rights stated, never a restoration sold on disc, which its restorer may hold rights in. Only its picture is
-used. The script loops it to a little over five and a half minutes, pillarboxes it to 1920x1080 and adds three silent
-audio tracks, three subtitle tracks with lines written for it, and an "Intro" chapter, so the skip button and the
-audio and subtitles panel have something to show.
+`make-clip.sh` makes the video the player shows from a silent film in the public domain: a short of the 1890s whose
+director is unknown, free in the US, where it was published before 1931, and in the EU, where an anonymous work's term
+ends 70 years after it was made public. The copy is one the archive holding the film publishes and marks as public
+domain, with no condition on its use; never a restoration sold on disc or a copy taken from a video site, which a
+restorer or distributor may claim rights in. Only its picture is used. The script scales it to 1080 lines, loops it to
+a little over five and a half minutes, pillarboxes it to 1920x1080 and adds three silent audio tracks, three subtitle
+tracks with lines written for it, and an "Intro" chapter, so the skip button and the audio and subtitles panel have
+something to show.
 
 ```sh
-tools/screens/make-clip.sh <film> <out dir> [--from <seconds>] [--to <seconds>]
+tools/screens/make-clip.sh <film> <out dir> [--from <seconds>] [--to <seconds>] [--crop <w:h:x:y>]
 ```
 
 `--from` and `--to` keep the part of the copy between them, for one with a title card, black frames or a fade at
-either end. The clip is about 125 MB and stays out of the repository, as does the film. It needs ffmpeg and ffprobe,
-and the same film and ffmpeg give the same bytes.
+either end. `--crop` keeps one rectangle of its frame, `width:height:x:y` in its pixels as ffmpeg's crop filter takes
+it, for a copy with black bars or a border around its picture (ffmpeg's cropdetect finds them); it is cut before the
+picture is scaled. The clip is about 110 MB and stays out of the repository, as does the film. It needs ffmpeg and
+ffprobe, and the same film and ffmpeg give the same bytes.
 
 ## Titles and pictures
 
