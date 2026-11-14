@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draws NZStreamer's launcher icon, TV banner and splash mark into app/src/main/res.
+"""Draws NZStreamer's launcher icon, TV banner and splash mark into app/src/main/res, and the README's logo.
 
 The mark is a play triangle whose back end runs out into three lines, a stream coming in. Its
 shape is defined once, below, in the 108 x 108 units of an adaptive icon's layers: the vector
@@ -194,6 +194,8 @@ DENSITIES = {"mdpi": 1, "hdpi": 1.5, "xhdpi": 2, "xxhdpi": 3, "xxxhdpi": 4}
 
 # Supersampled, then reduced: Pillow's polygons have no anti-aliasing of their own.
 SUPERSAMPLE = 8
+# The logo's height: the README shows it about 100 px tall, so it stays sharp on dense screens.
+LOGO_HEIGHT = 240
 
 
 def draw_mark(draw, scale, dx=0.0, dy=0.0, fill=ACCENT):
@@ -217,6 +219,28 @@ def legacy_icon(size, round_shape):
     return image.resize((size, size), Image.LANCZOS)
 
 
+def lockup(draw, size):
+    """
+    The mark beside the wordmark, Sora Bold at [size]: the mark half again as tall as the capitals,
+    a third of its width away from them. Gives the font, the text's left and right, the capitals'
+    height, the mark's pixels a unit, the gap and the whole width.
+    """
+    font = ImageFont.truetype(str(SORA), size)
+    font.set_variation_by_axes([700])
+    left, top, right, _ = draw.textbbox((0, 0), "NZStreamer", font=font, anchor="ls")
+    cap = -top
+    scale = cap * 1.5 / HEIGHT
+    gap = WIDTH * scale / 3
+    return font, left, right, cap, scale, gap, WIDTH * scale + gap + (right - left)
+
+
+def draw_lockup(draw, layout, x, middle, ink):
+    """The lockup from [layout] with its left edge at [x] and the mark's middle at [middle]."""
+    font, left, _, cap, scale, gap, _ = layout
+    draw_mark(draw, scale, dx=x - LEFT * scale, dy=middle - 54 * scale)
+    draw.text((x + WIDTH * scale + gap - left, middle + cap / 2), "NZStreamer", font=font, fill=ink, anchor="ls")
+
+
 def banner(width, height):
     """
     The TV launcher's banner: the mark and the wordmark side by side, centred, together about 70 %
@@ -225,26 +249,32 @@ def banner(width, height):
     big_w, big_h = width * SUPERSAMPLE, height * SUPERSAMPLE
     image = Image.new("RGB", (big_w, big_h), BACKGROUND)
     draw = ImageDraw.Draw(image)
-    text = "NZStreamer"
-
-    def layout(size):
-        font = ImageFont.truetype(str(SORA), size)
-        font.set_variation_by_axes([700])
-        left, top, right, _ = draw.textbbox((0, 0), text, font=font, anchor="ls")
-        cap = -top
-        # The mark half again as tall as the capitals, a third of its width away from them.
-        scale = cap * 1.5 / HEIGHT
-        gap = WIDTH * scale / 3
-        return font, left, right, cap, scale, gap, WIDTH * scale + gap + (right - left)
-
     size = 100
-    *_, total = layout(size)
-    font, left, right, cap, scale, gap, total = layout(round(size * big_w * 0.7 / total))
-    x = (big_w - total) / 2
-    middle = big_h / 2
-    draw_mark(draw, scale, dx=x - LEFT * scale, dy=middle - 54 * scale)
-    draw.text((x + WIDTH * scale + gap - left, middle + cap / 2), text, font=font, fill=TEXT, anchor="ls")
+    total = lockup(draw, size)[-1]
+    layout = lockup(draw, round(size * big_w * 0.7 / total))
+    draw_lockup(draw, layout, (big_w - layout[-1]) / 2, big_h / 2, TEXT)
     return image.resize((width, height), Image.LANCZOS)
+
+
+def logo(height, ink):
+    """
+    The README's logo: the lockup on a clear ground, [height] pixels tall, the mark nine tenths of
+    it, with a twentieth of the height around it. [ink] is the wordmark's colour, so GitHub's light
+    and dark themes each get one that reads on them; the mark keeps the accent on both.
+    """
+    big_h = height * SUPERSAMPLE
+    probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    size = 100
+    cap = lockup(probe, size)[3]
+    # The mark is half again as tall as the capitals.
+    layout = lockup(probe, round(size * big_h * 0.9 / 1.5 / cap))
+    pad = big_h / 20
+    big_w = round(layout[-1] + 2 * pad)
+    big_w -= big_w % SUPERSAMPLE
+    image = Image.new("RGBA", (big_w, big_h), (0, 0, 0, 0))
+    draw_lockup(ImageDraw.Draw(image), layout, (big_w - layout[-1]) / 2, big_h / 2, ink)
+    # Premultiplied while it shrinks, so the clear pixels' black doesn't darken the edges.
+    return image.convert("RGBa").resize((big_w // SUPERSAMPLE, height), Image.LANCZOS).convert("RGBA")
 
 
 def decelerate(fraction):
@@ -338,6 +368,11 @@ def main():
     write(RES / "drawable-v31/splash_mark.xml", splash_mark())
     write(RES / "drawable/splash_mark.xml", vector(ACCENT, data))
     write(RES / "values/splash_mark.xml", splash_values())
+    # The README's logo, for each of GitHub's themes.
+    readme = ROOT / ".github/readme"
+    readme.mkdir(parents=True, exist_ok=True)
+    logo(LOGO_HEIGHT, TEXT).save(readme / "logo-on-dark.png", optimize=True)
+    logo(LOGO_HEIGHT, BACKGROUND).save(readme / "logo-on-light.png", optimize=True)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # Brand assets
 
-`generate.py` draws NZStreamer's launcher icon and TV banner into `app/src/main/res`:
+`generate.py` draws NZStreamer's launcher icon and TV banner into `app/src/main/res`, and the README's logo:
 
 - `drawable/ic_launcher_background.xml`, `ic_launcher_foreground.xml`, `ic_launcher_monochrome.xml`:
   the adaptive icon's layers (vectors; the monochrome one is what themed icons tint);
@@ -13,7 +13,9 @@
   three lines run in from the left into the triangle's front, in `values/splash_mark.xml`'s
   `splash_mark_duration` (the splash theme's animation duration);
 - `drawable/splash_mark.xml`: the splash's icon before Android 12, which the library draws still: the
-  mark as the launcher icon has it.
+  mark as the launcher icon has it;
+- `.github/readme/logo-on-dark.png`, `logo-on-light.png`: the README's logo, the mark beside the name as
+  the banner has them on a clear ground, the name light for GitHub's dark theme and dark for its light one.
 
 The mark's outline and the colours are defined once in the script. Change them there and run it
 again rather than editing its output:

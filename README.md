@@ -1,9 +1,16 @@
-# NZStreamer
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/logo-on-dark.png">
+    <img alt="NZStreamer" src=".github/readme/logo-on-light.png" width="600">
+  </picture>
+</h1>
 
-[![CI](https://github.com/skjaere/nzstreamer/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/skjaere/nzstreamer/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/skjaere/nzstreamer/branch/main/graph/badge.svg)](https://codecov.io/gh/skjaere/nzstreamer)
-[![Latest release](https://img.shields.io/github/v/release/skjaere/nzstreamer)](https://github.com/skjaere/nzstreamer/releases)
-[![Licence](https://img.shields.io/badge/licence-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE.md)
+<p align="center">
+  <a href="https://github.com/skjaere/nzstreamer/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/skjaere/nzstreamer/actions/workflows/ci.yml/badge.svg?branch=main&amp;event=push"></a>
+  <a href="https://codecov.io/gh/skjaere/nzstreamer"><img alt="codecov" src="https://codecov.io/gh/skjaere/nzstreamer/branch/main/graph/badge.svg"></a>
+  <a href="https://github.com/skjaere/nzstreamer/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/skjaere/nzstreamer"></a>
+  <a href="LICENSE.md"><img alt="Licence" src="https://img.shields.io/badge/licence-PolyForm%20Noncommercial%201.0.0-blue"></a>
+</p>
 
 NZStreamer plays video from Usenet on Android phones, tablets and TVs. It streams straight from your own Usenet
 provider, using NZBs from your own indexers: nothing is downloaded first. It comes with no providers, indexers or
