@@ -10,7 +10,6 @@ import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.waitFor
 import io.skjaere.usenet.core.DownloadWriter
 import io.skjaere.usenet.core.EngineSettings
-import io.skjaere.usenet.core.NzbStreamOpener
 import io.skjaere.usenet.core.TrackProbe
 import io.skjaere.usenet.data.Clock
 import io.skjaere.usenet.data.Download
@@ -42,7 +41,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * The downloads' runner on a device (item 7): the app's Resolve, writer and places over the test's own NNTP server
+ * The downloads' runner on a device (item 7): the app's Resolve, its own writer and places over the test's own NNTP server
  * (LocalNntp, throttled to about a provider's rate on each connection) and the engine, the releases' NZBs through the
  * coordinator's grab (its test seam). No host exists yet (WF2b), so the test is the host: it calls [DownloadRunner.run]
  * and waits for it to end.
@@ -98,12 +97,15 @@ class DownloadRunnerDeviceTest {
         fixtures.close()
     }
 
-    /** The runner of the app's pieces, its writer's long gap [longGap], and the writer, whose live state the test reads. */
-    private fun runner(longGap: Long = DownloadWriter.LONG_GAP_BYTES): Pair<DownloadRunner, DownloadWriter> {
-        val writer = DownloadWriter(NzbStreamOpener.download(container.engine), longGapBytes = longGap)
+    /** The runner of the app's pieces, the app's own writer among them, its long gap [longGap]. */
+    private fun runner(longGap: Long = DownloadWriter.LONG_GAP_BYTES): DownloadRunner {
         val resolver = DownloadResolver.of(container, storage, indexers = { listOf(INDEXER) }, attempts = { 3 }, probe = TrackProbe.None)
-        return DownloadRunner(DownloadRunnerDeps.of(container, context, storage, debug, resolver::resolve, writer), scope) to writer
+        return DownloadRunner(DownloadRunnerDeps.of(container, context, storage, debug, resolver::resolve, longGapBytes = longGap), scope)
     }
+
+    /** Download [id] while it is written, at [bytes] or more: its live write's, as the page reads it. */
+    private suspend fun DownloadRunner.underWay(id: String, bytes: Long = 0) =
+        waitFor("download $id under way at $bytes bytes", 60_000) { item(id)?.takeIf { it.bytesPerSecond != null && it.written >= bytes } }
 
     /** [bytes] posted as the plain release [guid], its NZB the coordinator's grab hands over. */
     private fun release(guid: String, title: String, bytes: Int): Pair<DownloadFixtures.Release, DownloadCandidate> {
@@ -138,14 +140,17 @@ class DownloadRunnerDeviceTest {
     fun twoQueuedTheSecondStartsWhenTheFirstIsDoneAndPauseAndResumeGoOnAcrossAWalksEnd() = runBlocking<Unit> {
         val (one, first) = release(FIRST, "Harbor.Lights.S03E01.1080p.WEB-DL.H.264-KESTREL", 16 * DownloadFixtures.MB)
         val (two, second) = release(SECOND, "Harbor.Lights.S03E02.1080p.WEB-DL.H.264-KESTREL", 16 * DownloadFixtures.MB)
+        val cache = waitFor("the video cache to be open", timeoutMs = 10_000) { container.videoCache.forStreamer() }
+        // The streamer built from here on is lent it.
+        container.engine.rebuildWhenIdle()
         local.throttle = THROTTLE
-        val (runner, writer) = runner()
+        val runner = runner()
         val a = runner.add(1, first)
         val b = runner.add(2, second)
         val walk = runner.walk()
 
         runner.done(a)
-        waitFor("the second under way", 60_000) { writer.live.value?.takeIf { it.id == b && it.written >= 2 * DownloadFixtures.MB } }
+        runner.underWay(b, 2L * DownloadFixtures.MB)
         assertEquals(DownloadState.Done, runner.item(a)?.row?.state)
         // Its first stream opened only once the first was done, whose progress and end the trace says (the pairs wait on them).
         val lines = traced()
@@ -173,6 +178,13 @@ class DownloadRunnerDeviceTest {
             assertEquals(release.sha256, DownloadFixtures.sha256(storage.file(row).must("its file")))
             assertNull(storage.source(id))
         }
+        // The app's writer fetches as a download does (L343, M3): the video cache read, never added to. Resolve's prepare
+        // reads a file's first and last articles through it, as a play's does: none of what lies between is there.
+        listOf(one, two).forEach { release ->
+            val between = release.posted.single().ids.drop(2).dropLast(2)
+            val cached = between.count { cache.get(it) != null }
+            assertEquals("of the ${between.size} articles inside ${release.title}, in the video cache", 0, cached)
+        }
     }
 
     @Test
@@ -181,10 +193,10 @@ class DownloadRunnerDeviceTest {
         val (gone, first) = release(FIRST, "Harbor.Lights.S03E03.1080p.WEB-DL.H.264-KESTREL", 20 * DownloadFixtures.MB)
         val (whole, second) = release(SECOND, "Harbor.Lights.S03E03.720p.WEB-DL.H.264-GRP", 16 * DownloadFixtures.MB)
         local.throttle = THROTTLE
-        val (runner, writer) = runner(longGap = LONG_GAP)
+        val runner = runner(longGap = LONG_GAP)
         val id = runner.add(3, first, second)
         runner.walk()
-        waitFor("the first release under way", 60_000) { writer.live.value?.takeIf { it.id == id && it.written >= DownloadFixtures.MB } }
+        runner.underWay(id, DownloadFixtures.MB.toLong())
         // From article K on, no provider has it any more.
         val posted = gone.posted.single()
         local.missing += posted.ids.drop(FROM_ARTICLE)
@@ -208,10 +220,10 @@ class DownloadRunnerDeviceTest {
     fun aReleaseMissingTwoSmallArticlesFinishesWithTwoPartsMissingItsGapsRecorded() = runBlocking<Unit> {
         val (release, candidate) = release(FIRST, "Harbor.Lights.S03E04.1080p.WEB-DL.H.264-KESTREL", 16 * DownloadFixtures.MB)
         local.throttle = THROTTLE
-        val (runner, writer) = runner()
+        val runner = runner()
         val id = runner.add(4, candidate)
         runner.walk()
-        waitFor("it under way", 60_000) { writer.live.value?.takeIf { it.id == id } }
+        runner.underWay(id)
         val posted = release.posted.single()
         val lost = listOf(posted.ids[FIRST_LOST], posted.ids[SECOND_LOST])
         local.missing += lost
