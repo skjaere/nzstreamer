@@ -570,6 +570,34 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     }
 
     /**
+     * Every download but those removed, read from the table now, at their safe offsets: what a host's end says ([state]
+     * has it once Room says so, which can come after). Empty on a TV.
+     */
+    suspend fun items(): List<Item> {
+        if (!runs) return emptyList()
+        return dao.all().first().filter { it.state != DownloadState.Deleting }.map { Item(it, it.safeOffset, null) }
+    }
+
+    /**
+     * Android stopped the host (the job's onStopJob, item 9), whose walk was cancelled and recorded where it stopped: the
+     * download it left under way (Running or Resolving) is said to be in [state] for [reason], Waiting for the need that
+     * went (the host runs again once it is back) or Stopped by Android, held until Resume (L359). Under the queue's lock: one
+     * a walk has taken up again since is left as it runs.
+     */
+    suspend fun hostStopped(state: DownloadState, reason: String) {
+        if (!runs) return
+        require(state == DownloadState.Waiting || state == DownloadState.Stopped) { "A stopped host leaves a download waiting or stopped" }
+        changes.withLock {
+            // A cancelled walk's item stays current until a walk picks the next: only one still running is live.
+            val live = current?.takeIf { it.job.isActive }?.id
+            dao.queue().first().filter { (it.state == DownloadState.Running || it.state == DownloadState.Resolving) && it.id != live }.forEach { row ->
+                dao.setState(row.id, state, reason, now())
+                log.info("download {}: its host was stopped at {} bytes: {}", row.id, row.safeOffset, state)
+            }
+        }
+    }
+
+    /**
      * Walks the queue under [host] while it lives: the next runnable download, one left running by a kill first, resolved
      * then written, then the next. Returns once nothing can run (L388): all done or failed, the queue held, or a wait for
      * the providers or for storage. The host ends then; cancelled by its host, the item under way stops at its safe offset,

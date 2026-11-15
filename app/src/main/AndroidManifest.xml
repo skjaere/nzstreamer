@@ -19,6 +19,12 @@
          runtime permission on Android 13 and later, the app's first: asked at the first Download, after the sheet's line
          saying why. Refused, downloads still run, and the Downloads page shows them. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Downloads run in a user-initiated data transfer job on Android 14 and later (L334, L335): its normal permission,
+         granted at install, without which a user-initiated job can't be scheduled. Scheduled from the visible app alone. -->
+    <uses-permission android:name="android.permission.RUN_USER_INITIATED_JOBS" />
+    <!-- The downloads' job is persisted, so a reboot doesn't lose a download under way (L334): Android asks a persisted job
+         for this normal permission, granted at install. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- One APK for phones and TVs: Leanback not required (required would list it for TVs only),
          and no touch, which TVs lack; Play takes touch as required unless it is declared not. -->
@@ -173,6 +179,14 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+
+        <!-- The downloads' host on Android 14 and later (L334, L335): a user-initiated data transfer job, which only
+             JobScheduler binds. Not exported. Scheduled on Android 14 and later alone, where user-initiated jobs are. -->
+        <service
+            android:name=".download.DownloadJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            tools:targetApi="34" />
 
         <!-- The download notifications' Pause and Cancel (L358): explicit, immutable broadcasts from the app's own
              PendingIntents. Not exported, so nothing outside the app can send them. -->

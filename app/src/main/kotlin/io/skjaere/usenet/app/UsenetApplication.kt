@@ -35,6 +35,8 @@ import io.skjaere.usenet.app.debrid.ServiceRegistry
 import io.skjaere.usenet.app.debrid.nameOf
 import io.skjaere.usenet.app.debrid.seedDevDebrid
 import io.skjaere.usenet.app.download.DownloadDebug
+import io.skjaere.usenet.app.download.DownloadHostRules
+import io.skjaere.usenet.app.download.DownloadHosts
 import io.skjaere.usenet.app.download.DownloadNotifications
 import io.skjaere.usenet.app.download.DownloadRunner
 import io.skjaere.usenet.app.download.DownloadRunnerDeps
@@ -301,6 +303,9 @@ class AppContainer(private val context: Context) {
 
     /** The token the download notifications' Resume and Play carry, so another sender's ask only opens the page (item 11). */
     val downloadToken: DownloadToken by lazy { DownloadToken(File(context.filesDir, DownloadStorage.DIR)) }
+
+    /** Asks the downloads' host to run them (L335, L388): from the visible app alone, never on a TV. */
+    val downloadHosts: DownloadHosts by lazy { DownloadHosts(context, this) }
 
     /**
      * The releases found missing on the providers the engine uses, which plays skip without a grab until one it wasn't
@@ -706,6 +711,26 @@ class AppContainer(private val context: Context) {
         // Each download finished or failed while the process lives has its notification, gone again as it is removed
         // (L358); nothing on a TV (L369).
         appScope.launch { saveOrLog("say which downloads finished") { downloadNotifications.watch(downloads.state) } }
+        // A provider saved ends the downloads' waits for the providers (L381, L388), and a changed Wi-Fi or charging switch
+        // gives the job its new needs (L335): each schedules the host from the app in front, where they are changed. None
+        // of it on a TV (L369).
+        appScope.launch {
+            if (!DownloadHostRules.runs(television)) return@launch
+            saveOrLog("go on with the downloads as a provider is saved") {
+                settings.providers.distinctUntilChanged().drop(1).collect {
+                    downloads.retryNow()
+                    if (inFront.value.value) downloadHosts.schedule(DownloadHostRules.ScheduleCause.ProviderSaved)
+                }
+            }
+        }
+        appScope.launch {
+            if (!DownloadHostRules.runs(television)) return@launch
+            saveOrLog("give the downloads' job its new needs") {
+                settings.downloads.map(DownloadHostRules::needs).distinctUntilChanged().drop(1).collect {
+                    if (inFront.value.value) downloadHosts.schedule(DownloadHostRules.ScheduleCause.SwitchChanged)
+                }
+            }
+        }
         // What plays added to a TorBox account that an earlier process left goes a grace from now (L245), and the records
         // of an account signed out of, switched to keep its adds or given a new key go as it changes.
         debridAdds.start(settings.services)

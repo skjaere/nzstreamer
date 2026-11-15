@@ -20,6 +20,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import io.skjaere.usenet.app.download.DownloadAsk
 import io.skjaere.usenet.app.download.DownloadExtras
+import io.skjaere.usenet.app.download.DownloadHostRules
 import io.skjaere.usenet.app.download.DownloadIntents
 import io.skjaere.usenet.app.download.DownloadPlaces
 import io.skjaere.usenet.app.download.LocalNotificationAsk
@@ -149,6 +150,11 @@ class MainActivity : ComponentActivity() {
                     PlayerActivity.start(this@MainActivity, it, animate = container.displayHold.held.value == null)
                 }
             }
+        }
+        // The app's start with downloads to run and no host on them (L388), and each return to it: the host is scheduled
+        // from here, the app in front, as Android starts a user-initiated job for the visible app alone (C4). Never on a TV.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) { container.downloadHosts.schedule(DownloadHostRules.ScheduleCause.AppStart) }
         }
         // The TV's mode held for the next play (DisplayModeHold): this window asks for it while the play sheet finds that
         // play, and gives it up as it stops, once the next player's window asks for it (or the app has gone), or as soon

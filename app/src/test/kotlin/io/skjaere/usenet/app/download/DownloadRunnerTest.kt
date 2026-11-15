@@ -31,6 +31,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -1062,6 +1063,54 @@ class DownloadRunnerTest {
         assertEquals(listOf(false), switches)
     }
 
+    /**
+     * A job Android stopped (item 9): its host cancels the walk, which records where the download under way stopped, then
+     * says why it stopped there: waiting for the need that went, the job running it again once the need is back, or Stopped
+     * by Android when the user stopped it, holding the queue (L359). One a walk has taken up again since is left as it runs.
+     * The queue is read as the table has it now, for what a host's end says.
+     */
+    @Test
+    fun `a host stopped by Android leaves the one under way waiting for its need, or stopped, never one a walk runs again`() = test {
+        val a = fake("hl-a").apply { hold = HOLD }
+        val runner = runner()
+        val first = runner.add(1, a)
+        val second = runner.add(2, fake("hl-b"))
+        val walk = host(runner)
+        runCurrent()
+        assertEquals(DownloadState.Running, stored(first).state)
+
+        // Stopped for the network: as a kill leaves it, then waiting for Wi-Fi at its safe offset.
+        walk.cancelAndJoin()
+        assertEquals(DownloadState.Running, stored(first).state)
+        runner.hostStopped(DownloadState.Waiting, DownloadHostRules.WAITING_FOR_WIFI)
+        val waiting = stored(first)
+        assertEquals(DownloadState.Waiting, waiting.state)
+        assertEquals(DownloadHostRules.WAITING_FOR_WIFI, waiting.reason)
+        assertEquals(HOLD, waiting.safeOffset)
+        assertEquals(DownloadState.Queued, stored(second).state)
+        // The table now, ahead of the state Room says later: what the host's end leaves in the status notification.
+        assertEquals(listOf(first to DownloadState.Waiting, second to DownloadState.Queued), runner.items().map { it.row.id to it.row.state })
+        assertEquals(HOLD, runner.items().first().written)
+        // The job's need back, it runs first, from where it stopped.
+        assertEquals(listOf(first, second), runner.runnable().map { it.id })
+        val again = host(runner)
+        runCurrent()
+        assertEquals(DownloadState.Running, stored(first).state)
+        assertEquals(listOf(0L, HOLD), a.opens)
+
+        // A stop said after a walk took it up again leaves it running.
+        runner.hostStopped(DownloadState.Stopped, DownloadHostRules.STOPPED_BY_ANDROID)
+        assertEquals(DownloadState.Running, stored(first).state)
+
+        // Stopped by the user from Android: held until Resume.
+        again.cancelAndJoin()
+        runner.hostStopped(DownloadState.Stopped, DownloadHostRules.STOPPED_BY_ANDROID)
+        assertEquals(DownloadState.Stopped, stored(first).state)
+        assertEquals(DownloadHostRules.STOPPED_BY_ANDROID, stored(first).reason)
+        assertEquals(DownloadState.Queued, stored(second).state)
+        assertEquals(emptyList(), runner.runnable())
+    }
+
     @Test
     fun `nothing runs on a TV, where only reconcile does anything`() = test {
         host = DownloadHost.Service
@@ -1086,6 +1135,9 @@ class DownloadRunnerTest {
         assertEquals(emptyList(), tv.runnable())
         assertEquals(emptyList(), tv.state.value)
         assertEquals(emptyMap(), tv.done.value)
+        assertEquals(emptyList(), tv.items())
+        tv.hostStopped(DownloadState.Stopped, DownloadHostRules.STOPPED_BY_ANDROID)
+        assertEquals(DownloadState.Queued, stored(QUEUED).state)
         assertEquals(emptyList(), switches)
         tv.reconcile()
         assertEquals(1, storage.reconciles)

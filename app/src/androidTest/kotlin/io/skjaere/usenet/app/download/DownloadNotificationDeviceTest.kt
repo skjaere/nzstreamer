@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Intent
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.service.notification.StatusBarNotification
 import androidx.test.core.app.ActivityScenario
@@ -71,6 +72,11 @@ class DownloadNotificationDeviceTest {
     @After
     fun tearDown() = runBlocking<Unit> {
         scope.cancel()
+        // The job an own Resume schedules (item 9), ended before its rows go.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            DownloadJobService.scheduler(context).cancelAll()
+            waitFor("no host under way", 30_000) { if (DownloadJobService.starts.value == 0 && !container.downloads.walking.value) Unit else null }
+        }
         made.forEach { id ->
             container.downloadStorage.delete(id)
             manager.cancel(id, DownloadNotifications.DONE_ID)
@@ -196,8 +202,11 @@ class DownloadNotificationDeviceTest {
         }
         ActivityScenario.launch<MainActivity>(MainActivity.openDownloads(context, resume = true)).use { scenario ->
             scenario.onActivity { assertEquals(DownloadAsk.Resume, it.downloadAsked) }
-            val resumed = waitFor("the download resumed by the app's own ask") { runBlocking { dao.get(id) }?.takeIf { it.state == DownloadState.Queued } }
-            assertNull("queued again with nothing held", resumed.reason)
+            // Queued again, and its host scheduled with it (item 9), which may take it up at once: no longer held.
+            val resumed = waitFor("the download resumed by the app's own ask") {
+                runBlocking { dao.get(id) }?.takeIf { it.state != DownloadState.Paused && it.state != DownloadState.Stopped }
+            }
+            assertNotEquals("nothing held", DownloadHostRules.STOPPED_BY_ANDROID, resumed.reason)
         }
     }
 

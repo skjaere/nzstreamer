@@ -34,6 +34,7 @@ import androidx.navigation.toRoute
 import io.skjaere.usenet.app.debrid.DebridGate
 import io.skjaere.usenet.app.debrid.DebridPages
 import io.skjaere.usenet.app.download.DownloadAsk
+import io.skjaere.usenet.app.download.DownloadHostRules
 import io.skjaere.usenet.app.download.DownloadPages
 import io.skjaere.usenet.app.download.DownloadPlaces
 import io.skjaere.usenet.app.home.HomeScreen
@@ -239,11 +240,19 @@ fun AppNav(
         }
     }
     // A download notification's tap or action: the Downloads page, over whatever shows, and a resume asked with the app's
-    // token from here, the visible app, as Android schedules a user-initiated job only from it (C4).
+    // token from here, the visible app, as Android schedules a user-initiated job only from it (C4): the queue let go,
+    // then its host scheduled.
     LaunchedEffect(nav, downloads) {
         downloads.collect { ask ->
             nav.currentBackStackEntryFlow.first()
-            downloadPages.take(ask) { container.appScope.launch { saveOrLog("resume the downloads") { container.downloads.resume() } } }
+            downloadPages.take(ask) {
+                container.appScope.launch {
+                    saveOrLog("resume the downloads") {
+                        container.downloads.resume()
+                        container.downloadHosts.schedule(DownloadHostRules.ScheduleCause.Resume)
+                    }
+                }
+            }
         }
     }
     // A .nzb another app opened: Import over Home, whatever was showing, so Back goes to Home.
