@@ -37,12 +37,35 @@ sealed interface DownloadTrace {
         LeftForHost("left"),
     }
 
+    /**
+     * How the app's own schedule of the host went (L391), so a two-phase test tells it from JobScheduler's run of a job
+     * that was waiting, or Android's start of the service again.
+     */
+    enum class ScheduleResult(val word: String) {
+        /** The job scheduled: Android took it. */
+        Scheduled("scheduled"),
+
+        /** Not asked of Android: from the background, nothing to run, or a host under way or waiting will take it up. */
+        Skipped("skipped"),
+
+        /** The service started. */
+        Service("service"),
+
+        /** Asked, and Android refused it (the job's schedule failed, or the service's start from the background), or the ask failed. */
+        Refused("refused"),
+    }
+
     /** The trace's line for this, after its time. */
     val line: String
 
     /** A [host] started, by [cause]. */
     data class HostStart(val host: DownloadHost, val cause: StartCause) : DownloadTrace {
         override val line get() = "start host=${host.name.lowercase()} cause=${cause.word}"
+    }
+
+    /** The app's own schedule of the host for [cause] (its name, as the code has it), and how it went (L391). */
+    data class Schedule(val cause: DownloadHostRules.ScheduleCause, val result: ScheduleResult) : DownloadTrace {
+        override val line get() = "schedule cause=${cause.name} result=${result.word}"
     }
 
     /** Reconcile's [decision] for the row [id], by the process's last exit: its reason (ApplicationExitInfo's) and its time; none below API 30. */

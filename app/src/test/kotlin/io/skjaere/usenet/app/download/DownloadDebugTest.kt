@@ -1,6 +1,8 @@
 package io.skjaere.usenet.app.download
 
+import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
 import io.skjaere.usenet.app.download.DownloadTrace.Decision
+import io.skjaere.usenet.app.download.DownloadTrace.ScheduleResult
 import io.skjaere.usenet.app.download.DownloadTrace.StartCause
 import io.skjaere.usenet.data.Clock
 import org.junit.jupiter.api.Test
@@ -99,6 +101,29 @@ class DownloadDebugTest {
             lines,
         )
         // Ids, numbers and words of the trace's own: nothing a title, a release or a host could be in.
+        lines.forEach { assertTrue(LINE.matches(it), it) }
+    }
+
+    @Test
+    fun `the app's own schedules are traced by the cause's name and how each went`() {
+        val debug = DownloadDebug.of(filesDir, debug = true, clock = clock)
+        ScheduleCause.entries.forEach { debug.trace(DownloadTrace.Schedule(it, ScheduleResult.Scheduled)) }
+        ScheduleResult.entries.forEach { debug.trace(DownloadTrace.Schedule(ScheduleCause.AppStart, it)) }
+        val lines = File(folder, ".trace").readLines()
+        assertEquals(
+            listOf(
+                "1763164800000 schedule cause=Download result=scheduled",
+                "1763164800000 schedule cause=Resume result=scheduled",
+                "1763164800000 schedule cause=ProviderSaved result=scheduled",
+                "1763164800000 schedule cause=SwitchChanged result=scheduled",
+                "1763164800000 schedule cause=AppStart result=scheduled",
+                "1763164800000 schedule cause=AppStart result=scheduled",
+                "1763164800000 schedule cause=AppStart result=skipped",
+                "1763164800000 schedule cause=AppStart result=service",
+                "1763164800000 schedule cause=AppStart result=refused",
+            ),
+            lines,
+        )
         lines.forEach { assertTrue(LINE.matches(it), it) }
     }
 

@@ -37,6 +37,7 @@ import io.skjaere.usenet.app.debrid.seedDevDebrid
 import io.skjaere.usenet.app.download.DownloadDebug
 import io.skjaere.usenet.app.download.DownloadHostRules
 import io.skjaere.usenet.app.download.DownloadHosts
+import io.skjaere.usenet.app.download.DownloadHostsDeps
 import io.skjaere.usenet.app.download.DownloadNotifications
 import io.skjaere.usenet.app.download.DownloadRunner
 import io.skjaere.usenet.app.download.DownloadRunnerDeps
@@ -311,7 +312,7 @@ class AppContainer(private val context: Context) {
     val downloadToken: DownloadToken by lazy { DownloadToken(File(context.filesDir, DownloadStorage.DIR)) }
 
     /** Asks the downloads' host to run them (L335, L388): from the visible app alone, never on a TV. */
-    val downloadHosts: DownloadHosts by lazy { DownloadHosts(context, this) }
+    val downloadHosts: DownloadHosts by lazy { DownloadHosts(DownloadHostsDeps.of(context, this)) }
 
     /**
      * The releases found missing on the providers the engine uses, which plays skip without a grab until one it wasn't
