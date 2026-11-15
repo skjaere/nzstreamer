@@ -3,19 +3,20 @@ package io.skjaere.usenet.core
 import io.ktor.utils.io.ClosedByteChannelException
 import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.dropWhile
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
@@ -130,14 +131,17 @@ class DownloadWriter(
     @Volatile
     private var rate: TransferRate? = null
 
-    /** Bumped by [retryNow]: a wait before a reopen ends when it changes. */
-    private val wakes = MutableStateFlow(0)
+    /** What ends a wait before a reopen sooner: [retryNow], and the network's return. */
+    private val wakes = BackoffWakes(network)
 
     /** The write's bytes a second over the last 5 s ([RATE_WINDOW]); 0 between writes. */
     fun bytesPerSecond(): Long = rate?.bytesPerSecond() ?: 0
 
-    /** Ends a wait before a reopen, its backoff starting again from 2 s (L381): Resume, a provider saved. */
-    fun retryNow() = wakes.update { it + 1 }
+    /**
+     * Ends a wait before a reopen, its backoff starting again from 2 s (L381): Resume, a provider saved. One asked while a
+     * stream opens ends the wait after it, should it fail.
+     */
+    fun retryNow() = wakes.retryNow()
 
     /**
      * Writes download [id]'s [file] of [nzb] to [out] (allocated whole) from [from], every byte before which is written,
@@ -163,7 +167,7 @@ class DownloadWriter(
             _live.value = Live(id, from, unreachable = false)
             log.info("download {}: writing from byte {} of {}, {} stretch{} missing so far", id, from, file.size, gaps.size, plural(gaps.size, "es"))
             return try {
-                transfer(run, onOpen) ?: finish(run)
+                wakes.watching { transfer(run, onOpen) ?: finish(run) }
             } catch (e: StorageFailure) {
                 // What is written in front of it stays, as far as storage keeps it: Try again goes on from there.
                 log.warn(
@@ -194,6 +198,8 @@ class DownloadWriter(
         var shortAt: Long? = null
         while (run.written < run.size) {
             val from = run.written
+            // A retry asked for, or the network back, from here on ends the wait after this stream.
+            val since = wakes.mark()
             onOpen(from)
             val ended = stream(run, from)
             if (ended == Ended.Complete) break
@@ -261,7 +267,7 @@ class DownloadWriter(
                 run.id, run.written, run.size, sorted.kind, if (misses > 0) ", $misses of $MAX_NO_PROGRESS with no progress" else "", wait.inWholeSeconds,
             )
             reopen = true
-            if (pause(wait)) {
+            if (wakes.pause(wait, since)) {
                 wait = FIRST_BACKOFF
                 outOfReach = null
             } else {
@@ -367,17 +373,6 @@ class DownloadWriter(
         // What it filled with zeros again, and what it didn't reach.
         val came = gap.first until at
         return opened.gaps.all().mapNotNull { it.within(came) } + listOfNotNull((at..gap.last).takeUnless { it.isEmpty() })
-    }
-
-    /**
-     * Waits [wait] before a reopen; true when [retryNow] or the network's return ended it sooner (L381): a network up now
-     * first has to go and come back.
-     */
-    private suspend fun pause(wait: Duration): Boolean {
-        val seen = wakes.value
-        return withTimeoutOrNull(wait) {
-            merge(wakes.filter { it != seen }.map { }, network.dropWhile { it }.filter { it }.map { }).first()
-        } != null
     }
 
     /** What ended a stream ([cause]: its close's, or its open's; null: it ended short with none), and its kind for the log. */
@@ -598,6 +593,47 @@ class DownloadWriter(
 
 /** The part of this range within [other]; null when none is. */
 private fun LongRange.within(other: LongRange): LongRange? = (maxOf(first, other.first)..minOf(last, other.last)).takeUnless { it.isEmpty() }
+
+/**
+ * What ends a backoff's wait sooner (L381): a retry asked for ([retryNow]: Resume, a provider saved), and the [network]'s
+ * return, validated again after it was lost. Each counts from a [mark] taken as the try before the wait starts, so one
+ * that comes while that try runs (a connect to a provider out of reach takes its time to fail) ends the wait after it at
+ * once. The network's losses and returns are followed while [watching] runs. Safe from any thread.
+ */
+class BackoffWakes(private val network: StateFlow<Boolean>) {
+    private val asked = MutableStateFlow(0)
+    private val returned = MutableStateFlow(0)
+
+    /** The retries asked for and the network's returns so far: what a wait after the try starting now counts from. */
+    data class Mark(val asked: Int, val returned: Int)
+
+    fun mark() = Mark(asked.value, returned.value)
+
+    /** Ends the wait under way, or the next one of a try under way now. */
+    fun retryNow() = asked.update { it + 1 }
+
+    /** Runs [block], following the network meanwhile: each time it is validated again after it wasn't is a return. */
+    suspend fun <T> watching(block: suspend () -> T): T = coroutineScope {
+        val watch = launch(start = CoroutineStart.UNDISPATCHED) {
+            var up = network.value
+            network.collect { now ->
+                if (now && !up) returned.update { it + 1 }
+                up = now
+            }
+        }
+        try {
+            block()
+        } finally {
+            watch.cancel()
+        }
+    }
+
+    /** Waits [wait]; true when a retry asked for or the network's return since [since] ended it sooner, at once for one before it starts. */
+    suspend fun pause(wait: Duration, since: Mark): Boolean {
+        if (mark() != since) return true
+        return withTimeoutOrNull(wait) { merge(asked.filter { it != since.asked }, returned.filter { it != since.returned }).first() } != null
+    }
+}
 
 /**
  * Bytes a second over the last [window], or over the time since the first byte while that is shorter (a second at least):

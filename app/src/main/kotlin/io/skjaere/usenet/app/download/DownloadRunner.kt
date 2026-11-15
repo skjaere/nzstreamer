@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Build
 import io.skjaere.usenet.app.AppContainer
 import io.skjaere.usenet.app.download.DownloadResolver.Resolution
+import io.skjaere.usenet.core.BackoffWakes
 import io.skjaere.usenet.core.DownloadWriter
 import io.skjaere.usenet.core.MissingOn
 import io.skjaere.usenet.core.NzbStreamOpener
@@ -31,21 +32,15 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.dropWhile
-import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.nio.channels.FileChannel
-import kotlin.time.Duration
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
@@ -270,8 +265,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     // Under [changes].
     private val removed = HashMap<String, Removed>()
 
-    /** Bumped by [retryNow] and [resume]: a wait before Resolve is asked again ends when it changes. */
-    private val wakes = MutableStateFlow(0)
+    /** What ends a wait before Resolve is asked again sooner: [retryNow], [resume], and the network's return (L381). */
+    private val wakes = BackoffWakes(deps.network)
 
     /** Every download but those removed, by position, with the live write's bytes and rate (L380's page and notification). */
     val state: StateFlow<List<Item>> = if (!runs) {
@@ -599,13 +594,18 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         Walk.Next
     }
 
-    private suspend fun releases(id: String): Walk {
+    // The network followed meanwhile: its return ends a wait between Resolve's tries.
+    private suspend fun releases(id: String): Walk = wakes.watching { tryReleases(id) }
+
+    private suspend fun tryReleases(id: String): Walk {
         // Why the last release was given up as it was written: the words of a failure once no other is left to try.
         var gaveUp: DownloadWriter.GiveUp? = null
         var wait = DownloadWriter.FIRST_BACKOFF
         // Since when Resolve has found the providers out of reach, try after try.
         var outOfReach: TimeMark? = null
         while (true) {
+            // A retry asked for, or the network back, while Resolve asks ends the wait after it.
+            val mark = wakes.mark()
             when (val resolution = deps.resolve(id)) {
                 Resolution.Gone -> return Walk.Next
                 is Resolution.Failed -> {
@@ -627,7 +627,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                     }
                     val kind = resolution.error::class.simpleName
                     log.info("download {}: its providers out of reach ({}); resolving it again in {} s", id, kind, wait.inWholeSeconds)
-                    if (pause(wait)) {
+                    if (wakes.pause(wait, mark)) {
                         wait = DownloadWriter.FIRST_BACKOFF
                         outOfReach = null
                     } else {
@@ -812,18 +812,10 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         }
     }
 
-    /** Ends the writer's wait between reopens and Resolve's between tries (L381). */
+    /** Ends the writer's wait between reopens and Resolve's between tries, or the one after a try under way (L381). */
     private fun wake() {
         writer.retryNow()
-        wakes.update { it + 1 }
-    }
-
-    /** Waits [wait] before Resolve is asked again; true when [retryNow], [resume] or the network's return ended it sooner (L381). */
-    private suspend fun pause(wait: Duration): Boolean {
-        val seen = wakes.value
-        return withTimeoutOrNull(wait) {
-            merge(wakes.filter { it != seen }.map { }, deps.network.dropWhile { it }.filter { it }.map { }).first()
-        } != null
+        wakes.retryNow()
     }
 
     private fun now() = deps.clock.now()

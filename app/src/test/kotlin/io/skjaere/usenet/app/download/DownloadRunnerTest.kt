@@ -189,18 +189,21 @@ class DownloadRunnerTest {
     private val providers = listOf(ProviderConfig("provider-1", "Harbor news", "news.harbor-lights.invalid", 563, "", "", useTls = true))
 
     private var clock = Clock { NOW }
+
+    /** Whether Android calls the network validated, as the runner and its writer read it. */
+    private val network = MutableStateFlow(true)
     private val traced get() = File(dir, "debug/${DownloadDebug.TRACE}").takeIf { it.isFile }?.readLines().orEmpty()
 
     /** The runner of these fakes, in the test's work, on its virtual time. */
     private fun TestScope.runner(television: Boolean = false, exit: DownloadExit? = null): DownloadRunner {
         clock = Clock { NOW + testScheduler.currentTime }
-        val writer = DownloadWriter(opener, timeSource = testScheduler.timeSource, longGapBytes = LONG_GAP)
+        val writer = DownloadWriter(opener, network, timeSource = testScheduler.timeSource, longGapBytes = LONG_GAP)
         return DownloadRunner(
             DownloadRunnerDeps(
                 downloads = dao, storage = storage, resolve = resolver::resolve, writer = writer,
                 missing = { release, asked -> recorded += release.guid to asked.map { it.id } },
                 inUse = { providers }, lastExit = { exit }, television = television, host = { host }, receiverSwitch = { switches += it },
-                debug = DownloadDebug.On(File(dir, "debug"), clock), clock = clock, timeSource = testScheduler.timeSource,
+                debug = DownloadDebug.On(File(dir, "debug"), clock), network = network, clock = clock, timeSource = testScheduler.timeSource,
                 io = StandardTestDispatcher(testScheduler), undoMillis = DownloadRunner.UNDO_MILLIS,
             ),
             work,
@@ -709,6 +712,30 @@ class DownloadRunnerTest {
     }
 
     @Test
+    fun `a retryNow or the network's return while Resolve asks ends the wait after it`() = test {
+        val runner = runner()
+        val id = runner.add(1, fake("hl-a"))
+        repeat(4) { resolver.scripted += Resolution.Unreachable(UsenetError.ConnectionFailed("refused")) }
+        resolver.during = { call ->
+            when (call) {
+                // Resume, or a provider saved, while Resolve's second try connects.
+                2 -> runner.retryNow()
+                // The network lost and back while its fourth does.
+                4 -> {
+                    network.value = false
+                    kotlinx.coroutines.delay(100)
+                    network.value = true
+                }
+            }
+        }
+        host(runner)
+        advanceUntilIdle()
+        // 2 s after the first; none after the second, the backoff starting again; 2 s; none after the fourth.
+        assertEquals(listOf(0L, 2_000, 2_000, 4_000, 4_100), resolver.times)
+        assertEquals(DownloadState.Done, stored(id).state)
+    }
+
+    @Test
     fun `the boot receiver is switched on while the host is the service and something can run`() = test {
         host = DownloadHost.Service
         val runner = runner()
@@ -768,8 +795,16 @@ class DownloadRunnerTest {
         /** What the next resolves answer before any release is tried, in turn. */
         val scripted = ArrayDeque<Resolution>()
 
+        /** When each resolve was asked for, from the test's start. */
+        val times = mutableListOf<Long>()
+
+        /** What happens while each resolve runs, by its number from 1: a Resume, the network lost and back. */
+        var during: suspend (call: Int) -> Unit = {}
+
         suspend fun resolve(id: String): Resolution {
             calls += id
+            times += clock.now() - NOW
+            during(calls.size)
             val row = dao.get(id) ?: return Resolution.Gone
             scripted.removeFirstOrNull()?.let { said ->
                 when (said) {

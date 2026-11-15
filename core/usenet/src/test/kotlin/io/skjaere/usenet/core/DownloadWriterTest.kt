@@ -385,6 +385,41 @@ class DownloadWriterTest {
         assertContentEquals(clip.data, path.readBytes())
     }
 
+    /**
+     * A Resume, a provider saved or the network's return that comes while a stream is being opened, not while the writer
+     * waits, still ends the wait after that stream fails (L381): a provider out of reach takes a connect's time to fail,
+     * and the wait after it can be five minutes.
+     */
+    @Test
+    fun `a retryNow or the network's return while a stream opens ends the wait after it`() = runTest(timeout = 60.seconds) {
+        val opens = mutableListOf<Long>()
+        val network = MutableStateFlow(true)
+        lateinit var writer: DownloadWriter
+        writer = writer(
+            StreamOpener { _, _, range ->
+                opens += currentTime
+                when (opens.size) {
+                    // Resume as the second opens.
+                    2 -> writer.retryNow()
+                    // The network lost and back as the fourth opens.
+                    4 -> {
+                        network.value = false
+                        delay(100)
+                        network.value = true
+                    }
+                }
+                if (opens.size < 5) refused() else OpenedStream(ByteReadChannel(clip.data.copyOfRange(range.first.toInt(), size.toInt())), Job())
+            },
+            time = testScheduler.timeSource,
+            network = network,
+        )
+        val wrote = writer.wrote()
+        assertEquals(Outcome.Done(emptyList()), wrote.outcome)
+        // 2 s after the first; none after the second, the backoff starting again; 2 s; none after the fourth.
+        assertEquals(listOf(0L, 2_000, 2_000, 4_000, 4_100), opens)
+        assertContentEquals(clip.data, path.readBytes())
+    }
+
     @Test
     fun `a login refused or no provider waits for the providers, and an incomplete or damaged release goes to the next`() = runTest(timeout = 60.seconds) {
         val cases = mapOf(
