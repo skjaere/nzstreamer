@@ -14,13 +14,15 @@ import java.io.File
  * launch brings back after the process died finds the file as one the app just started does. The row gives the file
  * ([fileOf], where storage keeps it), its exact size, the gaps it was written with, and the release's own name for the
  * file, which says its container type and is never logged. A row that isn't Done, or whose file has no place now (its
- * volume away), has none.
+ * volume away), has none. A Done row whose file is gone (deleted from outside the app) is told to [gone], which fails it as
+ * the next start's reconcile would, and its file is given still, for the source to say it is gone.
  */
-class DownloadPlayFiles(private val downloads: DownloadDao, private val fileOf: (Download) -> File?) : DownloadFiles {
+class DownloadPlayFiles(private val downloads: DownloadDao, private val fileOf: (Download) -> File?, private val gone: (Download) -> Unit = {}) : DownloadFiles {
     override fun find(id: String): DownloadFile? {
         val row = runBlocking { downloads.get(id) }?.takeIf { it.state == DownloadState.Done } ?: return null
         val size = row.size ?: return null
         val file = fileOf(row) ?: return null
+        if (!file.isFile) gone(row)
         return DownloadFile(file, size, row.gaps.map { it.first..it.last }, row.fileName)
     }
 }

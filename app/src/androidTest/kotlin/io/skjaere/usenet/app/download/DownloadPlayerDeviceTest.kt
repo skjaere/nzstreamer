@@ -470,6 +470,10 @@ class DownloadPlayerDeviceTest {
             val panel = waitFor("Playback stopped", 30_000) { scenario.read { a -> overlayWords(a).takeIf { "Playback stopped" in it } } }
             assertTrue(panel.toString(), "The downloaded file is gone" in panel && "Close" in panel)
             assertFalse(panel.toString(), "Stream instead" in panel || "Try another release" in panel)
+            // Its row fails at once, as the next start's reconcile would fail it: no Play of the title finds the file again.
+            waitFor("the download failed as gone") { runBlocking { container.data.downloads.get(row.id) }?.takeIf { it.state == DownloadState.Failed } }
+            assertEquals(DownloadStorage.FILE_GONE, runBlocking { container.data.downloads.get(row.id) }?.reason)
+            waitFor("the download out of the finished ones") { container.downloads.done.value[row.watchKey]?.let { null } ?: Unit }
             online()
             waitFor("Stream instead with the network back", 30_000) { scenario.read { a -> overlayWords(a).takeIf { "Stream instead" in it } } }
             scenario.onActivity { a -> clickOverlay(a, "Stream instead") }

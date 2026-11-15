@@ -257,13 +257,8 @@ class DownloadStorage(
                     !ID.matches(row.id) -> downloads.delete(row.id).also { dropped++ }
                     row.state == DownloadState.Deleting -> deleteRow(row.id)
                     !File(bookkeeping(row.id), MARKER).isFile -> deleteRow(row.id).also { dropped++ }
-                    row.state == DownloadState.Done && volume != null && row.relativePath?.let { File(volume, it).isFile } != true -> {
-                        // Nothing of it is on the device: no byte written, no part missing, so Download again starts from 0.
-                        val gone = row.copy(
-                            state = DownloadState.Failed, reason = FILE_GONE, relativePath = null, safeOffset = 0, gaps = emptyList(),
-                            completedAt = null, updatedAt = clock.now(),
-                        )
-                        downloads.update(gone)
+                    volume != null && isGone(row, volume) -> {
+                        failGone(row)
                         failed++
                     }
                 }
@@ -276,6 +271,36 @@ class DownloadStorage(
                 log.info("Reconciled downloads: {} rows dropped, {} files gone, {} folders without a row deleted", dropped, failed, leftOver.size)
             }
         }
+    }
+
+    /**
+     * [id]'s finished file found gone as it plays (deleted from outside the app while it runs): [reconcile]'s rule for that
+     * row alone, at once, rather than at the next start, so its title streams again meanwhile (the hooks play only Done
+     * rows) and the Downloads page offers Download again. Whether it failed it: not for a row that isn't Done, nor while
+     * the volume isn't there, when nothing is known gone.
+     */
+    suspend fun fileGone(id: String): Boolean = changes.withLock {
+        withContext(io) {
+            val volume = volumeDir() ?: return@withContext false
+            val row = downloads.get(id)?.takeIf { isGone(it, volume) } ?: return@withContext false
+            failGone(row)
+            log.info("Download {}: its file is gone; failed as reconcile would fail it", id)
+            true
+        }
+    }
+
+    /** Whether [row] is finished and its file isn't on [volume]. */
+    private fun isGone(row: Download, volume: File): Boolean =
+        row.state == DownloadState.Done && row.relativePath?.let { File(volume, it).isFile } != true
+
+    /** [row], whose file is gone, failed: "The downloaded file is gone", holding no file and no progress. */
+    private suspend fun failGone(row: Download) {
+        // Nothing of it is on the device: no byte written, no part missing, so Download again starts from 0.
+        val gone = row.copy(
+            state = DownloadState.Failed, reason = FILE_GONE, relativePath = null, safeOffset = 0, gaps = emptyList(),
+            completedAt = null, updatedAt = clock.now(),
+        )
+        downloads.update(gone)
     }
 
     /** Deletes [id]: its row, its video and its bookkeeping, in the crash-safe order. */

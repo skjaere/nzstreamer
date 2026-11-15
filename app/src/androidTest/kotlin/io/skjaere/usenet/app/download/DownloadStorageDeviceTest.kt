@@ -334,6 +334,46 @@ class DownloadStorageDeviceTest {
     }
 
     /**
+     * A finished download's file found gone as it plays (deleted from outside the app while it runs): reconcile's rule for
+     * that row alone, at once, so its title streams again and Download again starts from 0. A file still there, a row not
+     * finished, one unknown and a volume away are left as they are.
+     */
+    @Test
+    fun aFinishedFileFoundGoneFailsItsRowAloneAtOnce() = runBlocking<Unit> {
+        val storage = storage()
+        storage.add(row("gone"))
+        storage.open("gone", NAME, 4096).close()
+        storage.finish("gone", NAME)
+        finished("gone", storage).also { downloads.update(it.copy(gaps = listOf(DownloadGap(1024, 2047)))) }
+        storage.add(row("kept"))
+        storage.open("kept", NAME, 4096).close()
+        storage.finish("kept", NAME)
+        val kept = finished("kept", storage)
+        val queued = row("queued").also { storage.add(it) }
+        assertTrue(storage.file(downloads.get("gone")!!)!!.delete())
+
+        // Its volume away: nothing is known gone.
+        assertFalse(storage(volumeDir = { null }).fileGone("gone"))
+        assertEquals(DownloadState.Done, downloads.get("gone")?.state)
+
+        assertTrue("not failed as gone", storage.fileGone("gone"))
+        val gone = downloads.get("gone")!!
+        assertEquals(DownloadState.Failed to "The downloaded file is gone", gone.state to gone.reason)
+        assertNull(gone.relativePath)
+        assertEquals(0L, gone.safeOffset)
+        assertEquals(emptyList<DownloadGap>(), gone.gaps)
+        assertNull(gone.completedAt)
+        assertTrue("its bookkeeping stays with its row", storage.bookkeeping("gone").isDirectory)
+        assertFalse("told again", storage.fileGone("gone"))
+
+        assertFalse(storage.fileGone("kept"))
+        assertEquals(kept, downloads.get("kept"))
+        assertFalse(storage.fileGone("queued"))
+        assertEquals(queued, downloads.get("queued"))
+        assertFalse(storage.fileGone("unknown"))
+    }
+
+    /**
      * L379, 3-storage's cleanup: a delete goes the row Deleting (hidden), the video folder, the bookkeeping folder, the row,
      * so a process that dies after any step leaves a row the next start's reconcile finishes, and never a file without one.
      */

@@ -9,6 +9,7 @@ import io.skjaere.usenet.data.WatchKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -32,7 +33,7 @@ class DownloadPlayFilesTest {
 
     /** Where storage keeps a row's finished file: under [volume] by its path, none while [volumeThere] is false. */
     private var volumeThere = true
-    private val files = DownloadPlayFiles(Rows(rows)) { row -> row.relativePath?.takeIf { volumeThere }?.let { File(volume, it) } }
+    private val files = DownloadPlayFiles(Rows(rows), fileOf = { row -> row.relativePath?.takeIf { volumeThere }?.let { File(volume, it) } })
 
     @Test
     fun `a finished download gives its file, size, gaps and the release's name for the file`() {
@@ -44,6 +45,26 @@ class DownloadPlayFilesTest {
         assertEquals("Harbor.Lights.S01E05.1080p.WEB.h264-KESTREL.mkv", found.name)
         // Printed by a slip, it names no release.
         assertFalse("Harbor" in found.toString(), found.toString())
+    }
+
+    /**
+     * A finished download whose file is gone (deleted from outside the app while it runs) is told as gone, so its row fails
+     * as the next start's reconcile would fail it, and its file is given still, for the source to say it is gone. A file
+     * there isn't, nor one with no place now (its volume away), which may come back.
+     */
+    @Test
+    fun `a finished download whose file is gone is told as gone, its file given still for the source to say so`(@TempDir dir: File) {
+        val told = mutableListOf<String>()
+        val video = File(dir, "v.mkv")
+        val here = DownloadPlayFiles(Rows(rows), { row -> row.relativePath?.takeIf { volumeThere }?.let { video } }) { told += it.id }
+        rows[done.id] = done
+        assertEquals(video, here.find(done.id)?.file)
+        assertEquals(listOf(done.id), told)
+        video.writeBytes(ByteArray(16))
+        assertNotNull(here.find(done.id))
+        volumeThere = false
+        assertNull(here.find(done.id))
+        assertEquals(listOf(done.id), told)
     }
 
     @Test
