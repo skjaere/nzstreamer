@@ -51,6 +51,7 @@ class SettingsRepository(
     val torrentIndexers: Flow<List<TorrentIndexerRecord>> = store.data.map { it.activeTorrentIndexers }
     val services: Flow<List<ServiceAccount>> = store.data.map { it.activeServices }
     val playback: Flow<PlaybackPrefs> = store.data.map { it.playback }
+    val downloads: Flow<DownloadPrefs> = store.data.map { it.downloads }
     val metadata: Flow<MetadataPrefs> = store.data.map { it.metadata }
     val cache: Flow<CachePrefs> = store.data.map { it.cache }
     val logs: Flow<LogPrefs> = store.data.map { it.logs }
@@ -403,6 +404,28 @@ class SettingsRepository(
 
     suspend fun updatePlayback(change: (PlaybackPrefs) -> PlaybackPrefs) {
         store.updateData { it.copy(playback = change(it.playback).copy(updatedAt = clock.now())) }
+    }
+
+    /** "Only on Wi-Fi or Ethernet" (W110). */
+    suspend fun setDownloadsUnmeteredOnly(on: Boolean) = updateDownloads { it.copy(unmeteredOnly = on) }
+
+    /** "Only while charging" (L365). */
+    suspend fun setDownloadsWhileCharging(on: Boolean) = updateDownloads { it.copy(whileCharging = on) }
+
+    /**
+     * "Download size" (L371): one of [DownloadPrefs.DOWNLOAD_SIZES_GB_PER_HOUR], or null for Not set. Any other is refused
+     * (an IllegalArgumentException), and the size saved stays: the setting offers only those.
+     */
+    suspend fun setDownloadSizeCap(gbPerHour: Int?) {
+        require(gbPerHour == null || gbPerHour in DownloadPrefs.DOWNLOAD_SIZES_GB_PER_HOUR) { "No download size of $gbPerHour GB an hour" }
+        updateDownloads { it.copy(sizeCapGbPerHour = gbPerHour) }
+    }
+
+    /** Android was asked whether the app may show notifications (at the first Download), or not yet. */
+    suspend fun setDownloadNotificationsAsked(asked: Boolean) = updateDownloads { it.copy(notificationsAsked = asked) }
+
+    private suspend fun updateDownloads(change: (DownloadPrefs) -> DownloadPrefs) {
+        store.updateData { it.copy(downloads = change(it.downloads).copy(updatedAt = clock.now())) }
     }
 
     suspend fun updateMetadata(change: (MetadataPrefs) -> MetadataPrefs) {

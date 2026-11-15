@@ -20,7 +20,8 @@ import org.junit.runner.RunWith
  * original language among its TMDB facts), 8 (with when a release needed a password it didn't come with), 9
  * (with which kind a recent search is: a search of the indexers, or a TMDB title opened), 10 (with whether
  * a show's audio is the audio description), 11 (with the titles taken out of Home's Up next), 12 (with where a
- * remembered release played from) and 13 (with when a release was found a copy of a disc).
+ * remembered release played from), 13 (with when a release was found a copy of a disc) and 14 (with this device's
+ * downloads).
  */
 @RunWith(AndroidJUnit4::class)
 class LibraryMigrationTest {
@@ -651,11 +652,76 @@ class LibraryMigrationTest {
         }
     }
 
-    /** Every migration in turn, from the first version on, ends at the schema Room expects of version 13. */
+    /**
+     * Version 14 adds this device's downloads ([Download], L351): every version 13 row stays, the watch states and the
+     * releases found missing among them, and there are no downloads.
+     */
     @Test
-    fun theWholeChainFrom1To13Validates() {
+    fun everyVersion13RowSurvivesTheMigrationTo14() {
+        helper.createDatabase(NAME, 13).use { db ->
+            db.execSQL(
+                "INSERT INTO tried_release (id, indexerId, guid, missingOn, incompleteAt, updatedAt, passwordAt, discAt) VALUES " +
+                    "('fake/hl-s01e01-broken', 'fake', 'hl-s01e01-broken', '[{\"provider\":\"p-a@10.0.2.2:1119\",\"checkedAt\":30}]', NULL, 30, NULL, NULL), " +
+                    "('fake/hl-s01e01-disc', 'fake', 'hl-s01e01-disc', '[]', NULL, 31, NULL, 31)",
+            )
+            db.execSQL(
+                "INSERT INTO watch_state (`key`, kind, showTmdbId, season, episode, movieTmdbId, title, positionMs, durationMs, watched, lastPlayedAt, " +
+                    "updatedAt, deleted, release_indexerId, release_guid, release_title, release_downloadTemplate, release_fileIndex, release_nzbId, " +
+                    "release_fileName, release_fileSize, release_source) VALUES " +
+                    "('episode:tmdb:900002:s1:e2', 'Episode', 900002, 1, 2, NULL, 'Harbor Lights S01E02', 700000, 2700000, 0, 22, 23, 0, " +
+                    "'fake', 'hl-s01e02', 'Harbor.Lights.S01E02.1080p.WEB.h264-GRP', 'http://x/api?t=get&id=hl-s01e02&apikey={apikey}', 0, 'abc', " +
+                    "'Harbor.Lights.S01E02.1080p.WEB.h264-GRP.mkv', 1400000000, NULL)",
+            )
+        }
+
+        helper.runMigrationsAndValidate(NAME, 14, true, LibraryDatabase.MIGRATION_13_14).use { db ->
+            fun count(table: String) = db.query("SELECT COUNT(*) FROM $table").use { it.moveToFirst(); it.getInt(0) }
+            assertEquals(2, count("tried_release"))
+            assertEquals(1, count("watch_state"))
+            assertEquals(0, count("download"))
+        }
+
+        val room = Room.databaseBuilder(instrumentation.targetContext, LibraryDatabase::class.java, NAME).addMigrations(*LibraryDatabase.MIGRATIONS).build()
+        try {
+            val library = LibraryRepository(room) { 40 }
+            runBlocking {
+                assertEquals(
+                    listOf(
+                        TriedRelease("fake/hl-s01e01-broken", "fake", "hl-s01e01-broken", listOf(ProviderCheck("p-a@10.0.2.2:1119", 30)), null, 30),
+                        TriedRelease("fake/hl-s01e01-disc", "fake", "hl-s01e01-disc", emptyList(), null, 31, discAt = 31),
+                    ),
+                    library.triedReleaseEntries().sortedBy { it.id },
+                )
+                val key = "episode:tmdb:900002:s1:e2"
+                assertEquals(
+                    RememberedRelease(
+                        "fake", "hl-s01e02", "Harbor.Lights.S01E02.1080p.WEB.h264-GRP", "http://x/api?t=get&id=hl-s01e02&apikey={apikey}", 0, "abc",
+                        "Harbor.Lights.S01E02.1080p.WEB.h264-GRP.mkv", 1_400_000_000,
+                    ),
+                    library.lastRelease(key),
+                )
+                assertEquals(700_000L, library.state(key).first()?.positionMs)
+                assertEquals(emptyList<Download>(), room.downloads().all().first())
+                // The new table at work: a download of the same episode, its release among the columns, reads back whole.
+                val download = Download(
+                    id = "9b0f6a52-3c1d-4e7a-8f20-5d6c7b8a9e01", watchKey = key, kind = DownloadKind.Episode, title = "Harbor Lights",
+                    subtitle = "S01E02", showTmdbId = 900002, season = 1, episode = 2, state = DownloadState.Done, position = 0,
+                    release = library.lastRelease(key), fileName = "Harbor.Lights.S01E02.1080p.WEB.h264-GRP.mkv", size = 1_400_000_000,
+                    indexerSize = 1_450_000_000, safeOffset = 1_400_000_000, createdAt = 40, completedAt = 41, updatedAt = 41,
+                )
+                room.downloads().insert(download)
+                assertEquals(download, room.downloads().doneFor(key))
+            }
+        } finally {
+            room.close()
+        }
+    }
+
+    /** Every migration in turn, from the first version on, ends at the schema Room expects of version 14. */
+    @Test
+    fun theWholeChainFrom1To14Validates() {
         helper.createDatabase(NAME, 1).close()
-        helper.runMigrationsAndValidate(NAME, 13, true, *LibraryDatabase.MIGRATIONS).close()
+        helper.runMigrationsAndValidate(NAME, 14, true, *LibraryDatabase.MIGRATIONS).close()
     }
 
     private companion object {

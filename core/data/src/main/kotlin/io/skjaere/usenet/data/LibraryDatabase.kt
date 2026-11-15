@@ -14,6 +14,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 
 @Dao
@@ -340,17 +341,56 @@ internal class Converters {
     /** A value that doesn't parse reads as no checks: the release is tried, and its next check writes it again. */
     @TypeConverter
     fun toChecks(value: String): List<ProviderCheck> = runCatching { Json.decodeFromString(checksSerializer, value) }.getOrDefault(emptyList())
+
+    @TypeConverter
+    fun fromDownloadKind(kind: DownloadKind): String = kind.name
+
+    @TypeConverter
+    fun toDownloadKind(value: String): DownloadKind = DownloadKind.valueOf(value)
+
+    @TypeConverter
+    fun fromDownloadState(state: DownloadState): String = state.name
+
+    @TypeConverter
+    fun toDownloadState(value: String): DownloadState = DownloadState.valueOf(value)
+
+    @TypeConverter
+    fun fromCandidates(candidates: List<DownloadCandidate>): String = Json.encodeToString(candidatesSerializer, candidates)
+
+    /** A value that doesn't parse reads as no candidates: the download fails as finding no release, and can be chosen again. */
+    @TypeConverter
+    fun toCandidates(value: String): List<DownloadCandidate> = runCatching { Json.decodeFromString(candidatesSerializer, value) }.getOrDefault(emptyList())
+
+    @TypeConverter
+    fun fromKeys(keys: List<String>): String = Json.encodeToString(keysSerializer, keys)
+
+    /** A value that doesn't parse reads as none tried: at worst a release is tried again. */
+    @TypeConverter
+    fun toKeys(value: String): List<String> = runCatching { Json.decodeFromString(keysSerializer, value) }.getOrDefault(emptyList())
+
+    @TypeConverter
+    fun fromGaps(gaps: List<DownloadGap>): String = Json.encodeToString(gapsSerializer, gaps)
+
+    /** A value that doesn't parse reads as no gaps: their zeros then play as they are, rather than the file not at all. */
+    @TypeConverter
+    fun toGaps(value: String): List<DownloadGap> = runCatching { Json.decodeFromString(gapsSerializer, value) }.getOrDefault(emptyList())
 }
 
 /** [TriedRelease.missingOn] as stored: a JSON array. Typed, as KSP doesn't see the serializer the plugin adds. */
 private val checksSerializer: KSerializer<List<ProviderCheck>> = ListSerializer(ProviderCheck.serializer())
 
+/** [Download.candidates], [Download.tried] and [Download.gaps] as stored: JSON arrays, typed as [checksSerializer] is. */
+private val candidatesSerializer: KSerializer<List<DownloadCandidate>> = ListSerializer(DownloadCandidate.serializer())
+private val keysSerializer: KSerializer<List<String>> = ListSerializer(String.serializer())
+private val gapsSerializer: KSerializer<List<DownloadGap>> = ListSerializer(DownloadGap.serializer())
+
 @Database(
     entities = [
         CollectedShow::class, WatchState::class, RecentSearch::class, ShowTrackChoice::class,
         CollectedMovie::class, ShowSummary::class, MovieSummary::class, SummaryRefresh::class, TriedRelease::class, UpNextRemoval::class,
+        Download::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -363,6 +403,7 @@ abstract class LibraryDatabase : RoomDatabase() {
     abstract fun trackChoices(): TrackChoiceDao
     abstract fun triedReleases(): TriedReleaseDao
     abstract fun upNextRemovals(): UpNextRemovalDao
+    abstract fun downloads(): DownloadDao
 
     companion object {
         /** Version 2 adds each show's audio and subtitles ([ShowTrackChoice]); every version 1 row stays. */
@@ -512,10 +553,30 @@ abstract class LibraryDatabase : RoomDatabase() {
             }
         }
 
+        /** Version 14 adds this device's downloads ([Download], L351); every version 13 row stays, and there are none. */
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // As Room creates them (schemas/.../14.json). A new table only.
+                listOf(
+                    "CREATE TABLE IF NOT EXISTS `download` (`id` TEXT NOT NULL, `watchKey` TEXT NOT NULL, `kind` TEXT NOT NULL, `title` TEXT NOT NULL, " +
+                        "`subtitle` TEXT, `showTmdbId` INTEGER, `season` INTEGER, `episode` INTEGER, `seasonEpisodes` INTEGER, `episodeName` TEXT, " +
+                        "`movieTmdbId` INTEGER, `year` INTEGER, `runtimeMinutes` INTEGER, `posterPath` TEXT, `stillPath` TEXT, `state` TEXT NOT NULL, " +
+                        "`reason` TEXT, `position` INTEGER NOT NULL, `candidates` TEXT NOT NULL, `tried` TEXT NOT NULL, `oneVideo` INTEGER NOT NULL, " +
+                        "`fileName` TEXT, `size` INTEGER, `indexerSize` INTEGER NOT NULL, `safeOffset` INTEGER NOT NULL, `gaps` TEXT NOT NULL, " +
+                        "`relativePath` TEXT, `video` TEXT, `tracks` TEXT, `createdAt` INTEGER NOT NULL, `completedAt` INTEGER, `updatedAt` INTEGER NOT NULL, " +
+                        "`release_indexerId` TEXT, `release_guid` TEXT, `release_title` TEXT, `release_downloadTemplate` TEXT, `release_fileIndex` INTEGER, " +
+                        "`release_nzbId` TEXT, `release_fileName` TEXT, `release_fileSize` INTEGER, `release_source` TEXT, PRIMARY KEY(`id`))",
+                    "CREATE INDEX IF NOT EXISTS `index_download_watchKey` ON `download` (`watchKey`)",
+                    "CREATE INDEX IF NOT EXISTS `index_download_showTmdbId` ON `download` (`showTmdbId`)",
+                    "CREATE INDEX IF NOT EXISTS `index_download_position` ON `download` (`position`)",
+                ).forEach(db::execSQL)
+            }
+        }
+
         /** Every migration, oldest first, as [create] opens the database with them. */
         val MIGRATIONS = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
-            MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
+            MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
         )
 
         /** The app's library, or another file of [name] (the scale tests' own, so the app's is never touched). */

@@ -32,6 +32,7 @@ data class AppSettings(
     val indexerSetupSkipped: Boolean = false,
     val collectionView: CollectionViewPrefs = CollectionViewPrefs(),
     val cast: CastPrefs = CastPrefs(),
+    val downloads: DownloadPrefs = DownloadPrefs(),
 ) {
     val activeIndexers: List<IndexerRecord> get() = indexers.filterNot { it.deleted }
     val activeTorrentIndexers: List<TorrentIndexerRecord> get() = torrentIndexers.filterNot { it.deleted }
@@ -243,6 +244,28 @@ data class CachePrefs(
         /** The limits the Cache screen offers. */
         val LIMITS_GB = listOf(1, 2, 5, 10)
         const val GB = 1_000_000_000L
+    }
+}
+
+/**
+ * Settings › Downloads, kept on this device alone, never synced (a transfer to a new phone copies it, as any setting).
+ * [unmeteredOnly]: "Only on Wi-Fi or Ethernet", on until switched off (W110), so mobile data and a metered hotspot wait.
+ * [whileCharging]: "Only while charging", off until switched on (L365). [sizeCapGbPerHour]: "Download size", one of
+ * [DOWNLOAD_SIZES_GB_PER_HOUR] in GB an hour of video, or null when not set (L371); releases above it are tried last.
+ * [notificationsAsked]: Android was asked whether the app may show notifications, at the first Download, so it is asked
+ * once.
+ */
+@Serializable
+data class DownloadPrefs(
+    val unmeteredOnly: Boolean = true,
+    val whileCharging: Boolean = false,
+    val sizeCapGbPerHour: Int? = null,
+    val notificationsAsked: Boolean = false,
+    val updatedAt: Long = 0,
+) {
+    companion object {
+        /** The download sizes Settings offers besides Not set, in GB (10^9 bytes) an hour of video. */
+        val DOWNLOAD_SIZES_GB_PER_HOUR = listOf(1, 2, 3, 4, 6, 8, 12)
     }
 }
 

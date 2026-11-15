@@ -27,10 +27,15 @@ class DataContainer(context: Context, scope: CoroutineScope, clock: Clock = Cloc
         produceFile = { File(context.filesDir, LINK_PATH) },
     )
 
+    private val database = LibraryDatabase.create(context)
+
     val secrets = SecretStore(secretsStore, KeystoreCipher())
     val settings = SettingsRepository(settingsStore, secrets, clock)
-    val library = LibraryRepository(LibraryDatabase.create(context), clock)
+    val library = LibraryRepository(database, clock)
     val link = LinkStore(linkStore, clock)
+
+    /** This device's downloads (L351), in the library's database. */
+    val downloads: DownloadDao = database.downloads()
 
     companion object {
         /** The secrets file under filesDir; the app's backup and data extraction rules exclude it by this path. */

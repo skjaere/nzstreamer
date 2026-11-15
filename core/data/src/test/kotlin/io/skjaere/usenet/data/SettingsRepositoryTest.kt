@@ -970,6 +970,71 @@ class SettingsRepositoryTest {
         assertEquals(listOf(CastDeviceMemory("device-den", noPicture = listOf(CastVideoCodec("Vvc", tenBit = true)), seenAt = 9)), later.cast.devices)
     }
 
+    /**
+     * W110, L365, L371: Settings › Downloads' choices are only on Wi-Fi or Ethernet, not only while charging, no download
+     * size, and the notifications not yet asked about (item 11), until chosen. A settings file saved before them reads
+     * these, and the rest as it was: no schema bump.
+     */
+    @Test
+    fun `downloads wait for Wi-Fi, not for charging, with no size and no ask yet, also in settings saved before them`() = runBlocking<Unit> {
+        val older = """{"schemaVersion":3,"playback":{"quality":"P1080","updatedAt":5},"cache":{"keepVideo":false,"limitGb":5,"updatedAt":3}}"""
+        val read = JsonFileSerializer(AppSettings.serializer(), AppSettings()).readFrom(older.byteInputStream())
+        assertEquals(DownloadPrefs(unmeteredOnly = true, whileCharging = false, sizeCapGbPerHour = null, notificationsAsked = false), read.downloads)
+        // The rest of the older file as it was.
+        assertEquals("P1080", read.playback.quality)
+        assertEquals(CachePrefs(keepVideo = false, limitGb = 5, updatedAt = 3), read.cache)
+        assertEquals(3, read.schemaVersion)
+
+        // The app's own store over such a file: the same, and the file isn't taken for a corrupt one.
+        File(dir, "settings.json").writeText(older)
+        assertEquals(DownloadPrefs(), repository.downloads.first())
+        assertEquals("P1080", repository.playback.first().quality)
+    }
+
+    @Test
+    fun `each download setting is saved and read back`() = runBlocking<Unit> {
+        val serializer = JsonFileSerializer(AppSettings.serializer(), AppSettings())
+        suspend fun saved() = File(dir, "settings.json").inputStream().use { serializer.readFrom(it).downloads }
+
+        repository.setDownloadsUnmeteredOnly(false)
+        assertEquals(DownloadPrefs(unmeteredOnly = false, updatedAt = 1_000), repository.downloads.first())
+        assertEquals(DownloadPrefs(unmeteredOnly = false, updatedAt = 1_000), saved())
+
+        repository.setDownloadsWhileCharging(true)
+        repository.setDownloadSizeCap(4)
+        repository.setDownloadNotificationsAsked(true)
+        val all = DownloadPrefs(unmeteredOnly = false, whileCharging = true, sizeCapGbPerHour = 4, notificationsAsked = true, updatedAt = 1_003)
+        assertEquals(all, repository.downloads.first())
+        assertEquals(all, saved())
+        assertTrue(""""downloads":{"unmeteredOnly":false,"whileCharging":true,"sizeCapGbPerHour":4,"notificationsAsked":true,""" in File(dir, "settings.json").readText())
+
+        // Each back again: Wi-Fi only on, charging off, the size not set, and not asked (as a device test leaves it).
+        repository.setDownloadsUnmeteredOnly(true)
+        repository.setDownloadsWhileCharging(false)
+        repository.setDownloadSizeCap(null)
+        repository.setDownloadNotificationsAsked(false)
+        assertEquals(DownloadPrefs(updatedAt = 1_007), saved())
+        // None of them touches another part of the settings.
+        assertEquals(PlaybackPrefs(), repository.playback.first())
+    }
+
+    /** L371: the download size is one of Settings' cells or not set; any other is refused, and the one saved stays. */
+    @Test
+    fun `a download size no cell offers is refused, and the size saved stays`() = runBlocking<Unit> {
+        assertEquals(listOf(1, 2, 3, 4, 6, 8, 12), DownloadPrefs.DOWNLOAD_SIZES_GB_PER_HOUR)
+        repository.setDownloadSizeCap(6)
+        listOf(0, -1, 5, 7, 13, 100).forEach { gbPerHour ->
+            assertFailsWith<IllegalArgumentException>("$gbPerHour GB an hour") { repository.setDownloadSizeCap(gbPerHour) }
+        }
+        assertEquals(DownloadPrefs(sizeCapGbPerHour = 6, updatedAt = 1_000), repository.downloads.first())
+        assertTrue(""""sizeCapGbPerHour":6""" in File(dir, "settings.json").readText())
+        // Every cell is taken.
+        DownloadPrefs.DOWNLOAD_SIZES_GB_PER_HOUR.forEach { gbPerHour ->
+            repository.setDownloadSizeCap(gbPerHour)
+            assertEquals(gbPerHour, repository.downloads.first().sizeCapGbPerHour)
+        }
+    }
+
     @Test
     fun `settings read earlier are put back as they were`() = runBlocking<Unit> {
         val a = repository.saveProvider(ProviderRecord("", "Main", "news.example.net"), "pw")
