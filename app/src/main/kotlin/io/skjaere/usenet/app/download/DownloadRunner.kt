@@ -145,7 +145,7 @@ class DownloadRunnerDeps(
     val television: Boolean,
     /** The host on this device (L334, L336). */
     val host: () -> DownloadHost,
-    /** Turns the boot and update receiver on or off (L375): item 10 wires it to setComponentEnabledSetting. */
+    /** Turns the boot and update receiver on or off (L375): the app's switches the component itself ([DownloadBootReceiver.switch]). */
     val receiverSwitch: (on: Boolean) -> Unit = {},
     val debug: DownloadDebug = DownloadDebug.Off,
     /** Whether Android calls the network validated, as the writer reads it: its return ends a wait (L381). */
@@ -163,8 +163,8 @@ class DownloadRunnerDeps(
          * The app's: the library's downloads, their places on the device, Resolve and the writer over the engine's download
          * opener (the debug build's throttle asked as each stream opens, item 8; a long gap asked for again while a provider
          * is left out of the engine), the memory of releases found missing, the process's last exit, and the host by the API
-         * level and the debug override. A test gives its own [resolve] and [debug], and the writer's [longGapBytes] given
-         * small.
+         * level and the debug override, and the boot and update receiver switched as it says (L375). A test gives its own
+         * [resolve] and [debug], and the writer's [longGapBytes] given small.
          */
         fun of(
             container: AppContainer,
@@ -190,6 +190,7 @@ class DownloadRunnerDeps(
             lastExit = { lastExit(context) },
             television = container.television,
             host = { DownloadHostRules.hostFor(Build.VERSION.SDK_INT, debug.serviceHost) },
+            receiverSwitch = { on -> DownloadBootReceiver.switch(context, on) },
             debug = debug,
         )
 
@@ -594,6 +595,22 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 dao.setState(row.id, state, reason, now())
                 log.info("download {}: its host was stopped at {} bytes: {}", row.id, row.safeOffset, state)
             }
+        }
+    }
+
+    /**
+     * The service waits in place for its need (item 10), its walk stopped where it was: the download it would run next says
+     * why ([reason]: "Waiting for Wi-Fi", "Waiting to charge"), the one a stopped walk left under way first, else the first
+     * that can run, so the page and the notification say what holds it. A need's wait still runs (L388), so the next walk
+     * takes it up first. Under the queue's lock: nothing while a walk runs one, nor in a held queue.
+     */
+    suspend fun hostWaits(reason: String) {
+        if (!runs) return
+        changes.withLock {
+            if (current?.job?.isActive == true) return@withLock
+            val row = next()?.takeUnless { it.state == DownloadState.Waiting && it.reason == reason } ?: return@withLock
+            dao.setState(row.id, DownloadState.Waiting, reason, now())
+            log.info("download {}: its host waits at {} bytes: {}", row.id, row.safeOffset, reason)
         }
     }
 

@@ -361,6 +361,21 @@ class DownloadNotifications(private val context: Context, television: Boolean) {
         return builder.build()
     }
 
+    /**
+     * A notification with nothing to say, on the Downloads channel, for a start of the service that must pass through the
+     * foreground with no download to show (Android ends an app whose service, started for the foreground, stops before it
+     * gets there). Never posted otherwise; secret on a lock screen as the others are.
+     */
+    fun passing(): Notification {
+        channels()
+        return NotificationCompat.Builder(context, DownloadNotice.DOWNLOADS_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_download)
+            .setColor(ACCENT)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setLocalOnly(true)
+            .build()
+    }
+
     /** The two channels, made once a process, before anything is posted on them: making one again changes nothing the user set. */
     private fun channels() {
         if (channelsMade) return

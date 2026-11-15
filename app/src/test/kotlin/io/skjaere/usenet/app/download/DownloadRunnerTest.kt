@@ -1111,6 +1111,55 @@ class DownloadRunnerTest {
         assertEquals(emptyList(), runner.runnable())
     }
 
+    /**
+     * The service waits in place for its need (item 10): the download it would run next says why, the one a stopped walk
+     * left under way first, at its safe offset; with none under way, the first that can run. A need's wait still runs (L388),
+     * and the walk takes it up first when the need is back. One a walk runs is left as it runs.
+     */
+    @Test
+    fun `a host waiting in place for its need says so on the one it would run next, never on one a walk runs`() = test {
+        val a = fake("hl-a").apply { hold = HOLD }
+        val runner = runner()
+        val first = runner.add(1, a)
+        val second = runner.add(2, fake("hl-b"))
+
+        // Before any walk: the first that can run waits to charge, the other stays queued, and both can still run.
+        runner.hostWaits(DownloadHostRules.WAITING_TO_CHARGE)
+        assertEquals(DownloadState.Waiting, stored(first).state)
+        assertEquals(DownloadHostRules.WAITING_TO_CHARGE, stored(first).reason)
+        assertEquals(DownloadState.Queued, stored(second).state)
+        assertEquals(listOf(first, second), runner.runnable().map { it.id })
+
+        // Its need back, the walk takes it up first; a wait said while it runs leaves it running.
+        val walk = host(runner)
+        runCurrent()
+        assertEquals(DownloadState.Running, stored(first).state)
+        runner.hostWaits(DownloadHostRules.WAITING_FOR_WIFI)
+        assertEquals(DownloadState.Running, stored(first).state)
+        assertNull(stored(first).reason)
+
+        // The network gone: the walk stopped where it was, then waiting for Wi-Fi at its safe offset; the other queued still.
+        walk.cancelAndJoin()
+        runner.hostWaits(DownloadHostRules.WAITING_FOR_WIFI)
+        val waiting = stored(first)
+        assertEquals(DownloadState.Waiting, waiting.state)
+        assertEquals(DownloadHostRules.WAITING_FOR_WIFI, waiting.reason)
+        assertEquals(HOLD, waiting.safeOffset)
+        assertEquals(DownloadState.Queued, stored(second).state)
+
+        // Back: on from where it stopped.
+        host(runner)
+        runCurrent()
+        assertEquals(DownloadState.Running, stored(first).state)
+        assertEquals(listOf(0L, HOLD), a.opens)
+
+        // A held queue has nothing to say a wait on.
+        runner.pause()
+        runner.hostWaits(DownloadHostRules.WAITING_FOR_WIFI)
+        assertEquals(DownloadState.Paused, stored(first).state)
+        assertEquals(DownloadState.Queued, stored(second).state)
+    }
+
     @Test
     fun `nothing runs on a TV, where only reconcile does anything`() = test {
         host = DownloadHost.Service
@@ -1137,7 +1186,9 @@ class DownloadRunnerTest {
         assertEquals(emptyMap(), tv.done.value)
         assertEquals(emptyList(), tv.items())
         tv.hostStopped(DownloadState.Stopped, DownloadHostRules.STOPPED_BY_ANDROID)
+        tv.hostWaits(DownloadHostRules.WAITING_FOR_WIFI)
         assertEquals(DownloadState.Queued, stored(QUEUED).state)
+        assertNull(stored(QUEUED).reason)
         assertEquals(emptyList(), switches)
         tv.reconcile()
         assertEquals(1, storage.reconciles)

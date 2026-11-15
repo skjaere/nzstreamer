@@ -6,8 +6,6 @@ import android.app.job.JobScheduler
 import android.app.job.JobService
 import android.content.ComponentName
 import android.content.Context
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.os.Build
 import android.os.PersistableBundle
 import androidx.annotation.RequiresApi
@@ -249,7 +247,7 @@ class DownloadJobService : JobService() {
         /** [plan] as Android's JobInfo (L335, L376): user-initiated, its network, persisted, charging when asked, no storage constraint. */
         fun jobInfo(context: Context, plan: JobPlan): JobInfo = JobInfo.Builder(plan.id, ComponentName(context, DownloadJobService::class.java))
             .setUserInitiated(plan.userInitiated)
-            .setRequiredNetwork(network(plan.unmetered))
+            .setRequiredNetwork(DownloadHosts.network(plan.unmetered))
             .setEstimatedNetworkBytes(plan.downloadBytes, plan.uploadBytes)
             .setPersisted(plan.persisted)
             .setRequiresCharging(plan.charging)
@@ -258,19 +256,6 @@ class DownloadJobService : JobService() {
                 putBoolean(UNMETERED, plan.unmetered)
                 putBoolean(CHARGING, plan.charging)
             })
-            .build()
-
-        /**
-         * The network the downloads need: as JobScheduler's own network types ask it, a validated one with the internet,
-         * a VPN's or a restricted one's included, and not metered (Wi-Fi or Ethernet, never mobile data or a metered
-         * hotspot) when [unmetered].
-         */
-        fun network(unmetered: Boolean): NetworkRequest = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-            .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-            .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
-            .apply { if (unmetered) addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) }
             .build()
     }
 }

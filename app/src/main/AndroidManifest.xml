@@ -23,8 +23,14 @@
          granted at install, without which a user-initiated job can't be scheduled. Scheduled from the visible app alone. -->
     <uses-permission android:name="android.permission.RUN_USER_INITIATED_JOBS" />
     <!-- The downloads' job is persisted, so a reboot doesn't lose a download under way (L334): Android asks a persisted job
-         for this normal permission, granted at install. -->
+         for this normal permission, granted at install. Below Android 14 the downloads' boot and update receiver hears the
+         boot with it, switched on only while a download can run (L375). -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Downloads run in the app's own dataSync foreground service below Android 14 (L334): a foreground service's normal
+         permission, granted at install, which Google's Cast framework also brings; and Android 14's for its type, asked of
+         a dataSync service there (the debug build's override runs the service on 14 too, L336). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!-- One APK for phones and TVs: Leanback not required (required would list it for TVs only),
          and no touch, which TVs lack; Play takes touch as required unless it is declared not. -->
@@ -187,6 +193,36 @@
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE"
             tools:targetApi="34" />
+
+        <!-- The downloads' host on Android 8 to 13 (L334): the app's own dataSync foreground service, started by the visible
+             app, the boot and update receiver and the watchdog alone. Not exported. On Android 14 and later only by the debug
+             build's override (L336). -->
+        <service
+            android:name=".download.DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- The downloads' service's watchdog (L334): a regular job, persisted, that the service schedules as it waits for its
+             network, and that starts it again (or says tap to resume on Android 12 and 13) once the network is back. Only
+             JobScheduler binds it. Not exported. -->
+        <service
+            android:name=".download.DownloadWatchdogService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <!-- Starts the downloads' service at boot and after the app's update, while one can run (L375). Disabled here, and
+             switched on by the downloads' runner only while the service is the host and a download can run, so a TV, a
+             phone on Android 14 and later, and a phone with nothing to run are never woken at boot. Not exported: the
+             system's broadcasts reach it. -->
+        <receiver
+            android:name=".download.DownloadBootReceiver"
+            android:enabled="false"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- The download notifications' Pause and Cancel (L358): explicit, immutable broadcasts from the app's own
              PendingIntents. Not exported, so nothing outside the app can send them. -->
