@@ -1510,7 +1510,7 @@ class ReleaseRankerTest {
 
     /** As on a TV a release above the maximum isn't the top: the smaller-first bonus is relative to the largest that fits. */
     @Test
-    fun `for downloading, a release above Download size neither sets its standing's top nor gets a bonus`() {
+    fun `for downloading, a release above Download size doesn't set the top of those that fit`() {
         val small = release("Harbor.Lights.S01E02.1080p.WEB-DL.H.264-ORCHID", size = 2 * gb)
         val larger = release("Harbor.Lights.S01E02.1080p.WEB-DL.H.264-KESTREL", size = 3 * gb)
         val above = release("Harbor.Lights.S01E02.1080p.BluRay.REMUX.AVC-FERRY", size = 12 * gb)
@@ -1519,6 +1519,26 @@ class ReleaseRankerTest {
         val ranked = rank(above, small, larger, context = upTo4GbAnHour)
         assertEquals(fitting, ranked.dropLast(1).map { it.facts.name to it.score })
         assertEquals(240.0 - 1_000.0, ranked.last().score, absoluteTolerance = 1e-9)
+    }
+
+    /** The cap holds releases after every one that fits, never their order among themselves: of those above it, the smaller first. */
+    @Test
+    fun `for downloading, releases above Download size go smaller first among themselves, so no remux leads a list all above it`() {
+        val upTo2GbAnHour = forDownload.copy(runtimeMinutes = 120, prefs = RankingPrefs(downloadCapBitsPerSecond = DownloadSize.bitsPerSecond(2)))
+        // Over two hours 6 GB is ~6.7 Mbps and 35 GB ~38.9, both above 2 GB an hour (~4.4): the name would put the remux first.
+        val web = release("Copper.Crown.2022.1080p.WEB-DL.H.264-KESTREL", size = 6 * gb)
+        val remux = release("Copper.Crown.2022.1080p.BluRay.REMUX.AVC-FERRY", size = 35 * gb, grabs = 100)
+        val ranked = rank(remux, web, context = upTo2GbAnHour)
+        assertEquals(listOf(web.name, remux.name), ranked.map { it.facts.name })
+        assertTrue(ranked.all { r -> r.reasons.any { it is ReleaseReason.AboveDownloadSize } })
+        // 25 x (1 - 6/35), relative to the largest above the cap, more than the remux's grabs give it (10.0).
+        assertEquals(240.0 - 1_000.0 + 25.0 * (1 - 6.0 / 35), ranked[0].score, absoluteTolerance = 0.05)
+        assertEquals(240.0 - 1_000.0 + 10.0, ranked[1].score, absoluteTolerance = 0.05)
+        // One that fits still goes before both, its bonus relative to the largest that fits, never to those above.
+        val fits = release("Copper.Crown.2022.1080p.WEB-DL.H.264-WREN", size = 3 * gb)
+        val small = release("Copper.Crown.2022.720p.WEB-DL.H.264-ORCHID", size = gb)
+        assertEquals(listOf(fits.name, small.name, web.name, remux.name), order(remux, small, web, fits, context = upTo2GbAnHour))
+        assertEquals(240.0, rank(remux, web, fits, context = upTo2GbAnHour).first().score, absoluteTolerance = 1e-9)
     }
 
     @Test
