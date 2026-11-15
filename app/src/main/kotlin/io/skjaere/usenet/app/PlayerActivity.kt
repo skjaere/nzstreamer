@@ -3176,7 +3176,10 @@ class PlayerActivity : ComponentActivity() {
     private fun playingRow(): Download? = launch?.watchKey?.takeUnless { container.television }?.let { container.downloads.done.value[it] }
 
     /** The episode after the one playing by its download alone ([OfflineNext], L354), for when TMDB can't be asked. */
-    private fun downloadedNext(): EpisodePlay? = playingRow()?.let { OfflineNext.next(it, container.downloads.done.value, online()) }
+    private fun downloadedNext(): EpisodePlay? = playingRow()?.let { OfflineNext.next(it, container.downloads.done.value, nextOnline()) }
+
+    /** Whether the next episode is looked for as online: a stream's play always, a download's while validated ([PlayerBranches.nextOnline]). */
+    private fun nextOnline(): Boolean = PlayerBranches.nextOnline(playingDownload, online())
 
     /**
      * [lookUp]'s answer from TMDB, or its failure where TMDB couldn't be asked (offline with nothing kept of the show, no
@@ -3193,13 +3196,13 @@ class PlayerActivity : ComponentActivity() {
 
     /**
      * What the downloads say of [next] for the card, with no search (L354): downloaded, its file played through the hook;
-     * offline, still downloading or not downloaded, as for the row's [standIn] whatever the network. Null where it is
-     * searched for and streams as before, and on a TV.
+     * for a download's play offline, still downloading or not downloaded, as for the row's [standIn] whatever the network.
+     * Null where it is searched for and streams as before, a stream's next not downloaded always, and on a TV.
      */
     private fun downloadStatus(next: EpisodePlay, standIn: Boolean): Prefetch? {
         if (container.television) return null
         val downloads = container.downloads
-        return PlayerBranches.nextStatus(next.key, online(), downloads.done.value, downloads.state.value, standIn)
+        return PlayerBranches.nextStatus(next.key, nextOnline(), downloads.done.value, downloads.state.value, standIn)
     }
 
     /** Whether the device's default network is validated now (L354): what a download's Stream instead and TheIntroDB wait for. */

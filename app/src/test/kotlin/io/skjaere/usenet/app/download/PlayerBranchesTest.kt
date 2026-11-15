@@ -134,6 +134,21 @@ class PlayerBranchesTest {
         assertNull(PlayerBranches.nextStatus(next, online = true, emptyMap(), emptyList()))
     }
 
+    /**
+     * A stream that plays has a network, whatever Android says of it (a Wi-Fi that blocks its check, a handover): its next
+     * episode not downloaded is searched for as before. The offline lines are a download's.
+     */
+    @Test
+    fun `a stream's next episode is searched for whatever Android says of the network, and only a download's play goes offline`() {
+        assertTrue(PlayerBranches.nextOnline(download = false, online = false))
+        assertTrue(PlayerBranches.nextOnline(download = false, online = true))
+        assertFalse(PlayerBranches.nextOnline(download = true, online = false))
+        assertTrue(PlayerBranches.nextOnline(download = true, online = true))
+        assertNull(PlayerBranches.nextStatus(next, PlayerBranches.nextOnline(download = false, online = false), emptyMap(), emptyList()))
+        // A downloaded next plays from its file after a stream too (L353).
+        assertEquals(Prefetch.Downloaded(partsMissing = 0), PlayerBranches.nextStatus(next, PlayerBranches.nextOnline(download = false, online = false), mapOf(next to row(6)), emptyList()))
+    }
+
     /** The episode a download's row stood in for, TMDB not reached, has nothing to be searched by: never searched for. */
     @Test
     fun `an episode the row stood in for is never searched for, the network back or not`() {

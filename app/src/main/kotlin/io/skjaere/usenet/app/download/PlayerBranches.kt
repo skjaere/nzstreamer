@@ -54,6 +54,13 @@ internal object PlayerBranches {
     }
 
     /**
+     * Whether the next episode is looked for as online ([nextStatus], [OfflineNext.next]): a download's play while the
+     * network is validated ([online]); a stream's always, as the stream playing shows it has a network whatever Android
+     * says of it (a Wi-Fi that blocks Android's check, a handover's moments), so its next is searched for as before.
+     */
+    fun nextOnline(download: Boolean, online: Boolean): Boolean = !download || online
+
+    /**
      * The next episode's line on the card from the downloads alone, with no search (L354): [Prefetch.Downloaded] where its
      * watch [key] has a finished download in [done], which the coordinator's hook plays from its file, with the parts its
      * download had no article for. While not [online], [Prefetch.StillDownloading] where one of it is on its way among the
