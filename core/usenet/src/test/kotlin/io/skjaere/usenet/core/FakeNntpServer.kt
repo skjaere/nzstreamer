@@ -1,6 +1,7 @@
 package io.skjaere.usenet.core
 
 import java.io.IOException
+import java.io.OutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -36,6 +37,11 @@ import kotlin.test.assertTrue
  * every STAT it would, and each is recorded, before it sees an answer. A connection reads on while its answers wait, and
  * answers a command other than a STAT only after them. They wait [holdStatsMs] at most: [statHoldTimedOut] then says how
  * many STATs came. Not for use with [idleAfterMs].
+ *
+ * With a [throttle], each connection's answers go out at that many bytes a second at most, as a provider's rate for each
+ * connection, so a download's tests see a transfer that takes time. Each byte waits its share of a second before it goes,
+ * in steps of a twentieth of a second's bytes. Each wait goes to [throttleWait] with the waiting connection's index
+ * (accept order from 0): a sleep, unless a test keeps the waits instead, to run on virtual time.
  */
 class FakeNntpServer(
     private val password: String = "secret",
@@ -49,6 +55,10 @@ class FakeNntpServer(
     private val outOf: Int = 1,
     private val holdStatsFor: Int = 0,
     private val holdStatsMs: Long = 10_000,
+    throttle: Long? = null,
+    private val throttleWait: (connection: Int, nanos: Long) -> Unit = { _, nanos ->
+        Thread.sleep(nanos / 1_000_000, (nanos % 1_000_000).toInt())
+    },
 ) : AutoCloseable {
     /** How a connection dies once idle ([idleAfterMs]). */
     enum class OnIdle {
@@ -113,6 +123,17 @@ class FakeNntpServer(
     @Volatile
     var loginAnswer: String? = null
 
+    /**
+     * At most how many bytes a second each connection's answers go out at, or null for as fast as loopback takes them.
+     * Each connection has this rate of its own, as a provider's connections each have theirs, so N connections can carry
+     * N times it. It is read for each step of an answer, so a change applies to the bytes still to go, mid-answer too.
+     */
+    @Volatile
+    var throttle: Long? = checked(throttle)
+        set(value) {
+            field = checked(value)
+        }
+
     init {
         require(holdStatsFor == 0 || idleAfterMs == null) { "Held answers don't count for the idle rule" }
         thread(isDaemon = true, name = "fake-nntp-accept") {
@@ -134,7 +155,7 @@ class FakeNntpServer(
     private fun serve(socket: Socket, index: Int) = try {
         socket.use {
             val reader = it.getInputStream().bufferedReader(Charsets.ISO_8859_1)
-            val out = it.getOutputStream()
+            val out = Paced(it.getOutputStream(), index)
             var lastAnswerEnd = System.nanoTime()
             // This connection's answers that wait for the STATs to come (holdStatsFor), in order. Writes go under its lock.
             val owed = mutableListOf<String>()
@@ -248,6 +269,37 @@ class FakeNntpServer(
         return index % outOf < affected && System.nanoTime() - lastAnswerEnd >= after * 1_000_000
     }
 
+    private fun checked(bytesASecond: Long?) = bytesASecond.also {
+        require(it == null || it > 0) { "A throttle is a number of bytes a second above 0" }
+    }
+
+    /**
+     * Connection [index]'s answers on their way out, held to [throttle] while it is set. They go in steps of a twentieth
+     * of a second's bytes, each after its share of the second, so a client sees the rate from the first byte and never a
+     * burst.
+     */
+    private inner class Paced(private val out: OutputStream, private val index: Int) : OutputStream() {
+        override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            var at = off
+            val end = off + len
+            while (at < end) {
+                val rate = throttle
+                if (rate == null) {
+                    out.write(b, at, end - at)
+                    return
+                }
+                val step = minOf((end - at).toLong(), maxOf(1L, rate / STEPS_A_SECOND)).toInt()
+                throttleWait(index, step * 1_000_000_000L / rate)
+                out.write(b, at, step)
+                at += step
+            }
+        }
+
+        override fun flush() = out.flush()
+    }
+
     private fun answer(command: String) = when {
         command.startsWith("AUTHINFO USER ") -> "381 password required"
         command.startsWith("AUTHINFO PASS ") ->
@@ -256,5 +308,10 @@ class FakeNntpServer(
         command == "DATE" -> "111 20261015000000"
         command == "QUIT" -> "205 bye"
         else -> "500 unknown command"
+    }
+
+    private companion object {
+        /** A throttled answer's steps a second ([throttle]). */
+        const val STEPS_A_SECOND = 20
     }
 }
