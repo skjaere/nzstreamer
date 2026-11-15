@@ -255,7 +255,8 @@ class DownloadPlayerDeviceTest {
 
     /**
      * A downloaded next episode: the card says so and counts down, and at the end the coordinator's hook plays its file,
-     * with nothing searched or grabbed and no play sheet.
+     * with nothing searched or grabbed and no play sheet. Offline, as a downloaded episode is played: the debug build's
+     * indexers stay on, so a hook that missed would search them, and with no network that search reaches nobody.
      */
     @Test
     fun aDownloadedNextEpisodePlaysFromItsFileAtTheEndWithNoSearch() = runBlocking<Unit> {
@@ -266,6 +267,7 @@ class DownloadPlayerDeviceTest {
         }
         val first = seed(episode(QUIET, 1))
         val second = seed(episode(QUIET, 2))
+        offline()
         PlayerActivity.nextEpisode = { _, playing -> play(QUIET, 2).takeIf { playing == AutoAdvance.Episode(QUIET.id, 1, 1) } }
         PlayerActivity.prefetchNext = { _, _, _ -> prefetches.incrementAndGet(); MutableStateFlow(Prefetch.Searching) }
         PlayerActivity.timings = PlayerActivity.Timings(countdownMs = 2_000)
