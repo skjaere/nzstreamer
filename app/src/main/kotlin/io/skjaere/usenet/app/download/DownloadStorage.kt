@@ -293,15 +293,8 @@ class DownloadStorage(
     private fun isGone(row: Download, volume: File): Boolean =
         row.state == DownloadState.Done && row.relativePath?.let { File(volume, it).isFile } != true
 
-    /** [row], whose file is gone, failed: "The downloaded file is gone", holding no file and no progress. */
-    private suspend fun failGone(row: Download) {
-        // Nothing of it is on the device: no byte written, no part missing, so Download again starts from 0.
-        val gone = row.copy(
-            state = DownloadState.Failed, reason = FILE_GONE, relativePath = null, safeOffset = 0, gaps = emptyList(),
-            completedAt = null, updatedAt = clock.now(),
-        )
-        downloads.update(gone)
-    }
+    /** [row], whose file is gone, failed ([failedGone]). */
+    private suspend fun failGone(row: Download) = downloads.update(failedGone(row, clock.now()))
 
     /** Deletes [id]: its row, its video and its bookkeeping, in the crash-safe order. */
     suspend fun delete(id: String): Unit = changes.withLock { withContext(io) { deleteRow(id) } }
@@ -365,6 +358,17 @@ class DownloadStorage(
 
         /** Reconcile's reason for a finished download whose file is gone. */
         const val FILE_GONE = "The downloaded file is gone"
+
+        /**
+         * [row], whose file is gone, as reconcile and [fileGone] fail it at [now]: "The downloaded file is gone", holding no
+         * file and no progress. What it is of (its title, year, length, release) stays.
+         */
+        internal fun failedGone(row: Download, now: Long): Download =
+            // Nothing of it is on the device: no byte written, no part missing, so Download again starts from 0.
+            row.copy(
+                state = DownloadState.Failed, reason = FILE_GONE, relativePath = null, safeOffset = 0, gaps = emptyList(), completedAt = null,
+                updatedAt = now,
+            )
 
         /**
          * A download's id, as [Download.newId] makes it: RFC 3986's unreserved characters, starting with a letter or digit,

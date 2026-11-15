@@ -1,6 +1,7 @@
 package io.skjaere.usenet.app.download
 
 import io.skjaere.usenet.app.play.CastTo
+import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.play.PlayOrigin
 import io.skjaere.usenet.app.play.PlayerLaunch
 import io.skjaere.usenet.app.play.ProbedTracksSerializer
@@ -18,6 +19,7 @@ import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.player.PlayUris
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import java.io.File
 import org.junit.jupiter.api.Test
@@ -153,6 +155,31 @@ class DownloadLaunchTest {
         val forgets = Regex("""forget\(launch\.watchKey, launch\.release\.toRemembered\(\)\)""").findAll(source).count()
         assertEquals(0, forgets, "a forget for a launch naming its release by its title")
         assertTrue("DownloadLaunch.releaseNamed(launch)" in source)
+    }
+
+    /**
+     * Stream instead of a film's download (L354): its year and length, which its search and the ranker's estimate go by
+     * where TMDB doesn't answer, come from its download's row, read by the launch's id in any state. By the time Stream
+     * instead is tapped on "The downloaded file is gone", the player's open has failed the row as gone, out of the finished
+     * ones, and it still says both.
+     */
+    @Test
+    fun `a film streamed instead takes its year and length from its download's row, failed as gone or not`() = runBlocking<Unit> {
+        val launch = assertNotNull(DownloadLaunch.of(film))
+        val gone = DownloadStorage.failedGone(film, now = 10)
+        assertEquals(DownloadState.Failed to DownloadStorage.FILE_GONE, gone.state to gone.reason)
+        val known = MovieTarget(900101, "Copper Crown", year = null, imdb = null, runtimeMinutes = null)
+        val asked = mutableListOf<String>()
+        listOf(film, gone).forEach { row ->
+            val target = DownloadLaunch.filmFacts(known, launch) { id -> asked += id; row.takeIf { it.id == id } }
+            assertEquals(known.copy(year = 2019, runtimeMinutes = 118), target, "${row.state}")
+        }
+        assertEquals(listOf("9a8b7c6d", "9a8b7c6d"), asked)
+        // Its row gone since (deleted), or nothing of it known: as it was.
+        assertEquals(known, DownloadLaunch.filmFacts(known, launch) { null })
+        assertEquals(known, DownloadLaunch.filmFacts(known, launch) { gone.copy(year = null, runtimeMinutes = null) })
+        // A launch that isn't a download's has no row to ask.
+        assertEquals(known, DownloadLaunch.filmFacts(known, launch.copy(uri = "usenet://nzb/d4e5f6/0")) { error("asked for $it") })
     }
 
     @Test

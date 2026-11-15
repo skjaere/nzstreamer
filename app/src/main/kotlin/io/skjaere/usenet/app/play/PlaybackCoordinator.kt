@@ -1119,13 +1119,16 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
 
     /**
      * [playMovie]'s stream: the remembered release alone while its NZB is stored, else the film's search. [again]: the play
-     * asked for again from another origin. With [lookUp], [known]'s ids are looked up on TMDB first ([withTmdbIds]).
-     * [leftOut]: what it leaves out from the start ([streamInstead]).
+     * asked for again from another origin. [facts]: what [known] becomes first, in the play's job (its ids looked up on
+     * TMDB, [streamInstead]). [leftOut]: what it leaves out from the start ([streamInstead]).
      */
-    private fun streamMovie(known: MovieTarget, origin: PlayOrigin, lookUp: Boolean = false, leftOut: Retry? = null, again: (PlayOrigin) -> Unit) {
+    private fun streamMovie(
+        known: MovieTarget, origin: PlayOrigin, leftOut: Retry? = null, facts: (suspend (MovieTarget) -> MovieTarget)? = null,
+        again: (PlayOrigin) -> Unit,
+    ) {
         replaceJob(origin, known.title, known.subtitle, known.watch, again = again)
         job = launchPlay(known.title, known.subtitle, origin = origin) {
-            val target = if (lookUp) withTmdbIds(known) else known
+            val target = facts?.invoke(known) ?: known
             val remembered = container.library.lastRelease(WatchKey.movie(target.tmdbId))
             // A torrent the play would leave out (kept from the service since) isn't played alone: the film is searched for.
             val playable = remembered?.let { Replay.leftOut(Replay.candidate(it), offService()) == null } == true
@@ -1179,9 +1182,13 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         val retry = Retry.streamInstead(launch.release, missingParts).takeIf { leaveOut }
         launch.watch.episodeTarget?.let { return streamEpisode(it, from, retry, again) }
         val film = launch.watch.movieTmdbId?.takeIf { launch.watch.kind == WatchKind.Movie } ?: return
-        val row = container.downloads.done.value[launch.watchKey]
         log.info("play: a film streams in place of its download")
-        streamMovie(MovieTarget(film, launch.watch.title, row?.year, imdb = null, row?.runtimeMinutes), from, lookUp = true, leftOut = retry, again = again)
+        // Its year and length from its download's row by its id, whatever its state: one found gone as it played has left
+        // the finished ones by now.
+        val facts: suspend (MovieTarget) -> MovieTarget = { known ->
+            withTmdbIds(DownloadLaunch.filmFacts(known, launch) { id -> container.data.downloads.get(id) })
+        }
+        streamMovie(MovieTarget(film, launch.watch.title, year = null, imdb = null, runtimeMinutes = null), from, leftOut = retry, facts = facts, again = again)
     }
 
     /** [target] with TMDB's ids and facts for the film, which indexers search by; as it is where TMDB doesn't answer. */

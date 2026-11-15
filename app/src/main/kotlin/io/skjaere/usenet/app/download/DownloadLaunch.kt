@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.download
 
+import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.play.PlayOrigin
 import io.skjaere.usenet.app.play.PlayerLaunch
 import io.skjaere.usenet.app.play.SavedRelease
@@ -55,6 +56,19 @@ internal object DownloadLaunch {
             video = readable { DownloadResolver.video(row) },
             tracks = readable { DownloadResolver.tracks(row) },
         )
+    }
+
+    /**
+     * [known], the film a download's [launch] streams instead (L354), with the year and length its download's row says,
+     * which the film's search and the ranker's estimate go by where TMDB doesn't answer. The row is read by the launch's
+     * id through [rowOf] in any state, never among the finished ones: by the time Stream instead is tapped on "The
+     * downloaded file is gone", the player's open has failed it ([DownloadStorage.fileGone]). As it is for a launch that
+     * isn't a download's, or a row gone since.
+     */
+    suspend fun filmFacts(known: MovieTarget, launch: PlayerLaunch, rowOf: suspend (id: String) -> Download?): MovieTarget {
+        val id = (PlayUris.parse(launch.uri) as? PlayUris.Target.Download)?.id ?: return known
+        val row = rowOf(id) ?: return known
+        return known.copy(year = row.year ?: known.year, runtimeMinutes = row.runtimeMinutes ?: known.runtimeMinutes)
     }
 
     /**

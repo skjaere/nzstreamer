@@ -251,7 +251,7 @@ class PlayerBranchesTest {
 
     /**
      * L354: Stream instead plays the title by its stream path, never through the hooks, which would play the file again,
-     * leaving the download's release out where the player says so.
+     * leaving the download's release out where the player says so; a film with its year and length from its download's row.
      */
     @Test
     fun `the coordinator's Stream instead streams past the download hooks`() {
@@ -262,5 +262,9 @@ class PlayerBranchesTest {
         assertFalse("downloadHook" in body, body)
         assertTrue("streamEpisode(" in body && "streamMovie(" in body, body)
         assertTrue("Retry.streamInstead(launch.release, missingParts).takeIf { leaveOut }" in body, body)
+        // A film's year and length from its download's row by its id, whatever its state, then TMDB's ids: never the
+        // finished downloads' map, which a row failed as its file was found gone has left by then.
+        assertFalse("downloads.done" in body, body)
+        assertTrue("withTmdbIds(DownloadLaunch.filmFacts(known, launch) { id -> container.data.downloads.get(id) })" in body, body)
     }
 }
