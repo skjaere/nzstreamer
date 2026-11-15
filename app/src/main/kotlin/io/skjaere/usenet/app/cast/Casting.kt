@@ -234,7 +234,8 @@ internal object Casting : CastLoader {
     /**
      * [launch]'s file, found as the player finds it, by its URI's source (W73): a Usenet play's in the phone's store, read
      * over the engine's stream; a debrid play's in the listing kept for it, read over HTTPS through the container's own
-     * debrid source, one ranged GET an upstream (L217). Null when the store or the listings have it no longer.
+     * debrid source, one ranged GET an upstream (L217). Null when the store or the listings have it no longer, and for a
+     * download's file, which no cast serves yet (L377).
      */
     private suspend fun find(container: AppContainer, launch: PlayerLaunch): Found? = when (val target = PlayUris.parse(launch.uri)) {
         is PlayUris.Target.Usenet -> {
@@ -249,6 +250,8 @@ internal object Casting : CastLoader {
                 Found(file.name, file.size, source, entry.account)
             }
         }
+        // No download is served to a Cast device yet: the player hides Cast while one plays (L377), and a cast play streams.
+        is PlayUris.Target.Download -> null
         null -> null
     }
 

@@ -1,0 +1,26 @@
+package io.skjaere.usenet.app.download
+
+import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadDao
+import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.player.DownloadFile
+import io.skjaere.usenet.player.DownloadFiles
+import kotlinx.coroutines.runBlocking
+import java.io.File
+
+/**
+ * The finished downloads' files as the player and the probe read them (L352, [io.skjaere.usenet.player.DownloadDataSource]):
+ * the Done row of the download a `download://` URI names, read from the library on the loading thread, so a player its
+ * launch brings back after the process died finds the file as one the app just started does. The row gives the file
+ * ([fileOf], where storage keeps it), its exact size, the gaps it was written with, and the release's own name for the
+ * file, which says its container type and is never logged. A row that isn't Done, or whose file has no place now (its
+ * volume away), has none.
+ */
+class DownloadPlayFiles(private val downloads: DownloadDao, private val fileOf: (Download) -> File?) : DownloadFiles {
+    override fun find(id: String): DownloadFile? {
+        val row = runBlocking { downloads.get(id) }?.takeIf { it.state == DownloadState.Done } ?: return null
+        val size = row.size ?: return null
+        val file = fileOf(row) ?: return null
+        return DownloadFile(file, size, row.gaps.map { it.first..it.last }, row.fileName)
+    }
+}

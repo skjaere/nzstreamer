@@ -9,7 +9,7 @@ import kotlin.test.assertNull
 /**
  * What a play's URI says ([PlayUris]): the scheme the player's data source routes it by, and the file it names. A Usenet
  * URI reads as [UsenetUris] reads it; a debrid service's names only a listing the app keeps and the file's place in it,
- * never a name, as the URI reaches the media session. Names and ids are invented.
+ * never a name, as the URI reaches the media session; a download's names only its row. Names and ids are invented.
  */
 class PlayUrisTest {
     @Test
@@ -50,10 +50,45 @@ class PlayUrisTest {
         assertFailsWith<IllegalArgumentException> { PlayUris.service("l7f3a9", -1) }
     }
 
+    /**
+     * L352: a download's URI names the download alone, by the random id its row has, never its file's name or size: the
+     * URI reaches the media session, and the player reads the file from the row.
+     */
+    @Test
+    fun aDownloadUriGivesItsIdAndNoName() {
+        val id = "3f2c9e1a-7b4d-4c2e-9a10-5e6f7a8b9c0d"
+        val uri = PlayUris.download(id)
+        assertEquals("download://$id", uri)
+        val target = PlayUris.parse(uri)
+        assertEquals(PlayUris.Target.Download(id), target)
+        assertEquals(PlayUris.DOWNLOAD, target?.scheme)
+        assertEquals("download", PlayUris.scheme(uri))
+        assertEquals(0, target?.fileIndex)
+        assertNull(target?.name)
+        assertNull(target?.size)
+        // Nothing more: a name in a query, a path, a file index or no id is no download URI.
+        assertNull(PlayUris.parse("download://$id?name=Harbor.Lights.S02E05.mkv"))
+        assertNull(PlayUris.parse("download://$id/v.mkv"))
+        assertNull(PlayUris.parse("download://$id/file/0"))
+        assertNull(PlayUris.parse("download://"))
+        assertNull(PlayUris.parse("download:///$id"))
+    }
+
+    @Test
+    fun aDownloadIdThatWouldNeedEscapingIsRefused() {
+        assertFailsWith<IllegalArgumentException> { PlayUris.download("Harbor Lights/S02") }
+        assertFailsWith<IllegalArgumentException> { PlayUris.download("../v.mkv") }
+        assertFailsWith<IllegalArgumentException> { PlayUris.download("a?b") }
+        assertFailsWith<IllegalArgumentException> { PlayUris.download("") }
+        assertNull(PlayUris.parse("download://Harbor%20Lights"))
+        assertNull(PlayUris.parse("download://a b"))
+    }
+
     @Test
     fun aUriRoutesByItsScheme() {
         assertEquals("usenet", PlayUris.scheme(UsenetUris.build("abc", 0, "Harbor.Lights.S02E05.mkv", 1)))
         assertEquals("debrid", PlayUris.scheme(PlayUris.service("l7f3a9", 0)))
+        assertEquals("download", PlayUris.scheme(PlayUris.download("3f2c9e1a")))
         assertEquals("https", PlayUris.scheme("https://cdn.example.org/clip.mkv"))
         assertEquals("content", PlayUris.scheme("content://media/external/downloads/7"))
         assertNull(PlayUris.scheme("/sdcard/clip.mkv"))

@@ -20,9 +20,10 @@ import org.junit.runner.RunWith
 
 /**
  * The player's and the probe's data source routes a play's URI by its scheme ([SourceDataSource]): a `usenet://` URI
- * reaches Usenet's source, a scheme no source has fails as a file not there (which the load policy doesn't retry) and
- * opens nothing, and each scheme's source is made once and opened again, as Media3 opens its one data source again for a
- * seek. On a device: the JVM's android.jar can't make the [Uri] a [DataSpec] holds. Fake sources, invented names.
+ * reaches Usenet's source and a `download://` one the download's, a scheme no source has fails as a file not there (which
+ * the load policy doesn't retry) and opens nothing, and each scheme's source is made once and opened again, as Media3
+ * opens its one data source again for a seek. On a device: the JVM's android.jar can't make the [Uri] a [DataSpec] holds.
+ * Fake sources, invented names.
  */
 @RunWith(AndroidJUnit4::class)
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -72,7 +73,9 @@ class SourceDataSourceDeviceTest {
 
     private val usenet = FakeFactory(byteArrayOf(1, 2, 3, 4))
     private val service = FakeFactory(byteArrayOf(9, 8))
-    private val source = SourceDataSource.Factory(mapOf(PlayUris.USENET to usenet, PlayUris.SERVICE to service)).createDataSource()
+    private val download = FakeFactory(byteArrayOf(7, 6, 5))
+    private val source = SourceDataSource.Factory(mapOf(PlayUris.USENET to usenet, PlayUris.SERVICE to service, PlayUris.DOWNLOAD to download))
+        .createDataSource()
 
     private val usenetUri = Uri.parse(UsenetUris.build("abc123", 0, "Harbor.Lights.S01E01.1080p.mkv", 4))
 
@@ -89,13 +92,28 @@ class SourceDataSourceDeviceTest {
         assertTrue("the service's source isn't made", service.made.isEmpty())
     }
 
+    /** L352: a finished download's URI reaches the download's source, and no other is made. */
+    @Test
+    fun aDownloadUriReachesTheDownloadsSource() {
+        val uri = Uri.parse(PlayUris.download("3f2c9e1a-7b4d-4c2e-9a10-5e6f7a8b9c0d"))
+        assertEquals(3L, source.open(DataSpec(uri)))
+        val read = ByteArray(3)
+        assertEquals(3, source.read(read, 0, 3))
+        assertArrayEquals(byteArrayOf(7, 6, 5), read)
+        assertEquals(uri, source.uri)
+        source.close()
+        assertEquals(listOf(uri), download.made.single().opened.map { it.uri })
+        assertEquals(1, download.made.single().closes)
+        assertTrue("neither Usenet's nor the service's source is made", usenet.made.isEmpty() && service.made.isEmpty())
+    }
+
     @Test
     fun aSchemeNoSourceHasFailsAsNotFoundAndOpensNothing() {
         for (uri in listOf("https://cdn.example.org/Harbor.Lights.S01E01.mkv", "file:///sdcard/Copper.Crown.mkv", "content://media/external/downloads/7", "clip.mkv")) {
             val e = assertThrows(DataSourceException::class.java) { source.open(DataSpec(Uri.parse(uri))) }
             assertEquals(uri, PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND, e.reason)
         }
-        assertTrue("no source made", usenet.made.isEmpty() && service.made.isEmpty())
+        assertTrue("no source made", usenet.made.isEmpty() && service.made.isEmpty() && download.made.isEmpty())
         assertNull(source.uri)
         assertEquals(emptyMap<String, List<String>>(), source.responseHeaders)
         // Closing it, as Media3 does after a failed open, closes nothing.

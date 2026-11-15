@@ -39,6 +39,7 @@ import io.skjaere.usenet.app.download.DownloadHostRules
 import io.skjaere.usenet.app.download.DownloadHosts
 import io.skjaere.usenet.app.download.DownloadHostsDeps
 import io.skjaere.usenet.app.download.DownloadNotifications
+import io.skjaere.usenet.app.download.DownloadPlayFiles
 import io.skjaere.usenet.app.download.DownloadRunner
 import io.skjaere.usenet.app.download.DownloadRunnerDeps
 import io.skjaere.usenet.app.download.DownloadStorage
@@ -115,6 +116,7 @@ import io.skjaere.usenet.newznab.NewznabClient
 import io.skjaere.usenet.player.AudioRouteWatcher
 import io.skjaere.usenet.player.DeviceCapabilitiesLoader
 import io.skjaere.usenet.player.DisplayModes
+import io.skjaere.usenet.player.DownloadDataSource
 import io.skjaere.usenet.player.ExoTrackProbe
 import io.skjaere.usenet.player.GapReports
 import io.skjaere.usenet.player.LinkResolver
@@ -235,21 +237,27 @@ class AppContainer(private val context: Context) {
      */
     val serviceSources = ServiceDataSource.Factory(LinkResolver { target, stale -> serviceLinks.link(target, stale) }, streamTraffic)
 
+    /** A finished download's file on this device (L352), found by its row: read as it is, with nothing read ahead. */
+    private val downloadSources = DownloadDataSource.Factory(DownloadPlayFiles(data.downloads) { row -> downloadStorage.file(row) })
+
     /**
      * Where the track probe and the cast relay read a play's file, by its URI's scheme ([PlayUris]): Usenet's, from the
-     * store's NZB; a debrid service's over HTTPS, as the CDN gives it.
+     * store's NZB; a debrid service's over HTTPS, as the CDN gives it; a download's from its file on this device.
      */
-    val dataSourceFactory = SourceDataSource.Factory(mapOf(PlayUris.USENET to usenetSources, PlayUris.SERVICE to serviceSources))
+    val dataSourceFactory = SourceDataSource.Factory(
+        mapOf(PlayUris.USENET to usenetSources, PlayUris.SERVICE to serviceSources, PlayUris.DOWNLOAD to downloadSources),
+    )
 
     /**
      * Where the player reads it: as [dataSourceFactory], but a debrid play's file is read ahead of the player as far as a
      * Usenet play's streams read ahead (L239, L249, W88), the cap asked as each player's source is made, as the engine's
-     * is ([start]); with the memory unread, 8 MiB.
+     * is ([start]); with the memory unread, 8 MiB. A download's file needs none: it is on the device.
      */
     val playerDataSources = SourceDataSource.Factory(
         mapOf(
             PlayUris.USENET to usenetSources,
             PlayUris.SERVICE to ReadAheadDataSource.Factory(serviceSources) { memory?.let(PlaybackBudgets::streamBytes) },
+            PlayUris.DOWNLOAD to downloadSources,
         ),
     )
 
