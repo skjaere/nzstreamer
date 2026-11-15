@@ -59,6 +59,14 @@ class DownloadStorage(
         override fun toString() = "Source(${nzb.size} bytes, password=${if (password == null) "none" else "set"})"
     }
 
+    /**
+     * The NZB grabbed for a release Resolve tried and had no answer about (the providers out of reach, the attempt cut
+     * short, the volume away as it was picked): its candidate's [key] and its [source], so its next try costs no grab (L340).
+     */
+    class Grab(val key: String, val source: Source) {
+        override fun toString() = "Grab($source)"
+    }
+
     /** [id]'s bookkeeping folder: its marker, and its NZB and password while it needs them. */
     fun bookkeeping(id: String): File = File(File(filesDir, DIR), checked(id))
 
@@ -170,10 +178,44 @@ class DownloadStorage(
         Source(nzb, File(folder, PASSWORD).takeIf { it.isFile }?.readText())
     }
 
-    /** Deletes [id]'s NZB and password, once its file is complete, failed or cancelled; its folder and marker stay. */
+    /**
+     * Deletes [id]'s NZB and password, and any kept for an attempt ([keepGrab]), once its file is complete, failed or
+     * cancelled; its folder and marker stay.
+     */
     suspend fun dropSource(id: String): Unit = withContext(io) {
         val folder = bookkeeping(id)
-        listOf(NZB, PASSWORD).forEach { name ->
+        listOf(NZB, PASSWORD, GRAB, GRAB_KEY, GRAB_PASSWORD).forEach { name ->
+            File(folder, name).delete()
+            File(folder, name + TMP).delete()
+        }
+    }
+
+    /**
+     * Keeps the NZB grabbed for [id]'s release [key] as Resolve tries it, with its [password] (none: no file), until that
+     * attempt has its answer ([dropGrab]): one that has none yet is tried again from it, with no grab. The key goes last,
+     * so a process dying part way leaves no key over another release's NZB.
+     */
+    suspend fun keepGrab(id: String, key: String, nzb: ByteArray, password: String?): Unit = withContext(io) {
+        val folder = bookkeeping(id)
+        File(folder, GRAB_KEY).delete()
+        writeWhole(File(folder, GRAB), nzb)
+        val passwordFile = File(folder, GRAB_PASSWORD)
+        if (password != null) writeWhole(passwordFile, password.toByteArray()) else passwordFile.delete()
+        writeWhole(File(folder, GRAB_KEY), key.toByteArray())
+    }
+
+    /** The NZB [keepGrab] kept for [id], with its release's key; null when none is. */
+    suspend fun grab(id: String): Grab? = withContext(io) {
+        val folder = bookkeeping(id)
+        val key = File(folder, GRAB_KEY).takeIf { it.isFile }?.readText() ?: return@withContext null
+        val nzb = File(folder, GRAB).takeIf { it.isFile }?.readBytes() ?: return@withContext null
+        Grab(key, Source(nzb, File(folder, GRAB_PASSWORD).takeIf { it.isFile }?.readText()))
+    }
+
+    /** Deletes the NZB [keepGrab] kept for [id]: its attempt had its answer. */
+    suspend fun dropGrab(id: String): Unit = withContext(io) {
+        val folder = bookkeeping(id)
+        listOf(GRAB_KEY, GRAB, GRAB_PASSWORD).forEach { name ->
             File(folder, name).delete()
             File(folder, name + TMP).delete()
         }
@@ -280,6 +322,11 @@ class DownloadStorage(
         const val MARKER = ".row"
         const val NZB = "nzb"
         const val PASSWORD = "password"
+
+        /** The NZB kept for an attempt Resolve has no answer about yet, its password and its release's key ([keepGrab]). */
+        const val GRAB = "grab"
+        const val GRAB_PASSWORD = "grab-password"
+        const val GRAB_KEY = "grab-key"
         const val NOMEDIA = ".nomedia"
         const val PART = ".part"
         private const val TMP = ".tmp"

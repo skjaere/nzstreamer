@@ -38,12 +38,17 @@ import io.skjaere.usenet.newznab.IndexerConfig
 import io.skjaere.usenet.newznab.NewznabItem
 import io.skjaere.usenet.newznab.NzbDownload
 import io.skjaere.usenet.releases.ReleaseKey
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -77,7 +82,7 @@ class DownloadResolverTest {
         val files: List<Pair<String, Long>>,
         val gone: Boolean = false,
         val password: String? = null,
-        val opening: Exception? = null,
+        var opening: Exception? = null,
     ) {
         val size: Long get() = files.sumOf { it.second }
 
@@ -115,7 +120,11 @@ class DownloadResolverTest {
 
     private val indexer = IndexerConfig(INDEXER, "Fake indexer", "http://indexer.invalid/api", "key")
 
-    private fun grab(item: NewznabItem): NzbDownload {
+    /** Called as each grab is made, before it is answered. */
+    private var onGrab: suspend (NewznabItem) -> Unit = {}
+
+    private suspend fun grab(item: NewznabItem): NzbDownload {
+        onGrab(item)
         grabbed += item.guid
         val fake = fakes.getValue(item.guid)
         return NzbDownload(fake.nzb, fake.password)
@@ -124,7 +133,11 @@ class DownloadResolverTest {
     /** Every article the providers were asked about: the check STATs all it is given (L341). */
     private val checked: MutableList<String> = Collections.synchronizedList(mutableListOf())
 
+    /** Called as each check starts. */
+    private var onCheck: suspend () -> Unit = {}
+
     private val availability = AvailabilityBackend { nzb, progress ->
+        onCheck()
         val articles = nzb.files.flatMap { file -> file.segments.map { it.articleId } }
         checked += articles
         articles.indices.forEach { progress(it + 1, articles.size) }
@@ -288,13 +301,49 @@ class DownloadResolverTest {
     }
 
     @Test
-    fun `a release is counted once its attempt starts, so a resolve cut short never grabs it again`() = runBlocking<Unit> {
+    fun `a release is counted once its attempt starts, before its grab, so a process that dies mid-attempt never grabs it again`() = runBlocking<Unit> {
         row(single, pack)
         val counted = mutableListOf<List<String>>()
-        dao.onUpdate = { counted += it.tried }
+        onGrab = { counted += stored().tried }
         resolver().resolve(ID)
-        // Kept before its grab: the first update of the row counts it.
-        assertEquals(listOf(key(single)), counted.first())
+        assertEquals(listOf(listOf(key(single))), counted)
+    }
+
+    @Test
+    fun `a resolve cut short mid-attempt tries that release again from the NZB kept for it, uncounted and with no second grab`() = runBlocking<Unit> {
+        row(single, pack)
+        val checking = CompletableDeferred<Unit>()
+        onCheck = {
+            checking.complete(Unit)
+            awaitCancellation()
+        }
+        val resolve = launch(Dispatchers.Default) { resolver().resolve(ID) }
+        withTimeout(10_000) { checking.await() }
+        // Paused, or the host stopped, while its articles are checked.
+        resolve.cancelAndJoin()
+        assertEquals(emptyList(), stored().tried)
+        assertEquals(listOf(single.guid), grabbed)
+
+        onCheck = {}
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(single.guid, ready.row.release?.guid)
+        assertEquals(listOf(single.guid), grabbed)
+        assertEquals(listOf(key(single)), stored().tried)
+        // Taken into the download's own copy, and not kept a second time.
+        assertContentEquals(single.nzb, storage.sources[ID]?.nzb)
+        assertNull(storage.grabs[ID])
+        assertTrue(dao.reasons.none { it.orEmpty().startsWith("Trying release 2") }, dao.reasons.toString())
+    }
+
+    @Test
+    fun `a process that died mid-attempt tries that release again from the NZB kept for it, counted once`() = runBlocking<Unit> {
+        // As a death mid-check leaves it: counted, its NZB kept.
+        row(single, pack, tried = listOf(single))
+        storage.grabs[ID] = DownloadStorage.Grab(key(single), DownloadStorage.Source(single.nzb, null))
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver(attempts = 1).resolve(ID))
+        assertEquals(single.guid, ready.row.release?.guid)
+        assertEquals(emptyList(), grabbed)
+        assertEquals(listOf(key(single)), stored().tried)
     }
 
     @Test
@@ -346,12 +395,19 @@ class DownloadResolverTest {
     }
 
     @Test
-    fun `with the volume gone the download waits for storage`() = runBlocking<Unit> {
+    fun `with the volume gone the download waits for storage, and its release is taken up again once it is back`() = runBlocking<Unit> {
         row(single)
         storage.space = null
         val waiting = assertIs<DownloadResolver.Resolution.Waiting>(resolver().resolve(ID))
         assertEquals(DownloadHostRules.STORAGE_UNAVAILABLE, waiting.reason)
         assertEquals(DownloadState.Waiting, stored().state)
+
+        // Back: the release that passed every step, from the NZB kept for it, with no second grab.
+        storage.space = ROOM
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(single.guid, ready.row.release?.guid)
+        assertEquals(listOf(single.guid), grabbed)
+        assertEquals(listOf(key(single)), stored().tried)
     }
 
     @Test
@@ -449,6 +505,13 @@ class DownloadResolverTest {
         assertEquals(DownloadState.Resolving, stored().state)
         assertEquals(DownloadHostRules.CANT_REACH_PROVIDER, stored().reason)
         assertEquals(emptyList(), stored().tried)
+
+        // Each resolve after a wait opens the NZB grabbed the first time: no grab is spent while the providers are away.
+        assertIs<DownloadResolver.Resolution.Unreachable>(resolver().resolve(ID))
+        unreachable.opening = null
+        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(listOf(unreachable.guid), grabbed)
+        assertEquals(listOf(key(unreachable)), stored().tried)
     }
 
     @Test
@@ -536,6 +599,7 @@ class DownloadResolverTest {
         dao.reasons.clear()
         dao.states.clear()
         storage.sources.clear()
+        storage.grabs.clear()
         storage.deletedVideos.clear()
         storage.spaceAsked.clear()
         storage.space = ROOM
@@ -584,9 +648,10 @@ class DownloadResolverTest {
         private fun change(id: String, block: (Download) -> Download) = rows.update { all -> all[id]?.let { all + (id to block(it)) } ?: all }
     }
 
-    /** The download's places: its own NZB copies, the room on the device, the videos deleted. */
+    /** The download's places: its own NZB copies, the NZB kept for an attempt, the room on the device, the videos deleted. */
     private class FakeStorage : DownloadResolver.Storage {
         val sources = mutableMapOf<String, DownloadStorage.Source>()
+        val grabs = mutableMapOf<String, DownloadStorage.Grab>()
         var space: DownloadSpace? = ROOM
         val deletedVideos = mutableListOf<String>()
         val spaceAsked = mutableListOf<String>()
@@ -599,6 +664,17 @@ class DownloadResolverTest {
 
         override suspend fun dropSource(id: String) {
             sources.remove(id)
+            grabs.remove(id)
+        }
+
+        override suspend fun keepGrab(id: String, key: String, nzb: ByteArray, password: String?) {
+            grabs[id] = DownloadStorage.Grab(key, DownloadStorage.Source(nzb, password))
+        }
+
+        override suspend fun grab(id: String) = grabs[id]
+
+        override suspend fun dropGrab(id: String) {
+            grabs.remove(id)
         }
 
         override suspend fun deleteVideo(id: String) {

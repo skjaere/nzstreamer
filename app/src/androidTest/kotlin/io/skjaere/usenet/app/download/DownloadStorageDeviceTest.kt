@@ -187,6 +187,38 @@ class DownloadStorageDeviceTest {
         assertNull(storage.source("kept"))
     }
 
+    /**
+     * The NZB grabbed for an attempt is kept beside the marker, with its release's key and password, until the attempt has
+     * its answer: dropped then, or with the rest of the download's NZBs once it is done, failed or cancelled (L340, L346).
+     */
+    @Test
+    fun theNzbGrabbedForAnAttemptIsKeptWithItsKeyUntilDropped() = runBlocking<Unit> {
+        val storage = storage()
+        storage.add(row("grabbed"))
+        assertNull(storage.grab("grabbed"))
+        storage.keepGrab("grabbed", "indexer/harbor-kestrel", NZB, "harbor-pw")
+        val grab = checkNotNull(storage.grab("grabbed"))
+        assertEquals("indexer/harbor-kestrel", grab.key)
+        assertArrayEquals(NZB, grab.source.nzb)
+        assertEquals("harbor-pw", grab.source.password)
+        assertFalse("the password in its words", grab.toString().contains("harbor-pw"))
+
+        // Another release's grab in its place: no password left from the first.
+        storage.keepGrab("grabbed", "indexer/harbor-grp", NZB, null)
+        assertEquals("indexer/harbor-grp", storage.grab("grabbed")!!.key)
+        assertNull(storage.grab("grabbed")!!.source.password)
+        storage.dropGrab("grabbed")
+        assertNull(storage.grab("grabbed"))
+        assertEquals(setOf(".row"), storage.bookkeeping("grabbed").list()!!.toSet())
+
+        // Dropped with the download's own NZB.
+        storage.keepSource("grabbed", NZB, "harbor-pw")
+        storage.keepGrab("grabbed", "indexer/harbor-kestrel", NZB, "harbor-pw")
+        storage.dropSource("grabbed")
+        assertNull(storage.grab("grabbed"))
+        assertEquals(setOf(".row"), storage.bookkeeping("grabbed").list()!!.toSet())
+    }
+
     /** An add whose insert fails never leaves a row without its marker (L346, L350), nor a marker without a row. */
     @Test
     fun anAddThatFailsLeavesNoRowWithoutItsMarker() = runBlocking<Unit> {

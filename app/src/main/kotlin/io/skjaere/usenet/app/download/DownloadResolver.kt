@@ -16,10 +16,13 @@ import io.skjaere.usenet.core.AttemptFailure
 import io.skjaere.usenet.core.AvailabilityBackend
 import io.skjaere.usenet.core.EngineAvailabilityBackend
 import io.skjaere.usenet.core.FileCandidate
+import io.skjaere.usenet.core.FetchedNzb
 import io.skjaere.usenet.core.FileChooser
 import io.skjaere.usenet.core.FilePicker
 import io.skjaere.usenet.core.NzbPreparer
+import io.skjaere.usenet.core.NzbSource
 import io.skjaere.usenet.core.PipelineEvent
+import io.skjaere.usenet.core.PlayCandidate
 import io.skjaere.usenet.core.PlayPipeline
 import io.skjaere.usenet.core.PrepareOutcome
 import io.skjaere.usenet.core.PreparedNzb
@@ -59,9 +62,12 @@ import org.slf4j.LoggerFactory
  * the providers in use is passed over without a grab ([tried]), as a play passes it over.
  *
  * At most three releases are tried for a download, or "Releases to try" where that is lower ([attempts]), counted across
- * its resolves ([Download.tried], L340): one counts once its attempt starts, which is when its grab is spent, so a process
- * that dies mid-attempt never grabs more. One whose attempt the providers failed (a login refused, none in reach) isn't
- * counted: it was never checked, and the download waits for them instead ([Resolution.Waiting], [Resolution.Unreachable]).
+ * its resolves ([Download.tried], L340): one counts once its attempt starts, before its grab, so a process that dies
+ * mid-attempt never grabs more. Each NZB grabbed is kept in the download's folder until its attempt has its answer about
+ * the release ([Storage.keepGrab]). One whose attempt had none (the providers failed it: a login refused, none in reach;
+ * the attempt cut short by a pause or the host's end; the volume away as it was picked) is tried again first from that
+ * NZB, with no grab, and isn't counted twice; the download waits for the providers meanwhile ([Resolution.Waiting],
+ * [Resolution.Unreachable]).
  *
  * The row says where it is: [DownloadState.Resolving], its reason the step's words, as the play sheet names its steps,
  * "Trying release 2 of 3" before them from the second release on. Once a release passes every step, the room on the
@@ -109,11 +115,22 @@ class DownloadResolver(
         /** The room on the device for [except]'s own size; null while the volume isn't there. */
         suspend fun space(except: String): DownloadSpace?
 
+        /** Keeps the NZB grabbed for [id]'s release [key] until its attempt has its answer. */
+        suspend fun keepGrab(id: String, key: String, nzb: ByteArray, password: String?)
+
+        /** The NZB kept for an attempt of [id] that had no answer; null when none is. */
+        suspend fun grab(id: String): DownloadStorage.Grab?
+
+        suspend fun dropGrab(id: String)
+
         companion object {
             fun of(storage: DownloadStorage): Storage = object : Storage {
                 override suspend fun keepSource(id: String, nzb: ByteArray, password: String?) = storage.keepSource(id, nzb, password)
                 override suspend fun source(id: String) = storage.source(id)
                 override suspend fun dropSource(id: String) = storage.dropSource(id)
+                override suspend fun keepGrab(id: String, key: String, nzb: ByteArray, password: String?) = storage.keepGrab(id, key, nzb, password)
+                override suspend fun grab(id: String) = storage.grab(id)
+                override suspend fun dropGrab(id: String) = storage.dropGrab(id)
                 override suspend fun deleteVideo(id: String) = storage.deleteVideo(id)
                 override suspend fun space(except: String) = storage.space(except)
             }
@@ -188,11 +205,17 @@ class DownloadResolver(
         return room(again) ?: Resolution.Ready(again, prepared, file)
     }
 
-    /** [row]'s candidates not tried yet, through the play's pipeline, as the class says. */
+    /**
+     * [row]'s candidates not tried yet, through the play's pipeline, as the class says. One whose attempt had no answer
+     * (the providers out of reach, the attempt cut short, the volume away as it was picked) is tried again first, from the
+     * NZB kept for it ([Storage.keepGrab]) and counted once: its grab is spent already.
+     */
     private suspend fun fromCandidates(row: Download): Resolution {
         val id = row.id
-        val left = minOf(MAX_TRIES, attempts()) - row.tried.size
-        val items = row.candidates.map(::ranked).filter { it.key !in row.tried }.distinctBy { it.key }
+        val kept = storage.grab(id)?.takeIf { grab -> row.candidates.any { ranked(it).key == grab.key } }
+        val counted = row.tried.filter { it != kept?.key }
+        val left = minOf(MAX_TRIES, attempts()) - counted.size
+        val items = row.candidates.map(::ranked).filter { it.key !in counted }.distinctBy { it.key }
         if (left <= 0 || items.isEmpty()) {
             log.info("download {}: no release left to try, {} tried", id, row.tried.size)
             return failed(id, NO_OTHER_RELEASE)
@@ -211,37 +234,68 @@ class DownloadResolver(
         val byKey = items.associateBy { it.key }
         val newznab = byKey.mapValues { it.value.item }
         val configs = indexers().associateBy { it.id }
-        val usenet = UsenetSource(
-            indexerGrab(newznab, configs, fetchNzb), availability, preparer, store, providersLeftOut, providerFallback, FileChooser.None,
-        )
+        val grabs = indexerGrab(newznab, configs, fetchNzb)
+        // Each NZB grabbed kept until its attempt has its answer; the one kept before served from it, with no grab.
+        val nzbs = object : NzbSource {
+            override suspend fun fetch(candidate: PlayCandidate): ByteArray = fetchWithPassword(candidate).bytes
+
+            override suspend fun fetchWithPassword(candidate: PlayCandidate): FetchedNzb {
+                kept?.takeIf { it.key == candidate.id }?.let { grab ->
+                    log.info("download {}: its release tried again from the NZB kept for it, no grab", id)
+                    return FetchedNzb(grab.source.nzb, grab.source.password)
+                }
+                return grabs.fetchWithPassword(candidate).also { storage.keepGrab(id, candidate.id, it.bytes, it.password) }
+            }
+        }
+        val usenet = UsenetSource(nzbs, availability, preparer, store, providersLeftOut, providerFallback, FileChooser.None)
         val pipeline = PlayPipeline({ usenet }, probe, maxAttempts = left, tried = tried(newznab) { indexerId -> configs[indexerId]?.name })
         // Counted across its resolves: the second release in all is "release 2", whichever resolve tries it.
-        val before = row.tried.size
-        var counted = row.tried
+        val before = counted.size
+        var counting = counted
         var attempt = 0
         var of = 0
+        // The attempt under way, and whether it has had its answer about its release (a step of it failed for the release).
+        var current: String? = null
+        var answered = false
         val skipped = mutableListOf<String>()
         var ended: PipelineEvent? = null
         log.info("download {}: resolving: up to {} of the {} release{} not tried yet", id, minOf(left, items.size), items.size, if (items.size == 1) "" else "s")
-        pipeline.play(items.map { it.playCandidate }, picker(row)).collect { event ->
-            when (event) {
-                is PipelineEvent.AttemptStarted -> {
-                    attempt = before + event.attempt
-                    of = before + event.of
-                    counted = counted + event.candidate.id
-                    count(id, counted)
+        try {
+            pipeline.play(items.map { it.playCandidate }, picker(row)).collect { event ->
+                when (event) {
+                    is PipelineEvent.AttemptStarted -> {
+                        attempt = before + event.attempt
+                        of = before + event.of
+                        current = event.candidate.id
+                        answered = false
+                        // Before its grab: a process that dies mid-attempt never grabs it a fourth time (L340).
+                        counting = counting + event.candidate.id
+                        count(id, counting)
+                    }
+                    is PipelineEvent.Step -> when (val status = event.status) {
+                        is StepStatus.Running -> say(DownloadHostRules.resolving(STEP_LABELS.getValue(event.step), attempt, of))
+                        // The release's answer: its NZB is no use kept. The providers failing is no answer about it.
+                        is StepStatus.Failed -> if (status.failure !is AttemptFailure.Provider) {
+                            answered = true
+                            storage.dropGrab(id)
+                        }
+                        is StepStatus.Done -> Unit
+                    }
+                    is PipelineEvent.Skipped -> skipped += event.reason
+                    is PipelineEvent.Succeeded, is PipelineEvent.Exhausted -> ended = event
+                    is PipelineEvent.Retrying -> Unit
                 }
-                is PipelineEvent.Step -> if (event.status is StepStatus.Running) {
-                    say(DownloadHostRules.resolving(STEP_LABELS.getValue(event.step), attempt, of))
-                }
-                is PipelineEvent.Skipped -> skipped += event.reason
-                is PipelineEvent.Succeeded, is PipelineEvent.Exhausted -> ended = event
-                is PipelineEvent.Retrying -> Unit
             }
+        } catch (e: CancellationException) {
+            // Cut short (a pause, the host stopped) before its release had its answer: not counted. Its NZB, kept once it
+            // was grabbed, is tried again first.
+            val cut = current
+            if (cut != null && !answered) withContext(NonCancellable) { count(id, counting - cut) }
+            throw e
         }
         return when (val end = ended) {
             is PipelineEvent.Succeeded -> resolved(id, end, byKey)
-            is PipelineEvent.Exhausted -> exhausted(id, end, counted, skipped)
+            is PipelineEvent.Exhausted -> exhausted(id, end, counting, skipped)
             else -> failed(id, NO_OTHER_RELEASE)
         }
     }
@@ -269,9 +323,11 @@ class DownloadResolver(
                 updatedAt = clock.now(),
             )
             downloads.update(kept)
+            // A wait for the volume keeps the NZB grabbed for it: the release is taken up again once the volume is back.
             room(kept)?.let { return it }
             // The archive's password as the NZB store keeps one (the NZB's own, else the indexer's), never logged.
             storage.keepSource(id, target.nzbBytes, target.prepared.metadata.orderedArchiveNzb.password ?: target.password)
+            storage.dropGrab(id)
             log.info("download {}: resolved, {} bytes, {}", id, size, if (kept.oneVideo) "its release's one video" else "one of its release's videos")
             return Resolution.Ready(kept, target.prepared, target.file)
         } finally {
