@@ -12,7 +12,7 @@ import kotlin.test.fail
 
 /**
  * The downloads in the app's own manifest (item 12, L334, L358, L375, B5 without the gate), read as a file, as
- * BackupRulesTest reads it: the five permissions they need, each with a comment saying why as the others have, and none of
+ * BackupRulesTest reads it: the six permissions they need, each with a comment saying why as the others have, and none of
  * those they were built not to need (no battery-optimisation exemption, no storage permission, no new hardware feature);
  * both job services bound by JobScheduler alone and not exported; the service a dataSync one and not exported; the boot
  * and update receiver disabled, switched on only while needed (L375), and not exported; the notifications' receiver not
@@ -25,7 +25,7 @@ class DownloadManifestTest {
     private val application: Element = manifest.elements("application").single()
 
     @Test
-    fun `the five permissions the downloads need are declared, each with a comment saying why`() {
+    fun `the six permissions the downloads need are declared, each with a comment saying why`() {
         val permissions = manifest.elements("uses-permission")
         val declared = permissions.map { it.android("name") }
         DOWNLOADS.forEach { name -> assertTrue(name in declared, "uses-permission $name is missing") }
@@ -112,10 +112,14 @@ class DownloadManifestTest {
         const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
         const val BIND_JOB_SERVICE = "android.permission.BIND_JOB_SERVICE"
 
-        /** The downloads' five: the job's, the persisted job's and the boot receiver's, the service's two, and the notifications'. */
+        /**
+         * The downloads' six: the job's, the persisted job's and the boot receiver's, the service's two, the notifications',
+         * and the network's (the job's and the watchdog's network constraint, which Android 14 refuses without it, and the
+         * default network the app follows, L381).
+         */
         val DOWNLOADS = setOf(
             "android.permission.RUN_USER_INITIATED_JOBS", "android.permission.RECEIVE_BOOT_COMPLETED", "android.permission.FOREGROUND_SERVICE",
-            "android.permission.FOREGROUND_SERVICE_DATA_SYNC", "android.permission.POST_NOTIFICATIONS",
+            "android.permission.FOREGROUND_SERVICE_DATA_SYNC", "android.permission.POST_NOTIFICATIONS", "android.permission.ACCESS_NETWORK_STATE",
         )
 
         /**

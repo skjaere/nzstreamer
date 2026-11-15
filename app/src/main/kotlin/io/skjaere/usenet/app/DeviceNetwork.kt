@@ -81,11 +81,18 @@ class DeviceNetwork private constructor(first: NetworkNow) {
          * registers says it, each word handed to the [DeviceNetwork] it is given ([heard]). Should Android not take the
          * callback (Android 11 on caps an app's callbacks), the writer reads the network as validated, as before the app
          * followed it: a provider out of reach still ends in the downloads' wait after its hour, and Resume and a provider
-         * saved still end a backoff. The service reads what [first] said, its own wait capped at an hour too.
+         * saved still end a backoff. The service reads what [first] said, its own wait capped at an hour too. Should even
+         * the first read be refused (no ACCESS_NETWORK_STATE), the network is taken as there but metered: Only on Wi-Fi or
+         * Ethernet still waits, and nothing that builds the downloads fails on it.
          */
         @VisibleForTesting
         internal fun follow(first: () -> NetworkNow, register: (DeviceNetwork) -> Unit): DeviceNetwork {
-            val network = DeviceNetwork(first())
+            val network = try {
+                DeviceNetwork(first())
+            } catch (e: RuntimeException) {
+                log.warn("Couldn't read the device's network: {}", e::class.simpleName)
+                DeviceNetwork(UNREAD)
+            }
             try {
                 register(network)
             } catch (e: RuntimeException) {
@@ -94,6 +101,9 @@ class DeviceNetwork private constructor(first: NetworkNow) {
             }
             return network
         }
+
+        /** The network as taken when Android won't say what it is: there, but metered. */
+        private val UNREAD = NetworkNow(usable = true, unmetered = false, wifi = false)
 
         private fun offers(caps: NetworkCapabilities) = NetworkNow(
             usable = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),

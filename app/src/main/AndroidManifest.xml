@@ -4,8 +4,11 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!-- "Set up with your phone" on a TV: which Wi-Fi or Ethernet address its page can listen on (a normal
-         permission, granted at install). Not WifiManager's ACCESS_WIFI_STATE, which implies Wi-Fi hardware. -->
+    <!-- The device's network, a normal permission, granted at install. "Set up with your phone" on a TV: which Wi-Fi or
+         Ethernet address its page can listen on (not WifiManager's ACCESS_WIFI_STATE, which implies Wi-Fi hardware).
+         Downloads: the job's and the watchdog's network constraint, which Android 14 refuses to schedule without it
+         (L334, L335), and the default network the app follows, the network the downloads' service waits for and whose
+         return ends their writer's backoff (L381). -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Play on TV: a TV on Wi-Fi below Android 13's T extensions 7 must hold a multicast lock to hear the mDNS queries
          its record answers (a normal permission, granted at install). It implies Wi-Fi hardware, which a TV on

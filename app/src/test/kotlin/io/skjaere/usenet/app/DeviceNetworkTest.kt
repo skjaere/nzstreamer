@@ -3,6 +3,7 @@ package io.skjaere.usenet.app
 import io.skjaere.usenet.app.download.ServicePlan
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -47,6 +48,16 @@ class DeviceNetworkTest {
         val network = DeviceNetwork.follow(first = { CELL_NOW }) { throw IllegalStateException("Too many NetworkRequests filed") }
         assertTrue(network.validated.value)
         assertEquals(CELL_NOW, network.now.value)
+    }
+
+    @Test
+    fun `a first read Android refuses leaves both answers usable, the service's metered so Wi-Fi only still waits`() {
+        // Without ACCESS_NETWORK_STATE (the manifest's guard keeps it), as when the callback isn't taken: never a failed start.
+        val network = DeviceNetwork.follow(first = { throw SecurityException("ConnectivityService: Neither user 10139 nor current process has ACCESS_NETWORK_STATE") }) { }
+        assertTrue(network.validated.value)
+        assertEquals(NetworkNow(usable = true, unmetered = false, wifi = false), network.now.value)
+        assertTrue(ServicePlan.networkMet(network.now.value, unmetered = false))
+        assertFalse(ServicePlan.networkMet(network.now.value, unmetered = true))
     }
 
     private companion object {
