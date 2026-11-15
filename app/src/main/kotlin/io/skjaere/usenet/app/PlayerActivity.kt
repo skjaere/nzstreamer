@@ -197,7 +197,7 @@ import io.skjaere.usenet.app.play.VideoZoom
 import io.skjaere.usenet.app.play.WatchSaver
 import io.skjaere.usenet.app.play.WindowOff
 import io.skjaere.usenet.app.play.fileChapters
-import io.skjaere.usenet.app.play.nextAiredEpisode
+import io.skjaere.usenet.app.play.nextAiredEpisodeOrFail
 import io.skjaere.usenet.app.play.previousAiredEpisode
 import io.skjaere.usenet.app.ui.AppColors
 import io.skjaere.usenet.app.ui.AppTheme
@@ -3108,8 +3108,11 @@ class PlayerActivity : ComponentActivity() {
      * may have come while it was looked up, the player leaves ([followTheEnd]).
      */
     private suspend fun offerNextEpisode(p: ControlsPlayer, playing: AutoAdvance.Episode, autoPlayNext: Boolean) {
-        // TMDB's answer, else the one the play's download says (L354): offline, or TMDB failing.
-        val next = nextEpisode(container, playing) ?: downloadedNext()
+        // TMDB's answer, its none included; only where TMDB couldn't be asked (offline with nothing kept, or failing), the
+        // one the play's download says (L354), which stands in with nothing to be searched by.
+        val answered = tmdbAnswer { nextEpisode(container, playing) }
+        val standIn = answered.isFailure
+        val next = answered.getOrElse { downloadedNext() }
         // A lookup deaf to cancellation can answer after onStop, for a setup that has gone.
         if (!currentCoroutineContext().isActive) return
         if (next == null) {
@@ -3123,7 +3126,7 @@ class PlayerActivity : ComponentActivity() {
         autoAdvance = machine
         while (true) {
             // What the downloads say of it, with no search (L354): downloaded, or offline still downloading or not.
-            val local = downloadStatus(next)
+            val local = downloadStatus(next, standIn)
             // A release found too long ago to be handed on by the end of the countdown counts as no
             // search: the card doesn't call it ready, and searches again as it shows or while it
             // shows (once at most while it waits on the user, see AutoAdvance).
@@ -3172,17 +3175,31 @@ class PlayerActivity : ComponentActivity() {
     /** The finished download of the episode playing, whatever plays it; none on a TV, which has no downloads (W108). */
     private fun playingRow(): Download? = launch?.watchKey?.takeUnless { container.television }?.let { container.downloads.done.value[it] }
 
-    /** The episode after the one playing by its download alone ([OfflineNext], L354), for when TMDB doesn't answer. */
+    /** The episode after the one playing by its download alone ([OfflineNext], L354), for when TMDB can't be asked. */
     private fun downloadedNext(): EpisodePlay? = playingRow()?.let { OfflineNext.next(it, container.downloads.done.value, online()) }
 
     /**
-     * What the downloads say of [next] for the card, with no search (L354): downloaded, its file played through the hook;
-     * offline, still downloading or not downloaded. Null where it is searched for and streams as before, and on a TV.
+     * [lookUp]'s answer from TMDB, or its failure where TMDB couldn't be asked (offline with nothing kept of the show, no
+     * key, TMDB failing), logged by its kind alone; cancellation passes on.
      */
-    private fun downloadStatus(next: EpisodePlay): Prefetch? {
+    private suspend fun <T> tmdbAnswer(lookUp: suspend () -> T): Result<T> = try {
+        Result.success(lookUp())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        log.info("player: TMDB didn't answer for the next episode ({}); a finished download's row says it where there is one", e::class.simpleName)
+        Result.failure(e)
+    }
+
+    /**
+     * What the downloads say of [next] for the card, with no search (L354): downloaded, its file played through the hook;
+     * offline, still downloading or not downloaded, as for the row's [standIn] whatever the network. Null where it is
+     * searched for and streams as before, and on a TV.
+     */
+    private fun downloadStatus(next: EpisodePlay, standIn: Boolean): Prefetch? {
         if (container.television) return null
         val downloads = container.downloads
-        return PlayerBranches.nextStatus(next.key, online(), downloads.done.value, downloads.state.value)
+        return PlayerBranches.nextStatus(next.key, online(), downloads.done.value, downloads.state.value, standIn)
     }
 
     /** Whether the device's default network is validated now (L354): what a download's Stream instead and TheIntroDB wait for. */
@@ -4125,11 +4142,14 @@ class PlayerActivity : ComponentActivity() {
             c.introDb.episode(e.showTmdbId, e.season, e.episode, durationMs)
         }
 
-        /** Test seam: the episode after the one playing, which a test can answer without TMDB. */
+        /**
+         * Test seam: the episode after the one playing, which a test can answer without TMDB: null where none has aired
+         * after it, a failure thrown where TMDB couldn't be asked, when a download's row says it (L354).
+         */
         @VisibleForTesting
         @Volatile
         internal var nextEpisode: suspend (AppContainer, AutoAdvance.Episode) -> EpisodePlay? = { c, e ->
-            nextAiredEpisode(c.tmdb, e.showTmdbId, e.season, e.episode)
+            nextAiredEpisodeOrFail(c.tmdb, e.showTmdbId, e.season, e.episode)
         }
 
         /** Test seam: the next episode's release search as the card starts it, which a test can leave searching for good. */

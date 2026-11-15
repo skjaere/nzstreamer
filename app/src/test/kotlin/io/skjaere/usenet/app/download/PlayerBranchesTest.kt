@@ -134,6 +134,16 @@ class PlayerBranchesTest {
         assertNull(PlayerBranches.nextStatus(next, online = true, emptyMap(), emptyList()))
     }
 
+    /** The episode a download's row stood in for, TMDB not reached, has nothing to be searched by: never searched for. */
+    @Test
+    fun `an episode the row stood in for is never searched for, the network back or not`() {
+        assertEquals(Prefetch.NotDownloadedOffline, PlayerBranches.nextStatus(next, online = true, emptyMap(), emptyList(), standIn = true))
+        val running = DownloadRunner.Item(row(6, DownloadState.Running), 420_000_000, 3_000_000)
+        assertEquals(Prefetch.StillDownloading(42), PlayerBranches.nextStatus(next, online = true, emptyMap(), listOf(running), standIn = true))
+        // One downloaded plays from its file, as any.
+        assertEquals(Prefetch.Downloaded(partsMissing = 0), PlayerBranches.nextStatus(next, online = true, mapOf(next to row(6)), emptyList(), standIn = true))
+    }
+
     @Test
     fun `what can't play offline counts down to nothing and offers Close alone`() {
         listOf(Prefetch.NotDownloadedOffline, Prefetch.StillDownloading(42)).forEach {

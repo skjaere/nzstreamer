@@ -59,11 +59,13 @@ internal object PlayerBranches {
      * download had no article for. While not [online], [Prefetch.StillDownloading] where one of it is on its way among the
      * runner's [items], by how much of it is written (of its exact size, else the indexer's), else
      * [Prefetch.NotDownloadedOffline]: neither can play. Null online for one not downloaded or not yet complete: the card
-     * searches for it, and it streams, as before.
+     * searches for it, and it streams, as before. Never null for a [standIn], an episode the playing one's download row
+     * named as TMDB couldn't be asked ([OfflineNext]): it has nothing to be searched by (no year, no other titles), so with
+     * the network back it stays as it was offline.
      */
-    fun nextStatus(key: String, online: Boolean, done: Map<String, Download>, items: List<DownloadRunner.Item>): Prefetch? {
+    fun nextStatus(key: String, online: Boolean, done: Map<String, Download>, items: List<DownloadRunner.Item>, standIn: Boolean = false): Prefetch? {
         done[key]?.let { return Prefetch.Downloaded(it.gaps.size) }
-        if (online) return null
+        if (online && !standIn) return null
         val coming = items.firstOrNull { it.row.watchKey == key && it.row.state in ON_ITS_WAY } ?: return Prefetch.NotDownloadedOffline
         val size = coming.row.size ?: coming.row.indexerSize
         val percent = if (size > 0) (coming.written * 100 / size).toInt().coerceIn(0, 99) else 0

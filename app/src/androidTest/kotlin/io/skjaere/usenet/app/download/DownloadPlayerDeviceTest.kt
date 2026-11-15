@@ -54,6 +54,8 @@ import io.skjaere.usenet.metadata.ExternalIds
 import io.skjaere.usenet.metadata.Season
 import io.skjaere.usenet.metadata.SeasonSummary
 import io.skjaere.usenet.metadata.ShowDetails
+import io.skjaere.usenet.metadata.TmdbError
+import io.skjaere.usenet.metadata.TmdbException
 import io.skjaere.usenet.newznab.TvIds
 import io.skjaere.usenet.player.PlayGaps
 import io.skjaere.usenet.player.PlayUris
@@ -232,13 +234,16 @@ class DownloadPlayerDeviceTest {
     }
 
     /**
-     * Offline, with TMDB not answering: the next episode is the row's next in its season, not downloaded, and the card says
-     * so with Close alone: no Play now, no countdown, no search, and the controls' Next plays nothing.
+     * Offline, with TMDB not reached: the next episode is the row's next in its season, not downloaded, and the card says
+     * so with Close alone: no Play now, no countdown, no search, and the controls' Next plays nothing. With the network
+     * back while it shows, the episode the row stood in for has nothing to be searched by (no year, no other titles), so
+     * the card stays so and nothing is searched.
      */
     @Test
     fun offlineTheCardForANextEpisodeNotDownloadedSaysSoWithClose() = runBlocking<Unit> {
         val row = seed(episode(QUIET, 2))
         offline()
+        PlayerActivity.nextEpisode = { _, _ -> throw TmdbException(TmdbError.Network("not reached")) }
         PlayerActivity.prefetchNext = { _, _, _ -> prefetches.incrementAndGet(); MutableStateFlow(Prefetch.Searching) }
         // The card from the start: the file is six minutes long.
         PlayerActivity.timings = PlayerActivity.Timings(cardBeforeEndMs = 400_000)
@@ -247,8 +252,38 @@ class DownloadPlayerDeviceTest {
             assertTrue(card.toString(), "Not downloaded · offline" in card && "Close" in card)
             assertFalse(card.toString(), "Play now" in card || "Stop" in card || "Next episode plays automatically" in card)
             assertFalse("the controls' Next plays it", scenario.read { a -> playerView(a).player?.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT) == true })
+            online()
+            // A few of the card's ticks with the network back.
+            delay(STAND_IN_MILLIS)
+            val back = scenario.read { a -> cardWords(a) }
+            assertTrue(back.toString(), "Not downloaded · offline" in back && "Close" in back)
+            assertFalse(back.toString(), "Play now" in back || "Next episode plays automatically" in back)
+            assertFalse("the controls' Next plays it online", scenario.read { a -> playerView(a).player?.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT) == true })
             scenario.onActivity { a -> clickOverlay(a, "Close") }
             waitFor("the card to go") { scenario.read { a -> cardWords(a).none { "S01E03" in it }.takeIf { it } } }
+        }
+        assertEquals("searches for the next episode", 0, prefetches.get())
+    }
+
+    /**
+     * Offline, with TMDB answering from what it kept that nothing has aired after the episode (a weekly show's newest), its
+     * answer stands: the row's next, which TMDB's count of the season names but hasn't aired, isn't offered, no card shows,
+     * and the player leaves at the end as for any last episode.
+     */
+    @Test
+    fun offlineWhenTmdbSaysNothingHasAiredAfterItNoCardShowsAndThePlayerLeaves() = runBlocking<Unit> {
+        val row = seed(episode(QUIET, 2))
+        offline()
+        PlayerActivity.prefetchNext = { _, _, _ -> prefetches.incrementAndGet(); MutableStateFlow(Prefetch.Searching) }
+        PlayerActivity.timings = PlayerActivity.Timings(cardBeforeEndMs = 400_000)
+        ActivityScenario.launch<PlayerActivity>(PlayerActivity.intent(context, checkNotNull(DownloadLaunch.of(row)))).use { scenario ->
+            seekNearTheEnd(scenario, beforeEndMs = 3_000)
+            waitFor("the player to leave at the end", 60_000) {
+                if (scenario.state == Lifecycle.State.DESTROYED) return@waitFor Unit
+                val words = runCatching { scenario.read { a -> cardWords(a) } }.getOrDefault(emptyList())
+                if (words.any { "S01E03" in it || "Not downloaded" in it }) throw AssertionError("a card for the next episode: $words")
+                null
+            }
         }
         assertEquals("searches for the next episode", 0, prefetches.get())
     }
@@ -517,5 +552,7 @@ class DownloadPlayerDeviceTest {
         const val BACK_MILLIS = 90_000L
         const val CARD_MILLIS = 30_000L
         const val LAUNCH_MILLIS = 15_000L
+        /** How long a card the row stood in for is watched with the network back: several of its ticks. */
+        const val STAND_IN_MILLIS = 3_000L
     }
 }

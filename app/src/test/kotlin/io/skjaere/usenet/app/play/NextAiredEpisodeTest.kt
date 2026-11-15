@@ -15,6 +15,7 @@ import java.time.LocalDate
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class NextAiredEpisodeTest {
     private val today = LocalDate.of(2026, 10, 14)
@@ -79,5 +80,20 @@ class NextAiredEpisodeTest {
     @Test
     fun `cancellation is passed on, not taken for a failure`() {
         assertFailsWith<CancellationException> { next(1, 1, loadShow = { throw CancellationException("player left") }) }
+    }
+
+    private fun answered(season: Int, episode: Int, loadShow: suspend (Int) -> ShowDetails = { show }) = runBlocking {
+        nextAiredEpisodeOrFail(900002, season, episode, today, loadShow, loadSeason = { _, n -> Season(900002, n, null, null, seasons.getValue(n)) })
+    }
+
+    /** The player's lookup (L354): TMDB's answer of none stands, and only TMDB not reached lets a download's row say the next. */
+    @Test
+    fun `the player's lookup tells nothing aired after it from TMDB not reached`() {
+        assertEquals(1 to 2, answered(1, 1)?.let { it.season to it.episode })
+        assertNull(answered(3, 1))
+        assertNull(answered(0, 2))
+        val failure = assertFailsWith<TmdbException> { answered(1, 1, loadShow = { throw TmdbException(TmdbError.Network("offline")) }) }
+        assertTrue(failure.error is TmdbError.Network, "${failure.error}")
+        assertFailsWith<CancellationException> { answered(1, 1, loadShow = { throw CancellationException("player left") }) }
     }
 }

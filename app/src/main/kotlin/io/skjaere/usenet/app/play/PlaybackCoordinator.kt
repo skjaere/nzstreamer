@@ -432,16 +432,35 @@ internal suspend fun nextAiredEpisode(
     loadShow: suspend (Int) -> io.skjaere.usenet.metadata.ShowDetails,
     loadSeason: suspend (Int, Int) -> io.skjaere.usenet.metadata.Season,
 ): EpisodePlay? = try {
+    nextAiredEpisodeOrFail(showTmdbId, season, episode, today, loadShow, loadSeason)
+} catch (e: CancellationException) {
+    throw e
+} catch (e: Exception) {
+    null
+}
+
+/**
+ * As [nextAiredEpisode], but TMDB not reached (offline with nothing kept of the show, no key, TMDB failing) throws rather
+ * than reading as no next episode: the player tells the two apart, and goes by a download's row only when TMDB couldn't
+ * be asked, never in place of its answer that nothing has aired after the episode (L354).
+ */
+suspend fun nextAiredEpisodeOrFail(tmdb: io.skjaere.usenet.metadata.TmdbClient, showTmdbId: Int, season: Int, episode: Int, today: java.time.LocalDate = java.time.LocalDate.now()): EpisodePlay? =
+    nextAiredEpisodeOrFail(showTmdbId, season, episode, today, loadShow = { tmdb.show(it) }, loadSeason = { id, number -> tmdb.season(id, number) })
+
+internal suspend fun nextAiredEpisodeOrFail(
+    showTmdbId: Int,
+    season: Int,
+    episode: Int,
+    today: java.time.LocalDate,
+    loadShow: suspend (Int) -> io.skjaere.usenet.metadata.ShowDetails,
+    loadSeason: suspend (Int, Int) -> io.skjaere.usenet.metadata.Season,
+): EpisodePlay? {
     val show = loadShow(showTmdbId)
     val next = loadSeason(showTmdbId, season).episodes.firstOrNull { it.episode == episode + 1 }
         ?: show.seasons.filter { !it.isSpecials && it.number > season && it.episodeCount > 0 }.minByOrNull { it.number }
             ?.takeIf { season > 0 }
             ?.let { s -> loadSeason(showTmdbId, s.number).episodes.firstOrNull { it.episode == 1 } }
-    next?.takeIf { show.hasAired(it, today) }?.let { EpisodePlay.of(show, it, today) }
-} catch (e: CancellationException) {
-    throw e
-} catch (e: Exception) {
-    null
+    return next?.takeIf { show.hasAired(it, today) }?.let { EpisodePlay.of(show, it, today) }
 }
 
 /**
