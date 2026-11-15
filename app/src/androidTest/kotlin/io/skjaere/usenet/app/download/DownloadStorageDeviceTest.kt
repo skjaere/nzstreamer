@@ -1,21 +1,29 @@
 package io.skjaere.usenet.app.download
 
+import android.database.sqlite.SQLiteConstraintException
+import android.database.sqlite.SQLiteException
 import android.os.storage.StorageManager
 import android.system.Os
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadDao
 import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.LibraryDatabase
 import io.skjaere.usenet.data.WatchKey
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -175,6 +183,43 @@ class DownloadStorageDeviceTest {
         storage.dropSource("kept")
         assertEquals(setOf(".row"), storage.bookkeeping("kept").list()!!.toSet())
         assertNull(storage.source("kept"))
+    }
+
+    /** An add whose insert fails never leaves a row without its marker (L346, L350), nor a marker without a row. */
+    @Test
+    fun anAddThatFailsLeavesNoRowWithoutItsMarker() = runBlocking<Unit> {
+        // Its caller cancelled as the insert commits: Room's call throws though the row is in.
+        lateinit var adding: Job
+        val cancelledAsItCommits = object : DownloadDao by downloads {
+            override suspend fun insert(download: Download) {
+                downloads.insert(download)
+                adding.cancel()
+                currentCoroutineContext().ensureActive()
+            }
+        }
+        val cancelled = DownloadStorage(files, { volume }, cancelledAsItCommits, storageManager)
+        adding = launch { cancelled.add(row("committed")) }
+        adding.join()
+        assertTrue(adding.isCancelled)
+        assertNotNull(downloads.get("committed"))
+        assertTrue("the marker of a row that is there", File(files, "downloads/committed/.row").isFile)
+
+        // Added again: the insert fails on its id, and the folder stays the first add's, whole.
+        val storage = storage()
+        storage.add(row("twice"))
+        storage.keepSource("twice", NZB, null)
+        assertThrows(SQLiteConstraintException::class.java) { runBlocking { storage.add(row("twice")) } }
+        assertTrue("the marker of the row added first", File(files, "downloads/twice/.row").isFile)
+        assertTrue(File(files, "downloads/twice/nzb").isFile)
+
+        // An insert that fails with no row: its folder goes too, as reconcile would delete it.
+        val refusing = object : DownloadDao by downloads {
+            override suspend fun insert(download: Download) = throw SQLiteException("disk I/O error")
+        }
+        val refused = DownloadStorage(files, { volume }, refusing, storageManager)
+        assertThrows(SQLiteException::class.java) { runBlocking { refused.add(row("refused")) } }
+        assertNull(downloads.get("refused"))
+        assertFalse(File(files, "downloads/refused").exists())
     }
 
     @Test

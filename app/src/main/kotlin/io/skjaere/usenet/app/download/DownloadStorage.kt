@@ -9,6 +9,7 @@ import io.skjaere.usenet.data.DownloadDao
 import io.skjaere.usenet.data.DownloadState
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -86,8 +87,18 @@ class DownloadStorage(
             try {
                 downloads.insert(row)
             } catch (e: Throwable) {
-                // No row: its folder goes too, as reconcile would delete it.
-                folder.deleteRecursively()
+                // No row: its folder goes too, as reconcile would delete it. A row may be there all the same: an insert
+                // whose caller was cancelled as it committed, or one whose id was taken, the folder then that row's. Asked
+                // whatever the cancellation; a failed ask keeps the folder, for the next reconcile to judge.
+                withContext(NonCancellable) {
+                    val rowThere = try {
+                        downloads.get(row.id) != null
+                    } catch (lookup: Exception) {
+                        e.addSuppressed(lookup)
+                        true
+                    }
+                    if (!rowThere) folder.deleteRecursively()
+                }
                 throw e
             }
         }
