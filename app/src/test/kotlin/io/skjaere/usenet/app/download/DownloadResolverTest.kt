@@ -664,6 +664,22 @@ class DownloadResolverTest {
         }
     }
 
+    /**
+     * Another nzb-streamer (an app update mid-download) can list an obfuscated file by its PAR2 name, or the other way
+     * round (N54, NR-19): the file at its place, of its size, is the same one, and the download goes on from its offset.
+     */
+    @Test
+    fun `a reopen finds its file listed under another name at its place and size`() = runBlocking<Unit> {
+        row(single) { it.resolvedAs(single, OBFUSCATED, 1_200_000_000L).copy(safeOffset = 500_000_000L, relativePath = "downloads/$ID/v.mkv") }
+        storage.sources[ID] = DownloadStorage.Source(single.nzb, null)
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals("a8f3c1.mkv", ready.file.name)
+        assertEquals(500_000_000L, ready.row.safeOffset)
+        assertEquals(emptyList(), grabbed)
+        assertEquals(emptyList(), storage.deletedVideos)
+        assertNotNull(storage.sources[ID])
+    }
+
     @Test
     fun `a file whose size no longer matches starts again from 0`() = runBlocking<Unit> {
         row(single) { it.resolvedAs(single, "a8f3c1.mkv", 1_200_000_001L).copy(safeOffset = 600_000_000L, relativePath = "downloads/$ID/v.mkv") }
@@ -680,7 +696,8 @@ class DownloadResolverTest {
 
     @Test
     fun `an own NZB that no longer gives the file is dropped and the next release resolved`() = runBlocking<Unit> {
-        row(single, pack, tried = listOf(single)) { it.resolvedAs(single, "gone.mkv", 1_200_000_000L) }
+        // No file of its name, nor one of its size at its place.
+        row(single, pack, tried = listOf(single)) { it.resolvedAs(single, "gone.mkv", 1_300_000_000L) }
         storage.sources[ID] = DownloadStorage.Source(single.nzb, null)
         val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
         assertEquals(listOf(pack.guid), grabbed)
@@ -820,6 +837,9 @@ class DownloadResolverTest {
 
         /** An article the providers lack. */
         const val GONE = "gone-"
+
+        /** A posted file's obfuscated name, as a release may post one. */
+        const val OBFUSCATED = "5d41402abc4b2a76b9719d911017c592.mkv"
 
         /** Room for any of the fakes: 100 GB. */
         val ROOM = DownloadSpace(available = 100_000_000_000L, used = 0, queued = 0)

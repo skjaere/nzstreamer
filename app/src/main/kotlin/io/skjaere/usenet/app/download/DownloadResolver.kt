@@ -200,7 +200,10 @@ class DownloadResolver(
             is PrepareOutcome.MissingArticles -> if (providersLeftOut()) return unreachable(row.id, UsenetError.MissingArticle(null), DownloadHostRules.CANT_REACH_PROVIDER) else null
             is PrepareOutcome.NeedsPassword, is PrepareOutcome.Unsupported -> null
         }
-        val file = prepared?.find(release.fileIndex, row.fileName ?: release.fileName, null)
+        // By its name and size first, as the player finds it: a file listed under another name at its place and of its size
+        // is the same (N54, NR-19). Then by its name alone, at whatever size, which starts it again from 0 below.
+        val name = row.fileName ?: release.fileName
+        val file = prepared?.let { it.find(release.fileIndex, name, size) ?: it.find(release.fileIndex, name, null) }
         if (prepared == null || file == null) {
             log.info("download {}: its own NZB no longer opens to its file: resolving it again", row.id)
             storage.dropSource(row.id)
