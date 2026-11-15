@@ -637,14 +637,17 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      * then written, then the next. Returns once nothing can run (L388): all done or failed, the queue held, or a wait for
      * the providers or for storage. The host ends then; cancelled by its host, the item under way stops at its safe offset,
      * its row as a kill leaves it, for the next walk. [walking] says it is under way until it has found nothing more.
+     * [taken] is called once, under the queue's lock, as the walk first looks at the queue: [walking] says from then on
+     * whether it takes up what is queued, so the host stops counting itself ahead of its walk (the job, L335).
      */
-    suspend fun run(host: DownloadHost) {
+    suspend fun run(host: DownloadHost, taken: () -> Unit = {}) {
         if (!runs) return
         // A host in a new process can start before the app's start has reconciled: its walk takes the rows as reconcile
         // leaves them, never one the user stopped from Android.
         reconcile()
         walks.withLock {
             log.info("Downloads: the {} runs the queue", host.name.lowercase())
+            var first = true
             try {
                 coroutineScope {
                     while (true) {
@@ -653,6 +656,10 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                             val row = next()
                             // Said under the queue's lock: a change made after this finds the walk taking it up, or ended.
                             _walking.value = row != null
+                            if (first) {
+                                first = false
+                                taken()
+                            }
                             if (row == null) return@withLock null
                             launch(deps.io) { walk = item(row.id) }.also { current = Current(row.id, it) }
                         } ?: break

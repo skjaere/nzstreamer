@@ -13,6 +13,8 @@ import io.skjaere.usenet.app.download.DownloadTrace.ScheduleResult
 import io.skjaere.usenet.data.Download
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
 
 /**
@@ -27,23 +29,31 @@ import org.slf4j.LoggerFactory
  * traced in the debug build with its cause and how it went (L391).
  */
 class DownloadHosts(private val deps: DownloadHostsDeps) {
+    /**
+     * One ask at a time: the app's start and a Resume as the app comes to the front would both find no job waiting, and
+     * the second schedule would stop the job the first started (C5).
+     */
+    private val asking = Mutex()
+
     /** Schedules the host for [cause] where the rules allow it; whether Android took it: the job scheduled, or the service started. */
     suspend fun schedule(cause: ScheduleCause): Boolean {
         if (!DownloadHostRules.runs(deps.television)) return false
-        val result = try {
-            val rows = deps.runnable()
-            val override = deps.debug.serviceHost
-            val visible = deps.visible()
-            when {
-                DownloadHostRules.hostFor(deps.sdk, override) == DownloadHost.Service -> startService(cause, override, visible, rows)
-                deps.sdk >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> scheduleJob(cause, visible, rows)
-                else -> ScheduleResult.Skipped
+        val result = asking.withLock {
+            try {
+                val rows = deps.runnable()
+                val override = deps.debug.serviceHost
+                val visible = deps.visible()
+                when {
+                    DownloadHostRules.hostFor(deps.sdk, override) == DownloadHost.Service -> startService(cause, override, visible, rows)
+                    deps.sdk >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> scheduleJob(cause, visible, rows)
+                    else -> ScheduleResult.Skipped
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.warn("Downloads: couldn't schedule the host for {}: {}", cause, e::class.simpleName)
+                ScheduleResult.Refused
             }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            log.warn("Downloads: couldn't schedule the host for {}: {}", cause, e::class.simpleName)
-            ScheduleResult.Refused
         }
         // So a two-phase test tells the app's own schedule from the platform's run of a job that was waiting (L391).
         deps.debug.trace(DownloadTrace.Schedule(cause, result))
@@ -67,7 +77,9 @@ class DownloadHosts(private val deps: DownloadHostsDeps) {
 
     /** Schedules the job for [cause] as [DownloadHostRules.schedules] allows, for the [rows] that can run. */
     private suspend fun scheduleJob(cause: ScheduleCause, visible: Boolean, rows: List<Download>): ScheduleResult {
-        val schedules = DownloadHostRules.schedules(cause, deps.television, visible, rows.isNotEmpty(), deps.walking(), deps.pending())
+        // Waiting first: a start ahead of its walk reads as waiting until its walk takes the queue up, and walking from then.
+        val pending = deps.pending()
+        val schedules = DownloadHostRules.schedules(cause, deps.television, visible, rows.isNotEmpty(), deps.walking(), pending)
         if (!schedules) return ScheduleResult.Skipped
         return if (deps.scheduleJob(cause, rows)) ScheduleResult.Scheduled else ScheduleResult.Refused
     }
@@ -92,7 +104,8 @@ class DownloadHosts(private val deps: DownloadHostsDeps) {
 /**
  * What [DownloadHosts] reads and asks of Android: the app's ([of]), or a test's fakes. [startService] starts the service
  * from the visible app, throwing [IllegalStateException] where Android refuses it; [pending] says whether the job waits to
- * run, and [scheduleJob] schedules it for the rows that can run, whether Android took it (both Android 14's).
+ * run, or runs ahead of its walk ([DownloadJobService.pending]), and [scheduleJob] schedules it for the rows that can run,
+ * whether Android took it (both Android 14's).
  */
 class DownloadHostsDeps(
     /** Whether this is a TV, where nothing of downloads runs (W108, L369). */
@@ -137,7 +150,14 @@ class DownloadHostsDeps(
         @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
         private suspend fun scheduleJob(context: Context, container: AppContainer, cause: ScheduleCause, rows: List<Download>): Boolean {
             val plan = JobPlan.of(container.settings.downloads.first(), rows)
-            val result = DownloadJobService.scheduler(context).schedule(DownloadJobService.jobInfo(context, plan))
+            DownloadJobService.scheduling()
+            val result = try {
+                DownloadJobService.scheduler(context).schedule(DownloadJobService.jobInfo(context, plan))
+            } catch (e: RuntimeException) {
+                DownloadJobService.refused()
+                throw e
+            }
+            if (result != JobScheduler.RESULT_SUCCESS) DownloadJobService.refused()
             log.info(
                 "Downloads: the job {} for {} ({} to run, {} bytes, {})", if (result == JobScheduler.RESULT_SUCCESS) "scheduled" else "refused", cause,
                 rows.size, plan.downloadBytes, if (plan.unmetered) "unmetered" else "any network",

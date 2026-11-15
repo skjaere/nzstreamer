@@ -495,6 +495,32 @@ class DownloadRunnerTest {
         assertEquals(DownloadState.Done, stored(first).state)
     }
 
+    /**
+     * A host's walk says when it has taken the queue up ([DownloadRunner.run]'s taken): once [DownloadRunner.walking] says
+     * whether it will take up what is queued, under the queue's lock. Until then the job reads as waiting to run, so the
+     * app's schedule never stops a job whose walk hasn't begun (L335, C5).
+     */
+    @Test
+    fun `a walk says it has taken the queue up once walking says whether it will`() = test {
+        val runner = runner()
+        val seen = mutableListOf<Boolean>()
+        val a = fake("hl-a").apply { hold = HOLD }
+        runner.add(1, a)
+        val walk = work.launch { runner.run(host) { seen += runner.walking.value } }
+        runCurrent()
+        assertEquals(listOf(true), seen)
+        a.gate.complete(Unit)
+        advanceUntilIdle()
+        assertTrue(walk.isCompleted)
+        // Once only: the walk's later looks at the queue say nothing more.
+        assertEquals(listOf(true), seen)
+
+        // Nothing to take up: said all the same, walking false, so the ask after it schedules.
+        work.launch { runner.run(host) { seen += runner.walking.value } }
+        advanceUntilIdle()
+        assertEquals(listOf(true, false), seen)
+    }
+
     @Test
     fun `move takes a queued one up and down past its queued neighbours`() = test {
         val runner = runner()

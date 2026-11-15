@@ -5,7 +5,10 @@ import io.skjaere.usenet.data.Clock
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.WatchKey
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -39,23 +42,31 @@ class DownloadHostsTest {
     /** What was asked of Android, in turn: the service's start and the job's schedule, each with its cause. */
     private val asked = mutableListOf<String>()
 
+    /** What happens once the ask has read whether a walk is under way or the job waits, after the first of the two reads. */
+    private var afterRead: (() -> Unit)? = null
+
+    private fun read() {
+        afterRead?.also { afterRead = null }?.invoke()
+    }
+
     private fun hosts(
         sdk: Int = 34,
         television: Boolean = false,
         debug: DownloadDebug = this.debug,
         runnable: suspend () -> List<Download> = { rows },
+        scheduleJob: suspend (ScheduleCause) -> Boolean = { jobTaken },
     ) = DownloadHosts(
         DownloadHostsDeps(
-            television = television, sdk = sdk, debug = debug, runnable = runnable, walking = { walking }, visible = { visible },
+            television = television, sdk = sdk, debug = debug, runnable = runnable, walking = { walking.also { read() } }, visible = { visible },
             standing = { standing },
             startService = {
                 asked += "service"
                 if (serviceRefused) throw IllegalStateException("Not allowed to start service Intent: app is in background")
             },
-            pending = { pending },
+            pending = { pending.also { read() } },
             scheduleJob = { cause, _ ->
                 asked += "job ${cause.name}"
-                jobTaken
+                scheduleJob(cause)
             },
         ),
     )
@@ -95,6 +106,49 @@ class DownloadHostsTest {
         // A changed switch schedules all the same, the waiting job taking the new needs (L335).
         assertTrue(hosts.schedule(ScheduleCause.SwitchChanged))
         assertEquals("$NOW schedule cause=SwitchChanged result=scheduled", traced().last())
+    }
+
+    /**
+     * A job Android has started whose walk hasn't taken the queue up yet reads as waiting to run (DownloadJobService's
+     * pending): a schedule now would stop it as it starts (C5). The walk can take the queue up between the ask's two reads,
+     * walking from then on and no longer waiting: read the other way round, the ask would find neither and schedule.
+     */
+    @Test
+    fun `a job started but not yet at the queue holds the ask back, its walk taking the queue up as the ask reads`() = runBlocking<Unit> {
+        pending = true
+        walking = false
+        afterRead = {
+            walking = true
+            pending = false
+        }
+        assertFalse(hosts().schedule(ScheduleCause.AppStart))
+        assertEquals(emptyList(), asked)
+        assertEquals(listOf("$NOW schedule cause=AppStart result=skipped"), traced())
+    }
+
+    /** The app's start and the notification's Resume as the app comes to the front: the second finds the first's job waiting. */
+    @Test
+    fun `two asks at once go one at a time, so the job is scheduled once`() = runBlocking<Unit> {
+        val scheduling = CompletableDeferred<Unit>()
+        val taken = CompletableDeferred<Unit>()
+        val hosts = hosts(
+            scheduleJob = {
+                scheduling.complete(Unit)
+                taken.await()
+                // Android has it now: waiting to run, or started and not yet at the queue.
+                pending = true
+                true
+            },
+        )
+        val first = async { hosts.schedule(ScheduleCause.Resume) }
+        scheduling.await()
+        val second = async { hosts.schedule(ScheduleCause.AppStart) }
+        repeat(3) { yield() }
+        taken.complete(Unit)
+        assertTrue(first.await())
+        assertFalse(second.await())
+        assertEquals(listOf("job Resume"), asked)
+        assertEquals(listOf("$NOW schedule cause=Resume result=scheduled", "$NOW schedule cause=AppStart result=skipped"), traced())
     }
 
     @Test

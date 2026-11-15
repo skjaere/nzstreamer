@@ -30,6 +30,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * The downloads' host on Android 14 and later (L334, L335, L376, L388, C4, C5): a user-initiated data transfer job, one
@@ -74,6 +75,8 @@ class DownloadJobService : JobService() {
         container.downloadNotifications.hostStarted()
         val run = Run()
         runs[params.jobId] = run
+        // Ahead of its walk until the walk takes the queue up: the app's schedule leaves it be (L335).
+        ahead.started(run)
         // Begun here, to its first wait: a stop that came before a dispatched start would skip its end, and a stop can't
         // come before this returns, on the same thread.
         run.job = container.appScope.launch(start = CoroutineStart.UNDISPATCHED) { walk(params, run, container) }
@@ -115,7 +118,7 @@ class DownloadJobService : JobService() {
             coroutineScope {
                 val keeping = launch { notifications.keepOngoing(runner.state) }
                 val reporting = launch { report(params, runner) }
-                runner.run(DownloadHost.Job)
+                runner.run(DownloadHost.Job) { ahead.past(run) }
                 // Before the job ends, so no update lands after Android has taken its notification away.
                 keeping.cancel()
                 reporting.cancel()
@@ -185,6 +188,7 @@ class DownloadJobService : JobService() {
     private suspend fun ended(params: JobParameters, run: Run, container: AppContainer) {
         // Its own: a start the visible app scheduled as this one ended may be there already.
         runs.remove(params.jobId, run)
+        ahead.past(run)
         val runner = container.downloads
         val stop = run.stop
         try {
@@ -230,6 +234,9 @@ class DownloadJobService : JobService() {
         /** The job's starts here whose walks haven't ended. */
         private val live = MutableStateFlow(0)
 
+        /** The app's schedules of the job and its starts here, each until its walk takes the queue up. */
+        private val ahead = JobAhead()
+
         /** How many starts of the job are under way in this process: a device test waits for none. */
         @VisibleForTesting
         internal val starts: StateFlow<Int> = live.asStateFlow()
@@ -238,11 +245,24 @@ class DownloadJobService : JobService() {
         fun scheduler(context: Context): JobScheduler = context.getSystemService(JobScheduler::class.java).forNamespace(JobPlan.NAMESPACE)
 
         /**
-         * Whether the job waits to run (L335): scheduled, and not running. A running one whose walk has ended is about to end
-         * itself, so the runner's [DownloadRunner.walking] says whether a running one will take up what is queued.
+         * Whether the job waits to run (L335): scheduled, and not running, or running ahead of its walk ([JobAhead]: the app
+         * scheduled it and its start hasn't come here yet, or it has and its walk hasn't taken the queue up), which a
+         * schedule would stop as it starts (C5). A running one whose walk has ended is about to end itself, so the runner's
+         * [DownloadRunner.walking] says whether a running one will take up what is queued. Read before it (DownloadHosts),
+         * so a walk that takes the queue up between the two reads is seen by the second.
          */
         fun pending(scheduler: JobScheduler): Boolean =
-            scheduler.getPendingJob(JobPlan.ID) != null && scheduler.getPendingJobReason(JobPlan.ID) != JobScheduler.PENDING_JOB_REASON_EXECUTING
+            scheduler.getPendingJob(JobPlan.ID) != null &&
+                (ahead.ahead || scheduler.getPendingJobReason(JobPlan.ID) != JobScheduler.PENDING_JOB_REASON_EXECUTING)
+
+        /**
+         * The app schedules the job: ahead of its walk from before Android has it, as its start can come before the
+         * schedule returns, until a start of it here takes the queue up; or nothing ahead if Android refuses it ([refused]).
+         */
+        fun scheduling() = ahead.scheduling()
+
+        /** Android didn't take the schedule [scheduling] said. */
+        fun refused() = ahead.refused()
 
         /** [plan] as Android's JobInfo (L335, L376): user-initiated, its network, persisted, charging when asked, no storage constraint. */
         fun jobInfo(context: Context, plan: JobPlan): JobInfo = JobInfo.Builder(plan.id, ComponentName(context, DownloadJobService::class.java))
@@ -261,3 +281,35 @@ class DownloadJobService : JobService() {
 }
 
 private val log = LoggerFactory.getLogger(DownloadJobService::class.java)
+
+/**
+ * The job's starts ahead of their walks (L335, C5), process-wide: from the app's schedule of it until a start of it here,
+ * and from each start until its walk takes the queue up or the start ends. While one is ahead the job reads as waiting to
+ * run, though Android may already run it: a schedule then would stop the start under way and run the job again. Once a
+ * walk is at the queue, the runner's walking says the rest. Safe from any thread.
+ */
+internal class JobAhead {
+    private val asked = AtomicBoolean(false)
+    private val starts: MutableSet<Any> = ConcurrentHashMap.newKeySet()
+
+    /** The app schedules the job: ahead until a start of it comes here. Said before Android has it, its start may come first. */
+    fun scheduling() = asked.set(true)
+
+    /** Android refused the schedule: nothing of it is ahead. */
+    fun refused() = asked.set(false)
+
+    /** A start of the job here, [start]: ahead until [past]; the app's schedule, if any, taken up by it. */
+    fun started(start: Any) {
+        // The start first, so a reader never finds neither.
+        starts += start
+        asked.set(false)
+    }
+
+    /** [start]'s walk has taken the queue up (or found nothing to), or the start ended. */
+    fun past(start: Any) {
+        starts -= start
+    }
+
+    /** Whether a schedule of the app's or a start here hasn't come to the queue yet. */
+    val ahead: Boolean get() = asked.get() || starts.isNotEmpty()
+}
