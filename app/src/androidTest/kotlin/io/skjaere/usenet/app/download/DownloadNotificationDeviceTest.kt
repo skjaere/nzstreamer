@@ -28,12 +28,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 
 /**
  * The download notifications on a phone (item 11, L358, L380, L387, C4; DlPhoneNotification). No host exists yet in the
@@ -67,6 +69,11 @@ class DownloadNotificationDeviceTest {
     @Before
     fun setUp() {
         shell("pm grant ${context.packageName} ${Manifest.permission.POST_NOTIFICATIONS}")
+        // The debug seams another class's process left as it died (ServiceHostDeviceTest's): the job is the host on Android
+        // 14 here, and the writer unthrottled.
+        val folder = File(context.filesDir, DownloadStorage.DIR)
+        listOf(DownloadDebug.HOST, DownloadDebug.THROTTLE).forEach { File(folder, it).delete() }
+        assertFalse("the debug build's host override still read", container.downloadDebug.serviceHost)
     }
 
     @After

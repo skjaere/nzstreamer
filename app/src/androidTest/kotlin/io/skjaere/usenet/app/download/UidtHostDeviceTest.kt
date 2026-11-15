@@ -107,6 +107,9 @@ class UidtHostDeviceTest {
     @Before
     fun setUp() = runBlocking<Unit> {
         assertFalse("a phone", container.television)
+        // The job is the host here: a host override another class's process left as it died (ServiceHostDeviceTest's) goes.
+        File(folder, DownloadDebug.HOST).delete()
+        assertFalse("the debug build's host override still read", container.downloadDebug.serviceHost)
         // No job or walk of another test's.
         scheduler.cancelAll()
         noHost()
