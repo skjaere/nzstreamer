@@ -57,6 +57,13 @@ internal object DownloadLaunch {
         )
     }
 
+    /**
+     * How a log line names [launch]'s release: a download's by its download's id, never by the release's name, as the
+     * downloads' own lines do; a stream's by its title, as before.
+     */
+    fun releaseNamed(launch: PlayerLaunch): String =
+        (PlayUris.parse(launch.uri) as? PlayUris.Target.Download)?.let { "the release of download ${it.id}" } ?: launch.release.title
+
     /** What [read] gives, or none where what the row keeps can't be read (a later version's form): never a failure at the tap. */
     private inline fun <T> readable(read: () -> T?): T? = try {
         read()

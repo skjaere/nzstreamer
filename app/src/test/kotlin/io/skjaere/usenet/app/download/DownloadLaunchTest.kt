@@ -19,6 +19,7 @@ import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.player.PlayUris
 import kotlinx.serialization.json.Json
+import java.io.File
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -131,6 +132,27 @@ class DownloadLaunchTest {
     fun `a row with no release kept has no launch`() {
         assertNull(DownloadLaunch.of(episode.copy(release = null)))
         assertNull(DownloadLaunch.of(episode.copy(release = release.copy(nzbId = null))))
+    }
+
+    /**
+     * A download's failed play forgets its release as the one that played the title (a file it can't read), and a failure
+     * to save that is logged: the line names the release by its download, never by its title, as the downloads' lines do.
+     */
+    @Test
+    fun `a line about a download's release names its download, never the release, and a stream's names it as before`() {
+        listOf(episode, film).forEach { row ->
+            val named = DownloadLaunch.releaseNamed(assertNotNull(DownloadLaunch.of(row)))
+            val release = assertNotNull(row.release)
+            assertEquals("the release of download ${row.id}", named)
+            assertFalse(release.title in named || release.fileName.orEmpty() in named || release.guid in named, named)
+        }
+        val stream = assertNotNull(DownloadLaunch.of(film)).copy(uri = "usenet://nzb/d4e5f6/0")
+        assertEquals("Copper.Crown.2019.1080p.WEB.h264-WREN", DownloadLaunch.releaseNamed(stream))
+        // The coordinator's forgets for a launch go through it.
+        val source = File("src/main/kotlin/io/skjaere/usenet/app/play/PlaybackCoordinator.kt").readText()
+        val forgets = Regex("""forget\(launch\.watchKey, launch\.release\.toRemembered\(\)\)""").findAll(source).count()
+        assertEquals(0, forgets, "a forget for a launch naming its release by its title")
+        assertTrue("DownloadLaunch.releaseNamed(launch)" in source)
     }
 
     @Test

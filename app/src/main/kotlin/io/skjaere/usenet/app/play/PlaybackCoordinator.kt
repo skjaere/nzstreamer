@@ -30,6 +30,7 @@ import io.skjaere.usenet.app.debrid.ServicePlayFailure
 import io.skjaere.usenet.app.debrid.ServiceSource
 import io.skjaere.usenet.app.debrid.triedBySource
 import io.skjaere.usenet.app.download.DownloadHook
+import io.skjaere.usenet.app.download.DownloadLaunch
 import io.skjaere.usenet.app.search.IndexerConfigs
 import io.skjaere.usenet.app.search.SourceTag
 import io.skjaere.usenet.app.search.playTag
@@ -1182,7 +1183,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         val origin = plan.origin ?: return
         replaceJob(origin, launch.title, launch.subtitle, launch.watch) { tryAnother(launch.copy(cast = it.cast), positionMs, forget, stopped) }
         job = launchPlay(launch.title, launch.subtitle, origin = origin) {
-            if (forget) forget(launch.watchKey, launch.release.toRemembered())
+            if (forget) forget(launch)
             when (plan) {
                 is RetryPlan.Again -> runPipeline(plan.request, plan.retry)?.let { _state.value = it }
                 is RetryPlan.SearchEpisode -> lookUpAndPlay(plan.target, plan.retry)
@@ -1260,7 +1261,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
      * device can't play): it is no longer the release Resume and replay choose for its watch key.
      */
     fun forgetFailed(launch: PlayerLaunch) {
-        scope.launch { forget(launch.watchKey, launch.release.toRemembered()) }
+        scope.launch { forget(launch) }
     }
 
     /**
@@ -1295,9 +1296,15 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         return failed.stopped
     }
 
-    /** Forgets [release] as the one that played [watchKey]; a failure (a full disk) is logged, and the play goes on. */
-    private suspend fun forget(watchKey: String, release: RememberedRelease) =
-        saveOrLog("forget ${release.title} for $watchKey") { container.library.forgetRelease(watchKey, release) }
+    /**
+     * Forgets [release] as the one that played [watchKey]; a failure (a full disk) is logged, its line naming the release
+     * [named], and the play goes on.
+     */
+    private suspend fun forget(watchKey: String, release: RememberedRelease, named: String = release.title) =
+        saveOrLog("forget $named for $watchKey") { container.library.forgetRelease(watchKey, release) }
+
+    /** Forgets [launch]'s release as the one that played its title, a download's named by its download alone ([DownloadLaunch.releaseNamed]). */
+    private suspend fun forget(launch: PlayerLaunch) = forget(launch.watchKey, launch.release.toRemembered(), DownloadLaunch.releaseNamed(launch))
 
     /**
      * Starts [block] as the sheet's job; a failure it doesn't handle ends in [PlayState.Failed] for
