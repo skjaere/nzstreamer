@@ -19,6 +19,7 @@ import io.skjaere.usenet.releases.RankingTarget
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeFalse
@@ -62,7 +63,11 @@ class RankingContextDeviceTest {
         val routes = FakeRoutes()
         val connector = FakeConnector()
         val den = castRoute("Den TV", model = "SHIELD Android TV")
+        // Download size as the user saves it, put back after: the debug build's start saves its settings first.
+        runBlocking { withTimeout(SEEDING_MILLIS) { container.devSettingsSaved.await() } }
+        val savedCap = runBlocking { container.settings.downloads.first() }.sizeCapGbPerHour
         try {
+            runBlocking { container.settings.setDownloadSizeCap(4) }
             CastFakes.started(routes, connector, CopyOnWriteArrayList())
             CastFakes.connected(den, connector)
             container.playOn.choose(PlayChoice.Cast(den.id, den.name))
@@ -86,15 +91,20 @@ class RankingContextDeviceTest {
             assertEquals(RankingTarget.Download, download.target)
             assertEquals("this phone's screen, not the Shield's", here.device.displayHeight, download.device.displayHeight)
             assertEquals(false, download.tv)
-            val saved = runBlocking { container.settings.downloads.first() }.sizeCapGbPerHour
-            assertEquals(saved?.takeIf { it > 0 }?.let(DownloadSize::bitsPerSecond), download.prefs.downloadCapBitsPerSecond)
+            assertEquals("Download size as saved", DownloadSize.bitsPerSecond(4), download.prefs.downloadCapBitsPerSecond)
             container.playOn.choose(PlayChoice.Phone)
             waitUntil("This phone chosen") { container.playOn.target.value == PlayTarget.Phone }
             assertEquals("This phone chosen: this phone's", RankingTarget.Device, runBlocking { container.rankingContext() }.target)
         } finally {
             container.playOn.choose(PlayChoice.Phone)
             CastFakes.reset()
+            runBlocking { container.settings.setDownloadSizeCap(savedCap) }
         }
+    }
+
+    private companion object {
+        /** How long the debug build's start may take to save its settings. */
+        const val SEEDING_MILLIS = 30_000L
     }
 
     private fun waitUntil(what: String, timeoutMs: Long = 10_000, probe: () -> Boolean) {
