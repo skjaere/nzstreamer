@@ -11,12 +11,19 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.annotation.VisibleForTesting
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import io.skjaere.usenet.app.download.DownloadAsk
+import io.skjaere.usenet.app.download.DownloadExtras
+import io.skjaere.usenet.app.download.DownloadIntents
+import io.skjaere.usenet.app.download.DownloadPlaces
+import io.skjaere.usenet.app.download.LocalNotificationAsk
+import io.skjaere.usenet.app.download.NotificationAsk
 import io.skjaere.usenet.app.play.DisplayPorts
 import io.skjaere.usenet.app.play.RemoteKeys
 import io.skjaere.usenet.app.ui.AppTheme
@@ -61,7 +68,21 @@ class MainActivity : ComponentActivity() {
     internal var addTvsAsked = 0
         private set
 
+    /** What a download notification asked ([openDownloads]), for AppNav to open and do. */
+    private val downloadAsks = Channel<DownloadAsk>(Channel.CONFLATED)
+
+    /** What this activity last handed AppNav of the download extras: a device test's view of a notification's tap. */
+    @VisibleForTesting
+    internal var downloadAsked: DownloadAsk? = null
+        private set
+
     private lateinit var formFactor: FormFactor
+
+    /**
+     * Android's notification ask at the first Download (L358), through this activity's launcher, which is registered as
+     * the activity is made: on phones and tablets alone, in their layout.
+     */
+    private val notificationAsk = NotificationAsk.of(this) { DownloadPlaces.shown(formFactor, container.television) }
 
     /** Whether a player was started since this activity last started: it has the TV's mode held for it by then. */
     private var launchedSinceStart = false
@@ -87,18 +108,24 @@ class MainActivity : ComponentActivity() {
         val gate = splashModel.gate
         setContent {
             AppTheme(formFactor) {
-                AppNav(opened, searchKeys = searchKeys.receiveAsFlow(), remotes = remotes.receiveAsFlow(), privacy = privacies.receiveAsFlow(), addTv = addTvs.receiveAsFlow())
+                CompositionLocalProvider(LocalNotificationAsk provides notificationAsk) {
+                    AppNav(
+                        opened, searchKeys = searchKeys.receiveAsFlow(), remotes = remotes.receiveAsFlow(), privacy = privacies.receiveAsFlow(),
+                        addTv = addTvs.receiveAsFlow(), downloads = downloadAsks.receiveAsFlow(),
+                    )
+                }
             }
         }
         // Over the activity until the settings Home shows by are read: the container's, which Home
         // reads too, so it has them from its next frame.
         splash.setKeepOnScreenCondition { gate.keepOnScreen(SystemClock.uptimeMillis()) }
-        // A recreation restores Import, the remote, the privacy page or Add a TV as it was; only a new start opens one.
+        // A recreation restores Import, the remote, the privacy page, Add a TV or Downloads as it was; only a new start opens one.
         if (savedInstanceState == null) {
             showOpenedNzb(intent)
             showRemote(intent)
             showPrivacy(intent)
             showAddTv(intent)
+            showDownloads(intent)
         }
         // Play on (W18): a new launch starts on This phone, a recreation keeps the TV it had.
         if (!container.television) container.playOn.restore(savedInstanceState?.getString(PLAY_ON))
@@ -194,6 +221,7 @@ class MainActivity : ComponentActivity() {
         showRemote(intent)
         showPrivacy(intent)
         showAddTv(intent)
+        showDownloads(intent)
     }
 
     /** Opens the file [intent] hands over in Import; not again when Recents starts the app with the intent that first opened it. */
@@ -235,6 +263,29 @@ class MainActivity : ComponentActivity() {
         addTvs.trySend(Unit)
     }
 
+    /**
+     * Opens Downloads as a download notification asks ([openDownloads], L380, C4), and resumes or plays there when the
+     * ask carries the app's own token: where downloads show alone (the activity is exported, so anything may ask), and not
+     * when Recents starts the app with the intent that first asked ([DownloadIntents]).
+     */
+    private fun showDownloads(intent: Intent) {
+        val extras = DownloadExtras(
+            open = intent.getBooleanExtra(EXTRA_OPEN_DOWNLOADS, false),
+            resume = intent.getBooleanExtra(EXTRA_DOWNLOAD_RESUME, false),
+            play = intent.getStringExtra(EXTRA_DOWNLOAD_PLAY),
+            choose = intent.getStringExtra(EXTRA_DOWNLOAD_CHOOSE),
+            token = intent.getStringExtra(EXTRA_DOWNLOAD_TOKEN),
+        )
+        val ask = DownloadIntents.ask(
+            extras,
+            shown = DownloadPlaces.shown(formFactor, container.television),
+            fromRecents = intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0,
+            matches = container.downloadToken::matches,
+        ) ?: return
+        downloadAsked = ask
+        downloadAsks.trySend(ask)
+    }
+
     companion object {
         private const val EXTRA_OPENED_NZB = "openedNzb"
 
@@ -246,6 +297,15 @@ class MainActivity : ComponentActivity() {
 
         /** The player's list's ask for Add a TV. */
         private const val EXTRA_OPEN_ADD_TV = "openAddTv"
+
+        /** A download notification's ask for the Downloads page ([openDownloads]), with what to do there. */
+        private const val EXTRA_OPEN_DOWNLOADS = "openDownloads"
+        private const val EXTRA_DOWNLOAD_RESUME = "downloadResume"
+        private const val EXTRA_DOWNLOAD_PLAY = "downloadPlay"
+        private const val EXTRA_DOWNLOAD_CHOOSE = "downloadChoose"
+
+        /** The app's own token ([io.skjaere.usenet.app.download.DownloadToken]), which a resume and a play carry. */
+        private const val EXTRA_DOWNLOAD_TOKEN = "downloadToken"
 
         /** The saved state's TV Play on chose (W18): its key id, kept across a recreation alone. */
         private const val PLAY_ON = "playOn"
@@ -281,5 +341,22 @@ class MainActivity : ComponentActivity() {
         fun openAddTv(context: Context): Intent = Intent(context, MainActivity::class.java)
             .putExtra(EXTRA_OPEN_ADD_TV, true)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+
+        /**
+         * Brings the app forward on the Downloads page (L380, C4), as a download notification's tap and its actions ask:
+         * into the activity there is, closing what is over it (the player). [resume] lets the queue go on from there, the
+         * visible app scheduling the host; [play] plays the finished download of that id; [choose] opens that download's
+         * list of releases. A resume or a play carries the app's own token: only the app's own PendingIntents have it.
+         */
+        fun openDownloads(context: Context, resume: Boolean = false, play: String? = null, choose: String? = null): Intent =
+            Intent(context, MainActivity::class.java)
+                .putExtra(EXTRA_OPEN_DOWNLOADS, true)
+                .apply {
+                    if (resume) putExtra(EXTRA_DOWNLOAD_RESUME, true)
+                    play?.let { putExtra(EXTRA_DOWNLOAD_PLAY, it) }
+                    choose?.let { putExtra(EXTRA_DOWNLOAD_CHOOSE, it) }
+                    if (resume || play != null) putExtra(EXTRA_DOWNLOAD_TOKEN, context.container.downloadToken.value)
+                }
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     }
 }

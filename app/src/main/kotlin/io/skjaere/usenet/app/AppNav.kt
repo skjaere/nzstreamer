@@ -33,6 +33,9 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import io.skjaere.usenet.app.debrid.DebridGate
 import io.skjaere.usenet.app.debrid.DebridPages
+import io.skjaere.usenet.app.download.DownloadAsk
+import io.skjaere.usenet.app.download.DownloadPages
+import io.skjaere.usenet.app.download.DownloadPlaces
 import io.skjaere.usenet.app.home.HomeScreen
 import io.skjaere.usenet.app.home.SetupStep
 import io.skjaere.usenet.app.link.AddTvScreen
@@ -144,6 +147,7 @@ internal inline fun NavBackStackEntry.ifResumed(action: () -> Unit) {
  * Import. [searchKeys]: a TV remote's search key, which opens a new search on a TV. [remotes]: a cast's notification's
  * tap, which opens the remote over whatever shows (L86). [privacy]: the privacy page asked for from outside the app's
  * screens (the player's list, L138), opened over whatever shows; [addTv] likewise Add a TV, which chooses the TV it pairs.
+ * [downloads]: a download notification's tap or action (L380, C4), as MainActivity read it.
  */
 @Composable
 fun AppNav(
@@ -153,12 +157,17 @@ fun AppNav(
     remotes: Flow<Unit> = emptyFlow(),
     privacy: Flow<Unit> = emptyFlow(),
     addTv: Flow<Unit> = emptyFlow(),
+    downloads: Flow<DownloadAsk> = emptyFlow(),
 ) {
     val formFactor = LocalFormFactor.current
     val jumps = rememberCollectionJumps(nav)
     // The search key's ask for voice, taken once by the Search it opens: saved, so a restore never asks again.
     val voice = rememberSaveable(saver = VoiceRequest.Saver) { VoiceRequest() }
     val container = LocalContext.current.container
+    // The notifications' ways to the Downloads page: on phones and tablets alone, in their layout (L369).
+    val downloadPages = io.skjaere.usenet.app.download.downloadPages(
+        DownloadPlaces.shown(formFactor, container.television), register = {}, open = { route -> nav.navigate(route) { launchSingleTop = true } },
+    )
     // On a TV the search key opens Search from a dialog or a sheet too, through the shell as the
     // activity's presses do: they are windows of their own, whose keys the activity never sees.
     val dialogSearchKeys = remember { Channel<Unit>(Channel.CONFLATED) }
@@ -194,6 +203,7 @@ fun AppNav(
         val graph: @Composable () -> Unit = {
             NavHost(nav, startDestination = HomeRoute) {
                 appGraph(nav, container, jumps, formFactor, voice)
+                downloadScreens(nav, DownloadPlaces.shown(formFactor, container.television))
                 appExtras?.run { screens(nav, container, formFactor) }
             }
         }
@@ -226,6 +236,14 @@ fun AppNav(
         addTv.collect {
             nav.currentBackStackEntryFlow.first()
             nav.navigate(AddTvRoute(choose = true)) { launchSingleTop = true }
+        }
+    }
+    // A download notification's tap or action: the Downloads page, over whatever shows, and a resume asked with the app's
+    // token from here, the visible app, as Android schedules a user-initiated job only from it (C4).
+    LaunchedEffect(nav, downloads) {
+        downloads.collect { ask ->
+            nav.currentBackStackEntryFlow.first()
+            downloadPages.take(ask) { container.appScope.launch { saveOrLog("resume the downloads") { container.downloads.resume() } } }
         }
     }
     // A .nzb another app opened: Import over Home, whatever was showing, so Back goes to Home.
@@ -417,6 +435,14 @@ fun NavGraphBuilder.appGraph(nav: NavController, container: AppContainer, jumps:
         )
     }
 }
+
+/**
+ * The downloads' screens (W108, L369), in the phone's graph alone, while [shown] (DownloadPlaces.shown): where downloads
+ * don't show, none is there and the ways into them it gives back are null, so nothing opens one. The page comes with item
+ * 19, which registers it here; until then there are none.
+ */
+fun NavGraphBuilder.downloadScreens(nav: NavController, shown: Boolean): DownloadPages =
+    io.skjaere.usenet.app.download.downloadPages(shown, register = {}, open = { route -> nav.navigate(route) })
 
 /**
  * Debrid's screens (L192), in the graph only while [shown]: hidden, none is there, and the ways into them it gives back

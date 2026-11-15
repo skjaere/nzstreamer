@@ -15,6 +15,10 @@
          normal one, granted at install. Media notifications need no POST_NOTIFICATIONS. Google's Cast framework adds
          FOREGROUND_SERVICE. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Downloads' notifications (L358): how one is going, with Pause and Cancel, and each one finished or failed. A
+         runtime permission on Android 13 and later, the app's first: asked at the first Download, after the sheet's line
+         saying why. Refused, downloads still run, and the Downloads page shows them. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- One APK for phones and TVs: Leanback not required (required would list it for TVs only),
          and no touch, which TVs lack; Play takes touch as required unless it is declared not. -->
@@ -169,6 +173,12 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+
+        <!-- The download notifications' Pause and Cancel (L358): explicit, immutable broadcasts from the app's own
+             PendingIntents. Not exported, so nothing outside the app can send them. -->
+        <receiver
+            android:name=".download.DownloadActionReceiver"
+            android:exported="false" />
 
         <!-- A log shared from Settings › Logs: the app picked may read that one file, from cache/logs/ alone. -->
         <provider

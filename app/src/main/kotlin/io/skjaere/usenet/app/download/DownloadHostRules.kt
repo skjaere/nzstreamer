@@ -97,6 +97,9 @@ object DownloadHostRules {
     /** The words of a wait for the network the [needs] ask for. */
     fun waitingForNetwork(needs: DownloadNeeds): String = if (needs.unmetered) WAITING_FOR_WIFI else WAITING_FOR_NETWORK
 
+    /** Whether a row Waiting for [reason] waits for what the job's constraints and the service's callbacks watch (L388). */
+    fun waitsForNeed(reason: String?): Boolean = reason in NEED_WAITS
+
     /** What a stop of the job means (onStopJob, API 34 on), and whether onStopJob asks JobScheduler to run it again (L335). */
     sealed interface JobStop {
         val reschedule: Boolean
@@ -210,7 +213,7 @@ object DownloadHostRules {
             DownloadState.Waiting -> row.reason?.let { if (it in NEED_WAITS) far(it) else it } ?: far("Waiting")
             DownloadState.Stopped -> STOPPED_BY_ANDROID
             DownloadState.Done -> listOfNotNull("Downloaded", missing(row.gaps.size), formatSize(total)).joinToString(" · ")
-            DownloadState.Failed -> listOfNotNull("Couldn't download it.", row.reason?.let { if (it.endsWith('.')) it else "$it." }).joinToString(" ")
+            DownloadState.Failed -> listOfNotNull("Couldn't download it.", failure(row)?.let { if (it.endsWith('.')) it else "$it." }).joinToString(" ")
             DownloadState.Deleting -> return null
         }
         return NotificationWords(title(row), text, if (more > 0) "$more more queued" else null)
@@ -225,6 +228,15 @@ object DownloadHostRules {
         val episode = row.episode
         // The code's digits are the same in every language, as a release's are; the title is the row's as it is.
         return if (row.kind == DownloadKind.Episode && season != null && episode != null) "${row.title} · ${"S%02dE%02d".format(Locale.ROOT, season, episode)}" else row.title
+    }
+
+    /**
+     * Why [row] failed, as its notification says it: a release that lacked parts (the play sheet's "Release incomplete",
+     * and a long gap) by how many releases were tried; any other reason as the row keeps it.
+     */
+    private fun failure(row: Download): String? = when (row.reason) {
+        DownloadResolver.INCOMPLETE -> if (row.tried.size > 1) "Your provider is missing parts of all ${row.tried.size} releases tried" else "Your provider is missing parts of this release"
+        else -> row.reason
     }
 
     private fun missing(parts: Int): String? = when (parts) {

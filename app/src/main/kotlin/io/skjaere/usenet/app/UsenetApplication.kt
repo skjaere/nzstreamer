@@ -35,9 +35,11 @@ import io.skjaere.usenet.app.debrid.ServiceRegistry
 import io.skjaere.usenet.app.debrid.nameOf
 import io.skjaere.usenet.app.debrid.seedDevDebrid
 import io.skjaere.usenet.app.download.DownloadDebug
+import io.skjaere.usenet.app.download.DownloadNotifications
 import io.skjaere.usenet.app.download.DownloadRunner
 import io.skjaere.usenet.app.download.DownloadRunnerDeps
 import io.skjaere.usenet.app.download.DownloadStorage
+import io.skjaere.usenet.app.download.DownloadToken
 import io.skjaere.usenet.app.home.SetupState
 import io.skjaere.usenet.app.search.IndexerConfigs
 import io.skjaere.usenet.app.search.NamedAccount
@@ -293,6 +295,12 @@ class AppContainer(private val context: Context) {
      * watch key start with it, from the reconcile at the app's start. Nothing runs on a TV (L369).
      */
     val downloads: DownloadRunner by lazy { DownloadRunner(DownloadRunnerDeps.of(this, context), appScope) }
+
+    /** The downloads' notifications (L358): the hosts' ongoing one and the status one, and each finished or failed one. */
+    val downloadNotifications: DownloadNotifications by lazy { DownloadNotifications(context, television) }
+
+    /** The token the download notifications' Resume and Play carry, so another sender's ask only opens the page (item 11). */
+    val downloadToken: DownloadToken by lazy { DownloadToken(File(context.filesDir, DownloadStorage.DIR)) }
 
     /**
      * The releases found missing on the providers the engine uses, which plays skip without a grab until one it wasn't
@@ -695,6 +703,9 @@ class AppContainer(private val context: Context) {
             }
         }
         appScope.launch { saveOrLog("forget the releases found incomplete a month ago") { library.pruneTriedReleases() } }
+        // Each download finished or failed while the process lives has its notification, gone again as it is removed
+        // (L358); nothing on a TV (L369).
+        appScope.launch { saveOrLog("say which downloads finished") { downloadNotifications.watch(downloads.state) } }
         // What plays added to a TorBox account that an earlier process left goes a grace from now (L245), and the records
         // of an account signed out of, switched to keep its adds or given a new key go as it changes.
         debridAdds.start(settings.services)
