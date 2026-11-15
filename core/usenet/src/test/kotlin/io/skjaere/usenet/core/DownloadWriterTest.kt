@@ -191,13 +191,15 @@ class DownloadWriterTest {
         assertContentEquals(zeroed(5), path.readBytes())
     }
 
+    // The wait before the reopen on virtual time (L385).
     @Test
-    fun `a connection cut mid-BODY is a network failure, reopened at the safe offset, nothing before it fetched again`() = runBlocking<Unit> {
+    fun `a connection cut mid-BODY is a network failure, reopened at the safe offset, nothing before it fetched again`() = runTest(timeout = 60.seconds) {
         val opens = AtomicInteger()
         val server = serve { i ->
             if (i == 9 && opens.get() < 2) Body.Dropped(clip.article(i), bytes = 100_000) else Body.Article(clip.article(i))
         }
-        val wrote = withTimeout(60_000) { writer().wrote(opened = { opens.incrementAndGet() }) }
+        val wrote = writer(time = testScheduler.timeSource).wrote(opened = { opens.incrementAndGet() })
+        assertEquals(FIRST_WAIT, currentTime, "waited before the reopen")
         assertEquals(Outcome.Done(emptyList()), wrote.outcome)
         assertEquals(2, wrote.opens.size, "streams opened at ${wrote.opens}")
         // Where the reader had got to: what the stream held unread in front of the cut went with its failure.
@@ -210,8 +212,9 @@ class DownloadWriterTest {
         assertContentEquals(clip.data, path.readBytes())
     }
 
+    // The wait before the reopen on virtual time (L385); the latches on real time, off the test's thread.
     @Test
-    fun `a rebuild of the engine mid-download ends its stream, and the writer goes on on the new streamer`() = runBlocking<Unit> {
+    fun `a rebuild of the engine mid-download ends its stream, and the writer goes on on the new streamer`() = runTest(timeout = 60.seconds) {
         val reached = CountDownLatch(1)
         val letGo = CountDownLatch(1)
         serve { i ->
@@ -221,7 +224,7 @@ class DownloadWriterTest {
             }
             Body.Article(clip.article(i))
         }
-        val write = async { withTimeout(60_000) { writer().wrote() } }
+        val write = async { writer(time = testScheduler.timeSource).wrote() }
         withContext(Dispatchers.IO) { assertTrue(reached.await(30, TimeUnit.SECONDS), "the stream never reached article 8") }
         val first = engine.streamer()
         engine.rebuildWhenIdle()
@@ -230,6 +233,7 @@ class DownloadWriterTest {
         val wrote = write.await()
         assertEquals(Outcome.Done(emptyList()), wrote.outcome)
         assertEquals(2, wrote.opens.size, "streams opened: ${wrote.opens}")
+        assertEquals(FIRST_WAIT, currentTime, "waited before the reopen")
         assertContentEquals(clip.data, path.readBytes())
     }
 
@@ -835,6 +839,9 @@ class DownloadWriterTest {
     private companion object {
         const val ID = "dl-7Qx2"
         const val MIB = 1024L * 1024
+
+        /** The writer's first wait before a reopen, in ms. */
+        val FIRST_WAIT = DownloadWriter.FIRST_BACKOFF.inWholeMilliseconds
 
         /** Invented hosts, as a provider's and its certificate's names. */
         const val HOST = "news.harbor-lights.invalid"
