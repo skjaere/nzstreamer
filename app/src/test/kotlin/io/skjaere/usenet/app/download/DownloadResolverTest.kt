@@ -637,6 +637,33 @@ class DownloadResolverTest {
         assertEquals(0, store.storedFiles().count)
     }
 
+    /**
+     * A reopen whose prepare fails for something that says nothing of the release (a reply the provider garbled, a failure
+     * nobody named) keeps the download's own NZB and what it wrote, and backs off to try it again, as the writer reopens on
+     * these (L382): never another release, which would start again from 0.
+     */
+    @Test
+    fun `a reopen whose prepare fails for no fault of the release keeps its own NZB and its offset`() = runBlocking<Unit> {
+        listOf(io.skjaere.nntp.NntpProtocolException("500 what?"), IllegalStateException("a check that failed")).forEach { failure ->
+            reset()
+            row(passworded, single, tried = listOf(passworded)) {
+                it.resolvedAs(passworded, "c90a4f.mkv", 1_300_000_000L).copy(safeOffset = 400_000_000L, relativePath = "downloads/$ID/v.mkv")
+            }
+            storage.sources[ID] = DownloadStorage.Source(passworded.nzb, "s3cret-from-indexer")
+            passworded.opening = failure
+            assertIs<DownloadResolver.Resolution.Unreachable>(resolver().resolve(ID), "for $failure")
+            assertNotNull(storage.sources[ID], "for $failure")
+            assertEquals(emptyList(), grabbed, "for $failure")
+            assertEquals(emptyList(), storage.deletedVideos, "for $failure")
+            assertEquals(400_000_000L, stored().safeOffset, "for $failure")
+
+            passworded.opening = null
+            val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID), "for $failure")
+            assertEquals(400_000_000L, ready.row.safeOffset, "for $failure")
+            assertEquals(passworded.guid, ready.row.release?.guid, "for $failure")
+        }
+    }
+
     @Test
     fun `a file whose size no longer matches starts again from 0`() = runBlocking<Unit> {
         row(single) { it.resolvedAs(single, "a8f3c1.mkv", 1_200_000_001L).copy(safeOffset = 600_000_000L, relativePath = "downloads/$ID/v.mkv") }

@@ -191,8 +191,14 @@ class DownloadResolver(
         providersReady(row.id)?.let { return it }
         val prepared = when (val outcome = preparer.prepare(source.nzb, release.title, source.password)) {
             is PrepareOutcome.Ready -> outcome.nzb
+            // Only a failure that is the release's says the copy no longer gives the file; any other (a reply garbled, one
+            // nobody named) is tried again after a wait, as the writer reopens on it (L382), the copy and what was written kept.
             is PrepareOutcome.Failed -> providers(row.id, outcome.error)?.let { return it }
-            else -> null
+                ?: if (outcome.error is UsenetError.Corrupt || outcome.error is UsenetError.MissingArticle) null
+                else return unreachable(row.id, outcome.error, DownloadHostRules.CANT_REACH_PROVIDER)
+            // Missing on the providers in use, with one left out that may have it: no word on the release yet.
+            is PrepareOutcome.MissingArticles -> if (providersLeftOut()) return unreachable(row.id, UsenetError.MissingArticle(null), DownloadHostRules.CANT_REACH_PROVIDER) else null
+            is PrepareOutcome.NeedsPassword, is PrepareOutcome.Unsupported -> null
         }
         val file = prepared?.find(release.fileIndex, row.fileName ?: release.fileName, null)
         if (prepared == null || file == null) {
