@@ -163,7 +163,7 @@ class DownloadStorage(
      * - a row being deleted is finished: its Undo went with the process that showed it;
      * - a row whose marker is missing came from another device (a transfer carries the library, never these folders), and
      *   is dropped; a queued one has its marker from [add], before any NZB, and a finished one keeps it;
-     * - a finished row whose file is gone fails, "The downloaded file is gone", and holds no file;
+     * - a finished row whose file is gone fails, "The downloaded file is gone", holding no file and no progress;
      * - a folder no row has, in either place, is deleted: what a process left as it died.
      *
      * Files beside the folders stay. While the volume isn't there, no row is taken for gone and its folders stay.
@@ -180,7 +180,12 @@ class DownloadStorage(
                     row.state == DownloadState.Deleting -> deleteRow(row.id)
                     !File(bookkeeping(row.id), MARKER).isFile -> deleteRow(row.id).also { dropped++ }
                     row.state == DownloadState.Done && volume != null && row.relativePath?.let { File(volume, it).isFile } != true -> {
-                        downloads.update(row.copy(state = DownloadState.Failed, reason = FILE_GONE, relativePath = null, updatedAt = clock.now()))
+                        // Nothing of it is on the device: no byte written, no part missing, so Download again starts from 0.
+                        val gone = row.copy(
+                            state = DownloadState.Failed, reason = FILE_GONE, relativePath = null, safeOffset = 0, gaps = emptyList(),
+                            completedAt = null, updatedAt = clock.now(),
+                        )
+                        downloads.update(gone)
                         failed++
                     }
                 }

@@ -5,6 +5,7 @@ import android.system.Os
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.LibraryDatabase
@@ -162,9 +163,9 @@ class DownloadStorageDeviceTest {
         storage.finish("done", NAME)
         storage.dropSource("done")
         val done = finished("done", storage)
-        // Done, its file gone since.
+        // Done, its file gone since, with a part that was missing.
         storage.add(row("gone"))
-        finished("gone", storage)
+        finished("gone", storage).also { downloads.update(it.copy(gaps = listOf(DownloadGap(1024, 2047)))) }
         // Running when the process went: its marker, its NZB and its .part.
         val running = row("running").copy(state = DownloadState.Running).also { storage.add(it) }
         storage.keepSource("running", NZB, null)
@@ -187,6 +188,11 @@ class DownloadStorageDeviceTest {
         val gone = downloads.get("gone")!!
         assertEquals(DownloadState.Failed to "The downloaded file is gone", gone.state to gone.reason)
         assertNull("it holds no file now", gone.relativePath)
+        // Nor any of its bytes: Download again starts from 0, never from the end of a file that is gone.
+        assertEquals(0L, gone.safeOffset)
+        assertEquals(emptyList<DownloadGap>(), gone.gaps)
+        assertNull(gone.completedAt)
+        assertEquals(4096L, gone.size)
         assertNull(downloads.get("moved"))
 
         assertTrue(File(files, "downloads/queued/.row").isFile)
