@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app
 
+import io.skjaere.usenet.app.download.DownloadStorage
 import io.skjaere.usenet.data.DataContainer
 import org.junit.jupiter.api.Test
 import org.w3c.dom.Element
@@ -12,7 +13,7 @@ import kotlin.test.assertTrue
  * The secrets can't be read off this device, so no backup or device transfer may carry them; nor Play on TV's file,
  * whose pins mean nothing without this device's key (L29). Each with its DataStore temp file. Nor the last crash's log,
  * which leaves the device only when shared from Settings › Logs, as the privacy page says (L139). Nor the debrid folder,
- * whose listings and records of adds are the device's own (L233).
+ * whose listings and records of adds are the device's own (L233). Nor the downloads, which stay on this device (L350).
  */
 class BackupRulesTest {
     private val res = File("src/main/res")
@@ -29,9 +30,9 @@ class BackupRulesTest {
 
     private fun Element.excludesSecrets() = excludes(DataContainer.SECRETS_PATH)
 
-    /** The folder [dir] left out whole, with whatever is in it ("logs/" or "logs" as Android reads it). */
-    private fun Element.excludesFolder(dir: String) =
-        children("exclude").any { it.getAttribute("domain") == "file" && it.getAttribute("path").trimEnd('/') == dir }
+    /** The folder [dir] of [domain] left out whole, with whatever is in it ("logs/" or "logs" as Android reads it). */
+    private fun Element.excludesFolder(dir: String, domain: String = "file") =
+        children("exclude").any { it.getAttribute("domain") == domain && it.getAttribute("path").trimEnd('/') == dir }
 
     private fun rules(attribute: String): Element {
         val application = parse(File("src/main/AndroidManifest.xml")).children("application").single()
@@ -95,6 +96,32 @@ class BackupRulesTest {
     @Test
     fun `the debrid folder is left out of full backups up to Android 11`() {
         assertTrue(rules("fullBackupContent").excludesFolder(AppContainer.DEBRID_DIR), "full backups don't exclude ${AppContainer.DEBRID_DIR}/")
+    }
+
+    /**
+     * L350: downloads stay on this device, both their videos, in the app's folder on the primary volume (Android's
+     * "external" domain), and each one's bookkeeping in filesDir (the "file" domain): its marker, and its NZB and password
+     * while it needs them. A backup or a transfer would carry gigabytes of video, and the library's rows, which go, arrive
+     * without their markers: the app then reads them as another device's and drops them.
+     */
+    @Test
+    fun `downloads are left out of cloud backups and device transfers on Android 12+, from both domains`() {
+        val extraction = rules("dataExtractionRules")
+        listOf("cloud-backup", "device-transfer").forEach { section ->
+            listOf("file", "external").forEach { domain ->
+                assertTrue(
+                    extraction.children(section).single().excludesFolder(DownloadStorage.DIR, domain),
+                    "$section doesn't exclude ${DownloadStorage.DIR}/ of $domain",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `downloads are left out of full backups up to Android 11, from both domains`() {
+        listOf("file", "external").forEach { domain ->
+            assertTrue(rules("fullBackupContent").excludesFolder(DownloadStorage.DIR, domain), "full backups don't exclude ${DownloadStorage.DIR}/ of $domain")
+        }
     }
 
     private companion object {

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Up to Android 11 (allowBackup="false" turns these backups off; this keeps the secrets, Play on
-     TV's link.json, the last crash's log and the debrid folder out if it is ever turned on). See
-     data_extraction_rules.xml for why. -->
+     TV's link.json, the last crash's log, the debrid folder and the downloads, videos and bookkeeping
+     both, out if it is ever turned on). See data_extraction_rules.xml for why. -->
 <full-backup-content>
     <exclude domain="file" path="datastore/secrets.json" />
     <exclude domain="file" path="datastore/secrets.json.tmp" />
@@ -9,4 +9,6 @@
     <exclude domain="file" path="datastore/link.json.tmp" />
     <exclude domain="file" path="logs/" />
     <exclude domain="file" path="debrid/" />
+    <exclude domain="file" path="downloads/" />
+    <exclude domain="external" path="downloads/" />
 </full-backup-content>
