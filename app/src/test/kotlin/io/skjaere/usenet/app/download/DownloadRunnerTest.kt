@@ -262,6 +262,14 @@ class DownloadRunnerTest {
             assertEquals(DownloadState.Done, stored(id).state)
             assertContentEquals(fake.data, storage.video(id).readBytes())
         }
+        // The debug build's trace, which the device pairs wait on (item 25): each stream's first byte, its progress as it is
+        // recorded, and its end, in that order.
+        listOf(A to a, B to b, C to c).forEach { (id, fake) ->
+            val mine = traced.map { it.substringAfter(' ') }.filter { "id=$id " in it }
+            assertEquals("reopen id=$id offset=0", mine.first(), mine.toString())
+            assertEquals("progress id=$id offset=${fake.size} size=${fake.size}", mine[mine.size - 2], mine.toString())
+            assertEquals("done id=$id size=${fake.size}", mine.last(), mine.toString())
+        }
     }
 
     @Test

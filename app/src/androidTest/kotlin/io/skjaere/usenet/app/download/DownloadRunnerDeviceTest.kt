@@ -147,9 +147,11 @@ class DownloadRunnerDeviceTest {
         runner.done(a)
         waitFor("the second under way", 60_000) { writer.live.value?.takeIf { it.id == b && it.written >= 2 * DownloadFixtures.MB } }
         assertEquals(DownloadState.Done, runner.item(a)?.row?.state)
-        // Its first stream opened only once the first was done.
+        // Its first stream opened only once the first was done, whose progress and end the trace says (the pairs wait on them).
         val lines = traced()
-        assertTrue(lines.toString(), lines.indexOfFirst { it.endsWith("done id=$a size=${one.size}") } < lines.indexOfFirst { it.contains("reopen id=$b ") })
+        val done = lines.indexOfFirst { it.endsWith("done id=$a size=${one.size}") }
+        assertTrue(lines.toString(), done >= 0 && lines.indexOfFirst { it.contains("reopen id=$b ") } > done)
+        assertTrue(lines.toString(), lines.take(done).any { it.endsWith("progress id=$a offset=${one.size} size=${one.size}") })
 
         runner.pause()
         withTimeout(30_000) { walk.join() }
