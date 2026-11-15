@@ -24,6 +24,7 @@ import io.skjaere.usenet.core.NzbSource
 import io.skjaere.usenet.core.PipelineEvent
 import io.skjaere.usenet.core.PlayCandidate
 import io.skjaere.usenet.core.PlayPipeline
+import io.skjaere.usenet.core.PlaybackTarget
 import io.skjaere.usenet.core.PrepareOutcome
 import io.skjaere.usenet.core.PreparedNzb
 import io.skjaere.usenet.core.PreparedNzbStore
@@ -271,7 +272,17 @@ class DownloadResolver(
             }
         }
         val usenet = UsenetSource(nzbs, availability, preparer, store, providersLeftOut, providerFallback, FileChooser.None)
-        val pipeline = PlayPipeline({ usenet }, probe, maxAttempts = left, tried = tried(newznab) { indexerId -> configs[indexerId]?.name })
+        // The probe keeps its target in the store to read it; the pipeline lets go of it when the probe fails, and resolved()
+        // once it is copied. Cut short as it reads, it lets go of it itself (L383).
+        val probing = TrackProbe { target ->
+            try {
+                probe.probe(target)
+            } catch (e: CancellationException) {
+                withContext(NonCancellable) { letGo(id, target) }
+                throw e
+            }
+        }
+        val pipeline = PlayPipeline({ usenet }, probing, maxAttempts = left, tried = tried(newznab) { indexerId -> configs[indexerId]?.name })
         // Counted across its resolves: the second release in all is "release 2", whichever resolve tries it.
         val before = counted.size
         var counting = counted
@@ -329,7 +340,11 @@ class DownloadResolver(
             // Cut short (a pause, the host stopped) before its release had its answer: not counted. Its NZB, kept once it
             // was grabbed, is tried again first.
             val cut = current
-            if (cut != null && !answered) withContext(NonCancellable) { count(id, counting - cut) }
+            withContext(NonCancellable) {
+                if (cut != null && !answered) count(id, counting - cut)
+                // Succeeded, and cut short before resolved() took it up: the probe's entry goes all the same.
+                (ended as? PipelineEvent.Succeeded)?.let { letGo(id, it.target) }
+            }
             throw e
         } catch (e: OutOfReach) {
             // Nothing known of the release: not counted, and tried again from its NZB once the wait is over.
@@ -393,15 +408,18 @@ class DownloadResolver(
             return Resolution.Ready(kept, target.prepared, target.file)
         } finally {
             // The probe kept its NZB in the store to read it: out again, unless a play kept it there before (L383).
-            withContext(NonCancellable) {
-                try {
-                    target.drop()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    log.warn("download {}: couldn't take its NZB out of the store: {}", id, e::class.simpleName)
-                }
-            }
+            withContext(NonCancellable) { letGo(id, target) }
+        }
+    }
+
+    /** Takes [target]'s NZB out of the store where its probe put it there, not where a play kept it before (L383). */
+    private suspend fun letGo(id: String, target: PlaybackTarget) {
+        try {
+            target.drop()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("download {}: couldn't take its NZB out of the store: {}", id, e::class.simpleName)
         }
     }
 

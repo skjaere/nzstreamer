@@ -185,8 +185,13 @@ class DownloadResolverTest {
 
     /** What the probe read, by candidate; it keeps the target first, as the app's probe does to read it by its address. */
     private val probed: MutableList<String> = Collections.synchronizedList(mutableListOf())
+
+    /** Called once the probe has kept its target, before it reads it. */
+    private var onProbe: suspend () -> Unit = {}
+
     private val probe = TrackProbe { target ->
         target.keep()
+        onProbe()
         probed += target.candidate.id
         ProbeResult.Playable(video, tracks)
     }
@@ -369,6 +374,37 @@ class DownloadResolverTest {
         assertEquals("s3cret-from-indexer", copy.password)
         // The password reaches no log line through the copy's own words.
         assertFalse(copy.toString().contains("s3cret"))
+    }
+
+    /** A resolve cut short as the probe reads the file takes out of the store what the probe put there (L383), and only that. */
+    @Test
+    fun `a resolve cancelled as its file is probed leaves nothing in the store but what a play kept there`() = runBlocking<Unit> {
+        row(single)
+        val probing = CompletableDeferred<Unit>()
+        onProbe = {
+            probing.complete(Unit)
+            awaitCancellation()
+        }
+        val resolve = launch(Dispatchers.Default) { resolver().resolve(ID) }
+        withTimeout(10_000) { probing.await() }
+        assertEquals(1, store.storedFiles().count)
+        resolve.cancelAndJoin()
+        assertEquals(0, store.storedFiles().count)
+
+        // One a play kept before stays.
+        reset()
+        row(single)
+        val kept = (NzbPreparer(prepareBackend, Dispatchers.Unconfined).prepare(single.nzb, single.title) as io.skjaere.usenet.core.PrepareOutcome.Ready).nzb
+        store.put(kept, single.nzb)
+        val again = CompletableDeferred<Unit>()
+        onProbe = {
+            again.complete(Unit)
+            awaitCancellation()
+        }
+        val second = launch(Dispatchers.Default) { resolver().resolve(ID) }
+        withTimeout(10_000) { again.await() }
+        second.cancelAndJoin()
+        assertNotNull(store.stored(kept.id))
     }
 
     @Test
