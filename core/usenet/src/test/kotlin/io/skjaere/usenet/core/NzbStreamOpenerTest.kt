@@ -1,13 +1,24 @@
 package io.skjaere.usenet.core
 
+import io.skjaere.nzbstreamer.NzbStreamer
+import io.skjaere.nzbstreamer.config.MissingArticlePolicy
+import io.skjaere.nzbstreamer.config.SegmentCacheConfig
+import io.skjaere.nzbstreamer.config.StreamingConfig
+import io.skjaere.nzbstreamer.stream.CacheUse
+import io.skjaere.nzbstreamer.stream.SegmentCache
+import io.skjaere.nzbstreamer.stream.StreamOptions
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlin.io.path.createTempDirectory
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -111,5 +122,71 @@ class NzbStreamOpenerTest {
         val error = cause?.toUsenetError()
         // Either is retried by the player; a missing or corrupt article would not be.
         assertTrue(error is UsenetError.ConnectionFailed || error is UsenetError.Network, "ended with $error: $cause")
+    }
+
+    /**
+     * A download's opener (item 6, L343): its streams run in the engine's download scope, which no use of the streamer
+     * counts (L347), and fetch as [NzbStreamOpener.DOWNLOAD_OPTIONS] say, below every play's step. They read the segment
+     * cache but store nothing in it, and fill an article no provider has with zeros whatever the streamer's own policy,
+     * while a play's stream on the same streamer stores what it fetches and keeps to that policy.
+     */
+    @Test
+    fun `the download opener passes its options, its streams in the download scope`() = runBlocking<Unit> {
+        assertEquals(
+            StreamOptions(priority = StreamOptions.BACKGROUND_PRIORITY, cache = CacheUse.READ_ONLY, missingArticles = MissingArticlePolicy.ZERO_FILL),
+            NzbStreamOpener.DOWNLOAD_OPTIONS,
+        )
+        val dir = createTempDirectory("opener-cache")
+        val cache = SegmentCache(SegmentCacheConfig(dir, maxBytes = 64L * 1024 * 1024))
+        // A streamer that fails a stream at an article no provider has, as nzb-streamer's default does.
+        val strict = UsenetEngine(
+            factory = { s ->
+                NzbStreamer.fromConfig(
+                    s.orderedProviders.map { it.toNntpConfig() }, StreamingConfig(missingArticles = MissingArticlePolicy.FAIL),
+                    segmentCache = cache, closeSegmentCache = false,
+                )
+            },
+        )
+        try {
+            val server = FakeNntpServer(body = { id ->
+                val i = clip.index(id)
+                if (i == gap) inFrontRead.await(30, TimeUnit.SECONDS)
+                if (i == gap) FakeNntpServer.Body.Missing else FakeNntpServer.Body.Article(clip.article(i))
+            })
+            servers += server
+            strict.configure(EngineSettings(listOf(server.provider())))
+            fun bodies(i: Int) = server.commands.count { it == "BODY <seg$i@test>" }
+            val whole = 0L until clip.data.size.toLong()
+
+            val download = withTimeout(30_000) { NzbStreamOpener.download(strict).open(clip.nzb, 0, whole) }
+            // Held at the gap: the stream is open, in the download scope alone.
+            assertEquals(1, strict.downloadScope.coroutineContext.job.children.count(), "download streams open")
+            assertEquals(0, strict.sessionScope.coroutineContext.job.children.count(), "play streams open")
+            val (received, cause) = withTimeout(30_000) {
+                download.readToEnd { read -> if (read >= gap * clip.segmentSize) inFrontRead.countDown() }
+            }
+            assertNull(cause, "the download's stream ended with $cause")
+            assertContentEquals(zeroFilled, received)
+            assertEquals(listOf(gapBytes), download.gaps.all())
+            assertEquals(0, cache.stats().entryCount, "segments the download's stream stored")
+
+            // A play's stream on the same streamer: the streamer's policy, and what it fetches stored. Its gap's answer no
+            // longer waits for the reader, so what it hadn't read of the bytes in front of it goes with the failure.
+            val (played, failed) = withTimeout(30_000) { NzbStreamOpener(strict).open(clip.nzb, 0, whole).readToEnd() }
+            assertTrue(played.size <= gap * clip.segmentSize, "the play's stream read ${played.size} bytes")
+            assertContentEquals(clip.data.copyOf(played.size), played)
+            assertIs<UsenetError.MissingArticle>(failed?.toUsenetError(), "the play's stream ended with $failed")
+            assertNotNull(cache.get("seg0@test"), "the play's stream stored nothing")
+
+            // What the cache holds, the download's stream reads from it: no BODY for it.
+            val before = bodies(0)
+            val (again, _) = withTimeout(30_000) { NzbStreamOpener.download(strict).open(clip.nzb, 0, whole).readToEnd() }
+            assertContentEquals(zeroFilled, again)
+            assertEquals(before, bodies(0), "BODYs of the cached segment")
+        } finally {
+            strict.close()
+            cache.close()
+            dir.toFile().deleteRecursively()
+        }
     }
 }

@@ -195,6 +195,17 @@ class UsenetEngine(
     )
 
     /**
+     * Scope for the downloads' stream writers, as [sessionScope] is for plays', with its handler for the same reason. Not
+     * counted by the engine's idleness (L347): a download streams for hours, and while a stream of [sessionScope] is open
+     * a provider left out isn't checked again, nor a video cache opened since taken up. So a rebuild closes the streamer
+     * under a download's streams, which end with the old streamer's close; their writer opens them again at their safe
+     * offset on the new one. Its lines name a cause's kind alone: a cause's words can name the provider's host.
+     */
+    val downloadScope = CoroutineScope(
+        SupervisorJob() + ioDispatcher + CoroutineExceptionHandler { _, e -> log.debug("Download stream ended: {}", e.toUsenetError()::class.simpleName) },
+    )
+
+    /**
      * Applies new settings; the next [streamer] call builds against them. A change only to what the
      * providers are called keeps the streamer, and the connections it has open.
      */
@@ -330,6 +341,7 @@ class UsenetEngine(
         override fun toString() = "$who, for ${since.elapsedNow().inWholeSeconds} s"
     }
 
+    /** Nothing uses [built]: no [withStreamer] caller, and no play's stream open. A download's ([downloadScope]) doesn't count. */
     private fun idle(built: Built) = built.users.get() == 0 && sessionScope.coroutineContext.job.children.none()
 
     /**
@@ -433,6 +445,7 @@ class UsenetEngine(
 
     override fun close() {
         sessionScope.cancel()
+        downloadScope.cancel()
         watchScope.cancel()
         current?.close()
         current = null

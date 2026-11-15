@@ -3,7 +3,12 @@ package io.skjaere.usenet.core
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.WriterJob
 import io.skjaere.nzbstreamer.NzbStreamer
+import io.skjaere.nzbstreamer.config.MissingArticlePolicy
+import io.skjaere.nzbstreamer.stream.CacheUse
+import io.skjaere.nzbstreamer.stream.Gap
+import io.skjaere.nzbstreamer.stream.StreamOptions
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -25,12 +30,20 @@ fun interface StreamOpener {
 /**
  * nzb-streamer's writer is launched as a child of the coroutine that calls
  * `launchStreamFile`. Calling it from `runBlocking` would make the caller wait for the
- * whole stream, so it is launched from the engine's session scope and the [WriterJob]
- * is handed back through a deferred. Cancelling the returned job cancels the writer.
- * A caller cancelled meanwhile gets its cancellation back, and the session is cancelled
- * with it (#123). The session counts as a use of the engine's streamer until the stream ends.
+ * whole stream, so it is launched from [scope], the engine's session scope for a play's and a
+ * cast's streams, and the [WriterJob] is handed back through a deferred. Cancelling the returned
+ * job cancels the writer. A caller cancelled meanwhile gets its cancellation back, and the session
+ * is cancelled with it (#123). A session in the engine's session scope counts as a use of its
+ * streamer until the stream ends; one in its download scope doesn't ([download]).
+ *
+ * [options] are how each stream fetches where it differs from a play's; null, as a play's and a
+ * cast's: the streamer's own.
  */
-class NzbStreamOpener(private val engine: UsenetEngine) : StreamOpener {
+class NzbStreamOpener(
+    private val engine: UsenetEngine,
+    private val scope: CoroutineScope = engine.sessionScope,
+    private val options: StreamOptions? = null,
+) : StreamOpener {
     override suspend fun open(nzb: PreparedNzb, fileIndex: Int, range: LongRange): OpenedStream {
         val candidate = nzb.candidates.getOrNull(fileIndex)
             ?: throw UsenetException(UsenetError.Unknown("File $fileIndex not in ${nzb.title}"))
@@ -42,9 +55,16 @@ class NzbStreamOpener(private val engine: UsenetEngine) : StreamOpener {
         // Where the stream fills an article no provider has with zeros, as offsets in the file: recorded on its download
         // threads, each before its zeros are written.
         val gaps = StreamGaps()
-        val session = engine.sessionScope.launch {
+        val session = scope.launch {
             try {
-                handoff.complete(streamer.launchStreamFile(nzb.metadata, candidate.file, range, candidate.name, onGap = { gaps.add(it.fileRange) }))
+                val onGap = { gap: Gap -> gaps.add(gap.fileRange) }
+                handoff.complete(
+                    if (options == null) {
+                        streamer.launchStreamFile(nzb.metadata, candidate.file, range, candidate.name, onGap = onGap)
+                    } else {
+                        streamer.launchStreamFile(nzb.metadata, candidate.file, range, candidate.name, options, onGap)
+                    },
+                )
             } catch (e: Throwable) {
                 handoff.completeExceptionally(e)
                 throw e
@@ -65,5 +85,24 @@ class NzbStreamOpener(private val engine: UsenetEngine) : StreamOpener {
             throw e as? UsenetException ?: UsenetException(e.toUsenetError(), e)
         }
         return OpenedStream(writer.channel, session, gaps)
+    }
+
+    companion object {
+        /**
+         * How a download's streams fetch (L343): below every play's step, its stream, prepare and checks
+         * ([StreamOptions.BACKGROUND_PRIORITY]), so a play started during a download never waits behind its fetches, and
+         * a wait for a connection has no limit of its own and never counts against a provider; the video cache read but
+         * never written, so a download of many gigabytes doesn't push out what plays keep there; and an article no provider
+         * has filled with zeros and said ([OpenedStream.gaps]), the download recording where. A play's concurrency and
+         * read-ahead, the streamer's own (L344).
+         */
+        val DOWNLOAD_OPTIONS = StreamOptions(
+            priority = StreamOptions.BACKGROUND_PRIORITY,
+            cache = CacheUse.READ_ONLY,
+            missingArticles = MissingArticlePolicy.ZERO_FILL,
+        )
+
+        /** A download's opener: its streams in the engine's download scope ([UsenetEngine.downloadScope]), fetching as [DOWNLOAD_OPTIONS] say. */
+        fun download(engine: UsenetEngine) = NzbStreamOpener(engine, engine.downloadScope, DOWNLOAD_OPTIONS)
     }
 }

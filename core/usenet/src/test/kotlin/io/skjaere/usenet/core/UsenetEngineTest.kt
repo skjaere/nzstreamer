@@ -3,16 +3,22 @@ package io.skjaere.usenet.core
 import io.skjaere.nntp.ArticleNotFoundException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -430,6 +436,93 @@ class UsenetEngineTest {
                 assertSame(second, engine.streamer())
                 assertEquals(listOf(listOf("a"), listOf("a")), built)
             }
+        }
+    }
+
+    // L347: the engine doesn't wait for downloads. Their streams run in a scope of their own that idle() doesn't count, so a
+    // download that streams for hours never holds back a provider's recheck or a new video cache; a rebuild closes the old
+    // streamer under them, and they open again on the new one. A play's stream still holds the rebuild back.
+
+    @Test
+    fun `a download's stream leaves the engine idle, and a provider left out is taken back while it streams`() = runBlocking<Unit> {
+        val time = TestTimeSource()
+        Providers(time).run {
+            engine.use {
+                failing["a"] = rejected
+                configure("a", "b")
+                val first = engine.streamer()
+                failing.clear()
+                val download = engine.downloadScope.launch { awaitCancellation() }
+                time += UsenetEngine.RECHECK_INTERVAL
+                val second = engine.streamer()
+                assertNotSame(first, second, "the download held the rebuild")
+                assertEquals(1, released)
+                assertEquals(emptyMap(), engine.leftOut.value)
+                assertTrue(download.isActive, "the download's session was cancelled by the rebuild")
+                download.cancelAndJoin()
+            }
+        }
+    }
+
+    /** A clip's server whose BODY of article [held] waits for [letGo]: a stream from it stays open in front of it. */
+    private class HeldClip(held: Int) : AutoCloseable {
+        val clip = TestClip()
+        val letGo = CountDownLatch(1)
+        val server = FakeNntpServer(body = { id ->
+            val i = clip.index(id)
+            if (i == held) letGo.await(30, TimeUnit.SECONDS)
+            FakeNntpServer.Body.Article(clip.article(i))
+        })
+        val built = AtomicInteger()
+        val released = AtomicInteger()
+        val engine = UsenetEngine(
+            factory = { s -> built.incrementAndGet(); UsenetEngine.defaultStreamer(s) },
+            release = { released.incrementAndGet(); it.close() },
+        )
+
+        override fun close() {
+            letGo.countDown()
+            engine.close()
+            server.close()
+        }
+    }
+
+    @Test
+    fun `a rebuild while a download streams ends that stream through the old streamer's close`() = runBlocking<Unit> {
+        HeldClip(held = 2).use { held ->
+            val engine = held.engine
+            engine.configure(EngineSettings(listOf(held.server.provider())))
+            val stream = withTimeout(30_000) { NzbStreamOpener.download(engine).open(held.clip.nzb, 0, 0L until held.clip.data.size.toLong()) }
+            engine.rebuildWhenIdle()
+            val first = held.built.get()
+            withTimeout(30_000) { engine.streamer() }
+            assertEquals(first + 1, held.built.get(), "built again while the download streamed")
+            assertEquals(1, held.released.get(), "the old streamer closed")
+            // Its stream ends, failed, short of the file's end: the writer opens it again on the new streamer.
+            val (received, cause) = withTimeout(30_000) { stream.readToEnd() }
+            assertTrue(received.size < held.clip.data.size, "the stream went on to its end: ${received.size} bytes")
+            assertNotNull(cause, "the stream ended without a cause after ${received.size} bytes")
+        }
+    }
+
+    @Test
+    fun `a play's stream still holds the rebuild back, a download's beside it or not`() = runBlocking<Unit> {
+        HeldClip(held = 2).use { held ->
+            val engine = held.engine
+            engine.configure(EngineSettings(listOf(held.server.provider())))
+            val whole = 0L until held.clip.data.size.toLong()
+            val play = withTimeout(30_000) { NzbStreamOpener(engine).open(held.clip.nzb, 0, whole) }
+            val download = withTimeout(30_000) { NzbStreamOpener.download(engine).open(held.clip.nzb, 0, whole) }
+            assertEquals(1, engine.sessionScope.coroutineContext.job.children.count())
+            assertEquals(1, engine.downloadScope.coroutineContext.job.children.count())
+            val first = engine.streamer()
+            engine.rebuildWhenIdle()
+            assertSame(first, engine.streamer(), "rebuilt under a play's stream")
+            assertEquals(0, held.released.get())
+            play.job.cancelAndJoin()
+            assertNotSame(first, engine.streamer(), "not rebuilt once the play's stream ended")
+            assertEquals(1, held.released.get())
+            download.job.cancel()
         }
     }
 
