@@ -74,9 +74,10 @@ class DownloadHosts(private val deps: DownloadHostsDeps) {
 
     companion object {
         /**
-         * The network the downloads need, for both hosts: as JobScheduler's own network types ask it, a validated one with
-         * the internet, a VPN's or a restricted one's included, and not metered (Wi-Fi or Ethernet, never mobile data or a
-         * metered hotspot) when [unmetered]. The job requires it; the service watches it with a network callback.
+         * The network the downloads need, as JobScheduler's own network types ask it: a validated one with the internet, a
+         * VPN's or a restricted one's included, and not metered (Wi-Fi or Ethernet, never mobile data or a metered hotspot)
+         * when [unmetered]. The job and the service's watchdog require it; the service judges the device's default network
+         * the same way ([ServicePlan.networkMet]).
          */
         fun network(unmetered: Boolean): NetworkRequest = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -85,12 +86,6 @@ class DownloadHosts(private val deps: DownloadHostsDeps) {
             .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
             .apply { if (unmetered) addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) }
             .build()
-
-        /** Whether a network of these [capabilities] is one [network] asks for, [unmetered] or not. */
-        fun satisfies(capabilities: NetworkCapabilities, unmetered: Boolean): Boolean =
-            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) &&
-                (!unmetered || capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
     }
 }
 

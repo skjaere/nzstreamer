@@ -294,10 +294,16 @@ class AppContainer(private val context: Context) {
     val downloadDebug: DownloadDebug by lazy { DownloadDebug.of(context.filesDir, BuildConfig.DEBUG) }
 
     /**
-     * Whether the device's default network has the internet and is validated (L381): the downloads' runner and writer
-     * read it at each failure, and its return ends their waits, on either host. One default network callback a process.
+     * The device's default network as the app follows it (L381), one default network callback a process: what it offers,
+     * which the downloads' service reads for their needs, and whether it is validated, which their runner and writer read.
      */
-    val validatedNetwork: StateFlow<Boolean> by lazy { ValidatedNetwork.of(context) }
+    val defaultNetwork: DeviceNetwork by lazy { DeviceNetwork.of(context) }
+
+    /**
+     * Whether the device's default network has the internet and is validated (L381), [defaultNetwork]'s: the downloads'
+     * runner and writer read it at each failure, and its return ends their waits, on either host.
+     */
+    val validatedNetwork: StateFlow<Boolean> get() = defaultNetwork.validated
 
     /**
      * This device's downloads, one at a time (L335, L337), which a host runs: its rows' state and the finished ones by

@@ -9,9 +9,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
@@ -71,8 +68,8 @@ import org.slf4j.LoggerFactory
  * A start goes into the foreground within Android's 5 s with the queue's ongoing notification
  * ([DownloadNotifications.ongoing]), passing through it unseen where there is nothing to show ([ForegroundOwed], as the
  * cast's service does); then the runner walks the queue ([DownloadRunner.run]) while its needs are met: the network they
- * ask for, watched with a network callback for the job's own request, and the charger, from the power broadcasts while
- * Only while charging is on. When one goes, the walk stops at its safe offset and the service waits in place, in the
+ * ask for, the device's default network as the app follows it (the one its connections go out on, as JobScheduler judges
+ * the job's), and the charger, from the power broadcasts while Only while charging is on. When one goes, the walk stops at its safe offset and the service waits in place, in the
  * foreground, the download saying what it waits for ("Waiting for Wi-Fi"), and the watchdog scheduled while it waits for
  * the network; back, it goes on. After an hour of waiting it gives the wait up: "Paused: no connection · Tap to resume"
  * after the network's. Its partial wake lock is held only while bytes flow ([CastWakeLock]'s rule), and a Wi-Fi lock
@@ -110,9 +107,6 @@ class DownloadService : Service() {
     private data class Conditions(val needs: DownloadNeeds, val network: Boolean, val wifi: Boolean, val charging: Boolean) {
         val need: Need get() = ServicePlan.need(needs, network, charging)
     }
-
-    /** The networks the needs' request matches now: whether any does, and whether one is Wi-Fi. */
-    private data class Networks(val met: Boolean, val wifi: Boolean)
 
     /** Whether a start may still want the foreground: Android takes the app down if the service stops before it gets there. */
     private val owed = ForegroundOwed()
@@ -420,42 +414,18 @@ class DownloadService : Service() {
                 .any { it.foreground && it.pid == Process.myPid() && it.service.className == DownloadService::class.java.name }
         }
 
-    /** What the needs ask for and what the device has, as they change: the switches read live, so a changed one applies at once. */
+    /**
+     * What the needs ask for and what the device has, as they change: the switches read live, so a changed one applies at
+     * once; the device's default network as the app follows it ([AppContainer.defaultNetwork]), the one its connections
+     * go out on and whose answer the writer reads ([ServicePlan.networkMet]).
+     */
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun conditions(container: AppContainer): Flow<Conditions> =
         container.settings.downloads.map(DownloadHostRules::needs).distinctUntilChanged().flatMapLatest { needs ->
-            combine(networks(needs.unmetered), if (needs.charging) plugged() else flowOf(true)) { networks, charging ->
-                Conditions(needs, networks.met, networks.wifi, charging)
+            combine(container.defaultNetwork.now, if (needs.charging) plugged() else flowOf(true)) { network, charging ->
+                Conditions(needs, ServicePlan.networkMet(network, needs.unmetered), network.wifi, charging)
             }
         }.distinctUntilChanged()
-
-    /**
-     * The networks the downloads' request matches ([DownloadHosts.network], the job's own), [unmetered] or any, as the
-     * callbacks say them: only what they are given, as the docs ask. Until they say, the device's network now.
-     */
-    private fun networks(unmetered: Boolean): Flow<Networks> = callbackFlow {
-        val connectivity = getSystemService(ConnectivityManager::class.java)
-        // Each network matched, and whether it is Wi-Fi.
-        val matched = HashMap<Network, Boolean>()
-        fun publish() {
-            trySend(synchronized(matched) { Networks(matched.isNotEmpty(), matched.values.any { it }) })
-        }
-        val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-                synchronized(matched) { matched[network] = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) }
-                publish()
-            }
-
-            override fun onLost(network: Network) {
-                synchronized(matched) { matched.remove(network) }
-                publish()
-            }
-        }
-        val now = connectivity.getNetworkCapabilities(connectivity.activeNetwork)
-        trySend(Networks(now != null && DownloadHosts.satisfies(now, unmetered), now?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true))
-        connectivity.registerNetworkCallback(DownloadHosts.network(unmetered), callback)
-        awaitClose { connectivity.unregisterNetworkCallback(callback) }
-    }.distinctUntilChanged()
 
     /** Whether the device is on the charger, from the power broadcasts (L365), and until one comes, as the battery's last one says. */
     private fun plugged(): Flow<Boolean> = callbackFlow {

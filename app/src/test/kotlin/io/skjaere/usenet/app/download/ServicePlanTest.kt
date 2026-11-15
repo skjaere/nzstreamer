@@ -1,6 +1,7 @@
 package io.skjaere.usenet.app.download
 
 import android.content.Intent
+import io.skjaere.usenet.app.NetworkNow
 import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
 import io.skjaere.usenet.app.download.ServicePlan.Need
 import io.skjaere.usenet.app.download.ServicePlan.Step
@@ -62,6 +63,38 @@ class ServicePlanTest {
         assertEquals(Need.Network("Waiting for a network"), ServicePlan.need(anyNetwork, network = false, charging = false))
         assertEquals(Need.Charger, ServicePlan.need(anyNetwork, network = true, charging = false))
         assertEquals(Need.Met, ServicePlan.need(anyNetwork, network = true, charging = true))
+    }
+
+    /**
+     * The service judges the device's default network, the one the writer's connections go out on and whose answer the
+     * writer reads (L381, L382), as JobScheduler judges the job's: a network the needs would match but that isn't the
+     * default carries no byte, so the service can't walk on it while the writer reads every failure as no network.
+     */
+    @Test
+    fun `its network is the default one, and never met while the writer reads it as not validated`() {
+        listOf(false, true).forEach { usable ->
+            listOf(false, true).forEach { unmeteredNetwork ->
+                listOf(false, true).forEach { wifi ->
+                    val now = NetworkNow(usable, unmeteredNetwork, wifi)
+                    listOf(false, true).forEach { wifiOnly ->
+                        val met = ServicePlan.networkMet(now, unmetered = wifiOnly)
+                        assertEquals(usable && (!wifiOnly || unmeteredNetwork), met, "$now, Wi-Fi only $wifiOnly")
+                        // What the writer reads is the same network's answer: the service never walks where it reads false.
+                        if (met) assertTrue(now.usable, "$now walked on with the writer reading no validated network")
+                    }
+                }
+            }
+        }
+        // A Wi-Fi kept as the default with no internet behind it (Stay connected), mobile data validated in the background:
+        // the connections go out on the Wi-Fi, so the service waits for a network, as the job would, rather than reopening
+        // for ever with each failure counting toward nothing.
+        val unvalidatedWifi = NetworkNow(usable = false, unmetered = true, wifi = true)
+        val anyNetwork = DownloadNeeds(unmetered = false, charging = false)
+        val need = ServicePlan.need(anyNetwork, ServicePlan.networkMet(unvalidatedWifi, anyNetwork.unmetered), charging = false)
+        assertEquals(Need.Network("Waiting for a network"), need)
+        assertEquals(Step.Wait(need, HOUR), ServicePlan.step(runnable = true, need = need, waitedMillis = 0))
+        // Mobile data as the default with Wi-Fi only on: not the Wi-Fi the needs ask for, whatever Wi-Fi is about.
+        assertFalse(ServicePlan.networkMet(NetworkNow(usable = true, unmetered = false, wifi = false), unmetered = true))
     }
 
     @Test

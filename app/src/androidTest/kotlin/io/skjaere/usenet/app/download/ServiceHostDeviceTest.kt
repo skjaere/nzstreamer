@@ -16,6 +16,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.app.MainActivity
+import io.skjaere.usenet.app.NetworkNow
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.download.DownloadFixtures.Packing
 import io.skjaere.usenet.app.engineSetup
@@ -45,7 +46,7 @@ import java.util.concurrent.ConcurrentHashMap
  * The downloads' service on a phone (item 10, L334, L336, L375, L388): the dataSync foreground service that runs the queue
  * on Android 8 to 13, run here on phone34 by the debug build's host override (L336, W116), which the test writes first and
  * removes after. It runs over the test's own NNTP server (LocalNntp, in the app's process, so the network's comings and
- * goings reach the service's own network callback and never the transfer itself), the releases' NZBs through the
+ * goings reach the service's view of the device's default network and never the transfer itself), the releases' NZBs through the
  * coordinator's grab (its test seam) from a test indexer saved for it; the episode is the test assets' film, and the debug
  * build's throttle holds the writer to a pace each case can watch.
  * - Started by the visible app, it is in the foreground within 5 s, as a dataSync service with the queue's notification,
@@ -101,8 +102,10 @@ class ServiceHostDeviceTest {
             "the service's network: validated Wi-Fi (Wi-Fi ${network?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)}, validated ${network?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)})",
             network?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true && network.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
         )
-        // The container's one flow of it, which the runner and its writer follow (L381), says so too, from its callback.
-        waitFor("the container's validated network", 10_000) { container.validatedNetwork.value.takeIf { it } }
+        // The container's view of it says so too: the service's for its needs, the runner's and its writer's (L381).
+        waitFor("the container's default network: validated Wi-Fi, unmetered", 10_000) {
+            container.defaultNetwork.now.value.takeIf { it == NetworkNow(usable = true, unmetered = true, wifi = true) && container.validatedNetwork.value }
+        }
         saved = settings.settings.first()
         assertTrue("Only on Wi-Fi or Ethernet, as a new install has it (W110)", saved.downloads.unmeteredOnly)
         assertFalse(saved.downloads.whileCharging)

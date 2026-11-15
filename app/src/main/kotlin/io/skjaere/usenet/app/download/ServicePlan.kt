@@ -1,6 +1,7 @@
 package io.skjaere.usenet.app.download
 
 import android.content.Intent
+import io.skjaere.usenet.app.NetworkNow
 import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
 import io.skjaere.usenet.data.Download
 
@@ -47,6 +48,15 @@ object ServicePlan {
         /** On the network, off the charger, with Only while charging on. */
         data object Charger : Need
     }
+
+    /**
+     * Whether the device's default network ([network], as the app follows it) is one the downloads' needs ask for (L334):
+     * usable, as their writer reads it (L381, L382), and unmetered where they ask for Wi-Fi or Ethernet ([unmetered]).
+     * The default, as JobScheduler judges the job's: the app's connections go out on it, so a network that would match
+     * but isn't the default carries none of them, and the service walking on it would reopen with each failure counting
+     * toward nothing.
+     */
+    fun networkMet(network: NetworkNow, unmetered: Boolean): Boolean = network.usable && (!unmetered || network.unmetered)
 
     /** What holds a download that [needs] what it needs, with a [network] they ask for there or not, and the [charging] or not. */
     fun need(needs: DownloadNeeds, network: Boolean, charging: Boolean): Need = when {
