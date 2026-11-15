@@ -3940,7 +3940,8 @@ class PlayerActivity : ComponentActivity() {
     /**
      * "Stream instead" (L354), on "Playback stopped" or the missing-parts prompt of a download's play: saves where it is,
      * its release kept as the one that played (no fault of it is known), closes, and has the coordinator play the title by
-     * its stream path, past the download hooks, from there; the play sheet shows how that goes. Offered only online.
+     * its stream path, past the download hooks, from there (the place itself, which the one saved isn't past nine tenths);
+     * the play sheet shows how that goes. Offered only online.
      */
     private fun streamInstead() {
         val l = launch ?: return
@@ -3949,7 +3950,7 @@ class PlayerActivity : ComponentActivity() {
         log.info("Download: streaming the title instead, from {}", format(position))
         player?.let { saveProgress(position, it.duration) }
         val handedOver = handOverMode()
-        container.playback.streamInstead(l)
+        container.playback.streamInstead(l, position)
         finishHandingOver(handedOver)
     }
 

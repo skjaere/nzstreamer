@@ -1160,17 +1160,19 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
      * "Stream instead" on a finished download's player (L354): [launch]'s title plays by its stream path, past the download
      * hooks, which would play the file again, as Play on its page streams a title with no download: an episode looked up on
      * TMDB and searched for, a film by its remembered release while stored, else its search, its ids looked up on TMDB
-     * first (its year and length from its download where TMDB doesn't answer). From where the player saved it, as any
-     * play of the title starts. The player offers it only while the network is validated. Nothing for a launch that is
-     * neither an episode nor a film.
+     * first (its year and length from its download where TMDB doesn't answer). From [positionMs], where the player was
+     * (null: where its place was saved), as Try another release starts where the release stopped: its place saved past
+     * nine tenths reads as watched, from the start. The player offers it only while the network is validated. Nothing for
+     * a launch that is neither an episode nor a film.
      */
-    fun streamInstead(launch: PlayerLaunch, origin: PlayOrigin = PlayOrigin.after(launch)) {
-        val again: (PlayOrigin) -> Unit = { streamInstead(launch, it) }
-        launch.watch.episodeTarget?.let { return streamEpisode(it, origin, again) }
+    fun streamInstead(launch: PlayerLaunch, positionMs: Long?, origin: PlayOrigin = PlayOrigin.after(launch)) {
+        val again: (PlayOrigin) -> Unit = { streamInstead(launch, positionMs, it) }
+        val from = origin.copy(start = positionMs ?: origin.start)
+        launch.watch.episodeTarget?.let { return streamEpisode(it, from, again) }
         val film = launch.watch.movieTmdbId?.takeIf { launch.watch.kind == WatchKind.Movie } ?: return
         val row = container.downloads.done.value[launch.watchKey]
         log.info("play: a film streams in place of its download")
-        streamMovie(MovieTarget(film, launch.watch.title, row?.year, imdb = null, row?.runtimeMinutes), origin, lookUp = true, again)
+        streamMovie(MovieTarget(film, launch.watch.title, row?.year, imdb = null, row?.runtimeMinutes), from, lookUp = true, again)
     }
 
     /** [target] with TMDB's ids and facts for the film, which indexers search by; as it is where TMDB doesn't answer. */

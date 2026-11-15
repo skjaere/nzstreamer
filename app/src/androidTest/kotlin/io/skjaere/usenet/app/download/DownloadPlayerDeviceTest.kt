@@ -90,6 +90,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.abs
 
 /**
  * L354, L377: the player's branches for a finished download's file, on this phone, end to end. A recorded gap is skipped
@@ -412,7 +413,7 @@ class DownloadPlayerDeviceTest {
     /**
      * A download whose file is gone: offline the panel says so with Close alone; with the network back it offers Stream
      * instead, which streams the episode by its stream path (looked up, searched for, grabbed over the mock), never the
-     * download again.
+     * download again, from where its player was.
      */
     @Test
     fun aFileGoneSaysSoAndStreamInsteadComesWithTheNetwork() = runBlocking<Unit> {
@@ -421,7 +422,8 @@ class DownloadPlayerDeviceTest {
         val row = seed(episode(HARBOR, 1, release = GOOD))
         checkNotNull(storage.file(row)).delete()
         offline()
-        ActivityScenario.launch<PlayerActivity>(PlayerActivity.intent(context, checkNotNull(DownloadLaunch.of(row)))).use { scenario ->
+        val launch = checkNotNull(DownloadLaunch.of(row)).copy(startPositionMs = GONE_AT_MS)
+        ActivityScenario.launch<PlayerActivity>(PlayerActivity.intent(context, launch)).use { scenario ->
             val panel = waitFor("Playback stopped", 30_000) { scenario.read { a -> overlayWords(a).takeIf { "Playback stopped" in it } } }
             assertTrue(panel.toString(), "The downloaded file is gone" in panel && "Close" in panel)
             assertFalse(panel.toString(), "Stream instead" in panel || "Try another release" in panel)
@@ -432,6 +434,9 @@ class DownloadPlayerDeviceTest {
         }
         val streamed = launchFor(row.watchKey)
         assertTrue("S01E01 plays from ${PlayUris.scheme(streamed.uri)}", PlayUris.parse(streamed.uri) is PlayUris.Target.Usenet)
+        // From where the player was, which its place saved wouldn't give past nine tenths or under a minute.
+        val at = checkNotNull(streamed.startPositionMs) { "the stream starts where its place was saved, not where the player was" }
+        assertTrue("the stream starts at $at ms", abs(at - GONE_AT_MS) < PLACE_SLACK_MS)
     }
 
     /** [row] as a finished download is left: chapters.mkv written as its file, its gaps as zeros, renamed done, then its row, Done, with its marker. */
@@ -592,6 +597,10 @@ class DownloadPlayerDeviceTest {
         const val BACK_MILLIS = 90_000L
         const val CARD_MILLIS = 30_000L
         const val LAUNCH_MILLIS = 15_000L
+        /** Where the player of a download whose file is gone was asked to start: what its stream starts from. */
+        const val GONE_AT_MS = 120_000L
+        /** How far a player that never played may stand from where it was asked to start. */
+        const val PLACE_SLACK_MS = 2_000L
         /** Long enough for a key's hand-over to close the player. */
         const val KEY_MILLIS = 2_000L
         /** Where Previous is pressed: inside the file's first seconds, where it goes to the episode before when it can. */
