@@ -237,6 +237,37 @@ class DownloadPlayerDeviceTest {
     }
 
     /**
+     * Three recorded gaps within ten minutes of film: the player skips each as its loader passes it and counts them, and the
+     * missing-parts prompt says so. Offline it is the count alone, with nothing to offer; with the network back it asks to
+     * stream instead, and Stream instead streams the episode by its stream path (looked up, searched for, grabbed over the
+     * mock).
+     */
+    @Test
+    fun threeGapsBringThePromptWhichOffersStreamInsteadOnlyOnline() = runBlocking<Unit> {
+        onTheMock()
+        tmdb = FakeTmdb(shows = mapOf(HARBOR.id to show(HARBOR)), seasons = { id, number -> if (id == HARBOR.id && number == 1) season(HARBOR) else null })
+        val mkv = DownloadFixtures.media(MEDIA)
+        val gaps = listOf(13, 15, 17).map { clusters(mkv)[it] + 100 }.map { it until it + PART }
+        val row = seed(episode(HARBOR, 1, gaps = gaps, release = GOOD))
+        offline()
+        // The prompt's time runs as the film plays: long enough here for the test to answer it.
+        PlayerActivity.timings = PlayerActivity.Timings(missingPartsAnswerForMs = PROMPT_MILLIS, missingPartsCountOnlyForMs = PROMPT_MILLIS)
+        val launch = checkNotNull(DownloadLaunch.of(row)).copy(startPositionMs = GAP_START_MS)
+        ActivityScenario.launch<PlayerActivity>(PlayerActivity.intent(context, launch)).use { scenario ->
+            val count = waitFor("the missing parts counted", 60_000) { scenario.read { a -> overlayWords(a).takeIf { "This release is missing parts (3 so far)" in it } } }
+            assertFalse(count.toString(), "Stream instead" in count || "Try another release" in count || "Keep watching" in count)
+            online()
+            val asked = waitFor("Stream instead with the network back", 30_000) { scenario.read { a -> overlayWords(a).takeIf { "Stream instead" in it } } }
+            assertTrue(asked.toString(), "Stream instead? It starts where you are." in asked && "Keep watching" in asked)
+            assertFalse(asked.toString(), "Try another release" in asked)
+            scenario.onActivity { a -> clickOverlay(a, "Stream instead") }
+            waitFor("the player to close", 30_000) { scenario.state.takeIf { it == Lifecycle.State.DESTROYED } }
+        }
+        val streamed = launchFor(row.watchKey)
+        assertTrue("S01E01 plays from ${PlayUris.scheme(streamed.uri)}", PlayUris.parse(streamed.uri) is PlayUris.Target.Usenet)
+    }
+
+    /**
      * Offline, with TMDB not reached: the next episode is the row's next in its season, not downloaded, and the card says
      * so with Close alone: no Play now, no countdown, no search, and the controls' Next plays nothing. With the network
      * back while it shows, the episode the row stood in for has nothing to be searched by (no year, no other titles), so
@@ -597,6 +628,8 @@ class DownloadPlayerDeviceTest {
         const val BACK_MILLIS = 90_000L
         const val CARD_MILLIS = 30_000L
         const val LAUNCH_MILLIS = 15_000L
+        /** How long the missing-parts prompt shows unanswered, in playback: past the test's answer. */
+        const val PROMPT_MILLIS = 600_000L
         /** Where the player of a download whose file is gone was asked to start: what its stream starts from. */
         const val GONE_AT_MS = 120_000L
         /** How far a player that never played may stand from where it was asked to start. */
