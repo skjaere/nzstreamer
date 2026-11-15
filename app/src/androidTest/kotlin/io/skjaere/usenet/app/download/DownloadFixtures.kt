@@ -49,9 +49,10 @@ class DownloadFixtures(val local: LocalNntp = LocalNntp()) : Closeable {
 
     /**
      * Posts [source] as [title]'s video, `<title>.mkv`, [packing] as said: in articles of [partSize] bytes, an archive in
-     * volumes of [volumeSize] bytes at most, named as such sets are (`.rar`, `.r00`, …; `.7z.001`, …).
+     * volumes of [volumeSize] bytes at most, named as such sets are (`.rar`, `.r00`, …; `.7z.001`, …). A [salt] goes in the
+     * articles' tag: the same bytes under ids no run used before (a test asset's, which are the same on every run).
      */
-    fun post(packing: Packing, title: String, source: ByteArray, partSize: Int = PART, volumeSize: Long = VOLUME): Release {
+    fun post(packing: Packing, title: String, source: ByteArray, partSize: Int = PART, volumeSize: Long = VOLUME, salt: String = ""): Release {
         val fileName = "$title.mkv"
         val files = when (packing) {
             Packing.Plain -> listOf(fileName to source)
@@ -60,7 +61,7 @@ class DownloadFixtures(val local: LocalNntp = LocalNntp()) : Closeable {
             Packing.SevenZip -> ArchiveGenerator.generate(source, volumeSize, ContainerType.SEVENZIP, fileName)
                 .mapIndexed { i, volume -> "$title.7z.%03d".format(i + 1) to volume.data }
         }
-        val posted = files.map { (name, data) -> local.post(name, data, partSize, tag(name, data, partSize)) }
+        val posted = files.map { (name, data) -> local.post(name, data, partSize, tag(name + salt, data, partSize)) }
         return Release(packing, title, fileName, source, posted, local.nzb(*posted.toTypedArray()))
     }
 

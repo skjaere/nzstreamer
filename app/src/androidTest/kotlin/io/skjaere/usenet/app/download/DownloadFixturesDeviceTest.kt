@@ -7,10 +7,12 @@ import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.download.DownloadFixtures.Packing
 import io.skjaere.usenet.app.engineSetup
 import io.skjaere.usenet.app.mockOnEngine
+import io.skjaere.usenet.app.waitFor
 import io.skjaere.usenet.core.EngineSettings
 import io.skjaere.usenet.core.NzbStreamOpener
 import io.skjaere.usenet.core.PrepareOutcome
 import io.skjaere.usenet.core.PreparedNzb
+import io.skjaere.nzbstreamer.stream.SegmentCache
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
@@ -28,7 +30,7 @@ import java.security.MessageDigest
 /**
  * The downloads' archive fixtures (T4), proven before the writer that uses them: each release [DownloadFixtures] posts on
  * the test's own server opens through the app's preparer as one video of the source's name and size, and its bytes, streamed
- * through the app's opener from the first to the last, are the source's. Seeded bytes at either end of the fixtures' sizes
+ * through the app's download opener from the first to the last, are the source's, every article from the server. Seeded bytes at either end of the fixtures' sizes
  * (16 and 64 MB), plain, as a split stored RAR4 set and as a split 7z (Copy); the test assets' film, where a test plays it,
  * as a set too. What a test writes beside them goes with them.
  */
@@ -37,8 +39,12 @@ class DownloadFixturesDeviceTest {
     private val container = InstrumentationRegistry.getInstrumentation().targetContext.container
     private val fixtures = DownloadFixtures()
 
+    private lateinit var cache: SegmentCache
+
     @Before
     fun setUp() = runBlocking<Unit> {
+        // Open before the streamer is built on the test's server, which is then lent it.
+        cache = waitFor("the video cache to be open", timeoutMs = 10_000) { container.videoCache.forStreamer() }
         engineSetup("the engine on the test's own NNTP server") {
             mockOnEngine()
             container.engine.configure(EngineSettings(listOf(fixtures.local.provider)))
@@ -52,14 +58,14 @@ class DownloadFixturesDeviceTest {
 
     @Test
     fun plainSeededBytesOpenWholeThroughThePreparer() = runBlocking<Unit> {
-        val release = fixtures.post(Packing.Plain, TITLE, DownloadFixtures.seeded(16 * DownloadFixtures.MB, seed = 1))
+        val release = fixtures.post(Packing.Plain, TITLE, DownloadFixtures.seeded(16 * DownloadFixtures.MB, fresh()))
         assertEquals(listOf("$TITLE.mkv"), release.posted.map { it.name })
         opensWhole(release)
     }
 
     @Test
     fun aSplitStoredRar4SetOpensWholeThroughThePreparer() = runBlocking<Unit> {
-        val release = fixtures.post(Packing.Rar4, TITLE, DownloadFixtures.seeded(16 * DownloadFixtures.MB, seed = 2))
+        val release = fixtures.post(Packing.Rar4, TITLE, DownloadFixtures.seeded(16 * DownloadFixtures.MB, fresh()))
         // Volumes of 5 MB at most: four, named as a RAR4 set's are, the first .rar.
         assertEquals(listOf("$TITLE.rar", "$TITLE.r00", "$TITLE.r01", "$TITLE.r02"), release.posted.map { it.name })
         assertTrue(release.posted.all { it.data.size <= DownloadFixtures.VOLUME })
@@ -68,7 +74,7 @@ class DownloadFixturesDeviceTest {
 
     @Test
     fun aSplit7zCopySetOfTheLargestSizeOpensWholeThroughThePreparer() = runBlocking<Unit> {
-        val release = fixtures.post(Packing.SevenZip, TITLE, DownloadFixtures.seeded(64 * DownloadFixtures.MB, seed = 3))
+        val release = fixtures.post(Packing.SevenZip, TITLE, DownloadFixtures.seeded(64 * DownloadFixtures.MB, fresh()))
         assertEquals((1..13).map { "$TITLE.7z.%03d".format(it) }, release.posted.map { it.name })
         opensWhole(release)
     }
@@ -76,7 +82,7 @@ class DownloadFixturesDeviceTest {
     @Test
     fun theTestAssetsFilmGoesInASplitSetWhereATestPlaysIt() = runBlocking<Unit> {
         val film = DownloadFixtures.media("chapters.mkv")
-        val release = fixtures.post(Packing.Rar4, FILM, film, partSize = 64 * 1024, volumeSize = 250_000)
+        val release = fixtures.post(Packing.Rar4, FILM, film, partSize = 64 * 1024, volumeSize = 250_000, salt = fresh().toString())
         assertEquals(3, release.posted.size)
         opensWhole(release)
     }
@@ -102,7 +108,9 @@ class DownloadFixturesDeviceTest {
 
     /**
      * [release] prepared by the app's preparer, as Resolve prepares one: a listing of one video, its name and size the
-     * source's; then its whole file streamed through the app's opener, every byte the source's and no part missing.
+     * source's; then its whole file streamed through the app's download opener, every byte the source's and no part
+     * missing. Each release is fresh (a seed, or for the film a tag, no run used before), so every article came from the
+     * test's own server, never the video cache; and the download's stream stored none of what it read there.
      */
     private suspend fun opensWhole(release: DownloadFixtures.Release) {
         val outcome = engineSetup("${release.title} prepared") { container.preparer.prepare(release.nzb, release.title) }
@@ -110,12 +118,17 @@ class DownloadFixturesDeviceTest {
         assertEquals(listOf(release.fileName to release.size), prepared.files.map { it.name to it.size })
         assertTrue(prepared.oneVideo)
         assertEquals(release.sha256, streamed(prepared))
+        val unfetched = release.ids.filter { (fixtures.local.bodies[it]?.get() ?: 0) == 0 }
+        assertEquals("articles the server was never asked for", emptyList<String>(), unfetched)
+        // Prepare reads a volume's first and last articles through the cache, as a play's does: what lies between, the stream's.
+        val inside = release.posted.flatMap { it.ids.drop(2).dropLast(2) }
+        assertEquals("of ${inside.size} articles inside the volumes, in the video cache", 0, inside.count { cache.get(it) != null })
     }
 
-    /** The SHA-256 of [prepared]'s one file, streamed whole through the app's opener; it fails where the stream fills a gap. */
+    /** The SHA-256 of [prepared]'s one file, streamed whole as a download streams it; it fails where the stream fills a gap. */
     private suspend fun streamed(prepared: PreparedNzb): String = withTimeout(120_000) {
         val file = prepared.files.single()
-        val opened = NzbStreamOpener(container.engine).open(prepared, file.index, 0 until file.size)
+        val opened = NzbStreamOpener.download(container.engine).open(prepared, file.index, 0 until file.size)
         try {
             val digest = MessageDigest.getInstance("SHA-256")
             val chunk = ByteArray(64 * 1024)
@@ -138,5 +151,8 @@ class DownloadFixturesDeviceTest {
     private companion object {
         const val TITLE = "Harbor.Lights.S02E04.1080p.WEB-DL.H.264-KESTREL"
         const val FILM = "Copper.Crown.2019.1080p.WEB-DL.H.264-GRP"
+
+        /** A seed no run used before: no segment of its bytes is in the video cache. */
+        fun fresh(): Long = System.nanoTime()
     }
 }
