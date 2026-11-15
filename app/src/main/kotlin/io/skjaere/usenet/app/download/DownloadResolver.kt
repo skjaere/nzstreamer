@@ -375,6 +375,12 @@ class DownloadResolver(
         /** Nothing left to try: every candidate tried, or its tries used up. */
         const val NO_OTHER_RELEASE = "No other release to try"
 
+        /** A release that lacks articles: the play sheet's words for it, and the runner's for one given up as it was written. */
+        const val INCOMPLETE = "Release incomplete"
+
+        /** A release whose articles can't be read. */
+        const val DAMAGED = "Release damaged"
+
         /** As the player's launch reads its own: what a later version adds is passed over. */
         private val json = Json { ignoreUnknownKeys = true }
 
@@ -396,8 +402,8 @@ class DownloadResolver(
             is AttemptFailure.FetchFailed -> "Couldn't get the NZB"
             is AttemptFailure.Unsupported -> "Can't be read: an archive of a kind not supported"
             is AttemptFailure.Failed -> when (failure.error) {
-                is UsenetError.Corrupt -> "Release damaged"
-                is UsenetError.MissingArticle -> "Release incomplete"
+                is UsenetError.Corrupt -> DAMAGED
+                is UsenetError.MissingArticle -> INCOMPLETE
                 is UsenetError.Timeout -> "Your Usenet provider didn't answer in time"
                 is UsenetError.Network -> "The connection was lost"
                 else -> OPEN_FAILED
@@ -419,7 +425,7 @@ class DownloadResolver(
          * The app's: the engine checking every article of what would be written (L341), the container's preparer, store and
          * track probe, the indexers the search asks, the coordinator's grab (its test seam), the memory of releases found
          * missing as a play that wasn't chosen reads it, and Settings' "Releases to try". A test gives its own [indexers] and
-         * [attempts].
+         * [attempts], and a [probe] that reads nothing where its releases are no film.
          */
         @SuppressLint("VisibleForTests") // The coordinator's grab, read as each grab is made, so a test serves both.
         fun of(
@@ -427,13 +433,14 @@ class DownloadResolver(
             storage: DownloadStorage,
             indexers: suspend () -> List<IndexerConfig> = container::indexerConfigs,
             attempts: suspend () -> Int = { container.settings.playback.first().attempts },
+            probe: TrackProbe = TrackProbe { target -> container.trackProbe.probe(target) },
         ) = DownloadResolver(
             downloads = container.data.downloads,
             storage = Storage.of(storage),
             availability = EngineAvailabilityBackend(container.engine, checkAll = { true }),
             preparer = container.preparer,
             store = container.store,
-            probe = TrackProbe { target -> container.trackProbe.probe(target) },
+            probe = probe,
             indexers = indexers,
             fetchNzb = { indexer, item -> PlaybackCoordinator.fetchNzb(container, indexer, item) },
             tried = { items, indexerName -> container.missingReleases.forPlay(items, chosen = false, indexerName) },

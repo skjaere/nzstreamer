@@ -74,6 +74,9 @@ class DownloadStorage(
         return "$DIR/${checked(id)}/" + if (extension == null) VIDEO else "$VIDEO.$extension"
     }
 
+    /** Whether the primary volume's folder is there: a download waiting for it ("Storage isn't available") can run again. */
+    fun volumeThere(): Boolean = volumeDir() != null
+
     /** [row]'s finished file; null before it has one, or while the volume isn't there. */
     fun file(row: Download): File? = row.relativePath?.let { path -> volumeDir()?.let { File(it, path) } }
 

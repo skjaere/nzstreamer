@@ -34,6 +34,10 @@ import io.skjaere.usenet.app.debrid.DebridGate
 import io.skjaere.usenet.app.debrid.ServiceRegistry
 import io.skjaere.usenet.app.debrid.nameOf
 import io.skjaere.usenet.app.debrid.seedDevDebrid
+import io.skjaere.usenet.app.download.DownloadDebug
+import io.skjaere.usenet.app.download.DownloadRunner
+import io.skjaere.usenet.app.download.DownloadRunnerDeps
+import io.skjaere.usenet.app.download.DownloadStorage
 import io.skjaere.usenet.app.home.SetupState
 import io.skjaere.usenet.app.search.IndexerConfigs
 import io.skjaere.usenet.app.search.NamedAccount
@@ -277,6 +281,18 @@ class AppContainer(private val context: Context) {
     val finder by lazy { EpisodeReleaseFinder(checkedSearch) }
 
     val playback by lazy { io.skjaere.usenet.app.play.PlaybackCoordinator(this, appScope) }
+
+    /** Where this device's downloads live, and how their files come and go (L346, L348). */
+    val downloadStorage: DownloadStorage by lazy { DownloadStorage.of(context, data.downloads) }
+
+    /** The debug build's seams for the downloads' device tests (L336, L367): Off in every other build. */
+    val downloadDebug: DownloadDebug by lazy { DownloadDebug.of(context.filesDir, BuildConfig.DEBUG) }
+
+    /**
+     * This device's downloads, one at a time (L335, L337), which a host runs: its rows' state and the finished ones by
+     * watch key start with it, from the reconcile at the app's start. Nothing runs on a TV (L369).
+     */
+    val downloads: DownloadRunner by lazy { DownloadRunner(DownloadRunnerDeps.of(this, context), appScope) }
 
     /**
      * The releases found missing on the providers the engine uses, which plays skip without a grab until one it wasn't
@@ -835,6 +851,9 @@ class UsenetApplication : Application(), SingletonImageLoader.Factory {
         container.crashLog.install()
         // Before any activity starts: the first one counts.
         registerActivityLifecycleCallbacks(container.inFront)
+        // Before a host goes on with them: the downloads' folders and rows in step, and those the user stopped from
+        // Android held until Resume (L359).
+        container.appScope.launch { saveOrLog("reconcile the downloads") { container.downloads.reconcile() } }
         if (BuildConfig.SEED_DEV_SETTINGS) {
             container.appScope.launch {
                 try {
