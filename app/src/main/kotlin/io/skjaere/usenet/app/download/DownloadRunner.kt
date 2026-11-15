@@ -6,6 +6,8 @@ import android.database.sqlite.SQLiteFullException
 import android.os.Build
 import io.skjaere.usenet.app.AppContainer
 import io.skjaere.usenet.app.download.DownloadResolver.Resolution
+import io.skjaere.usenet.app.play.MissingReleases
+import io.skjaere.usenet.app.play.Replay
 import io.skjaere.usenet.core.BackoffWakes
 import io.skjaere.usenet.core.DownloadWriter
 import io.skjaere.usenet.core.MissingOn
@@ -140,8 +142,11 @@ class DownloadRunnerDeps(
     val resolve: suspend (id: String) -> Resolution,
     /** What the writer streams through: the engine's download opener ([NzbStreamOpener.download]). */
     opener: StreamOpener,
-    /** Remembers [release] as missing on the providers [asked], as a play's gap does (L342). */
-    val missing: suspend (release: RememberedRelease, asked: List<ProviderConfig>) -> Unit,
+    /**
+     * Remembers [release] as missing on the providers [asked], as a play's gap does (L342), its line naming it [named], never
+     * by its name: the app's memory of releases tried ([remembered]).
+     */
+    val missing: suspend (release: RememberedRelease, asked: List<ProviderConfig>, named: String) -> Unit,
     /** The providers in use now: those a write fetches from. */
     val inUse: () -> List<ProviderConfig>,
     /** How the app's process last ended; null below API 30, or with none kept. */
@@ -197,10 +202,7 @@ class DownloadRunnerDeps(
             storage = DownloadRunner.Storage.of(storage),
             resolve = resolve,
             opener = NzbStreamOpener.download(container.engine),
-            missing = { release, asked ->
-                val indexer = container.settings.indexers.first().firstOrNull { it.id == release.indexerId }?.name
-                container.missingReleases.record(release.indexerId, release.guid, release.title, indexer, MissingOn.ProvidersFetchedFrom, asked)
-            },
+            missing = remembered(container.missingReleases),
             inUse = { container.engine.inUse },
             lastExit = { lastExit(context) },
             television = container.television,
@@ -211,6 +213,14 @@ class DownloadRunnerDeps(
             longGapBytes = longGapBytes,
             providersLeftOut = { container.engine.leftOut.value.isNotEmpty() },
         )
+
+        /**
+         * The app's memory of releases tried ([missingReleases]) remembering a release found missing on the providers fetched
+         * from as it was written (L342), its line naming it as a download's lines do, with neither its title nor its indexer.
+         */
+        fun remembered(missingReleases: MissingReleases): suspend (RememberedRelease, List<ProviderConfig>, String) -> Unit = { release, asked, named ->
+            missingReleases.record(release.indexerId, release.guid, release.title, indexerName = null, MissingOn.ProvidersFetchedFrom, asked, named)
+        }
 
         /** The app's process's last end, as Android keeps it from Android 11 on, with the package's last update; null before. */
         private fun lastExit(context: Context): DownloadExit? {
@@ -954,7 +964,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         val row = dao.get(id) ?: return
         val release = row.release?.takeIf { row.oneVideo } ?: return
         try {
-            deps.missing(release, asked)
+            deps.missing(release, asked, DownloadResolver.naming(row)(Replay.key(release)))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

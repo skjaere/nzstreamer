@@ -7,6 +7,7 @@ import io.skjaere.nzbstreamer.metadata.NzbMetadataResponse
 import io.skjaere.nzbstreamer.nzb.NzbDocument
 import io.skjaere.nzbstreamer.stream.StreamableFile
 import io.skjaere.usenet.app.download.DownloadResolver.Resolution
+import io.skjaere.usenet.app.play.MissingReleases
 import io.skjaere.usenet.core.DownloadWriter
 import io.skjaere.usenet.core.FileCandidate
 import io.skjaere.usenet.core.OpenedStream
@@ -23,8 +24,10 @@ import io.skjaere.usenet.data.DownloadDao
 import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.data.ReleaseChecks
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.logging.LogBuffer
 import io.skjaere.usenet.releases.ReleaseKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -187,7 +190,8 @@ class DownloadRunnerTest {
 
     /** The releases remembered as missing, by guid, with the ids of the providers asked. */
     private val recorded = mutableListOf<Pair<String, List<String>>>()
-    private val providers = listOf(ProviderConfig("provider-1", "Harbor news", "news.harbor-lights.invalid", 563, "", "", useTls = true))
+    /** One, with no name: a line naming it would name its host. */
+    private val providers = listOf(ProviderConfig("provider-1", "", "news.harbor-lights.invalid", 563, "", "", useTls = true))
 
     private var clock = Clock { NOW }
 
@@ -195,13 +199,20 @@ class DownloadRunnerTest {
     private val network = MutableStateFlow(true)
     private val traced get() = File(dir, "debug/${DownloadDebug.TRACE}").takeIf { it.isFile }?.readLines().orEmpty()
 
-    /** The runner of these fakes, in the test's work, on its virtual time: its writer over the fake opener, made by the deps as the app's are. */
-    private fun TestScope.runner(television: Boolean = false, exit: DownloadExit? = null): DownloadRunner {
+    /**
+     * The runner of these fakes, in the test's work, on its virtual time: its writer over the fake opener, made by the deps as
+     * the app's are; the releases found missing [recorded], unless the deps are given how to remember them ([missing]).
+     */
+    private fun TestScope.runner(
+        television: Boolean = false,
+        exit: DownloadExit? = null,
+        missing: suspend (RememberedRelease, List<ProviderConfig>, String) -> Unit = { release, asked, _ -> recorded += release.guid to asked.map { it.id } },
+    ): DownloadRunner {
         clock = Clock { NOW + testScheduler.currentTime }
         return DownloadRunner(
             DownloadRunnerDeps(
                 downloads = dao, storage = storage, resolve = resolver::resolve, opener = opener,
-                missing = { release, asked -> recorded += release.guid to asked.map { it.id } },
+                missing = missing,
                 inUse = { providers }, lastExit = { exit }, television = television, host = { host }, network = network,
                 receiverSwitch = { switches += it }, debug = DownloadDebug.On(File(dir, "debug"), clock), longGapBytes = LONG_GAP, clock = clock,
                 timeSource = testScheduler.timeSource, io = StandardTestDispatcher(testScheduler), undoMillis = DownloadRunner.UNDO_MILLIS,
@@ -738,6 +749,32 @@ class DownloadRunnerTest {
         host(runner)
         advanceUntilIdle()
         assertEquals(listOf(single.guid to listOf("provider-1")), recorded)
+    }
+
+    /**
+     * A download's lines in the app's log (logcat, and Settings › Logs, which a user may share) name it by its id and its
+     * release by its place among the row's, never by the release's name or a provider's host. A release given up for a long
+     * gap is remembered as missing on its provider by the app's memory of releases tried, whose own lines name a play's
+     * release by its title and the providers by their names, else their hosts: here as the app's deps remember it, on a fake
+     * table, with the provider in use that has no name. A release of its own here, so no other test's lines can name it.
+     */
+    @Test
+    fun `a release given up for a long gap is remembered with a line that names no release and no host`() = test {
+        val gap = fake("hl-gap-meridian").apply { missing = listOf(SIZE / 2L until SIZE) }
+        val whole = fake("hl-whole-meridian")
+        val table = TriedTable(NOW)
+        val remembered = MissingReleases(table, inUse = { providers }, checkedInUse = { providers }, now = { NOW })
+        val runner = runner(missing = DownloadRunnerDeps.remembered(remembered))
+        val from = LogBuffer.snapshot().lastOrNull()?.seq ?: 0L
+        val id = runner.add(1, gap, whole)
+        host(runner)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Done, stored(id).state)
+        val provider = providers.single()
+        assertEquals(listOf(ReleaseChecks.provider(provider.id, provider.host, provider.port)), table.entries.getValue(gap.key).missingOn.map { it.provider })
+        val lines = LogBuffer.snapshot().filter { it.seq > from }.map { it.message }
+        assertEquals(emptyList(), lines.filter { line -> listOf(gap.title, whole.title, provider.host).any { it in line } })
+        assertTrue("download $id, release 1 missing on 1 provider" in lines, lines.toString())
     }
 
     @Test

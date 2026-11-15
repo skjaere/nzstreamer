@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.download
 
+import io.skjaere.compressionutils.EncryptionInfo
 import io.skjaere.nntp.NntpAuthenticationException
 import io.skjaere.nntp.NntpConnectionException
 import io.skjaere.nntp.YencHeaders
@@ -11,6 +12,7 @@ import io.skjaere.nzbstreamer.nzb.FilenameResolver
 import io.skjaere.nzbstreamer.nzb.NzbDocument
 import io.skjaere.nzbstreamer.nzb.NzbParser
 import io.skjaere.nzbstreamer.stream.StreamableFile
+import io.skjaere.usenet.app.play.MissingReleases
 import io.skjaere.usenet.app.play.VideoTiming
 import io.skjaere.usenet.core.AvailabilityBackend
 import io.skjaere.usenet.core.MissingOn
@@ -23,6 +25,7 @@ import io.skjaere.usenet.core.ProbeResult
 import io.skjaere.usenet.core.ProbedTrack
 import io.skjaere.usenet.core.ProbedTracks
 import io.skjaere.usenet.core.ProbedVideo
+import io.skjaere.usenet.core.ProviderConfig
 import io.skjaere.usenet.core.TrackProbe
 import io.skjaere.usenet.core.TriedReleases
 import io.skjaere.usenet.core.UsenetError
@@ -32,6 +35,7 @@ import io.skjaere.usenet.data.DownloadDao
 import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.data.ReleaseChecks
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.logging.LogBuffer
@@ -77,8 +81,9 @@ class DownloadResolverTest {
 
     /**
      * A release as the fake indexer and providers have it: its [title], its videos ([files], names to sizes) each in a
-     * volume of its own, its articles [gone] from the providers, a [password] its indexer sends beside its NZB, and a
-     * provider that refuses the login or can't be reached as it is opened ([opening]).
+     * volume of its own, its articles [gone] from the providers, a [password] its indexer sends beside its NZB, a
+     * provider that refuses the login or can't be reached as it is opened ([opening]), and an archive whose headers are
+     * [encrypted], which nothing opens without its password.
      */
     private class Fake(
         val guid: String,
@@ -87,6 +92,7 @@ class DownloadResolverTest {
         val gone: Boolean = false,
         val password: String? = null,
         var opening: Exception? = null,
+        val encrypted: Boolean = false,
     ) {
         val size: Long get() = files.sumOf { it.second }
 
@@ -166,6 +172,7 @@ class DownloadResolverTest {
             val fake = fakeOf(nzbBytes)
             opened += fake.guid to password
             fake.opening?.let { return PrepareResult.Failure(it.message.orEmpty(), it) }
+            if (fake.encrypted) return PrepareResult.Encrypted("encrypted", EncryptionInfo("${fake.guid}.rar", 0, 0, 15, null, true))
             val parsed = NzbParser.parse(nzbBytes)
             val volumes = parsed.files.onEach { file ->
                 val name = checkNotNull(FilenameResolver.extractSubjectFilename(file.subject))
@@ -205,7 +212,11 @@ class DownloadResolverTest {
     private val storage = FakeStorage()
     private val store by lazy { PreparedNzbStore(nzbDir) }
 
-    private fun resolver(attempts: Int = 10, tried: TriedReleases = TriedReleases.None, providers: Boolean? = true) = DownloadResolver(
+    /**
+     * Resolve over these fakes, what is known of releases tried [tried], or, where [remembered] is given, the app's memory of
+     * them as the app's Resolve reads it.
+     */
+    private fun resolver(attempts: Int = 10, tried: TriedReleases = TriedReleases.None, providers: Boolean? = true, remembered: MissingReleases? = null) = DownloadResolver(
         downloads = dao,
         storage = storage,
         availability = availability,
@@ -214,7 +225,7 @@ class DownloadResolverTest {
         probe = probe,
         indexers = { listOf(indexer) },
         fetchNzb = { _, item -> grab(item) },
-        tried = { _, _ -> tried },
+        tried = remembered?.let(DownloadResolver::remembered) ?: { _, _, _ -> tried },
         attempts = { attempts },
         providersChecked = { providers },
         clock = { NOW },
@@ -260,20 +271,39 @@ class DownloadResolverTest {
 
     /**
      * A download's lines in the app's log (logcat, and Settings › Logs, which a user may share) name it by its id and its
-     * release by its place among the row's, never by the release's name: Resolve runs a play's pipeline, whose own lines
-     * name a play's release by its title. Releases of their own here, so no other test's lines can name them.
+     * release by its place among the row's, never by the release's name, its indexer's or a provider's host: Resolve runs a
+     * play's pipeline and the app's memory of releases tried, whose own lines name a play's release by its title and its
+     * indexer, and the providers it is missing on by their names, else their hosts. Over that memory as the app's Resolve
+     * reads it, on a fake table, with one provider in use that has no name: a release missing on it, one that needs a
+     * password, and a copy of a disc, each remembered all the same. Releases and a provider of their own here, so no other
+     * test's lines can name them.
      */
     @Test
-    fun `Resolve's pipeline names a download's releases by their place in its log lines, never by their names`() = runBlocking<Unit> {
+    fun `a download's log lines name its releases by their place, never by their names, indexers or providers`() = runBlocking<Unit> {
         val missing = Fake("hl-s02e04-plover", "Harbor.Lights.S02E04.2160p.WEB.h265-PLOVER", listOf("e81f07.mkv" to 4_000_000_000L), gone = true)
-        val whole = Fake("hl-s02e04-tern", "Harbor.Lights.S02E04.1080p.WEB.h264-TERN", listOf("f92a18.mkv" to 1_200_000_000L))
-        row(missing, whole)
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
-        val lines = LogBuffer.snapshot().map { it.message }
-        assertEquals(emptyList(), lines.filter { missing.title in it || whole.title in it })
-        // The pipeline's lines are there all the same, each release by its place.
-        assertTrue(lines.any { "play_pipeline: download $ID, release 1 " in it }, lines.filter { "play_pipeline" in it }.toString())
-        assertTrue(lines.any { "play_pipeline: download $ID, release 2 " in it }, lines.filter { "play_pipeline" in it }.toString())
+        val locked = Fake("hl-s02e04-tern", "Harbor.Lights.S02E04.1080p.WEB.h264-TERN", listOf("f92a18.rar" to 1_200_000_000L), encrypted = true)
+        val disc = Fake("hl-s02e04-heron", "Harbor.Lights.S02E04.1080p.BluRay.ISO-HERON", listOf("a03b29.iso" to 8_000_000_000L))
+        row(missing, locked, disc)
+        val provider = ProviderConfig("p-meridian", "", "reader.quiet-meridian.invalid", 563, "", "", useTls = true)
+        val table = TriedTable(NOW)
+        val remembered = MissingReleases(table, inUse = { listOf(provider) }, checkedInUse = { listOf(provider) }, now = { NOW })
+        val from = LogBuffer.snapshot().lastOrNull()?.seq ?: 0L
+        assertIs<DownloadResolver.Resolution.Failed>(resolver(remembered = remembered).resolve(ID))
+        val lines = LogBuffer.snapshot().filter { it.seq > from }.map { it.message }
+        val secret = listOf(missing.title, locked.title, disc.title, indexer.name, provider.host)
+        assertEquals(emptyList(), lines.filter { line -> secret.any { it in line } })
+        // Each remembered all the same: missing on the provider, needing a password, a disc copy.
+        val kept = table.entries
+        assertEquals(listOf(ReleaseChecks.provider(provider.id, provider.host, provider.port)), kept.getValue(key(missing)).missingOn.map { it.provider })
+        assertNotNull(kept.getValue(key(locked)).passwordAt)
+        assertNotNull(kept.getValue(key(disc)).discAt)
+        // Their lines are there, each release by its place, as are the pipeline's.
+        listOf(
+            "download $ID, release 1 missing on 1 provider",
+            "download $ID, release 2 needs a password it didn't come with",
+            "download $ID, release 3 is a disc copy",
+        ).forEach { assertTrue(it in lines, lines.toString()) }
+        (1..3).forEach { place -> assertTrue(lines.any { "play_pipeline: download $ID, release $place " in it }, lines.toString()) }
     }
 
     @Test
@@ -844,7 +874,7 @@ class DownloadResolverTest {
         assertIs<DownloadResolver.Resolution.Waiting>(
             DownloadResolver(
                 dao, storage, availability, NzbPreparer(prepareBackend, Dispatchers.Unconfined), store, probe, { listOf(indexer) }, { _, item -> grab(item) },
-                { _, _ -> TriedReleases.None }, { 10 }, providersChecked = { ++checks == 1 }, clock = { NOW },
+                { _, _, _ -> TriedReleases.None }, { 10 }, providersChecked = { ++checks == 1 }, clock = { NOW },
             ).resolve(ID),
         )
         assertNull(storage.sources[ID])

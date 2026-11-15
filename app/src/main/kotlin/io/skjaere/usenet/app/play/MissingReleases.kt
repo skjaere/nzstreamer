@@ -93,7 +93,8 @@ class MissingReleases(
      * What the pipeline skips and remembers in a play of [items] (by candidate id): those [chosen] by
      * the user are tried whatever is known of them, and one that plays is forgotten for the providers
      * in use. A release found missing is remembered for the providers in use when it was looked up
-     * before its attempt, as [record] asks. [indexerName] names an item's indexer in the log.
+     * before its attempt, as [record] asks. [indexerName] names an item's indexer in the log. A download's Resolve gives how
+     * its lines name a candidate ([named]): in place of the release's title and indexer, as a download's lines name no release.
      *
      * A lookup goes by the providers in use as they are named now ([inUse]): the caller has the engine
      * check them before the play's first (TR-11), and no lookup checks them again. The pipeline also
@@ -102,9 +103,17 @@ class MissingReleases(
      * ([io.skjaere.usenet.core.UsenetEngine.recheckProviders]) would hold it on the last release's steps
      * while the engine logs in to each provider. The next use checks them anyway.
      */
-    fun forPlay(items: Map<String, NewznabItem>, chosen: Boolean, indexerName: (indexerId: String) -> String?): TriedReleases = object : TriedReleases {
+    fun forPlay(
+        items: Map<String, NewznabItem>,
+        chosen: Boolean,
+        named: ((PlayCandidate) -> String)? = null,
+        indexerName: (indexerId: String) -> String?,
+    ): TriedReleases = object : TriedReleases {
         /** The providers in use as each candidate (by id) was looked up. The pipeline asks of one candidate at a time. */
         private val asked = mutableMapOf<String, List<ProviderConfig>>()
+
+        /** How a line names [candidate], [item]: as [named] says, else by its title and its indexer. */
+        private fun who(candidate: PlayCandidate, item: NewznabItem) = named?.invoke(candidate) ?: "${item.title} from ${indexerName(item.indexerId) ?: item.indexerId}"
 
         override suspend fun knownMissing(candidate: PlayCandidate): String? {
             val item = items[candidate.id] ?: return null
@@ -116,7 +125,7 @@ class MissingReleases(
 
         override suspend fun missing(candidate: PlayCandidate, on: MissingOn) {
             val item = items[candidate.id] ?: return
-            record(item.indexerId, item.guid, item.title, indexerName(item.indexerId), on, asked[candidate.id] ?: inUse())
+            record(item.indexerId, item.guid, item.title, indexerName(item.indexerId), on, asked[candidate.id] ?: inUse(), named?.invoke(candidate))
         }
 
         override suspend fun found(candidate: PlayCandidate) {
@@ -129,14 +138,14 @@ class MissingReleases(
             val item = items[candidate.id] ?: return
             ReleaseChecks.key(item.indexerId, item.guid) ?: return
             store.recordPasswordNeeded(item.indexerId, item.guid)
-            log.info("{} from {} needs a password it didn't come with", item.title, indexerName(item.indexerId) ?: item.indexerId)
+            log.info("{} needs a password it didn't come with", who(candidate, item))
         }
 
         override suspend fun discCopy(candidate: PlayCandidate) {
             val item = items[candidate.id] ?: return
             ReleaseChecks.key(item.indexerId, item.guid) ?: return
             store.recordDiscCopy(item.indexerId, item.guid)
-            log.info("{} from {} is a disc copy", item.title, indexerName(item.indexerId) ?: item.indexerId)
+            log.info("{} is a disc copy", who(candidate, item))
         }
     }
 
@@ -162,24 +171,33 @@ class MissingReleases(
      * now (one added or edited in Settings, one left out or back): which were asked isn't known, as work
      * begun on a streamer goes on with it once another replaces it (S9-7). A gap found fetching articles
      * ([MissingOn.ProvidersFetchedFrom]) is remembered only while one provider is in use: with several,
-     * one may have been passed over without being asked.
+     * one may have been passed over without being asked. A download's lines name the release [named] instead of by its
+     * title and indexer, and count the providers ([recordedLine]).
      */
-    suspend fun record(indexerId: String, guid: String, title: String, indexerName: String?, on: MissingOn, asked: List<ProviderConfig> = inUse()) {
+    suspend fun record(
+        indexerId: String,
+        guid: String,
+        title: String,
+        indexerName: String?,
+        on: MissingOn,
+        asked: List<ProviderConfig> = inUse(),
+        named: String? = null,
+    ) {
         ReleaseChecks.key(indexerId, guid) ?: return
         val indexer = indexerName ?: indexerId
         when (on) {
             MissingOn.AnyProvider -> {
                 store.record(indexerId, guid, emptyList(), incomplete = true)
-                log.info("{}", recordedLine(title, indexer, null))
+                log.info("{}", recordedLine(title, indexer, null, named))
             }
             MissingOn.ProvidersInUse, MissingOn.ProvidersFetchedFrom -> {
                 if (asked.isEmpty() || (on == MissingOn.ProvidersFetchedFrom && asked.size > 1)) return
                 if (identities(inUse()).toSet() != identities(asked).toSet()) {
-                    log.info("{} from {} not remembered as missing: the providers in use changed meanwhile", title, indexer)
+                    log.info("{} not remembered as missing: the providers in use changed meanwhile", named ?: "$title from $indexer")
                     return
                 }
                 store.record(indexerId, guid, identities(asked), incomplete = false)
-                log.info("{}", recordedLine(title, indexer, asked))
+                log.info("{}", recordedLine(title, indexer, asked, named))
             }
         }
     }
@@ -259,8 +277,18 @@ internal fun missingChip(known: KnownMissing, today: LocalDate, zone: ZoneId): S
     else -> "Missing on your providers · ${shortDate(dateOf(known.checkedAt, zone), today)}"
 }
 
-/** The log's line for [title] from [indexer] remembered as missing on [providers] (by name, else host), or, without, as an NZB that lacks files. */
-internal fun recordedLine(title: String, indexer: String, providers: List<ProviderConfig>?): String =
-    if (providers == null) "$title from $indexer has an incomplete NZB" else "$title from $indexer missing on ${providers.joinToString { it.name.ifBlank { it.host } }}"
+/**
+ * The log's line for [title] from [indexer] remembered as missing on [providers] (by name, else host), or, without, as an
+ * NZB that lacks files. A download's names the release [named] instead, and counts the providers: its lines name no
+ * release and no host.
+ */
+internal fun recordedLine(title: String, indexer: String, providers: List<ProviderConfig>?, named: String? = null): String {
+    val release = named ?: "$title from $indexer"
+    return when {
+        providers == null -> "$release has an incomplete NZB"
+        named != null -> "$release missing on ${providers.size} provider${if (providers.size == 1) "" else "s"}"
+        else -> "$release missing on ${providers.joinToString { it.name.ifBlank { it.host } }}"
+    }
+}
 
 private fun dateOf(millis: Long, zone: ZoneId): LocalDate = Instant.ofEpochMilli(millis).atZone(zone).toLocalDate()

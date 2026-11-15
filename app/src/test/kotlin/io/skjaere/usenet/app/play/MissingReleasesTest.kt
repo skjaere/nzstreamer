@@ -21,6 +21,7 @@ import io.skjaere.usenet.core.UsenetSource
 import io.skjaere.usenet.data.KnownMissing
 import io.skjaere.usenet.data.ReleaseChecks
 import io.skjaere.usenet.data.TriedRelease
+import io.skjaere.usenet.logging.LogBuffer
 import io.skjaere.usenet.newznab.NewznabItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -462,5 +463,51 @@ class MissingReleasesTest {
             recordedLine(broken.title, "Fake", listOf(a, b)),
         )
         assertEquals("Harbor.Lights.S01E01.PROPER.1080p.WEB-DL.AAC2.0.H.264-BROKEN from Fake has an incomplete NZB", recordedLine(broken.title, "Fake", null))
+        // A download's names the release as the download's lines do, and counts the providers.
+        assertEquals("download d-7, release 2 missing on 2 providers", recordedLine(broken.title, "Fake", listOf(a, b), named = "download d-7, release 2"))
+        assertEquals("download d-7, release 1 missing on 1 provider", recordedLine(broken.title, "Fake", listOf(b), named = "download d-7, release 1"))
+        assertEquals("download d-7, release 2 has an incomplete NZB", recordedLine(broken.title, "Fake", null, named = "download d-7, release 2"))
+    }
+
+    /**
+     * A download's lookups (its Resolve's) name each release in their lines as the download's own lines do ([forPlay]'s
+     * named), never by its title or its indexer, and count the providers rather than name them (one without a name by its
+     * host): a download's lines name no release and no host. What is remembered is a play's.
+     */
+    @Test
+    fun `a download's lines name each release as the download does, and no provider`() = runTest {
+        val from = LogBuffer.snapshot().lastOrNull()?.seq ?: 0L
+        val gone = item("nzb-lacks-a-volume")
+        val locked = item("hl-s01e01-locked")
+        val disc = item("hl-s01e01-disc")
+        val keys = listOf(broken, gone, locked, disc).map { it.key }
+        fun download() = missing.forPlay(listOf(broken, gone, locked, disc).associateBy { it.key }, chosen = false, named = { "download d-7, release ${keys.indexOf(it.id) + 1}" }) { "Fake" }
+        val tried = download()
+        assertNull(tried.knownMissing(broken.candidate()))
+        tried.missing(broken.candidate(), MissingOn.ProvidersInUse)
+        tried.missing(gone.candidate(), MissingOn.AnyProvider)
+        tried.passwordNeeded(locked.candidate())
+        tried.discCopy(disc.candidate())
+        // Looked up with a alone in use, found missing once b had taken its place.
+        inUse = listOf(a)
+        val again = download()
+        again.knownMissing(broken.candidate())
+        inUse = listOf(b)
+        again.missing(broken.candidate(), MissingOn.ProvidersInUse)
+
+        assertEquals(listOf(keyA, keyB), store.entries.getValue(broken.key).missingOn.map { it.provider })
+        assertEquals(KnownMissing(now, incompleteNzb = true), missing.known(listOf(gone.key)).first()[gone.key])
+        val lines = LogBuffer.snapshot().filter { it.seq > from }.map { it.message }
+        assertEquals(
+            listOf(
+                "download d-7, release 1 missing on 2 providers",
+                "download d-7, release 2 has an incomplete NZB",
+                "download d-7, release 3 needs a password it didn't come with",
+                "download d-7, release 4 is a disc copy",
+                "download d-7, release 1 not remembered as missing: the providers in use changed meanwhile",
+            ),
+            lines.filter { it.startsWith("download d-7") },
+        )
+        assertEquals(emptyList(), lines.filter { line -> listOf(broken.title, "Fake", a.name, b.host).any { it in line } })
     }
 }

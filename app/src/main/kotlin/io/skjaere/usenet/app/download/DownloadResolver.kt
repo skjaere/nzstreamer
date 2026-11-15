@@ -2,6 +2,7 @@ package io.skjaere.usenet.app.download
 
 import android.annotation.SuppressLint
 import io.skjaere.usenet.app.AppContainer
+import io.skjaere.usenet.app.play.MissingReleases
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.play.ProbedTracksSerializer
 import io.skjaere.usenet.app.play.Replay
@@ -85,8 +86,8 @@ import kotlin.time.Duration.Companion.seconds
  * A download resolved before whose process died isn't grabbed again: its NZB is prepared again from its own copy and its
  * file found by name. One whose size no longer matches starts again from its first byte.
  *
- * Its own log lines name the download by its id, never the release; the pipeline's and the memory of tried releases' name
- * the release as a play's do.
+ * Its log lines, the pipeline's and the memory of releases tried's among them (which name a play's release by its title),
+ * name the download by its id and a release by its place among the row's ([naming]), never by the release's name.
  */
 class DownloadResolver(
     private val downloads: DownloadDao,
@@ -99,8 +100,11 @@ class DownloadResolver(
     private val indexers: suspend () -> List<IndexerConfig>,
     /** One grab of an NZB: the coordinator's, so a test serves both a play's and a download's. */
     private val fetchNzb: suspend (IndexerConfig, NewznabItem) -> NzbDownload,
-    /** What is remembered of releases found missing, for a resolve of these items (by key), as a play's that wasn't chosen. */
-    private val tried: (items: Map<String, NewznabItem>, indexerName: (String) -> String?) -> TriedReleases,
+    /**
+     * What is remembered of releases found missing, for a resolve of these items (by key), as a play's that wasn't chosen,
+     * its lines naming a candidate as the resolve's do ([remembered]).
+     */
+    private val tried: (items: Map<String, NewznabItem>, indexerName: (String) -> String?, named: (PlayCandidate) -> String) -> TriedReleases,
     /** Settings' "Releases to try". */
     private val attempts: suspend () -> Int,
     /**
@@ -284,11 +288,11 @@ class DownloadResolver(
                 throw e
             }
         }
-        // Its lines name each release by its place among the row's, as a download's lines name no release.
-        val places = row.candidates.map { ranked(it).key }.distinct().withIndex().associate { (i, key) -> key to i + 1 }
+        // Its lines, and the memory of tried releases', name each release by its place among the row's, never by its name.
+        val naming = naming(row)
+        val named = { candidate: PlayCandidate -> naming(candidate.id) }
         val pipeline = PlayPipeline(
-            { usenet }, probing, maxAttempts = left, tried = tried(newznab) { indexerId -> configs[indexerId]?.name },
-            named = { candidate -> "download $id, release ${places[candidate.id] ?: "?"}" },
+            { usenet }, probing, maxAttempts = left, tried = tried(newznab, { indexerId -> configs[indexerId]?.name }, named), named = named,
         )
         // Counted across its resolves: the second release in all is "release 2", whichever resolve tries it.
         val before = counted.size
@@ -587,6 +591,23 @@ class DownloadResolver(
         private val ENGINE_WAIT = 30.seconds
 
         /**
+         * How a download's log lines name [row]'s releases, by key: "download <id>, release <n>", n its place among the
+         * row's candidates, never by the release's name. Resolve's, the pipeline's and the memory of releases tried's
+         * lines name them so, as does the runner's for a release found missing as it is written.
+         */
+        internal fun naming(row: Download): (key: String) -> String {
+            val places = row.candidates.map { ranked(it).key }.distinct().withIndex().associate { (i, key) -> key to i + 1 }
+            return { key -> "download ${row.id}, release ${places[key] ?: "?"}" }
+        }
+
+        /**
+         * The app's memory of releases found missing ([missingReleases]) for a resolve, as a play that wasn't chosen reads it,
+         * its lines naming each release as the resolve names it.
+         */
+        fun remembered(missingReleases: MissingReleases): (Map<String, NewznabItem>, (String) -> String?, (PlayCandidate) -> String) -> TriedReleases =
+            { items, indexerName, named -> missingReleases.forPlay(items, chosen = false, named, indexerName) }
+
+        /**
          * [candidate] as a play tries it: rebuilt as Replay rebuilds a release no search returned ([Replay.candidate]), its
          * size and its indexer's passworded flag kept.
          */
@@ -616,7 +637,7 @@ class DownloadResolver(
             probe = probe,
             indexers = indexers,
             fetchNzb = { indexer, item -> PlaybackCoordinator.fetchNzb(container, indexer, item) },
-            tried = { items, indexerName -> container.missingReleases.forPlay(items, chosen = false, indexerName) },
+            tried = remembered(container.missingReleases),
             attempts = attempts,
             providersChecked = {
                 when {
