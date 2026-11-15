@@ -680,6 +680,27 @@ class DownloadRunnerTest {
         assertEquals(4, storage.reconciles)
     }
 
+    /**
+     * The app's start launches reconcile; a host (the boot receiver's service, the job brought back, the start's schedule)
+     * can ask first. Whatever asks first, the rows are as reconcile leaves them: a download the user stopped from Android is
+     * never taken up by a host that came before it (L359).
+     */
+    @Test
+    fun `a host or the start's schedule that asks before reconcile finds the rows as reconcile leaves them`() = test {
+        val r = fake("hl-r")
+        row(RUNNING, 1, 0, r) { it.copy(state = DownloadState.Running, updatedAt = AT) }
+        row(QUEUED, 2, 1, r)
+        val runner = runner(exit = DownloadExit(DownloadExit.USER_REQUESTED, AT + 1))
+        assertEquals(emptyList(), runner.runnable())
+        host(runner).join()
+        assertEquals(emptyList(), resolver.calls)
+        assertEquals(DownloadState.Stopped, stored(RUNNING).state)
+        assertEquals(DownloadState.Queued, stored(QUEUED).state)
+        // The start's own call after them: once a process.
+        runner.reconcile()
+        assertEquals(1, storage.reconciles)
+    }
+
     @Test
     fun `the waits for the providers and for storage and a held queue start nothing, where a need's wait runs`() = test {
         val r = fake("hl-r")

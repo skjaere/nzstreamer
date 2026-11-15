@@ -261,6 +261,12 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /** One walk at a time: a host that starts while another's walk ends waits for it. */
     private val walking = Mutex()
 
+    /** Reconcile once a process, before anything reads the queue to run it ([reconcile]). */
+    private val reconciling = Mutex()
+
+    @Volatile
+    private var reconciled = false
+
     /** The item the walk runs now: its row's id and its job, which Pause, Cancel, Remove and Replace stop. */
     private class Current(val id: String, val job: Job)
 
@@ -511,8 +517,15 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         }
     }
 
-    /** The downloads that can run now, in their order (L388): what a host waits for, and what the app's start schedules for. */
-    suspend fun runnable(): List<Download> = if (!runs) emptyList() else DownloadHostRules.runnable(dao.queue().first(), deps.storage.volumeThere())
+    /**
+     * The downloads that can run now, in their order (L388): what a host waits for, and what the app's start schedules for.
+     * As [reconcile] leaves them, whichever asks first.
+     */
+    suspend fun runnable(): List<Download> {
+        if (!runs) return emptyList()
+        reconcile()
+        return DownloadHostRules.runnable(dao.queue().first(), deps.storage.volumeThere())
+    }
 
     /**
      * Walks the queue under [host] while it lives: the next runnable download, one left running by a kill first, resolved
@@ -522,6 +535,9 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      */
     suspend fun run(host: DownloadHost) {
         if (!runs) return
+        // A host in a new process can start before the app's start has reconciled: its walk takes the rows as reconcile
+        // leaves them, never one the user stopped from Android.
+        reconcile()
         walking.withLock {
             log.info("Downloads: the {} runs the queue", host.name.lowercase())
             coroutineScope {
@@ -545,8 +561,20 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      * Running or Resolving with no host on it now is Stopped, "Stopped by Android", held until Resume, when the process's
      * last end was the user's (Task Manager's Stop or a force stop) after the row's last update; any other end (a kill, a
      * reboot, an update), or one before that update, leaves it for its host to go on with. Runs on a TV too.
+     *
+     * Once a process, whoever asks first: the app's start launches it, and a host's walk ([run]) and the start's schedule
+     * ([runnable]) wait for it, so a host in a new process never takes up a row before reconcile has judged it.
      */
     suspend fun reconcile() {
+        if (reconciled) return
+        reconciling.withLock {
+            if (reconciled) return@withLock
+            reconcileNow()
+            reconciled = true
+        }
+    }
+
+    private suspend fun reconcileNow() {
         try {
             deps.storage.reconcile()
         } catch (e: CancellationException) {
