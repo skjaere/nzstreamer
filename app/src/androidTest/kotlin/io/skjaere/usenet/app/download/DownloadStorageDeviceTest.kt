@@ -22,6 +22,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.io.IOException
 import java.nio.ByteBuffer
 import kotlin.random.Random
 
@@ -128,6 +129,31 @@ class DownloadStorageDeviceTest {
         assertTrue(space.allocatable > 0)
         assertEquals(0L, space.queued)
         assertEquals(size, space.used)
+    }
+
+    /**
+     * A run that dies between its file's rename and its row's Done leaves the row Running: its resume opens the file
+     * again, which is the finished one, taken back whole. A `.part` is never renamed over a finished file.
+     */
+    @Test
+    fun aResumeAfterTheRenameTakesTheFinishedFileBackAndAFinishNeverRenamesOverIt() = runBlocking<Unit> {
+        val storage = storage()
+        storage.add(row("renamed"))
+        val bytes = Random(9).nextBytes(64 * 1024)
+        storage.open("renamed", NAME, bytes.size.toLong()).use { it.write(ByteBuffer.wrap(bytes), 0) }
+        val done = storage.finish("renamed", NAME)
+
+        storage.open("renamed", NAME, bytes.size.toLong()).use { channel ->
+            val read = ByteBuffer.allocate(bytes.size)
+            while (read.hasRemaining() && channel.read(read, read.position().toLong()) >= 0) Unit
+            assertArrayEquals("what the resume opened", bytes, read.array())
+        }
+        assertEquals(done, storage.finish("renamed", NAME))
+        assertArrayEquals("the finished file", bytes, done.readBytes())
+
+        File(done.path + ".part").writeBytes(ByteArray(1024))
+        assertThrows(IOException::class.java) { runBlocking { storage.finish("renamed", NAME) } }
+        assertArrayEquals("the finished file, a .part beside it", bytes, done.readBytes())
     }
 
     @Test

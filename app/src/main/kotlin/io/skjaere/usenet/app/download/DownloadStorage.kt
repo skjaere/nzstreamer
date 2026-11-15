@@ -95,14 +95,19 @@ class DownloadStorage(
 
     /**
      * Opens [id]'s video to write: its `.part`, made if new, with its whole [size] allocated before the first byte (C8), so
-     * the room is taken at once and progress is the row's alone. Opened again (a resume) it keeps what was written. Throws
-     * [Unavailable] while the volume isn't there, and an IOException when Android can't allocate it. The caller closes it.
+     * the room is taken at once and progress is the row's alone. Opened again (a resume) it keeps what was written, and a
+     * file [finish] renamed already, by a run that died before its row said so, is taken back whole as the `.part`: a new
+     * one beside it would be zeros, which its finish would rename over it. Throws [Unavailable] while the volume isn't
+     * there, and an IOException when Android can't allocate it. The caller closes it.
      */
     suspend fun open(id: String, fileName: String, size: Long): FileChannel = withContext(io) {
         require(size >= 0) { "A size of $size" }
         val volume = volumeDir() ?: throw Unavailable()
         File(downloadsDir(volume), checked(id)).mkdirs()
-        val file = RandomAccessFile(part(volume, id, fileName), "rw")
+        val part = part(volume, id, fileName)
+        val done = File(volume, relativePath(id, fileName))
+        if (done.isFile && !part.exists() && !done.renameTo(part)) throw IOException("Couldn't reopen download $id's file")
+        val file = RandomAccessFile(part, "rw")
         try {
             // Android's fallocate refuses an empty length.
             if (size > 0) storageManager.allocateBytes(file.fd, size)
@@ -113,13 +118,21 @@ class DownloadStorage(
         }
     }
 
-    /** Renames [id]'s complete `.part` to its finished name, in its folder (atomic): the finished file. */
+    /**
+     * Renames [id]'s complete `.part` to its finished name, in its folder (atomic): the finished file. Never over a finished
+     * file, which a rename would replace.
+     */
     suspend fun finish(id: String, fileName: String): File = withContext(io) {
         val volume = volumeDir() ?: throw Unavailable()
         val part = part(volume, id, fileName)
         val done = File(volume, relativePath(id, fileName))
-        // Renamed already, by a run that died before its row said so.
-        if (part.renameTo(done) || (done.isFile && !part.exists())) done else throw IOException("Couldn't rename download $id's file")
+        when {
+            // Renamed already, by a run that died before its row said so.
+            !part.exists() && done.isFile -> done
+            done.exists() -> throw IOException("Download $id's file is finished already")
+            part.renameTo(done) -> done
+            else -> throw IOException("Couldn't rename download $id's file")
+        }
     }
 
     /** Deletes [id]'s video, finished or not, giving back what it held: another release replaces it, or it starts again from 0. */
