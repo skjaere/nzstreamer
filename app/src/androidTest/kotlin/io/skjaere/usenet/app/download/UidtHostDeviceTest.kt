@@ -36,6 +36,7 @@ import io.skjaere.usenet.data.TriedRelease
 import io.skjaere.usenet.newznab.NzbDownload
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -115,6 +116,9 @@ class UidtHostDeviceTest {
             "the job's network: validated Wi-Fi (Wi-Fi ${network?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)}, validated ${network?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)})",
             network?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true && network.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
         )
+        // The debug build's own seeding first (its provider, saved as a fresh install's first process starts): settings taken
+        // before it would be put back without it, and every later test in the process would find no provider.
+        withTimeout(SEEDING_MILLIS) { container.devSettingsSaved.await() }
         saved = settings.settings.first()
         assertTrue("Only on Wi-Fi or Ethernet, as a new install has it (W110)", saved.downloads.unmeteredOnly)
         assertFalse(saved.downloads.whileCharging)
@@ -487,6 +491,9 @@ class UidtHostDeviceTest {
     private companion object {
         const val SHOW = 900_791
         const val INDEXER = "dl-job-test"
+
+        /** How long the debug build's seeding may take, as the app's start runs it. */
+        const val SEEDING_MILLIS = 30_000L
 
         /** The film's articles: 16 KiB, about 43 of them. */
         const val PART = 16 * 1024
