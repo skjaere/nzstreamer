@@ -696,6 +696,48 @@ class DownloadRunnerTest {
         assertNull(dao.get(cancelled))
     }
 
+    /** The NZB and its password go with a download's end, whatever stops the walk as its row is written (L346). */
+    @Test
+    fun `the NZB and its password go on Done and Failed though the walk is stopped as they go`() = test {
+        val runner = runner()
+        suspend fun stoppedAsItDrops(id: String, release: Fake) {
+            val dropping = CompletableDeferred<Unit>()
+            val letGo = CompletableDeferred<Unit>()
+            storage.beforeDropSource = {
+                dropping.complete(Unit)
+                letGo.await()
+            }
+            release.gate.complete(Unit)
+            advanceUntilIdle()
+            assertTrue(dropping.isCompleted)
+            // Paused, or the host stopped, as the NZB goes.
+            val pause = work.launch { runner.pause() }
+            runCurrent()
+            storage.beforeDropSource = {}
+            letGo.complete(Unit)
+            pause.join()
+            assertNull(storage.source(id))
+            assertFalse(File(storage.bookkeeping(id), "password").exists())
+        }
+
+        val done = fake("hl-done", password = "s3cret").apply { hold = HOLD }
+        val first = runner.add(1, done)
+        host(runner)
+        runCurrent()
+        stoppedAsItDrops(first, done)
+        assertEquals(DownloadState.Done, stored(first).state)
+
+        val garbled = fake("hl-garbled", password = "s3cret").apply {
+            hold = HOLD
+            fails = HOLD to UsenetError.Protocol("garbled")
+        }
+        val second = runner.add(2, garbled)
+        host(runner)
+        runCurrent()
+        stoppedAsItDrops(second, garbled)
+        assertEquals(DownloadState.Failed, stored(second).state)
+    }
+
     @Test
     fun `reconcile stops a row left running only when the user stopped the app after its last update`() = test {
         assertEquals(android.app.ApplicationExitInfo.REASON_USER_REQUESTED, DownloadExit.USER_REQUESTED)
@@ -1165,7 +1207,11 @@ class DownloadRunnerTest {
             return DownloadStorage.Source(nzb.readBytes(), File(bookkeeping(id), "password").takeIf { it.isFile }?.readText())
         }
 
+        /** Called as an NZB is about to be dropped: where a cancel finds a drop on its way, as Android's I/O dispatch does. */
+        var beforeDropSource: suspend () -> Unit = {}
+
         override suspend fun dropSource(id: String) {
+            beforeDropSource()
             events += "drop source $id"
             File(bookkeeping(id), "nzb").delete()
             File(bookkeeping(id), "password").delete()

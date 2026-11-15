@@ -707,10 +707,13 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 Resolution.Gone -> return Walk.Next
                 is Resolution.Failed -> {
                     val why = gaveUp
-                    if (why != null && resolution.reason == DownloadResolver.NO_OTHER_RELEASE) {
-                        dao.setState(id, DownloadState.Failed, gaveUpWords(why), now())
+                    // Failed by Resolve: its NZB goes too, whatever stops the walk meanwhile (L346).
+                    withContext(NonCancellable) {
+                        if (why != null && resolution.reason == DownloadResolver.NO_OTHER_RELEASE) {
+                            dao.setState(id, DownloadState.Failed, gaveUpWords(why), now())
+                        }
+                        deps.storage.dropSource(id)
                     }
-                    deps.storage.dropSource(id)
                     log.info("download {}: failed", id)
                     return Walk.Next
                 }
@@ -829,20 +832,25 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         }
     }
 
-    /** Download [id]'s file complete: renamed, its row Done with the [gaps] still missing, its NZB and password gone (L346). */
+    /**
+     * Download [id]'s file complete: renamed, its row Done with the [gaps] still missing, its NZB and password gone (L346),
+     * all of it once renamed whatever stops the walk meanwhile: nothing would drop them from a Done row later.
+     */
     private suspend fun finished(id: String, fileName: String, size: Long, gaps: List<LongRange>) {
         deps.storage.finish(id, fileName)
-        val row = dao.get(id) ?: return
-        val at = now()
-        dao.update(
-            row.copy(
-                state = DownloadState.Done, reason = null, safeOffset = size, gaps = gaps.map { DownloadGap(it.first, it.last) }, completedAt = at,
-                updatedAt = at,
-            ),
-        )
-        deps.storage.dropSource(id)
-        deps.debug.trace(DownloadTrace.Completed(id, size))
-        log.info("download {}: done, {} bytes, {} part{} missing", id, size, gaps.size, if (gaps.size == 1) "" else "s")
+        withContext(NonCancellable) {
+            val row = dao.get(id) ?: return@withContext
+            val at = now()
+            dao.update(
+                row.copy(
+                    state = DownloadState.Done, reason = null, safeOffset = size, gaps = gaps.map { DownloadGap(it.first, it.last) }, completedAt = at,
+                    updatedAt = at,
+                ),
+            )
+            deps.storage.dropSource(id)
+            deps.debug.trace(DownloadTrace.Completed(id, size))
+            log.info("download {}: done, {} bytes, {} part{} missing", id, size, gaps.size, if (gaps.size == 1) "" else "s")
+        }
     }
 
     /**
@@ -889,8 +897,11 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         }
     }
 
-    /** Download [id] failed, for [reason]: its NZB and password go (L346), its file and record stay, for Try again. */
-    private suspend fun failed(id: String, reason: String) {
+    /**
+     * Download [id] failed, for [reason]: its NZB and password go (L346), its file and record stay, for Try again; both
+     * whatever stops the walk meanwhile.
+     */
+    private suspend fun failed(id: String, reason: String) = withContext(NonCancellable) {
         dao.setState(id, DownloadState.Failed, reason, now())
         deps.storage.dropSource(id)
         log.info("download {}: failed", id)
