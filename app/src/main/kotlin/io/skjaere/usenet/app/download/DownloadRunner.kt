@@ -426,9 +426,10 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         changes.withLock {
             stop(id)
             removed.remove(id)
-            if (dao.get(id) == null) return@withLock
+            val row = dao.get(id) ?: return@withLock
             deps.storage.dropSource(id)
             delete(id)
+            passHold(row)
             log.info("download {}: cancelled", id)
         }
     }
@@ -447,6 +448,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 val row = dao.get(id)?.takeIf { it.state != DownloadState.Deleting } ?: return@mapNotNull null
                 removed[id] = Removed(row.state, row.reason, token)
                 dao.setState(id, DownloadState.Deleting, null, now())
+                passHold(row)
                 id
             }
         }
@@ -498,7 +500,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /**
      * Replaces download [id]'s releases with [candidates] (Choose another release, Choose release): stopped where it runs,
      * what it wrote deleted and its room given back, its NZB gone, its tries, gaps and safe offset reset, and queued in its
-     * place, to resolve from the new ones.
+     * place, to resolve from the new ones; one that holds the queue (Paused, Stopped) holds it still, until Resume.
      */
     suspend fun replace(id: String, candidates: List<DownloadCandidate>) {
         if (!runs) return
@@ -510,9 +512,12 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             // meanwhile: a row left naming a deleted file at its offset would open its release again into a file of zeros.
             withContext(NonCancellable) {
                 deps.storage.dropSource(id)
+                // One that holds the queue still holds it (L380); any other is queued in its place.
+                val held = row.state in HOLDS
                 dao.update(
                     row.copy(
-                        state = DownloadState.Queued, reason = null, candidates = candidates.take(MAX_CANDIDATES), tried = emptyList(), oneVideo = false,
+                        state = if (held) row.state else DownloadState.Queued, reason = if (held) row.reason else null,
+                        candidates = candidates.take(MAX_CANDIDATES), tried = emptyList(), oneVideo = false,
                         release = null, fileName = null, size = null, indexerSize = candidates.first().size, safeOffset = 0, gaps = emptyList(),
                         relativePath = null, video = null, tracks = null, completedAt = null, updatedAt = now(),
                     ),
@@ -627,6 +632,19 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 log.info("download {}: left {} as the app last ended (exit {}): {}", row.id, row.state, exit?.reason ?: "unknown", decision.word)
             }
         }
+    }
+
+    /**
+     * [gone], cancelled or removed, held the queue (Paused or Stopped, L380): unless another row holds it still, the hold
+     * goes to the next that would run, as a Pause with nothing running does, so nothing starts before Resume. Under [changes].
+     */
+    private suspend fun passHold(gone: Download) {
+        if (gone.state !in HOLDS) return
+        val rows = dao.queue().first()
+        if (rows.any { it.state in HOLDS }) return
+        val next = DownloadHostRules.runnable(rows, deps.storage.volumeThere()).firstOrNull() ?: return
+        dao.setState(next.id, gone.state, gone.reason, now())
+        log.info("download {}: holds the queue in {}'s place", next.id, gone.id)
     }
 
     /** The next download to run, under [changes]: one a kill left Running or Resolving first, else the first that can run. */

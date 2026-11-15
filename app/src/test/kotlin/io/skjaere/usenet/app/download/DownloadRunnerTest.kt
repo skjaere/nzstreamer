@@ -314,6 +314,53 @@ class DownloadRunnerTest {
         assertEquals(emptyList(), runner.runnable())
     }
 
+    /**
+     * Pause holds the whole queue until Resume (L380), whatever is done to the row that holds it: Choose another release
+     * keeps it paused, and Cancel or Remove hands the hold to the next that would run. So does Stopped by Android's.
+     */
+    @Test
+    fun `a replace keeps the held row held, and a cancel or remove of it hands the hold to the next`() = test {
+        val a = fake("hl-a").apply { hold = HOLD }
+        val runner = runner()
+        val first = runner.add(1, a)
+        val second = runner.add(2, fake("hl-b"))
+        val third = runner.add(3, fake("hl-c"))
+        host(runner)
+        runCurrent()
+        runner.pause()
+        runCurrent()
+        assertEquals(DownloadState.Paused, stored(first).state)
+
+        runner.replace(first, listOf(fake("hl-x").candidate))
+        assertEquals(DownloadState.Paused, stored(first).state)
+        assertEquals(emptyList(), runner.runnable())
+
+        runner.cancel(first)
+        assertEquals(DownloadState.Paused, stored(second).state)
+        assertEquals(emptyList(), runner.runnable())
+
+        runner.remove(listOf(second))
+        assertEquals(DownloadState.Paused, stored(third).state)
+        assertEquals(emptyList(), runner.runnable())
+        host(runner).join()
+        assertEquals(listOf(first), resolver.calls)
+
+        // Undo brings the removed one back, held too: Resume lets both go, in their order.
+        runner.undoRemove(listOf(second))
+        runner.resume()
+        assertEquals(listOf(second, third), runner.runnable().map { it.id })
+
+        // Stopped by Android's hold goes the same way, with its words.
+        dao.rows.value = emptyMap()
+        val c = fake("hl-c2")
+        row(STOPPED, 4, 10, c) { it.copy(state = DownloadState.Stopped, reason = DownloadHostRules.STOPPED_BY_ANDROID) }
+        row(QUEUED, 5, 11, c)
+        runner.cancel(STOPPED)
+        assertEquals(DownloadState.Stopped, stored(QUEUED).state)
+        assertEquals(DownloadHostRules.STOPPED_BY_ANDROID, stored(QUEUED).reason)
+        assertEquals(emptyList(), runner.runnable())
+    }
+
     @Test
     fun `a cancel of the running one stops it and deletes what it wrote, its NZB first, and the next starts`() = test {
         val a = fake("hl-a", password = "s3cret")
