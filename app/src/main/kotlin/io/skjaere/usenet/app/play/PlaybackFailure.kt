@@ -29,10 +29,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.PlaybackException
+import io.skjaere.usenet.app.download.DownloadStorage
 import io.skjaere.usenet.app.ui.AppType
 import io.skjaere.usenet.app.ui.colors
 import io.skjaere.usenet.app.ui.tryFocus
 import io.skjaere.usenet.core.UsenetError
+import io.skjaere.usenet.player.GapReached
 import io.skjaere.usenet.player.LinkFailure
 import io.skjaere.usenet.player.LinkUnavailable
 import io.skjaere.usenet.player.UsenetDataSourceException
@@ -96,10 +98,12 @@ internal data class PlaybackFailure(val reason: String, val releaseAtFault: Bool
 
         /**
          * Why the player's [error] stopped playback: a debrid play's file no longer to be had where its causes hold one
-         * ([LinkUnavailable]), else the Usenet failure behind it, else its [errorCode].
+         * ([LinkUnavailable]), else the Usenet failure behind it, else its [errorCode]. A finished [download]'s play in its
+         * own words ([downloadFailure]).
          */
-        fun of(error: Throwable, errorCode: Int, providersLeftOut: Boolean = false): PlaybackFailure {
+        fun of(error: Throwable, errorCode: Int, providersLeftOut: Boolean = false, download: Boolean = false): PlaybackFailure {
             val causes = generateSequence(error) { it.cause.takeIf { cause -> cause !== it } }.take(16).toList()
+            if (download) return downloadFailure(causes, errorCode)
             causes.firstNotNullOfOrNull { it as? LinkUnavailable }?.let { return of(it.failure) }
             return of(causes.firstNotNullOfOrNull { it as? UsenetDataSourceException }?.error, errorCode, providersLeftOut)
         }
@@ -128,6 +132,21 @@ internal data class PlaybackFailure(val reason: String, val releaseAtFault: Bool
                 service("The debrid service won’t play this release.", "The TV's debrid service won't play this release.")
             }
         }
+
+        /**
+         * A finished download's play stopped (L354, its [causes] and [errorCode]): a stretch its download had no article for
+         * where the file's index can't go past it ([GapReached]), or its file gone (deleted, or its volume away), in the
+         * download's words, the Downloads page's for the second. Neither is the release's fault, nor the providers' (the play
+         * asked none): the title still streams. Anything else by its code, as any file's.
+         */
+        private fun downloadFailure(causes: List<Throwable>, errorCode: Int): PlaybackFailure = when {
+            causes.any { it is GapReached } -> PlaybackFailure(MISSING_HERE, releaseAtFault = false, remote = MISSING_HERE)
+            errorCode == PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> PlaybackFailure(DownloadStorage.FILE_GONE, releaseAtFault = false, remote = DownloadStorage.FILE_GONE)
+            else -> of(usenet = null, errorCode)
+        }
+
+        /** A download's part its file's index can't go past. */
+        private const val MISSING_HERE = "This download is missing a part here"
 
         /** A service's wait in words: "20 minutes", "2 hours"; a minute at least. */
         private fun about(waitMs: Long): String {
@@ -163,7 +182,8 @@ internal data class PlaybackFailure(val reason: String, val releaseAtFault: Bool
  * [details] is File details' button, which the focus goes back to as they close.
  *
  * The buttons always show whole: when the room the player leaves it is too low for everything (a
- * landscape phone 360 dp tall at a large font size), the words above them scroll instead.
+ * landscape phone 360 dp tall at a large font size), the words above them scroll instead. [tryAnother]
+ * names its button: Stream instead in its place for a finished download's play (L354).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -175,6 +195,7 @@ fun PlaybackFailedPanel(
     onDetails: () -> Unit,
     modifier: Modifier = Modifier,
     details: FocusRequester = remember { FocusRequester() },
+    tryAnother: String = TRY_ANOTHER,
 ) {
     val first = remember { FocusRequester() }
     val keys = LocalInputModeManager.current
@@ -199,7 +220,7 @@ fun PlaybackFailedPanel(
         FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (canTryAnother) {
                 CardButton("Close", onClose, Modifier, filled = false, horizontalPadding = 16.dp)
-                CardButton("Try another release", onTryAnother, Modifier.focusRequester(first), filled = true, horizontalPadding = 16.dp)
+                CardButton(tryAnother, onTryAnother, Modifier.focusRequester(first), filled = true, horizontalPadding = 16.dp)
             } else {
                 CardButton("Close", onClose, Modifier.focusRequester(first), filled = true, horizontalPadding = 16.dp)
             }

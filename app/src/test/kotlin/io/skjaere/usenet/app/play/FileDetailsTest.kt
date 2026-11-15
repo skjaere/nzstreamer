@@ -40,6 +40,9 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.util.Locale
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -289,6 +292,49 @@ class FileDetailsTest {
         assertEquals("Copper.Crown.2021.1080p.WEB-DL.H.264-GRP.mkv", details.fileName)
         assertEquals("Opened from an NZB file", row(details, "Indexer")?.value)
         assertEquals("5.2 GB", row(details, "Size")?.value)
+    }
+
+    /**
+     * L354: a download's Source, the indexer as for any play, then where it came from, in the
+     * providers' place (none are used, so none are named, nor their connections): when it finished, to this phone, played
+     * from the file, not streamed; and the parts no provider had, skipped as it plays. The rest reads the file as a stream's.
+     */
+    @Test
+    fun `a download's source says when it was downloaded and what of it is missing, in the providers' place`() {
+        // Late in the evening there: already the next day in UTC.
+        val zone = ZoneId.of("America/New_York")
+        val today = LocalDate.of(2026, 11, 15)
+        val finished = ZonedDateTime.of(2026, 11, 12, 21, 30, 0, 0, zone).toInstant().toEpochMilli()
+        val uri = PlayUris.download("3f2c9e1a-7b4d-4c2e-9a10-5e6f7a8b9c0d")
+        fun details(downloaded: FileOrigin.Downloaded?) =
+            FileDetails(FileOrigin.of(launch().copy(uri = uri), uri, null, SourceNames(indexers), providers, 6, downloaded = downloaded), shield, zone, today)
+        val gaps = details(FileOrigin.Downloaded(at = finished, missingParts = 2))
+        assertEquals(
+            "Source" to listOf(
+                "Indexer: My indexer",
+                "Downloaded: 12 Nov, to this phone (plays from the file, not streamed)",
+                "Missing: 2 parts (skipped as it plays)",
+            ),
+            rows(gaps).last(),
+        )
+        // The file as a stream's: its name and size from the launch.
+        assertEquals(file, gaps.fileName)
+        assertEquals("8.4 GB", row(gaps, "Size")?.value)
+        assertEquals("1 part", row(details(FileOrigin.Downloaded(at = finished, missingParts = 1)), "Missing")?.value)
+        val whole = details(FileOrigin.Downloaded(at = finished))
+        assertNull(row(whole, "Missing"))
+        // A year back says the year; one whose finish isn't known, where to alone.
+        val lastYear = ZonedDateTime.of(2025, 12, 30, 9, 0, 0, 0, zone).toInstant().toEpochMilli()
+        assertEquals("30 Dec 2025, to this phone", row(details(FileOrigin.Downloaded(at = lastYear)), "Downloaded")?.value)
+        assertEquals("To this phone", row(details(null), "Downloaded")?.value)
+        assertTrue(listOf(gaps, whole).none { d -> row(d, "Providers") != null })
+        // A stream's source as before, given a download's facts or not.
+        assertEquals(listOf("Indexer", "Providers"), FileDetails(origin(), shield).sections.last().rows.map { it.label })
+        assertEquals(
+            listOf("Indexer", "Providers"),
+            FileDetails(FileOrigin.of(launch(), launch().uri, null, SourceNames(indexers), providers, 6, downloaded = FileOrigin.Downloaded(finished, 2)), shield)
+                .sections.last().rows.map { it.label },
+        )
     }
 
     /** A launch saved before names were kept has only the file's position: the URI's name and size, else the NZB's file. */

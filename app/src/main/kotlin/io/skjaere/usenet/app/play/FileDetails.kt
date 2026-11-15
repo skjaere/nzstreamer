@@ -49,6 +49,11 @@ import io.skjaere.usenet.player.UsenetDataSource
 import io.skjaere.usenet.player.VideoDetails
 import io.skjaere.usenet.releases.Hdr
 import io.skjaere.usenet.releases.ReleaseParser
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /**
  * What File details name a play's source by, as the settings keep it: the [indexers] (Usenet's), the [torrentIndexers] and
@@ -79,7 +84,12 @@ data class FileOrigin(
     val connections: Int?,
     /** A debrid play's Service row: the service's name, or [SIGNED_OUT]; null for another play, or until the settings are read. */
     val service: String? = null,
+    /** A finished download's play's Downloaded and Missing rows (L354), in the providers' place; null for another play. */
+    val downloaded: Downloaded? = null,
 ) {
+    /** A finished download's file: when it was finished ([at], ms since the epoch; null when not known), and the stretches its download had no article for. */
+    data class Downloaded(val at: Long? = null, val missingParts: Int = 0)
+
     companion object {
         const val REMOVED = "An indexer since removed"
         const val OPENED_FILE = "Opened from an NZB file"
@@ -92,9 +102,14 @@ data class FileOrigin(
          * null when no longer held). Nothing comes from the indexer's search item, which a Resume doesn't have: it reads
          * as the play from search did. The indexer is named from [names]' indexers of the release's source (a torrent's
          * from the torrent indexers), disabled ones included (null until they are read); one no longer there is said to be
-         * removed. A debrid play names the service of the [account] its listing came from in place of the providers.
+         * removed. A debrid play names the service of the [account] its listing came from in place of the providers; a
+         * finished download's what is [downloaded] of it (when, and the parts missing; nothing known, none), as no
+         * providers are used (L354).
          */
-        fun of(launch: PlayerLaunch?, uri: String, listing: FileListing<*>?, names: SourceNames?, providers: List<ProviderConfig>, connections: Int?, account: String? = null): FileOrigin {
+        fun of(
+            launch: PlayerLaunch?, uri: String, listing: FileListing<*>?, names: SourceNames?, providers: List<ProviderConfig>, connections: Int?, account: String? = null,
+            downloaded: Downloaded? = null,
+        ): FileOrigin {
             val release = launch?.release
             val target = PlayUris.parse(uri)
             val name = release?.fileName ?: target?.name
@@ -108,6 +123,7 @@ data class FileOrigin(
                 else -> names.indexers.firstOrNull { it.id == launch.release.indexerId }?.name ?: REMOVED
             }
             val fromService = target is PlayUris.Target.Service
+            val fromDownload = target is PlayUris.Target.Download
             val service = names?.takeIf { fromService }?.let { n ->
                 n.services.firstOrNull { it.id == account }?.let(ServiceRegistry::kindOf)?.displayName ?: SIGNED_OUT
             }
@@ -116,9 +132,10 @@ data class FileOrigin(
                 fileName = name ?: stored?.name,
                 fileSize = size ?: stored?.size,
                 indexer = indexer,
-                providers = if (fromService) emptyList() else providers.map { it.name.ifBlank { it.host } },
-                connections = connections.takeUnless { fromService },
+                providers = if (fromService || fromDownload) emptyList() else providers.map { it.name.ifBlank { it.host } },
+                connections = connections.takeUnless { fromService || fromDownload },
                 service = service,
+                downloaded = if (fromDownload) downloaded ?: Downloaded() else null,
             )
         }
     }
@@ -135,9 +152,13 @@ data class FileOrigin(
  * Vision, HDR), the row says so (W4). HDR10+ is never contradicted: Media3 1.11.1 doesn't read it from an HEVC stream,
  * so the player can't say whether the file has it. Nothing about audio or subtitles: the audio and subtitles sheet has
  * them.
+ *
+ * A finished download's Source (L354) says, after its indexer, when it was downloaded to this phone, in [zone]'s days
+ * ("12 Nov", with the year when it isn't [today]'s), that it plays from the file, and the parts its download had no
+ * article for, skipped as it plays: no providers or connections, which it doesn't use.
  */
 @androidx.annotation.OptIn(UnstableApi::class)
-class FileDetails(origin: FileOrigin, playing: Playing = Playing()) {
+class FileDetails(origin: FileOrigin, playing: Playing = Playing(), zone: ZoneId = ZoneId.systemDefault(), today: LocalDate = LocalDate.now(zone)) {
     /**
      * What the player knows of the file: whether it has read its tracks, the [video] track (the one selected, else the
      * first, which a device that plays none still has), the file's length, the [decoder] it started and the [display];
@@ -197,6 +218,12 @@ class FileDetails(origin: FileOrigin, playing: Playing = Playing()) {
         val source = listOfNotNull(
             origin.indexer?.let { Row("Indexer", it) },
             origin.service?.let { Row("Service", it, "a cached torrent, streamed from the service") },
+            origin.downloaded?.let { d ->
+                val day = d.at?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+                    ?.let { date -> date.format(if (date.year == today.year) DAY else DAY_YEAR) }
+                Row("Downloaded", day?.let { "$it, $TO_THIS_PHONE" } ?: TO_THIS_PHONE.replaceFirstChar { it.uppercase() }, "plays from the file, not streamed")
+            },
+            origin.downloaded?.missingParts?.takeIf { it > 0 }?.let { n -> Row("Missing", if (n == 1) "1 part" else "$n parts", "skipped as it plays") },
             origin.providers.takeIf { it.isNotEmpty() }?.let { names ->
                 val connections = origin.connections?.let { if (it == 1) "1 connection" else "$it connections" }
                 Row("Providers", names.joinToString(", then "), listOfNotNull("in this order".takeIf { names.size > 1 }, connections).joinToString(" · ").ifEmpty { null })
@@ -215,6 +242,13 @@ class FileDetails(origin: FileOrigin, playing: Playing = Playing()) {
     private companion object {
         /** The lowest resolution class an HD file or name has. */
         const val HD = 720
+
+        /** Where a download went: this device, which the app calls a phone on a tablet too ("This phone" in Play on). */
+        const val TO_THIS_PHONE = "to this phone"
+
+        /** A download's day, as the collection's dates say one: "12 Nov", "30 Dec 2025". */
+        val DAY: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
+        val DAY_YEAR: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH)
 
         /** Containers by their MIME type, as the extractor or the file's extension names them. */
         val CONTAINERS = mapOf(

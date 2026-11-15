@@ -220,6 +220,36 @@ class AutoAdvanceTest {
         assertTrue(a.playNow())
     }
 
+    /** L354: a downloaded next episode counts down and moves on as a release found does, and nothing searches for it. */
+    @Test
+    fun `a downloaded next episode counts down and moves on, with no search`() {
+        val a = machine()
+        val steps = a.play(duration - 10_000, 10_000, prefetch = Prefetch.Downloaded(partsMissing = 2))
+        assertEquals(AutoAdvance.Card(10, 1f, Prefetch.Downloaded(partsMissing = 2)), steps.first().card)
+        assertTrue(steps.none { it.startPrefetch })
+        assertTrue(steps.last().advance)
+    }
+
+    /**
+     * L354: offline, a next episode not downloaded or still on its way can't play: no countdown and no advance, the card
+     * waiting at the end with Close, and nothing searches.
+     */
+    @Test
+    fun `what can't play offline gets no countdown, no search and no advance`() {
+        listOf(Prefetch.NotDownloadedOffline, Prefetch.StillDownloading(42)).forEach { status ->
+            val a = machine()
+            val steps = a.play(duration - 10_000, 30_000, prefetch = status)
+            assertTrue(steps.all { it.card == AutoAdvance.Card(secondsLeft = null, progress = null, prefetch = status, autoPlays = false) }, "$status")
+            assertTrue(steps.none { it.advance || it.startPrefetch }, "$status")
+        }
+        // From the credits on too: Close, not Stop.
+        val credits = duration - 60_000
+        assertEquals(
+            AutoAdvance.Card(null, null, Prefetch.NotDownloadedOffline, autoPlays = false),
+            machine().update(at(credits, creditsMs = credits), Prefetch.NotDownloadedOffline).card,
+        )
+    }
+
     @Test
     fun `the countdown runs while the search is still going`() {
         val a = machine()

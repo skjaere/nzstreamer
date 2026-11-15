@@ -45,6 +45,19 @@ internal fun missingPartsSpoken(count: Int) = "This release is missing parts, $c
 
 internal const val MISSING_PARTS_QUESTION = "Try another release? It starts where you are."
 
+/** The button that plays another release of the play's request, here and on "Playback stopped". */
+internal const val TRY_ANOTHER = "Try another release"
+
+/** In its place for a finished download's play, while online (L354): the title by its stream path. */
+internal const val STREAM_INSTEAD = "Stream instead"
+
+/** The prompt's question for a download's play, which has no other release to try. */
+internal const val STREAM_INSTEAD_QUESTION = "Stream instead? It starts where you are."
+
+/** The prompt's question and its button: another release's, or for a download's play [streamInstead]'s (L354). */
+internal fun missingPartsWords(streamInstead: Boolean): Pair<String, String> =
+    if (streamInstead) STREAM_INSTEAD_QUESTION to STREAM_INSTEAD else MISSING_PARTS_QUESTION to TRY_ANOTHER
+
 /**
  * The player's prompt for a release found missing parts ([MissingParts]): "This release is missing parts (3 so far)",
  * "Try another release? It starts where you are.", Keep watching and Try another release (QlPhonePrompt, QlTvPromptB);
@@ -57,6 +70,8 @@ internal const val MISSING_PARTS_QUESTION = "Try another release? It starts wher
  * keeps watching rather than pause. From then, an OK pressed within [OkGuard]'s moment, or a held OK's repeats, press
  * nothing: an OK meant to pause, as the prompt appears, isn't taken for an answer. At a large font the words scroll and the
  * buttons stay whole, one under the other where they don't fit side by side. [keepWatching] is its button's requester.
+ * For a finished download's play ([streamInstead], L354) it asks to stream the title instead, Stream instead in Try another
+ * release's place, offered only while online (the count alone otherwise).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -68,8 +83,10 @@ fun MissingPartsPrompt(
     onTryAnother: () -> Unit,
     modifier: Modifier = Modifier,
     keepWatching: FocusRequester = remember { FocusRequester() },
+    streamInstead: Boolean = false,
 ) {
     val heading = missingPartsHeading(prompt.count)
+    val (question, another) = missingPartsWords(streamInstead)
     val surface = modifier.clip(RoundedCornerShape(16.dp)).background(colors.surface.copy(alpha = 0.94f)).takesTaps().semantics { liveRegion = LiveRegionMode.Polite }
     if (!prompt.tryAnother) {
         Text(
@@ -86,7 +103,7 @@ fun MissingPartsPrompt(
     }
     val buttons = @Composable {
         CardButton("Keep watching", onKeepWatching, Modifier.focusRequester(keepWatching), filled = false, horizontalPadding = 16.dp)
-        CardButton("Try another release", onTryAnother, Modifier, filled = true, horizontalPadding = 16.dp)
+        CardButton(another, onTryAnother, Modifier, filled = true, horizontalPadding = 16.dp)
     }
     if (compact) {
         Row(
@@ -95,7 +112,7 @@ fun MissingPartsPrompt(
         ) {
             Column(Modifier.weight(1f, fill = false)) {
                 Text(heading, style = AppType.small.copy(fontWeight = FontWeight.SemiBold), color = colors.warnStrong, modifier = Modifier.semantics { contentDescription = missingPartsSpoken(prompt.count) })
-                Text(MISSING_PARTS_QUESTION, style = AppType.small, color = colors.textSecondary)
+                Text(question, style = AppType.small, color = colors.textSecondary)
             }
             buttons()
         }
@@ -104,7 +121,7 @@ fun MissingPartsPrompt(
             // Weighted, so the buttons are measured first and the words get what is left, as Playback stopped's.
             Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(heading, style = AppType.small.copy(fontWeight = FontWeight.SemiBold), color = colors.warnStrong, modifier = Modifier.semantics { contentDescription = missingPartsSpoken(prompt.count) })
-                Text(MISSING_PARTS_QUESTION, style = AppType.bodyStrong.copy(fontSize = 14.sp), color = colors.text)
+                Text(question, style = AppType.bodyStrong.copy(fontSize = 14.sp), color = colors.text)
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { buttons() }
         }

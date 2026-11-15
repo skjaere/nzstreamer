@@ -3,6 +3,8 @@ package io.skjaere.usenet.app.play
 import org.junit.jupiter.api.Test
 import java.util.Locale
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class NextEpisodeCardTest {
     @Test
@@ -31,5 +33,31 @@ class NextEpisodeCardTest {
         // From the start of the credits, before the countdown.
         assertEquals("Stop", stopLabel(AutoAdvance.Card(secondsLeft = null, progress = null, prefetch = ready, autoPlays = true)))
         assertEquals("Close", stopLabel(AutoAdvance.Card(secondsLeft = null, progress = null, prefetch = ready)))
+    }
+
+    /** L354: a next episode on this device says so, with no search; one that can't play offline says why. */
+    @Test
+    fun `the third line says when the next episode is downloaded, on its way or not downloaded while offline`() {
+        assertEquals("Downloaded · ready", prefetchLine(Prefetch.Downloaded(partsMissing = 0)))
+        assertEquals("Downloaded · 1 part missing", prefetchLine(Prefetch.Downloaded(partsMissing = 1)))
+        assertEquals("Downloaded · 2 parts missing", prefetchLine(Prefetch.Downloaded(partsMissing = 2)))
+        assertEquals("Not downloaded · offline", prefetchLine(Prefetch.NotDownloadedOffline))
+        assertEquals("Still downloading · 42%", prefetchLine(Prefetch.StillDownloading(42)))
+    }
+
+    /** L354: a downloaded next episode counts down and plays as a release found does; what can't play offline offers Close alone. */
+    @Test
+    fun `the card offers Play now for what can play, and Close alone for what can't offline`() {
+        val downloaded = AutoAdvance.Card(secondsLeft = 8, progress = 0.8f, prefetch = Prefetch.Downloaded(0))
+        assertTrue(offersPlayNow(downloaded))
+        assertEquals("Stop", stopLabel(downloaded))
+        listOf(Prefetch.NotDownloadedOffline, Prefetch.StillDownloading(42)).forEach { status ->
+            val card = AutoAdvance.Card(secondsLeft = null, progress = null, prefetch = status)
+            assertFalse(offersPlayNow(card), "$status")
+            assertEquals("Close", stopLabel(card))
+        }
+        // As before: nothing found, or nothing held, still offers Play now, which searches.
+        assertTrue(offersPlayNow(AutoAdvance.Card(null, null, Prefetch.NothingFound)))
+        assertTrue(offersPlayNow(AutoAdvance.Card(null, null, null)))
     }
 }

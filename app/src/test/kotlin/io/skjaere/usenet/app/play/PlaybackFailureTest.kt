@@ -1,10 +1,12 @@
 package io.skjaere.usenet.app.play
 
 import androidx.media3.common.PlaybackException
+import androidx.media3.datasource.DataSourceException
 import io.skjaere.nntp.NntpConnectionException
 import io.skjaere.nntp.NntpConnectionLostException
 import io.skjaere.usenet.core.UsenetError
 import io.skjaere.usenet.core.toUsenetError
+import io.skjaere.usenet.player.GapReached
 import io.skjaere.usenet.player.LinkFailure
 import io.skjaere.usenet.player.LinkUnavailable
 import io.skjaere.usenet.player.UsenetDataSourceException
@@ -249,6 +251,38 @@ class PlaybackFailureTest {
         val missing = UsenetDataSourceException(UsenetError.MissingArticle("<a@b>"), null, PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND)
         assertEquals(PlaybackFailure.of(UsenetError.MissingArticle("<a@b>"), io), PlaybackFailure.of(IOException("load failed", missing), io))
         assertEquals(PlaybackFailure.of(null, PlaybackException.ERROR_CODE_DECODER_INIT_FAILED), PlaybackFailure.of(IOException("plain"), PlaybackException.ERROR_CODE_DECODER_INIT_FAILED))
+    }
+
+    /**
+     * L354: a download's file gone (deleted, or its volume away) and a part no provider had where the file's
+     * index can't go past it, in the download's words; neither the release's fault, nor said as the providers' (a download's
+     * play asks none), a provider left out or not. Anything else as for any file.
+     */
+    @Test
+    fun `a download's play says its file is gone, or that it is missing a part there`() {
+        val gone = DataSourceException("Download d1 has no finished file", null, PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND)
+        assertEquals(
+            PlaybackFailure("The downloaded file is gone", releaseAtFault = false, remote = "The downloaded file is gone"),
+            PlaybackFailure.of(IOException("load failed", gone), PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND, download = true),
+        )
+        val gap = GapReached(4_000_000L..4_999_999L)
+        listOf(false, true).forEach { leftOut ->
+            assertEquals(
+                PlaybackFailure("This download is missing a part here", releaseAtFault = false, remote = "This download is missing a part here"),
+                PlaybackFailure.of(IOException("load failed", gap), PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND, providersLeftOut = leftOut, download = true),
+            )
+        }
+        // A stream's gap is a missing article, as before.
+        assertTrue(PlaybackFailure.of(IOException("load failed", gap), PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND).reason.startsWith("Part of this release"))
+        // Anything else, by its code, as any file.
+        assertEquals(
+            PlaybackFailure.of(null, PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED),
+            PlaybackFailure.of(IOException("bad"), PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED, download = true),
+        )
+        assertEquals(
+            PlaybackFailure.of(null, PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE),
+            PlaybackFailure.of(IOException("short"), PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE, download = true),
+        )
     }
 
     @Test

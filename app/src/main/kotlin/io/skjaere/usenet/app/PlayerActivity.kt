@@ -117,6 +117,8 @@ import io.skjaere.usenet.app.casting.CastMove
 import io.skjaere.usenet.app.casting.CastPrecheck
 import io.skjaere.usenet.app.casting.MoveOutcome
 import io.skjaere.usenet.app.debrid.ServiceFiles
+import io.skjaere.usenet.app.download.OfflineNext
+import io.skjaere.usenet.app.download.PlayerBranches
 import io.skjaere.usenet.app.link.CastButton
 import io.skjaere.usenet.app.link.CastButtonSpot
 import io.skjaere.usenet.app.link.CastIntroFocus
@@ -169,6 +171,7 @@ import io.skjaere.usenet.app.play.PlayWhenMade
 import io.skjaere.usenet.app.play.Prefetch
 import io.skjaere.usenet.app.play.RemoteKeys
 import io.skjaere.usenet.app.play.RemotePlay
+import io.skjaere.usenet.app.play.STREAM_INSTEAD
 import io.skjaere.usenet.app.play.SavedRelease
 import io.skjaere.usenet.app.play.ScrubRate
 import io.skjaere.usenet.app.play.SeekBurst
@@ -185,6 +188,7 @@ import io.skjaere.usenet.app.play.SlowStreamBanner
 import io.skjaere.usenet.app.play.SourceNames
 import io.skjaere.usenet.app.play.StallLog
 import io.skjaere.usenet.app.play.StoppedPlay
+import io.skjaere.usenet.app.play.TRY_ANOTHER
 import io.skjaere.usenet.app.play.TrackChoices
 import io.skjaere.usenet.app.play.TrackSheet
 import io.skjaere.usenet.app.play.TrackSheetPanel
@@ -204,6 +208,7 @@ import io.skjaere.usenet.core.ProviderConfig
 import io.skjaere.usenet.core.UsenetError
 import io.skjaere.usenet.core.UsenetUris
 import io.skjaere.usenet.data.AspectMode
+import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.LibraryRepository
 import io.skjaere.usenet.data.PlaybackPrefs
 import io.skjaere.usenet.data.WatchKind
@@ -352,6 +357,16 @@ import kotlin.math.roundToInt
  * Assistant and the picture-in-picture window play, pause and seek the play through it, as the controls do, and its Next
  * and Previous are the controls' own. It says the play as the top bar does, or only the app's name for a play TMDB doesn't
  * name ([SessionMetadata]). A media key nothing in the player takes goes no further.
+ *
+ * A finished download's file (`download://<id>`, L354) plays as a stream does, but for what it isn't ([PlayerBranches]):
+ * the CPU kept awake with no Wi-Fi lock, no slow-stream banner or stream-cost line, nothing remembered as missing on the
+ * providers, and no Cast button (L377). A part its download had no article for is skipped and counted as a stream's is.
+ * Its failures say so in its words ("The downloaded file is gone"), and in Try another release's place, on "Playback
+ * stopped" and the missing-parts prompt, it offers Stream instead while the network is validated, which plays the title by
+ * its stream path ([streamInstead]); offline nothing. The next-episode card says what the downloads say of the next
+ * episode, with no search: downloaded, still downloading or not downloaded while offline, the last two with Close alone;
+ * when TMDB doesn't answer, the next and previous come from the download's row ([OfflineNext]). TheIntroDB is asked only
+ * while online; its chapters work offline. File details name where the file came from in the providers' place.
  */
 @androidx.annotation.OptIn(UnstableApi::class)
 class PlayerActivity : ComponentActivity() {
@@ -383,6 +398,9 @@ class PlayerActivity : ComponentActivity() {
     /** Whether the next player made plays as it is made, or waits paused at its place ([PlayWhenMade], W106). */
     private var playsWhenMade = PlayWhenMade.FIRST
     private var launch: PlayerLaunch? = null
+
+    /** Whether the play is a finished download's file (L354), which the player's branches for one go by ([PlayerBranches]). */
+    private val playingDownload: Boolean get() = PlayerBranches.isDownload(launch?.uri ?: intent.getStringExtra(EXTRA_URI))
 
     /**
      * Who holds, for this player, what a debrid play added to the service account (L234): one id, kept as Android makes the
@@ -790,6 +808,7 @@ class PlayerActivity : ComponentActivity() {
         detailsButton = roundButton(R.drawable.ic_file_details, "File details") { openPanel(Panel.Details, detailsButton, controls = true) }
         castView = if (PlayerCast.shows(container.television)) castButton() else null
         topBar = topBar(back, pipButton, aspectButton, audioButton, detailsButton, castView)
+        showCast()
         showZoom()
         momentLabel = momentLabel()
         sideMark = SideMark(this)
@@ -844,9 +863,13 @@ class PlayerActivity : ComponentActivity() {
             setContent {
                 AppTheme(formFactor) {
                     failure?.let { f ->
+                        // A download's Stream instead comes and goes with the network as the panel shows (L354).
+                        val online = if (f.download) container.validatedNetwork.collectAsStateWithLifecycle().value else false
+                        val other = PlayerBranches.other(f.download, online, f.canTryAnother)
                         PlaybackFailedPanel(
-                            f.reason, f.canTryAnother, onTryAnother = ::tryAnother, onClose = ::finish, onDetails = { openPanel(Panel.Details, failureView, controls = false) },
-                            details = failureDetails,
+                            f.reason, other != PlayerBranches.Other.None, onTryAnother = ::tryAnother, onClose = ::finish,
+                            onDetails = { openPanel(Panel.Details, failureView, controls = false) }, details = failureDetails,
+                            tryAnother = if (other == PlayerBranches.Other.StreamInstead) STREAM_INSTEAD else TRY_ANOTHER,
                         )
                     }
                 }
@@ -873,7 +896,7 @@ class PlayerActivity : ComponentActivity() {
                     promptShown?.let { s ->
                         MissingPartsPrompt(
                             s.prompt, compact = controlsShown, takeFocus = s.takeFocus, onKeepWatching = ::keepWatching, onTryAnother = ::tryAnotherForMissingParts,
-                            keepWatching = promptKeepWatching,
+                            keepWatching = promptKeepWatching, streamInstead = playingDownload,
                         )
                     }
                 }
@@ -990,6 +1013,7 @@ class PlayerActivity : ComponentActivity() {
         lastSubtitles = null
         subtitlesOff = SubtitlePlan.ForcedOnly
         showTitles()
+        showCast()
         hideSystemBars()
         // Brought to the front from the background, onStart comes after this and starts it.
         if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) startPlay()
@@ -1083,6 +1107,14 @@ class PlayerActivity : ComponentActivity() {
             view.text = value
             view.isVisible = !value.isNullOrEmpty()
         }
+    }
+
+    /** Whether the top bar's Cast button shows for the play now: not while a download plays (L377), whose file isn't cast in DN1. */
+    private fun castShown(): Boolean = PlayerBranches.castShown(container.television, playingDownload)
+
+    /** The Cast button, where the player has one, shown or gone for the play now ([castShown]): gone, the titles take its room. */
+    private fun showCast() {
+        castView?.isVisible = castShown()
     }
 
     /**
@@ -1204,7 +1236,7 @@ class PlayerActivity : ComponentActivity() {
     private fun showTopBar(visibility: Int) {
         topBar.visibility = visibility
         titles.visibility = if (controlsFading) View.INVISIBLE else View.VISIBLE
-        listOfNotNull(pipButton.takeIf { pictureInPicture }, aspectButton, audioButton, detailsButton, castView)
+        listOfNotNull(pipButton.takeIf { pictureInPicture }, aspectButton, audioButton, detailsButton, castView?.takeIf { castShown() })
             .forEach { b -> b.visibility = if (controlsFading && !b.hasFocus()) View.INVISIBLE else View.VISIBLE }
     }
 
@@ -2457,6 +2489,7 @@ class PlayerActivity : ComponentActivity() {
     /** Makes the player for the launch (or opened file) and starts it, once the settings it needs are read. */
     private fun startPlay() {
         val uri = launch?.uri ?: intent.getStringExtra(EXTRA_URI) ?: return finish()
+        val download = PlayerBranches.isDownload(uri)
         // Tied to the started state: onStop cancels it, so a player is never made after onStop
         // has run (nothing would release it and it would play in the background); finish() too.
         setupJob = lifecycleScope.launch {
@@ -2502,7 +2535,11 @@ class PlayerActivity : ComponentActivity() {
                 gapsListening = container.gapReports.listen(target.nzbId) { found -> if (found.isOf(target)) foundGaps += found.range }
             }
             // By the device's kind: only a TV's HDMI route changes under a play (a receiver switched on, the TV re-syncing).
-            val p = PlayerFactory.create(this@PlayerActivity, dataSources(container), loadControlFor(budget), followAudioRoute = container.television, gaps = gaps)
+            // A download's file keeps the CPU awake alone: no Wi-Fi lock for a file on this device (L354).
+            val p = PlayerFactory.create(
+                this@PlayerActivity, dataSources(container), loadControlFor(budget), followAudioRoute = container.television, gaps = gaps,
+                wakeMode = PlayerBranches.wakeMode(download),
+            )
             player = p
             // Before prepare(), so the decoder it starts is heard.
             fileDetails.follow(p)
@@ -2580,11 +2617,14 @@ class PlayerActivity : ComponentActivity() {
                     val causes = generateSequence<Throwable>(error) { it.cause }.take(16).toList()
                     val usenet = causes.firstNotNullOfOrNull { it as? UsenetDataSourceException }?.error
                     val link = causes.firstNotNullOfOrNull { it as? LinkUnavailable }?.failure
-                    val failed = PlaybackFailure.of(error, error.errorCode, providersLeftOut = container.engine.leftOut.value.isNotEmpty())
+                    val failed = PlaybackFailure.of(error, error.errorCode, providersLeftOut = container.engine.leftOut.value.isNotEmpty(), download = download)
                     log.warn("Playback failed: {} ({})", failed.reason, link ?: usenet ?: error.errorCodeName, error)
                     if (player !== p) return
-                    // Missing on the providers fetched from: remembered while one is in use, so a play skips the release without a grab.
-                    if (usenet is UsenetError.MissingArticle) launch?.let { container.playback.rememberMissing(it, providers) }
+                    // Missing on the providers fetched from: remembered while one is in use, so a play skips the release without a
+                    // grab. Never a download's gap, which no provider was asked for now (L354).
+                    if (usenet is UsenetError.MissingArticle && PlayerBranches.remembersMissing(download)) {
+                        launch?.let { container.playback.rememberMissing(it, providers) }
+                    }
                     // A debrid play's file no longer to be had: remembered against the account that played it, as a play's own
                     // failures are (L174); Try another release leaves out that account's releases where it stops them.
                     val stops = link?.let { l -> launch?.let { container.playback.serviceFailed(it, l) } }.orEmpty()
@@ -2650,7 +2690,10 @@ class PlayerActivity : ComponentActivity() {
             // Both go by the position the controls show: where a burst of rewind and fast-forward taps goes, at once.
             segmentsJob = lifecycleScope.launch { findSegments(shown, episode) }
             gapsJob = lifecycleScope.launch { watchMissingParts(shown, uri) }
-            dipJob = lifecycleScope.launch { watchDips(p, detector, stalls, uri, playback.maxBitrate?.let { (it / 1_000_000).toInt() }) }
+            // A download's file comes as fast as it is read: no slow-stream banner for it (L354).
+            if (PlayerBranches.watchesDips(download)) {
+                dipJob = lifecycleScope.launch { watchDips(p, detector, stalls, uri, playback.maxBitrate?.let { (it / 1_000_000).toInt() }) }
+            }
             nextLookup = if (episode != null) EndOfPlay.Next.Pending else EndOfPlay.Next.None
             episode?.let { playing ->
                 nextJob = lifecycleScope.launch { offerNextEpisode(shown, playing, playback.autoPlayNext) }
@@ -2769,14 +2812,18 @@ class PlayerActivity : ComponentActivity() {
     /**
      * Finds the file's intro, recap and credits: its chapters, and for a TMDB [episode]
      * TheIntroDB's times (asked once the file is open, with its length, only if the user turned
-     * that on). Then shows the skip button while playback is in an intro or recap; the credits are
-     * for [offerNextEpisode]. Nothing shows for a file without any.
+     * that on; for a download's file only while online, L354). Then shows the skip button while
+     * playback is in an intro or recap; the credits are for [offerNextEpisode]. Nothing shows for a
+     * file without any.
      */
     private suspend fun findSegments(p: ControlsPlayer, episode: AutoAdvance.Episode?) {
         // The chapters come with the tracks, as the file opens; and its length, which picks
         // TheIntroDB's version of the episode.
         while (p.duration <= 0 || p.currentTracks.isEmpty) delay(TICK_MS)
-        val online = episode?.let { lookUpSegments(container, it, p.duration) }.orEmpty()
+        val download = playingDownload
+        val asks = PlayerBranches.asksIntroDb(download, online = download && online())
+        if (episode != null && !asks) log.debug("Skip segments: offline, TheIntroDB not asked; the file's chapters alone")
+        val online = episode?.takeIf { asks }?.let { lookUpSegments(container, it, p.duration) }.orEmpty()
         val accepted = Segments.accept(Segments.fromChapters(readChapters(p.currentTracks)), online, p.duration) { s, why ->
             log.debug("Skip segment dropped, {}: {}", why, s)
         }
@@ -2823,6 +2870,8 @@ class PlayerActivity : ComponentActivity() {
      */
     private suspend fun watchMissingParts(p: ControlsPlayer, uri: String) {
         val size = PlayUris.parse(uri)?.size ?: launch?.release?.fileSize
+        // A download's gaps are known to no stream that would find them ahead: each counts as the play goes past it (L354).
+        val download = PlayerBranches.isDownload(uri)
         /** Where byte [position] is in the film, from the file's index or, without one that can say, its share of the file. */
         fun timeAt(position: Long): Long? = playGaps?.timeMsAt(position) ?: size?.takeIf { it > 0 && p.duration > 0 }?.let { (position.toDouble() / it * p.duration).toLong() }
         val unplaced = mutableListOf<LongRange>()
@@ -2837,11 +2886,18 @@ class PlayerActivity : ComponentActivity() {
                 jumps += jump
                 // The stream opened again at the point it went on from.
                 dips?.reopened()
+                if (download) {
+                    (timeAt(jump.bytes.first) ?: jump.fromMs)?.let { at ->
+                        if (missingParts.found(jump.bytes, at)) log.debug("Missing part at bytes {}-{}, {} into the film: {} so far", jump.bytes.first, jump.bytes.last, format(at), missingParts.count)
+                    }
+                }
                 (jump.toMs ?: timeAt(jump.bytes.last + 1))?.let { missingParts.jumped(jump.bytes, it) }
             }
             val l = launch
             val waiting = failure != null || nextCard != null || skipShown != null || windowScene().unseen
-            val state = missingParts.update(p.currentPosition, waiting, tryAnother = l != null && container.playback.canTryAnother(l))
+            // A download's prompt offers its stream, only while online; a stream's another release, as before (L354).
+            val other = PlayerBranches.other(download, online = download && online(), canTryAnother = !download && l != null && container.playback.canTryAnother(l))
+            val state = missingParts.update(p.currentPosition, waiting, tryAnother = other != PlayerBranches.Other.None)
             if (state.notice) say(MISSING_PART_SKIPPED, forMs = NOTICE_MS)
             if (state.timedOut) log.info("Missing parts: the prompt went unanswered; watching on ({} so far)", missingParts.count)
             showPrompt(state.prompt)
@@ -2999,6 +3055,7 @@ class PlayerActivity : ComponentActivity() {
      * that goes. This one is remembered as missing only once another plays, and played again from here if none does (W3).
      */
     private fun tryAnotherForMissingParts() {
+        if (playingDownload) return streamInstead()
         val l = launch ?: return
         if (isFinishing) return
         val position = controlsPlayer?.currentPosition ?: resumePosition.takeIf { it != C.TIME_UNSET } ?: 0
@@ -3051,7 +3108,8 @@ class PlayerActivity : ComponentActivity() {
      * may have come while it was looked up, the player leaves ([followTheEnd]).
      */
     private suspend fun offerNextEpisode(p: ControlsPlayer, playing: AutoAdvance.Episode, autoPlayNext: Boolean) {
-        val next = nextEpisode(container, playing)
+        // TMDB's answer, else the one the play's download says (L354): offline, or TMDB failing.
+        val next = nextEpisode(container, playing) ?: downloadedNext()
         // A lookup deaf to cancellation can answer after onStop, for a setup that has gone.
         if (!currentCoroutineContext().isActive) return
         if (next == null) {
@@ -3064,10 +3122,12 @@ class PlayerActivity : ComponentActivity() {
         val machine = AutoAdvance(autoPlayNext, SystemClock::elapsedRealtime, timings.cardBeforeEndMs, timings.countdownMs).also { if (cardStopped) it.stop() }
         autoAdvance = machine
         while (true) {
+            // What the downloads say of it, with no search (L354): downloaded, or offline still downloading or not.
+            val local = downloadStatus(next)
             // A release found too long ago to be handed on by the end of the countdown counts as no
             // search: the card doesn't call it ready, and searches again as it shows or while it
             // shows (once at most while it waits on the user, see AutoAdvance).
-            val status = prefetch?.takeIf { it.first == next }?.second?.value
+            val status = local ?: prefetch?.takeIf { it.first == next }?.second?.value
                 ?.takeUnless { it is Prefetch.Ready && !container.playback.holdsPrefetched(next, timings.countdownMs) }
             // The last credits, if a file has several (a scene between them).
             val credits = segments?.filter { it.kind == SegmentKind.Credits }?.maxOfOrNull { it.startMs }
@@ -3085,7 +3145,11 @@ class PlayerActivity : ComponentActivity() {
                 ),
                 status,
             )
+            // Never with what the downloads said: the machine searches only when told nothing.
             if (step.startPrefetch) prefetch = next to prefetchNext(container, next, launch?.release)
+            // Next plays only what can: not an episode offline with no download (L354).
+            val playable = local?.canPlay != false
+            if (playable != (p.playNext != null)) p.playNext = if (playable) ({ switchTo(next) }) else null
             // Play now takes the focus once no burst's seek waits, as the skip button does, and not under a side panel,
             // which keeps it.
             showCard(step.card?.takeIf { failure == null }?.let { NextCard(next, it, showStill, takeFocus = !p.seeking && panel == null) })
@@ -3100,9 +3164,29 @@ class PlayerActivity : ComponentActivity() {
      * Previous only starts this one again.
      */
     private suspend fun offerPreviousEpisode(p: ControlsPlayer, playing: AutoAdvance.Episode) {
-        val previous = previousEpisode(container, playing) ?: return
+        // TMDB's answer, else the one the play's download says, a finished one alone (L354).
+        val previous = previousEpisode(container, playing) ?: playingRow()?.let { OfflineNext.previous(it, container.downloads.done.value) } ?: return
         p.playPrevious = { switchTo(previous) }
     }
+
+    /** The finished download of the episode playing, whatever plays it; none on a TV, which has no downloads (W108). */
+    private fun playingRow(): Download? = launch?.watchKey?.takeUnless { container.television }?.let { container.downloads.done.value[it] }
+
+    /** The episode after the one playing by its download alone ([OfflineNext], L354), for when TMDB doesn't answer. */
+    private fun downloadedNext(): EpisodePlay? = playingRow()?.let { OfflineNext.next(it, container.downloads.done.value, online()) }
+
+    /**
+     * What the downloads say of [next] for the card, with no search (L354): downloaded, its file played through the hook;
+     * offline, still downloading or not downloaded. Null where it is searched for and streams as before, and on a TV.
+     */
+    private fun downloadStatus(next: EpisodePlay): Prefetch? {
+        if (container.television) return null
+        val downloads = container.downloads
+        return PlayerBranches.nextStatus(next.key, online(), downloads.done.value, downloads.state.value)
+    }
+
+    /** Whether the device's default network is validated now (L354): what a download's Stream instead and TheIntroDB wait for. */
+    private fun online(): Boolean = container.validatedNetwork.value
 
     private fun showCard(card: NextCard?) {
         val showing = card != null
@@ -3140,12 +3224,13 @@ class PlayerActivity : ComponentActivity() {
 
     /**
      * The screen kept on only while this play runs or is about to, not with the "Playback stopped" panel up ([KeepAwake]);
-     * the stream-cost line in the log runs just as long, while its stream plays.
+     * the stream-cost line in the log runs just as long, while its stream plays: never for a download's file, which streams
+     * nothing (L354).
      */
     private fun keepAwake() {
         val awake = player?.let { p -> KeepAwake.of(p.playWhenReady, p.playbackState, failed = failure != null) } == true
         playerView.keepScreenOn = awake
-        container.streamCost.playing(awake)
+        container.streamCost.playing(awake && PlayerBranches.logsStreamCost(playingDownload))
     }
 
     /** Whether the picture-in-picture window opens as the user leaves the play as it is now, and how ([PictureInPicturePolicy]). */
@@ -3783,7 +3868,9 @@ class PlayerActivity : ComponentActivity() {
         hideDip()
         hideMark()
         fileDetails.stopped()
-        failure = Failure(failed.reason, failed.remote, canTryAnother = l != null && container.playback.canTryAnother(l, stops), stops)
+        val download = playingDownload
+        // A download has no request to try another release of: it offers its stream instead, while online (L354).
+        failure = Failure(failed.reason, failed.remote, canTryAnother = !download && l != null && container.playback.canTryAnother(l, stops), stops, download)
         sessionPlayer?.failed = true
         updateControlsUse()
         backLeavesFailure.isEnabled = true
@@ -3809,6 +3896,7 @@ class PlayerActivity : ComponentActivity() {
      * shows how that goes.
      */
     private fun tryAnother() {
+        if (playingDownload) return streamInstead()
         val l = launch ?: return
         if (isFinishing) return
         val p = player
@@ -3820,8 +3908,27 @@ class PlayerActivity : ComponentActivity() {
         finishHandingOver(handedOver)
     }
 
-    /** The panel's [reason], and [remote], the same in the words a paired phone is told it (L37); [stops], the routes it stopped. */
-    private data class Failure(val reason: String, val remote: String, val canTryAnother: Boolean, val stops: Set<String> = emptySet())
+    /**
+     * "Stream instead" (L354), on "Playback stopped" or the missing-parts prompt of a download's play: saves where it is,
+     * its release kept as the one that played (no fault of it is known), closes, and has the coordinator play the title by
+     * its stream path, past the download hooks, from there; the play sheet shows how that goes. Offered only online.
+     */
+    private fun streamInstead() {
+        val l = launch ?: return
+        if (isFinishing) return
+        val position = controlsPlayer?.currentPosition ?: resumePosition.takeIf { it != C.TIME_UNSET } ?: 0
+        log.info("Download: streaming the title instead, from {}", format(position))
+        player?.let { saveProgress(position, it.duration) }
+        val handedOver = handOverMode()
+        container.playback.streamInstead(l)
+        finishHandingOver(handedOver)
+    }
+
+    /**
+     * The panel's [reason], and [remote], the same in the words a paired phone is told it (L37); [stops], the routes it
+     * stopped; [download], a finished download's play, which offers its stream instead (L354).
+     */
+    private data class Failure(val reason: String, val remote: String, val canTryAnother: Boolean, val stops: Set<String> = emptySet(), val download: Boolean = false)
 
     /**
      * The picture-in-picture window as the player tells Android of it: its shape ([aspect], null: not known yet), where it
@@ -3863,7 +3970,7 @@ class PlayerActivity : ComponentActivity() {
     /**
      * Where the file playing comes from, for File details: the launch's release (or the opened NZB's), its file, the
      * [indexers] (null until read), and the providers in use now with the connections a stream takes, or a debrid play's
-     * service by the account its listing came from.
+     * service by the account its listing came from, or what a finished download's row says of it (L354).
      */
     private fun detailsOrigin(indexers: SourceNames?): FileOrigin {
         val uri = launch?.uri ?: intent.getStringExtra(EXTRA_URI).orEmpty()
@@ -3873,7 +3980,10 @@ class PlayerActivity : ComponentActivity() {
         val entry = (target as? PlayUris.Target.Service)?.let { container.debridListings.keptAs(it.listingId) }
         val listing = (target as? PlayUris.Target.Usenet)?.let { container.store.get(it.nzb.nzbId) }
             ?: entry?.let { ServiceFiles(it.prepared.hash, it.title, it.prepared.listing) }
-        return FileOrigin.of(launch, uri, listing, indexers, container.engine.inUse, container.engine.streamConcurrency, account = entry?.account)
+        // A download's: when it finished and the parts its download had no article for, from its row (L354).
+        val downloaded = (target as? PlayUris.Target.Download)?.takeUnless { container.television }
+            ?.let { t -> container.downloads.done.value.values.firstOrNull { it.id == t.id } }?.let { FileOrigin.Downloaded(it.completedAt, it.gaps.size) }
+        return FileOrigin.of(launch, uri, listing, indexers, container.engine.inUse, container.engine.streamConcurrency, account = entry?.account, downloaded = downloaded)
     }
 
     /** Bits per second as the log says them: "12.3". */

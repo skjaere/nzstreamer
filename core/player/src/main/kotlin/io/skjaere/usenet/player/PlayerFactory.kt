@@ -39,7 +39,9 @@ object PlayerFactory {
      * capabilities change, so that a receiver switched on mid-film moves the audio to passthrough, and a play that fell
      * back to PCM as the TV's HDMI re-synced (androidx/media#2258) recovers, at the cost of a brief break in the sound
      * (Media3's doing, checked on the Shield). A phone's selects once, as it always has. [gaps] hears of the missing
-     * stretches its extractors go past, and of the file's index.
+     * stretches its extractors go past, and of the file's index. [wakeMode]: what the player keeps awake while it plays, a
+     * stream's Wi-Fi lock with the CPU ([C.WAKE_MODE_NETWORK]), or the CPU alone for a file on this device
+     * ([C.WAKE_MODE_LOCAL], a finished download's).
      *
      * Media3's own "becoming noisy" handling is off: Android sends that broadcast as HDMI goes away too, and a TV box's
      * HDMI goes away with every re-sync (a refresh-rate switch, Dolby Vision, the TV waking, a receiver switched on), so
@@ -49,7 +51,10 @@ object PlayerFactory {
      * Media3's platform diagnostics are off too: the app sends no telemetry, and Google may collect what a player reports
      * there (L17).
      */
-    fun create(context: Context, dataSourceFactory: DataSource.Factory, loadControl: LoadControl, followAudioRoute: Boolean = false, gaps: PlayGaps? = null): ExoPlayer =
+    fun create(
+        context: Context, dataSourceFactory: DataSource.Factory, loadControl: LoadControl, followAudioRoute: Boolean = false, gaps: PlayGaps? = null,
+        wakeMode: Int = C.WAKE_MODE_NETWORK,
+    ): ExoPlayer =
         ExoPlayer.Builder(context)
             .apply { if (followAudioRoute) setTrackSelector(DefaultTrackSelector(context, followingTheRoute(context))) }
             .setSeekBackIncrementMs(SEEK_BACK_MS)
@@ -65,7 +70,7 @@ object PlayerFactory {
                 /* handleAudioFocus = */ true,
             )
             .setHandleAudioBecomingNoisy(false)
-            .setWakeMode(C.WAKE_MODE_NETWORK)
+            .setWakeMode(wakeMode)
             .setUsePlatformDiagnostics(false)
             .build()
 
@@ -95,7 +100,7 @@ object PlayerFactory {
      * stop it short of 50 s: time doesn't take precedence over them, as a low-RAM box couldn't
      * spare the memory. At 20 s / 90 s it rested from 90 s, or the bytes, down to 20 s, up to 70 s
      * in which the stream's connections sat idle, long enough for a NAT, a VPN or the provider to
-     * drop them. The same on every device, phones on mobile data too: playback holds a
+     * drop them. The same on every device, phones on mobile data too: a stream's playback holds a
      * high-performance Wi-Fi lock anyway ([C.WAKE_MODE_NETWORK]).
      */
     fun loadControl(budget: PlaybackBudget): DefaultLoadControl =

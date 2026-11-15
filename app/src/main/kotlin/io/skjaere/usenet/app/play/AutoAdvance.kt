@@ -16,7 +16,9 @@ import kotlin.math.max
  * once ended), so nothing is cut short: wall-clock time from when they began, held while the user
  * has paused (not once the file has ended), and while the card is out of sight, ended or not.
  * With auto-play off, or when the search found nothing, there is no countdown and only "Play now"
- * moves on.
+ * moves on. Offline, an episode not downloaded or still downloading can't play: no countdown, and
+ * nothing moves on (L354); one downloaded counts down as a release found does, and nothing searches
+ * for it, as the player passes what the downloads say of it in the search's place.
  *
  * The search starts once the episode counts as watched, but no earlier than
  * [PREFETCH_BEFORE_END_MS] before the end, since the coordinator hands its result on for only ten
@@ -101,7 +103,8 @@ class AutoAdvance(
         val credits = known && playback.creditsStartMs?.let { it < playback.durationMs && playback.positionMs >= it } == true
         val appeared = (lastSeconds || credits) && !showing
         showing = lastSeconds || credits
-        val counting = autoPlayNext && prefetch !is Prefetch.NothingFound
+        // Not when the search found nothing, nor for an episode that can't play without the network (L354).
+        val counting = autoPlayNext && prefetch?.counts != false
         val remaining = remainingMs
         remainingMs = when {
             !lastSeconds -> null

@@ -694,12 +694,38 @@ data class SheetNow(val state: PlayState, val remote: RemotePlay?) {
     override fun toString() = "SheetNow(${state::class.simpleName})"
 }
 
-/** What a background search for the next episode has found so far. */
+/**
+ * What a background search for the next episode has found so far; or, for one on this device or while offline, what the
+ * downloads say of it, with no search (L354).
+ */
 sealed interface Prefetch {
+    /** Whether the card counts down to it, as auto-play would: not with nothing found, nor for what can't play now. */
+    val counts: Boolean get() = true
+
+    /** Whether Play now and the controls' Next play it: not what can't play without the network. */
+    val canPlay: Boolean get() = true
+
     data object Searching : Prefetch
     /** [choose]: in the release playing, which names no file for it; the play asks which it is ([PlayingPack]). */
     data class Ready(val releaseTitle: String, val sizeBytes: Long, val choose: Boolean = false) : Prefetch
-    data object NothingFound : Prefetch
+    data object NothingFound : Prefetch {
+        override val counts: Boolean get() = false
+    }
+
+    /** Downloaded on this device: the hook plays its file (L353), with [partsMissing] stretches its download had no article for. */
+    data class Downloaded(val partsMissing: Int) : Prefetch
+
+    /** Not downloaded, and no network to stream it by: nothing can play it, and the card offers Close alone. */
+    data object NotDownloadedOffline : Prefetch {
+        override val counts: Boolean get() = false
+        override val canPlay: Boolean get() = false
+    }
+
+    /** Its download is on its way, [percent] of it written, and no network to stream it by meanwhile: as [NotDownloadedOffline]. */
+    data class StillDownloading(val percent: Int) : Prefetch {
+        override val counts: Boolean get() = false
+        override val canPlay: Boolean get() = false
+    }
 }
 
 sealed interface PlayState {
@@ -1068,8 +1094,17 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
      */
     fun playMovie(target: MovieTarget, origin: PlayOrigin = PlayOrigin.Here) {
         if (downloadHook.play(WatchKey.movie(target.tmdbId), origin)) return
-        replaceJob(origin, target.title, target.subtitle, target.watch) { playMovie(target, it) }
-        job = launchPlay(target.title, target.subtitle, origin = origin) {
+        streamMovie(target, origin) { playMovie(target, it) }
+    }
+
+    /**
+     * [playMovie]'s stream: the remembered release alone while its NZB is stored, else the film's search. [again]: the play
+     * asked for again from another origin. With [lookUp], [known]'s ids are looked up on TMDB first ([withTmdbIds]).
+     */
+    private fun streamMovie(known: MovieTarget, origin: PlayOrigin, lookUp: Boolean = false, again: (PlayOrigin) -> Unit) {
+        replaceJob(origin, known.title, known.subtitle, known.watch, again = again)
+        job = launchPlay(known.title, known.subtitle, origin = origin) {
+            val target = if (lookUp) withTmdbIds(known) else known
             val remembered = container.library.lastRelease(WatchKey.movie(target.tmdbId))
             // A torrent the play would leave out (kept from the service since) isn't played alone: the film is searched for.
             val playable = remembered?.let { Replay.leftOut(Replay.candidate(it), offService()) == null } == true
@@ -1091,9 +1126,45 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
      */
     fun playEpisode(target: EpisodeTarget, origin: PlayOrigin = PlayOrigin.Here) {
         if (downloadHook.play(target.key, origin)) return
+        streamEpisode(target, origin) { playEpisode(target, it) }
+    }
+
+    /** [playEpisode]'s stream: the episode looked up on TMDB, then searched for. [again]: the play asked for again from another origin. */
+    private fun streamEpisode(target: EpisodeTarget, origin: PlayOrigin, again: (PlayOrigin) -> Unit) {
         val watch = WatchTarget(WatchKind.Episode, WatchTitle.episode(target.showName, target.season, target.episode), showTmdbId = target.showTmdbId, season = target.season, episode = target.episode)
-        replaceJob(origin, target.showName, target.label, watch) { playEpisode(target, it) }
+        replaceJob(origin, target.showName, target.label, watch, again = again)
         job = launchPlay(target.showName, target.label, origin = origin) { lookUpAndPlay(target, retry = null) }
+    }
+
+    /**
+     * "Stream instead" on a finished download's player (L354): [launch]'s title plays by its stream path, past the download
+     * hooks, which would play the file again, as Play on its page streams a title with no download: an episode looked up on
+     * TMDB and searched for, a film by its remembered release while stored, else its search, its ids looked up on TMDB
+     * first (its year and length from its download where TMDB doesn't answer). From where the player saved it, as any
+     * play of the title starts. The player offers it only while the network is validated. Nothing for a launch that is
+     * neither an episode nor a film.
+     */
+    fun streamInstead(launch: PlayerLaunch, origin: PlayOrigin = PlayOrigin.after(launch)) {
+        val again: (PlayOrigin) -> Unit = { streamInstead(launch, it) }
+        launch.watch.episodeTarget?.let { return streamEpisode(it, origin, again) }
+        val film = launch.watch.movieTmdbId?.takeIf { launch.watch.kind == WatchKind.Movie } ?: return
+        val row = container.downloads.done.value[launch.watchKey]
+        log.info("play: a film streams in place of its download")
+        streamMovie(MovieTarget(film, launch.watch.title, row?.year, imdb = null, row?.runtimeMinutes), origin, lookUp = true, again)
+    }
+
+    /** [target] with TMDB's ids and facts for the film, which indexers search by; as it is where TMDB doesn't answer. */
+    private suspend fun withTmdbIds(target: MovieTarget): MovieTarget = try {
+        val details = TmdbLookup.movie(container, target.tmdbId)
+        target.copy(
+            year = details.year ?: target.year, imdb = details.ids.imdb, runtimeMinutes = details.runtimeMinutes ?: target.runtimeMinutes,
+            releaseDate = details.releaseDate, originalLanguage = details.originalLanguage,
+        )
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        log.info("play: the film's ids from TMDB failed ({}): searched for by its own", e::class.simpleName)
+        target
     }
 
     /**

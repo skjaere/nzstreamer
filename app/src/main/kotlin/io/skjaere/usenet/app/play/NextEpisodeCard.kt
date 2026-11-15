@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
@@ -54,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import io.skjaere.usenet.app.ui.AppType
+import io.skjaere.usenet.app.ui.DownloadedIcon
 import io.skjaere.usenet.app.ui.colors
 import io.skjaere.usenet.app.ui.LocalFocusStyle
 import io.skjaere.usenet.app.ui.OwnedRipple
@@ -69,8 +71,9 @@ private val StillPlaceholder = Color(0xFF23384A)
 
 /**
  * The player's "Next episode" card (mockup "Player with next episode"): the next episode's still
- * and name, how the search for its release is going, a countdown with a bar while one runs, and
- * Stop (Close when nothing will start by itself) and Play now. Play now takes focus as the card
+ * and name, how the search for its release is going (or that it is downloaded, L354), a countdown
+ * with a bar while one runs, and Stop (Close when nothing will start by itself) and Play now; Close
+ * alone for an episode that can't play offline ([offersPlayNow]), which then takes the focus. Play now takes focus as the card
  * shows, so a TV remote's centre button plays at once: once, as soon as [takeFocus] lets it (it
  * doesn't while a burst of seeks waits, whose held key would then come to it, nor under a side
  * panel), and again only through [playNow], the player's way to give it back.
@@ -115,8 +118,11 @@ fun NextEpisodeCard(
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Countdown(card)
                     Text(next.subtitle, style = AppType.bodyStrong.copy(fontSize = 14.sp), color = colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    // Wraps at larger font sizes rather than losing "ready".
-                    Text(prefetchLine(card.prefetch), style = AppType.small, color = colors.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    // Wraps at larger font sizes rather than losing "ready". A downloaded one's by the Downloaded tick.
+                    Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (card.prefetch is Prefetch.Downloaded) Icon(DownloadedIcon, contentDescription = null, Modifier.size(14.dp), tint = colors.muted)
+                        Text(prefetchLine(card.prefetch), style = AppType.small, color = colors.muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
                 }
             }
             card.progress?.let { progress ->
@@ -132,8 +138,10 @@ fun NextEpisodeCard(
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             if (compact) Countdown(card, Modifier.weight(1f, fill = false))
             val share = if (compact) Modifier else Modifier.weight(1f)
-            CardButton(stopLabel(card), onStop, share, filled = false)
-            CardButton("Play now", onPlayNow, share.focusRequester(playNow), filled = true)
+            // Close alone for what can't play offline (L354), taking the focus Play now would.
+            val plays = offersPlayNow(card)
+            CardButton(stopLabel(card), onStop, if (plays) share else share.focusRequester(playNow), filled = false)
+            if (plays) CardButton("Play now", onPlayNow, share.focusRequester(playNow), filled = true)
         }
     }
 }
@@ -208,12 +216,24 @@ private fun Countdown(card: AutoAdvance.Card, modifier: Modifier = Modifier) {
  * The card's third line: "Looking for a release…", "Release found · 2.2 GB · ready" (in the season
  * pack playing that names no file for it, that it may be there and its file is the user's to
  * choose: nothing says the pack holds it), "No release found yet", or "Searches again on play" when
- * nothing searches and what was found is not held ([AutoAdvance.Card.prefetch] null).
+ * nothing searches and what was found is not held ([AutoAdvance.Card.prefetch] null). For an
+ * episode on this device or while offline, what the downloads say (L354): "Downloaded · ready",
+ * "Downloaded · 2 parts missing", "Not downloaded · offline", "Still downloading · 42%".
  */
 internal fun prefetchLine(prefetch: Prefetch?): String = when (prefetch) {
     Prefetch.Searching -> "Looking for a release…"
     is Prefetch.Ready -> if (prefetch.choose) "May be in this release · you choose its file"
         else listOfNotNull("Release found", prefetch.sizeBytes.takeIf { it > 0 }?.let(::formatSize), "ready").joinToString(" · ")
     Prefetch.NothingFound -> "No release found yet"
+    is Prefetch.Downloaded -> "Downloaded · " + when (prefetch.partsMissing) {
+        0 -> "ready"
+        1 -> "1 part missing"
+        else -> "${prefetch.partsMissing} parts missing"
+    }
+    Prefetch.NotDownloadedOffline -> "Not downloaded · offline"
+    is Prefetch.StillDownloading -> "Still downloading · ${prefetch.percent}%"
     null -> "Searches again on play"
 }
+
+/** Whether the card offers Play now: not for an episode that can't play without the network (L354), which has Close alone. */
+internal fun offersPlayNow(card: AutoAdvance.Card): Boolean = card.prefetch?.canPlay != false
