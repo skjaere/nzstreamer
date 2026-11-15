@@ -335,6 +335,11 @@ The end-to-end smoke test (`EngineSmokeTest`) streams the clip through the `.nzb
 Article ids come from the file's contents, so seeding the same file again after a restart of the mock keeps its
 `.nzb` valid. The fixtures under `app/src/androidTest/` are seeded the same way, for example
 `./gradlew :tools:mock-seed:run --args="seed --video app/src/androidTest/fixtures/chapters.mkv --out build/chapters.nzb --segment 100000"`.
+The download pairs' 48 MB file is made by
+`python3 -I app/src/androidTest/fixtures/pair-download.py build/Harbor.Lights.S03E07.1080p.WEB.h264-KESTREL.mkv` and
+seeded under that name with the default segment size
+(`./gradlew :tools:mock-seed:run --args="seed --video build/Harbor.Lights.S03E07.1080p.WEB.h264-KESTREL.mkv --out build/pair-download.nzb"`),
+as its `.nzb` asset names its articles and its file so.
 
 The fake indexer seeds an invented show and movie into the mock and serves them as a Newznab indexer; it prints its
 address and API key. It needs a second clip too, a copy with E-AC-3 audio that one of its releases plays. Make it once:
