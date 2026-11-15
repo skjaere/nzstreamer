@@ -60,7 +60,7 @@ import kotlin.time.TimeSource
  *   (a long gap, L342), whose bytes are no use, and a reopen that ends short with no cause where the stream before it did
  *   (the file's last listed article shorter than its guessed size); a long gap while a provider is left out of the engine
  *   ([providersLeftOut]), which may have it, is asked for again from its first byte after the wait, for an hour before the
- *   release is given up, each long gap past the one before its own hour;
+ *   release is given up; a long gap past the stretch asked for before starts an hour of its own;
  * - a login refused, or no provider ([UsenetError.AuthFailed], [UsenetError.NotConfigured]), waits for the providers;
  * - a write or force the volume has no room for (ENOSPC, EFBIG) fails it as [STORAGE_FULL], with no reopen: its file and
  *   record are kept, and Try again goes on from the safe offset once there is room.

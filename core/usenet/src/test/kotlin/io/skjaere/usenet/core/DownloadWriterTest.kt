@@ -306,9 +306,14 @@ class DownloadWriterTest {
             if (opens.size == 2) leftOut = false
         })
         assertEquals(Outcome.Done(emptyList()), back.outcome)
-        assertEquals(listOf(0L to 0L, 2_000L to bytesOf(4).first), opens)
-        // Gone back before the stretch: never recorded missing past it, and every byte of it came.
-        assertTrue(back.records.any { it.offset == bytesOf(4).first && it.gaps.isEmpty() }, "records ${back.records}")
+        assertEquals(listOf(0L, 2_000L), opens.map { it.first })
+        // Back to the stretch's first byte, or to where the reader was before it: the engine's fetches run ahead of the
+        // reader, which the stretch's zeros can find an article or so behind. Never past it.
+        val reopened = opens[1].second
+        assertTrue(reopened <= bytesOf(4).first, "reopened at $reopened")
+        // Never recorded missing, and every byte of it came.
+        assertTrue(back.records.all { it.gaps.isEmpty() }, "records ${back.records}")
+        assertEquals(Record(size, emptyList()), back.records.last())
         assertContentEquals(clip.data, path.readBytes())
 
         // Left out for an hour: given up for the next.
@@ -317,7 +322,7 @@ class DownloadWriterTest {
         val gone = writer(time = testScheduler.timeSource, longGapBytes = 3 * part, leftOut = { true }).wrote()
         assertEquals(Outcome.NextRelease(GiveUp.LongGap), gone.outcome)
         assertTrue(currentTime - start >= 1.hours.inWholeMilliseconds, "gave up after ${(currentTime - start) / 1000} s")
-        assertTrue(gone.opens.drop(1).all { it == bytesOf(4).first }, "opens ${gone.opens}")
+        assertTrue(gone.opens.drop(1).all { it <= bytesOf(4).first }, "opens ${gone.opens}")
     }
 
     /**
