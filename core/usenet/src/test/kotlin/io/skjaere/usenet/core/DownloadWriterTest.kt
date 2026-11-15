@@ -421,6 +421,24 @@ class DownloadWriterTest {
         assertContentEquals(clip.data, path.readBytes())
     }
 
+    /**
+     * nzb-streamer ends a stream with no cause where the file's last listed article is shorter than its layout guessed
+     * (an NZB that lacks the file's last articles, whose size it can't count): every reopen ends at the same byte. The
+     * release can't give what lies past it, and gives up for the next (L382's guessed size), never six reopens that blame
+     * the provider.
+     */
+    @Test
+    fun `a stream that keeps ending short at the same byte gives the release up for the next`() = runTest(timeout = 60.seconds) {
+        val end = 5 * part + 1_234
+        val wrote = writer(
+            StreamOpener { _, _, range -> OpenedStream(ByteReadChannel(clip.data.copyOfRange(range.first.toInt(), maxOf(range.first, end).toInt())), Job()) },
+            time = testScheduler.timeSource,
+        ).wrote()
+        assertEquals(Outcome.NextRelease(GiveUp.Incomplete), wrote.outcome)
+        assertEquals(listOf(0L, end), wrote.opens)
+        assertEquals(Record(end, emptyList()), wrote.records.last())
+    }
+
     @Test
     fun `a full volume fails it as Storage is full, with no reopen and no record past the failed write`() = runBlocking<Unit> {
         serve()

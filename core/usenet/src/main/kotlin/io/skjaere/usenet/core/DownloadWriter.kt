@@ -56,7 +56,8 @@ import kotlin.time.TimeSource
  * - six reopens in a row that reached the provider and made no progress fail it ([NO_PROGRESS]);
  * - a part the NZB lists no article for, or one of a guessed size ([UsenetError.MissingArticle]), and a damaged release
  *   ([UsenetError.Corrupt]) give the release up for the next, as does a stretch missing in a row of [longGapBytes] or more
- *   (a long gap, L342), whose bytes are no use;
+ *   (a long gap, L342), whose bytes are no use, and a reopen that ends short with no cause where the stream before it did
+ *   (the file's last listed article shorter than its guessed size);
  * - a login refused, or no provider ([UsenetError.AuthFailed], [UsenetError.NotConfigured]), waits for the providers;
  * - a write or force the volume has no room for (ENOSPC, EFBIG) fails it as [STORAGE_FULL], with no reopen: its file and
  *   record are kept, and Try again goes on from the safe offset once there is room.
@@ -98,7 +99,10 @@ class DownloadWriter(
 
     /** Why a release was given up. */
     enum class GiveUp {
-        /** A part its NZB lists no article for, or one whose size it only guesses ([UsenetError.MissingArticle]). */
+        /**
+         * A part its NZB lists no article for, or one whose size it only guesses ([UsenetError.MissingArticle]), or a file
+         * whose streams keep ending short at the same byte.
+         */
         Incomplete,
 
         /** Its articles can't be read ([UsenetError.Corrupt]). */
@@ -186,6 +190,8 @@ class DownloadWriter(
         var reopen = false
         // Since when the provider has been out of reach on a validated network, reopen after reopen.
         var outOfReach: TimeMark? = null
+        // Where the last stream that ended short with no cause ended.
+        var shortAt: Long? = null
         while (run.written < run.size) {
             val from = run.written
             onOpen(from)
@@ -204,6 +210,17 @@ class DownloadWriter(
             }
             // What came is kept: a reopen starts there.
             run.save()
+            if (ended.cause == null) {
+                // Ended short again where the stream before it did, with nothing between: the release can't give the bytes
+                // past it (its layout only guesses the file's size, its last articles not in the NZB), and no reopen will.
+                if (!progressed && shortAt == run.written) {
+                    log.info("download {}: its streams end at {} of {} bytes: giving its release up", run.id, run.written, run.size)
+                    return Outcome.NextRelease(GiveUp.Incomplete)
+                }
+                shortAt = run.written
+            } else {
+                shortAt = null
+            }
             val sorted = sort(ended.cause, progressed)
             when (sorted.into) {
                 Into.Incomplete, Into.Corrupt -> {
