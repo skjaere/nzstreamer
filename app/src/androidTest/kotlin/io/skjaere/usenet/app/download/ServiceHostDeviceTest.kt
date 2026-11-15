@@ -199,8 +199,8 @@ class ServiceHostDeviceTest {
         assertEquals(release.sha256, DownloadFixtures.sha256(container.downloadStorage.file(done) ?: throw AssertionError("no file")))
         // Nothing left to run: it stops, its notification removed with the foreground, and nothing left to say.
         waitFor("the service stopped", 30_000) { if (DownloadService.phase.value == DownloadService.Phase.None) Unit else null }
-        assertNull(active(DownloadNotifications.ONGOING_ID))
-        assertNull(active(DownloadNotifications.STATUS_ID))
+        gone("its notification gone with the foreground", DownloadNotifications.ONGOING_ID)
+        gone("nothing left to say", DownloadNotifications.STATUS_ID)
     }
 
     @Test
@@ -378,6 +378,12 @@ class ServiceHostDeviceTest {
 
     private fun active(id: Int): StatusBarNotification? = manager.activeNotifications.firstOrNull { it.id == id && it.tag == null }
 
+    /**
+     * Notification [id] gone: Android takes the foreground's away on NotificationManager's thread, after the service has
+     * left the foreground, so it is waited for rather than read once.
+     */
+    private suspend fun gone(what: String, id: Int) = waitFor(what, GONE_MILLIS) { if (active(id) == null) Unit else null }
+
     private fun text(n: StatusBarNotification): String = n.notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
 
     private fun actions(n: StatusBarNotification): List<String> = n.notification.actions.orEmpty().map { it.title.toString() }
@@ -391,6 +397,9 @@ class ServiceHostDeviceTest {
 
         /** How long the debug build's seeding may take, as the app's start runs it. */
         const val SEEDING_MILLIS = 30_000L
+
+        /** How long a notification Android takes away may take to go. */
+        const val GONE_MILLIS = 10_000L
 
         /** The film's articles: 16 KiB, about 43 of them. */
         const val PART = 16 * 1024

@@ -245,7 +245,7 @@ class UidtHostDeviceTest {
         val paused = waitFor("paused from the notification") { runBlocking { dao.get(id) }?.takeIf { it.state == DownloadState.Paused } }
         waitFor("the job's end") { jobEnded() }
         // The job's notification went with the job; the status one says what is left, after its end.
-        assertNull(active(DownloadNotifications.ONGOING_ID))
+        gone("the job's notification gone with the job", DownloadNotifications.ONGOING_ID)
         val status = waitFor("the status notification") { active(DownloadNotifications.STATUS_ID) }
         assertTrue(text(status), text(status).startsWith("Paused"))
         assertEquals(listOf("Resume", "Cancel"), actions(status))
@@ -270,8 +270,8 @@ class UidtHostDeviceTest {
             action(again, "Cancel").send()
             waitFor("cancelled") { if (runBlocking { dao.get(id) } == null) Unit else null }
             waitFor("the job's end") { jobEnded() }
-            assertNull(active(DownloadNotifications.ONGOING_ID))
-            assertNull("nothing left to say", active(DownloadNotifications.STATUS_ID))
+            gone("the job's notification gone with the job", DownloadNotifications.ONGOING_ID)
+            gone("nothing left to say", DownloadNotifications.STATUS_ID)
         } finally {
             instrumentation.runOnMainSync { opened.finish() }
         }
@@ -434,6 +434,12 @@ class UidtHostDeviceTest {
 
     private fun jobEnded(): Unit? = if (scheduler.getPendingJob(JobPlan.ID) == null && DownloadJobService.starts.value == 0) Unit else null
 
+    /**
+     * Notification [id] gone: Android takes a job's own away with the job on NotificationManager's thread, after the job is
+     * gone from JobScheduler's, so it is waited for rather than read once.
+     */
+    private suspend fun gone(what: String, id: Int) = waitFor(what, GONE_MILLIS) { if (active(id) == null) Unit else null }
+
     private fun validatedWifi(): Unit? = connectivity.getNetworkCapabilities(connectivity.activeNetwork)
         ?.takeIf { it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && it.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) }?.let { }
 
@@ -497,6 +503,9 @@ class UidtHostDeviceTest {
 
         /** How long the debug build's seeding may take, as the app's start runs it. */
         const val SEEDING_MILLIS = 30_000L
+
+        /** How long a notification Android takes away may take to go. */
+        const val GONE_MILLIS = 10_000L
 
         /** The film's articles: 16 KiB, about 43 of them. */
         const val PART = 16 * 1024
