@@ -11,8 +11,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * What downloads take of the device's storage and what a new one may take (L348): Android's allocatable bytes, less the
- * 1 GB the video cache leaves free, less what the queued downloads still need. A download whose file is made holds its
+ * What downloads take of the device's storage and what a new one may take (L348): what is free on the volume (or what
+ * Android can allocate, where less), less the 1 GB the video cache leaves free, less what the queued downloads still need. A download whose file is made holds its
  * whole size already (its allocation before the first byte, C8), so the running one counts whole and needs nothing more.
  * The numbers are the Download sheet's and the Downloads page's strip's. Sizes in GB of 10^9 bytes, as the boards count.
  */
@@ -21,6 +21,7 @@ class DownloadSpaceTest {
     fun `free space is what Android can allocate less the 1 GB kept free and what the queued downloads still need`() {
         val space = DownloadSpace.of(
             allocatable = 20 * GB,
+            usable = 20 * GB,
             rows = listOf(
                 // Not resolved yet: the indexer's size.
                 row("a", DownloadState.Queued, indexerSize = 1_200_000_000),
@@ -29,7 +30,7 @@ class DownloadSpaceTest {
                 row("c", DownloadState.Done, size = 4 * GB, file = true),
             ),
         )
-        assertEquals(20 * GB, space.allocatable)
+        assertEquals(20 * GB, space.available)
         assertEquals(3_200_000_000, space.queued)
         assertEquals(4 * GB, space.used)
         assertEquals(15_800_000_000, space.free)
@@ -41,7 +42,7 @@ class DownloadSpaceTest {
     @Test
     fun `the running download counts whole, as its file has its whole size from before its first byte`() {
         val running = row("run", DownloadState.Running, size = 3_100_000_000, indexerSize = 3_200_000_000, file = true, safeOffset = 1_300_000_000)
-        val space = DownloadSpace.of(41 * GB, listOf(running, row("q", DownloadState.Queued, indexerSize = 1_200_000_000)))
+        val space = DownloadSpace.of(41 * GB, 41 * GB, listOf(running, row("q", DownloadState.Queued, indexerSize = 1_200_000_000)))
         // The strip: "23.4 GB · 41 GB free" counts it at its 3.1 GB, not the 1.3 GB written so far.
         assertEquals(3_100_000_000, space.used)
         // Its remaining 1.8 GB is allocated already: only the queued one's 1.2 GB is set aside from what Android can give.
@@ -49,7 +50,7 @@ class DownloadSpaceTest {
         assertEquals(41 * GB - GB - 1_200_000_000, space.free)
 
         // While it resolves, before its file is made, it still needs its whole size, as a queued one does.
-        val resolving = DownloadSpace.of(41 * GB, listOf(running.copy(state = DownloadState.Resolving, relativePath = null, safeOffset = 0)))
+        val resolving = DownloadSpace.of(41 * GB, 41 * GB, listOf(running.copy(state = DownloadState.Resolving, relativePath = null, safeOffset = 0)))
         assertEquals(0, resolving.used)
         assertEquals(3_100_000_000, resolving.queued)
     }
@@ -58,6 +59,7 @@ class DownloadSpaceTest {
     fun `a held download keeps what it set aside, and a failed one without its file or one being deleted sets aside nothing`() {
         val space = DownloadSpace.of(
             allocatable = 30 * GB,
+            usable = 30 * GB,
             rows = listOf(
                 // Paused and stopped keep their file and its whole size (C8); one that never started still needs its own.
                 row("paused", DownloadState.Paused, size = 2 * GB, file = true, safeOffset = GB),
@@ -79,17 +81,32 @@ class DownloadSpaceTest {
 
     @Test
     fun `a download fits in what is free, to the byte, and free is never below nothing`() {
-        val space = DownloadSpace.of(10 * GB, listOf(row("q", DownloadState.Queued, indexerSize = 4 * GB)))
+        val space = DownloadSpace.of(10 * GB, 10 * GB, listOf(row("q", DownloadState.Queued, indexerSize = 4 * GB)))
         assertEquals(5 * GB, space.free)
         assertTrue(space.fits(5 * GB))
         assertTrue(space.fits(1))
         assertFalse(space.fits(5 * GB + 1))
 
         // Less than the reserve and the queue: nothing is free, and nothing fits.
-        val full = DownloadSpace.of(GB + 100, listOf(row("q", DownloadState.Queued, indexerSize = 4 * GB)))
+        val full = DownloadSpace.of(GB + 100, GB + 100, listOf(row("q", DownloadState.Queued, indexerSize = 4 * GB)))
         assertEquals(0, full.free)
         assertFalse(full.fits(1))
-        assertEquals(0, DownloadSpace.of(0, emptyList()).free)
+        assertEquals(0, DownloadSpace.of(0, 0, emptyList()).free)
+    }
+
+    /**
+     * Android's allocatable bytes count the caches it would clear to make room, this app's watched video and TMDB's
+     * answers among them. Downloads take only what is free on the volume, so an allocation never clears them: here 2 GB
+     * free and 15 GB of caches Android could clear.
+     */
+    @Test
+    fun `what is free never counts the caches Android would clear to make room`() {
+        val space = DownloadSpace.of(allocatable = 16_500_000_000, usable = 2 * GB, rows = emptyList())
+        assertEquals(2 * GB, space.available)
+        assertEquals(GB, space.free)
+        assertFalse(space.fits(10 * GB))
+        // Where Android keeps more of what is free for itself than it could clear, what it can allocate is the bound.
+        assertEquals(GB, DownloadSpace.of(allocatable = 2 * GB, usable = 3 * GB, rows = emptyList()).free)
     }
 
     /**
@@ -100,15 +117,15 @@ class DownloadSpaceTest {
     fun `the download a check is for is left out of what is set aside`() {
         val film = row("film", DownloadState.Resolving, size = 25 * GB, indexerSize = 26 * GB)
         val rows = listOf(film, row("q", DownloadState.Queued, indexerSize = 2 * GB), row("done", DownloadState.Done, size = GB, file = true))
-        val space = DownloadSpace.of(42 * GB, rows, except = "film")
+        val space = DownloadSpace.of(42 * GB, 42 * GB, rows, except = "film")
         assertEquals(2 * GB, space.queued)
         assertEquals(GB, space.used)
         assertEquals(39 * GB, space.free)
         assertTrue(space.fits(25 * GB))
         // Counted with the others, its own size would be taken from what is free twice.
-        assertFalse(DownloadSpace.of(42 * GB, rows).fits(25 * GB))
+        assertFalse(DownloadSpace.of(42 * GB, 42 * GB, rows).fits(25 * GB))
         // Its file made already (a retry from its safe offset): what it holds is Android's already, and isn't used here.
-        val made = DownloadSpace.of(42 * GB, listOf(film.copy(relativePath = "downloads/film/v.mkv"), rows[1]), except = "film")
+        val made = DownloadSpace.of(42 * GB, 42 * GB, listOf(film.copy(relativePath = "downloads/film/v.mkv"), rows[1]), except = "film")
         assertEquals(0, made.used)
         assertEquals(39 * GB, made.free)
     }
@@ -119,7 +136,7 @@ class DownloadSpaceTest {
      */
     @Test
     fun `the numbers the sheet says when a release won't fit`() {
-        val space = DownloadSpace.of(5_200_000_000, listOf(row("queued", DownloadState.Queued, indexerSize = 1_200_000_000)))
+        val space = DownloadSpace.of(5_200_000_000, 5_200_000_000, listOf(row("queued", DownloadState.Queued, indexerSize = 1_200_000_000)))
         assertEquals(3 * GB, space.free)
         assertEquals(1_200_000_000, space.queued)
         assertEquals(GB, DownloadSpace.KEPT_FREE)
@@ -127,7 +144,7 @@ class DownloadSpaceTest {
         // A release of 2.9 GB, "about" as the indexer says it, fits.
         assertTrue(space.fits(2_900_000_000))
         // Nothing downloaded or queued: the empty page's "41 GB free on this device".
-        assertEquals(41 * GB, DownloadSpace.of(42 * GB, emptyList()).free)
+        assertEquals(41 * GB, DownloadSpace.of(42 * GB, 42 * GB, emptyList()).free)
     }
 
     private fun row(id: String, state: DownloadState, size: Long? = null, indexerSize: Long = 0, file: Boolean = false, safeOffset: Long = 0) = Download(

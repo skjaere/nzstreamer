@@ -136,7 +136,7 @@ class DownloadStorageDeviceTest {
         assertEquals(0L, checkNotNull(storage.space(except = id)).queued)
         downloads.update(row(id).copy(size = size, relativePath = storage.relativePath(id, NAME)))
         val space = checkNotNull(storage.space())
-        assertTrue(space.allocatable > 0)
+        assertTrue(space.available > 0)
         assertEquals(0L, space.queued)
         assertEquals(size, space.used)
     }

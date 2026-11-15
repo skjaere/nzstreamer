@@ -182,7 +182,8 @@ class DownloadStorage(
      */
     suspend fun space(except: String? = null): DownloadSpace? = withContext(io) {
         val volume = volumeDir() ?: return@withContext null
-        DownloadSpace.of(storageManager.getAllocatableBytes(storageManager.getUuidForPath(volume)), downloads.all().first(), except)
+        val allocatable = storageManager.getAllocatableBytes(storageManager.getUuidForPath(volume))
+        DownloadSpace.of(allocatable, volume.usableSpace, downloads.all().first(), except)
     }
 
     /**
