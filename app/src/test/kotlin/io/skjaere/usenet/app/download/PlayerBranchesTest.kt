@@ -186,6 +186,39 @@ class PlayerBranchesTest {
     }
 
     /**
+     * The player asks each decision where it acts (L354, L377). Nothing in a JVM test runs the activity, and a device can't
+     * see a wake lock, so its source is read: a change that drops a guard (a download's play holding a Wi-Fi lock, watching
+     * a stream's speed, logging a stream's cost, remembering its gap as missing on the providers, offering what can't play
+     * offline) fails here, as the hooks' first lines are pinned. Each action is found once, inside its guard.
+     */
+    @Test
+    fun `the player asks each decision where it acts`() {
+        val source = File("src/main/kotlin/io/skjaere/usenet/app/PlayerActivity.kt").readText()
+        fun count(text: String) = Regex(Regex.escape(text)).findAll(source).count()
+        val guarded = mapOf(
+            "the wake mode by the play" to Regex("""PlayerFactory\.create\((?s:.){0,400}?wakeMode = PlayerBranches\.wakeMode\(download\),\s*\)"""),
+            "no missing record for a download" to
+                Regex("""if \(usenet is UsenetError\.MissingArticle && PlayerBranches\.remembersMissing\(download\)\) \{\s*launch\?\.let \{ container\.playback\.rememberMissing\("""),
+            "no dip watch for a download" to Regex("""if \(PlayerBranches\.watchesDips\(download\)\) \{\s*dipJob = lifecycleScope\.launch \{ watchDips\("""),
+            "no stream-cost line for a download" to Regex("""container\.streamCost\.playing\(awake && PlayerBranches\.logsStreamCost\(playingDownload\)\)"""),
+            "the Cast button by the play" to Regex("""PlayerBranches\.castShown\(container\.television, playingDownload\)"""),
+            "TheIntroDB only online for a download" to Regex("""PlayerBranches\.asksIntroDb\(download, online = download && online\(\)\)"""),
+            "Play now only for what can play" to Regex("""private fun playNow\(card: NextCard\) \{\s*if \(offersPlayNow\(card\.card\) && """),
+            "the next-track key only for what can play" to Regex("""cardHasNext = nextCard\?\.let \{ offersPlayNow\(it\.card\) \} == true"""),
+            "Previous offline only to a download" to Regex("""if \(PlayerBranches\.previousPlays\(previous\.key, nextOnline\(\), finishedDownloads\(\)\)\) switchTo\(previous\)"""),
+            "the offline lines a download's alone" to Regex("""PlayerBranches\.nextOnline\(playingDownload, online\(\)\)"""),
+            "Stream instead's release by its failure" to Regex("""streamInstead\(leaveOut = PlayerBranches\.streamLeavesOut\(failure\?\.fileGone == true\)\)"""),
+        ).filterValues { !it.containsMatchIn(source) }.keys
+        val once = mapOf(
+            "PlayerFactory.create(" to count("PlayerFactory.create("),
+            "container.playback.rememberMissing(" to count("container.playback.rememberMissing("),
+            "launch { watchDips(" to count("launch { watchDips("),
+            "container.streamCost.playing(" to count("container.streamCost.playing("),
+        ).filterValues { it != 1 }
+        assertTrue(guarded.isEmpty() && once.isEmpty(), "guards gone: $guarded; actions not found once: $once")
+    }
+
+    /**
      * Stream instead leaves the download's own release out of the stream after its missing parts or a fault of its own,
      * as the stream would meet the same; not for its file gone, which says nothing of the release.
      */

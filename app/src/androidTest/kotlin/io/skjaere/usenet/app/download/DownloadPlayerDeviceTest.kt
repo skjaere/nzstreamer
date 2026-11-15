@@ -231,6 +231,9 @@ class DownloadPlayerDeviceTest {
                 delay(100)
             }
             assertTrue("the play never jumped: at most $jump ms between two looks 100 ms apart", jump >= 2_000)
+            // A file on this device streams nothing: no stream-cost line while it plays (L354).
+            assertTrue("playing", scenario.read { a -> a.player?.isPlaying == true })
+            assertFalse("the stream-cost line runs for a download's play", container.streamCost.running)
             assertTrue("\"${PlayerActivity.MISSING_PART_SKIPPED}\" never showed", notice)
             assertEquals(listOf(gap.first..gap.last), scenario.read { a -> a.jumps.map(PlayGaps.Jump::bytes) })
             // The top bar with the controls: its buttons, but no Cast (L377).
