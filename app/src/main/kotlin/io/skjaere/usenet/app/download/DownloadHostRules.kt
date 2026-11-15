@@ -52,6 +52,12 @@ object DownloadHostRules {
      */
     const val CANT_REACH_PROVIDER = "Can't reach your Usenet provider"
 
+    /**
+     * The indexers out of reach or failing (a 5xx) as Resolve grabs (L382's outage, an indexer's): said while it backs off,
+     * and as a wait that ends the host after an hour of it (L388).
+     */
+    const val CANT_REACH_INDEXER = "Can't reach your indexer"
+
     /** The provider refused the login, or none is saved (L382). */
     const val CHECK_PROVIDER = "Check your Usenet provider"
 

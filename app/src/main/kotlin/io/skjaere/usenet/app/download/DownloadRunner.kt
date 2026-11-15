@@ -625,12 +625,12 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 is Resolution.Unreachable -> {
                     val since = outOfReach ?: deps.timeSource.markNow().also { outOfReach = it }
                     if (since.elapsedNow() >= DownloadWriter.UNREACHABLE_FOR) {
-                        log.info("download {}: its providers out of reach for {} min: waiting", id, since.elapsedNow().inWholeMinutes)
-                        waiting(id, DownloadHostRules.CANT_REACH_PROVIDER)
+                        log.info("download {}: out of reach for {} min: waiting", id, since.elapsedNow().inWholeMinutes)
+                        waiting(id, resolution.words)
                         return Walk.End
                     }
                     val kind = resolution.error::class.simpleName
-                    log.info("download {}: its providers out of reach ({}); resolving it again in {} s", id, kind, wait.inWholeSeconds)
+                    log.info("download {}: out of reach ({}); resolving it again in {} s", id, kind, wait.inWholeSeconds)
                     if (wakes.pause(wait, mark)) {
                         wait = DownloadWriter.FIRST_BACKOFF
                         outOfReach = null
@@ -837,8 +837,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         /** The states that hold the whole queue until Resume (L380). */
         private val HOLDS = setOf(DownloadState.Paused, DownloadState.Stopped)
 
-        /** The waits for the providers, which a provider saved or Resume queues again (L388). */
-        private val PROVIDER_WAITS = setOf(DownloadHostRules.CHECK_PROVIDER, DownloadHostRules.CANT_REACH_PROVIDER)
+        /** The waits for the providers and the indexers, which a provider saved or Resume queues again (L388). */
+        private val PROVIDER_WAITS = setOf(DownloadHostRules.CHECK_PROVIDER, DownloadHostRules.CANT_REACH_PROVIDER, DownloadHostRules.CANT_REACH_INDEXER)
 
         /** The waits that end the host, which Resume queues again (L388). */
         private val ENDING_WAITS = PROVIDER_WAITS + DownloadHostRules.STORAGE_UNAVAILABLE

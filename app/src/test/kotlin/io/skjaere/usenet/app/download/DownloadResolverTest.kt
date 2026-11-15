@@ -35,6 +35,8 @@ import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.newznab.IndexerConfig
+import io.skjaere.usenet.newznab.NewznabError
+import io.skjaere.usenet.newznab.NewznabException
 import io.skjaere.usenet.newznab.NewznabItem
 import io.skjaere.usenet.newznab.NzbDownload
 import io.skjaere.usenet.releases.ReleaseKey
@@ -123,8 +125,12 @@ class DownloadResolverTest {
     /** Called as each grab is made, before it is answered. */
     private var onGrab: suspend (NewznabItem) -> Unit = {}
 
+    /** The indexer's answer to a grab instead of the NZB, while set: a 503, a dropped connection. */
+    private var indexerFails: NewznabError? = null
+
     private suspend fun grab(item: NewznabItem): NzbDownload {
         onGrab(item)
+        indexerFails?.let { throw NewznabException(it) }
         grabbed += item.guid
         val fake = fakes.getValue(item.guid)
         return NzbDownload(fake.nzb, fake.password)
@@ -136,8 +142,12 @@ class DownloadResolverTest {
     /** Called as each check starts. */
     private var onCheck: suspend () -> Unit = {}
 
+    /** What fails each check before an answer, while set: the connection lost. */
+    private var checkFails: Throwable? = null
+
     private val availability = AvailabilityBackend { nzb, progress ->
         onCheck()
+        checkFails?.let { return@AvailabilityBackend VerificationResult.Failure("the check couldn't finish", it) }
         val articles = nzb.files.flatMap { file -> file.segments.map { it.articleId } }
         checked += articles
         articles.indices.forEach { progress(it + 1, articles.size) }
@@ -514,6 +524,59 @@ class DownloadResolverTest {
         assertEquals(listOf(key(unreachable)), stored().tried)
     }
 
+    /**
+     * The connection lost or a timeout as a release is checked, opened or probed says nothing of the release (L382): it isn't
+     * counted, no other release is grabbed while it lasts, and the download backs off and asks again, from the NZB kept.
+     */
+    @Test
+    fun `a connection lost while a release is checked is backed off from, nothing counted and nothing more grabbed`() = runBlocking<Unit> {
+        row(single, pack)
+        checkFails = java.io.IOException("Connection reset by peer")
+        val out = assertIs<DownloadResolver.Resolution.Unreachable>(resolver().resolve(ID))
+        assertIs<UsenetError.Network>(out.error)
+        assertEquals(DownloadHostRules.CANT_REACH_PROVIDER, out.words)
+        assertEquals(DownloadState.Resolving, stored().state)
+        assertEquals(DownloadHostRules.CANT_REACH_PROVIDER, stored().reason)
+        assertEquals(emptyList(), stored().tried)
+        assertEquals(listOf(single.guid), grabbed)
+
+        checkFails = null
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(single.guid, ready.row.release?.guid)
+        assertEquals(listOf(single.guid), grabbed)
+        assertEquals(listOf(key(single)), stored().tried)
+    }
+
+    /** An indexer that can't be reached or answers 5xx gave no NZB: nothing was grabbed, so nothing is counted (L340). */
+    @Test
+    fun `an indexer out of reach counts nothing, and the download backs off saying so`() = runBlocking<Unit> {
+        val five = (1..5).map { Fake("hl-later-$it", "Harbor.Lights.S02E04.720p.WEB.h264-GRP$it", listOf("f$it.mkv" to 800_000_000L)) }
+        row(*five.toTypedArray())
+        indexerFails = NewznabError.Server("HTTP 503")
+        val out = assertIs<DownloadResolver.Resolution.Unreachable>(resolver().resolve(ID))
+        assertEquals(DownloadHostRules.CANT_REACH_INDEXER, out.words)
+        assertEquals(DownloadHostRules.CANT_REACH_INDEXER, stored().reason)
+        assertEquals(DownloadState.Resolving, stored().state)
+        assertEquals(emptyList(), stored().tried)
+
+        // A dropped connection the same (one release: the grab's own retry of it waits a second).
+        indexerFails = NewznabError.Network("Unable to resolve host")
+        assertIs<DownloadResolver.Resolution.Unreachable>(resolver(attempts = 1).resolve(ID))
+        assertEquals(emptyList(), stored().tried)
+
+        // Back: the first release, as it ranked.
+        indexerFails = null
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(five[0].guid, ready.row.release?.guid)
+        assertEquals(listOf(key(five[0])), stored().tried)
+
+        // Its refusal to serve more today is the indexer's answer: counted as before.
+        reset()
+        row(*five.toTypedArray())
+        indexerFails = NewznabError.DownloadLimitReached("Download limit reached")
+        assertIs<DownloadResolver.Resolution.Failed>(resolver().resolve(ID))
+    }
+
     @Test
     fun `a failure's words name nothing an indexer or a provider said`() {
         val words = listOf(
@@ -603,6 +666,8 @@ class DownloadResolverTest {
         storage.deletedVideos.clear()
         storage.spaceAsked.clear()
         storage.space = ROOM
+        indexerFails = null
+        checkFails = null
         grabbed.clear()
         checked.clear()
         opened.clear()

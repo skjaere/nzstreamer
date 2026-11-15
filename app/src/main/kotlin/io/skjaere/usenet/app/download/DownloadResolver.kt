@@ -42,6 +42,8 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.newznab.IndexerConfig
+import io.skjaere.usenet.newznab.NewznabError
+import io.skjaere.usenet.newznab.NewznabException
 import io.skjaere.usenet.newznab.NewznabItem
 import io.skjaere.usenet.newznab.NzbDownload
 import io.skjaere.usenet.search.RankedItem
@@ -152,10 +154,10 @@ class DownloadResolver(
         data class Waiting(val reason: String) : Resolution
 
         /**
-         * The providers couldn't be reached ([error]'s kind): the row says so while the host backs off and resolves it again,
-         * as the writer does for a reopen that got no connection (L382). Nothing was counted.
+         * The providers couldn't be reached ([error]'s kind), or the indexers: the row says so ([words]) while the host backs
+         * off and resolves it again, as the writer does for a reopen that got no connection (L382). Nothing was counted.
          */
-        data class Unreachable(val error: UsenetError) : Resolution
+        data class Unreachable(val error: UsenetError, val words: String = DownloadHostRules.CANT_REACH_PROVIDER) : Resolution
 
         /** The row is gone: removed meanwhile. */
         data object Gone : Resolution
@@ -234,7 +236,16 @@ class DownloadResolver(
         val byKey = items.associateBy { it.key }
         val newznab = byKey.mapValues { it.value.item }
         val configs = indexers().associateBy { it.id }
-        val grabs = indexerGrab(newznab, configs, fetchNzb)
+        // Whether the last grab failed for an outage on the indexer's side (out of reach, a 5xx): no NZB came, nothing spent.
+        var indexerOut = false
+        val grabs = indexerGrab(newznab, configs) { indexer, item ->
+            try {
+                fetchNzb(indexer, item).also { indexerOut = false }
+            } catch (e: NewznabException) {
+                indexerOut = e.error.isOutage()
+                throw e
+            }
+        }
         // Each NZB grabbed kept until its attempt has its answer; the one kept before served from it, with no grab.
         val nzbs = object : NzbSource {
             override suspend fun fetch(candidate: PlayCandidate): ByteArray = fetchWithPassword(candidate).bytes
@@ -257,11 +268,17 @@ class DownloadResolver(
         // The attempt under way, and whether it has had its answer about its release (a step of it failed for the release).
         var current: String? = null
         var answered = false
+        // The connection lost or timed out in the attempt before: no other release is grabbed while it lasts (L382).
+        var lost: UsenetError? = null
+        // Grabs that failed for an outage on the indexer's side, uncounted.
+        var indexerOutages = 0
         val skipped = mutableListOf<String>()
         var ended: PipelineEvent? = null
         log.info("download {}: resolving: up to {} of the {} release{} not tried yet", id, minOf(left, items.size), items.size, if (items.size == 1) "" else "s")
         try {
             pipeline.play(items.map { it.playCandidate }, picker(row)).collect { event ->
+                // Ended at the next event, once the attempt before has let go of what it held.
+                lost?.let { throw OutOfReach(it) }
                 when (event) {
                     is PipelineEvent.AttemptStarted -> {
                         attempt = before + event.attempt
@@ -274,10 +291,20 @@ class DownloadResolver(
                     }
                     is PipelineEvent.Step -> when (val status = event.status) {
                         is StepStatus.Running -> say(DownloadHostRules.resolving(STEP_LABELS.getValue(event.step), attempt, of))
-                        // The release's answer: its NZB is no use kept. The providers failing is no answer about it.
-                        is StepStatus.Failed -> if (status.failure !is AttemptFailure.Provider) {
-                            answered = true
-                            storage.dropGrab(id)
+                        is StepStatus.Failed -> when (val failure = status.failure) {
+                            // The providers failing is no answer about the release, nor a connection lost.
+                            is AttemptFailure.Provider -> Unit
+                            is AttemptFailure.Failed -> if (failure.error.isLostConnection()) lost = failure.error else answered(id).also { answered = true }
+                            is AttemptFailure.FetchFailed -> if (indexerOut) {
+                                // No NZB came: the release isn't counted, and the next may be another indexer's.
+                                current?.let { counting = counting - it }
+                                count(id, counting)
+                                indexerOutages++
+                            } else {
+                                answered(id).also { answered = true }
+                            }
+                            // The release's answer: its NZB is no use kept.
+                            else -> answered(id).also { answered = true }
                         }
                         is StepStatus.Done -> Unit
                     }
@@ -292,13 +319,23 @@ class DownloadResolver(
             val cut = current
             if (cut != null && !answered) withContext(NonCancellable) { count(id, counting - cut) }
             throw e
+        } catch (e: OutOfReach) {
+            // Nothing known of the release: not counted, and tried again from its NZB once the wait is over.
+            current?.let { count(id, counting - it) }
+            return unreachable(id, e.error, DownloadHostRules.CANT_REACH_PROVIDER)
         }
         return when (val end = ended) {
             is PipelineEvent.Succeeded -> resolved(id, end, byKey)
-            is PipelineEvent.Exhausted -> exhausted(id, end, counting, skipped)
+            is PipelineEvent.Exhausted -> exhausted(id, end, counting, skipped, indexerOutages > 0)
             else -> failed(id, NO_OTHER_RELEASE)
         }
     }
+
+    /** The attempt under way had its answer about its release: the NZB kept for it is no use now. */
+    private suspend fun answered(id: String) = storage.dropGrab(id)
+
+    /** A connection lost in an attempt ([lost]): it ends the resolve before another release is grabbed. */
+    private class OutOfReach(val error: UsenetError) : Exception(error::class.simpleName)
 
     /**
      * [succeeded]'s release kept as the download's, as the class says: the room checked for its exact size, then its NZB
@@ -349,7 +386,7 @@ class DownloadResolver(
      * counted, and the download waits for them. Else it fails, in the last failure's words, or, every release left passed
      * over as found missing before, in the play sheet's words for those.
      */
-    private suspend fun exhausted(id: String, ended: PipelineEvent.Exhausted, counted: List<String>, skipped: List<String>): Resolution {
+    private suspend fun exhausted(id: String, ended: PipelineEvent.Exhausted, counted: List<String>, skipped: List<String>, indexerOut: Boolean): Resolution {
         val last = ended.failedAttempts.lastOrNull()
             ?: return failed(id, skipped.takeIf { it.isNotEmpty() }?.let(::skippedNotice) ?: NO_OTHER_RELEASE)
         val (candidate, failure) = last
@@ -357,6 +394,8 @@ class DownloadResolver(
             count(id, counted - candidate.id)
             providers(id, failure.error)?.let { return it }
         }
+        // Releases left untried for want of their NZBs: the indexers are asked again once the wait is over (L382).
+        if (indexerOut) return unreachable(id, UsenetError.Network(null), DownloadHostRules.CANT_REACH_INDEXER)
         log.info("download {}: {} release{} tried, the last failing as {}", id, counted.size, if (counted.size == 1) "" else "s", failure::class.simpleName)
         return failed(id, reason(failure))
     }
@@ -368,12 +407,15 @@ class DownloadResolver(
      */
     private suspend fun providers(id: String, error: UsenetError): Resolution? = when (error) {
         is UsenetError.AuthFailed, UsenetError.NotConfigured -> waiting(id, DownloadHostRules.CHECK_PROVIDER)
-        is UsenetError.ConnectionFailed, is UsenetError.Network, is UsenetError.Timeout -> {
-            log.info("download {}: the providers couldn't be reached ({})", id, error::class.simpleName)
-            downloads.setState(id, DownloadState.Resolving, DownloadHostRules.CANT_REACH_PROVIDER, clock.now())
-            Resolution.Unreachable(error)
-        }
+        is UsenetError.ConnectionFailed, is UsenetError.Network, is UsenetError.Timeout -> unreachable(id, error, DownloadHostRules.CANT_REACH_PROVIDER)
         else -> null
+    }
+
+    /** Out of reach for [error], the row saying so in [words] while the host backs off and resolves it again. */
+    private suspend fun unreachable(id: String, error: UsenetError, words: String): Resolution {
+        log.info("download {}: {} ({})", id, if (words == DownloadHostRules.CANT_REACH_INDEXER) "the indexers couldn't give an NZB" else "the providers couldn't be reached", error::class.simpleName)
+        downloads.setState(id, DownloadState.Resolving, words, clock.now())
+        return Resolution.Unreachable(error, words)
     }
 
     /** Fails [row] where its exact size doesn't fit (L338), or waits while the volume isn't there; null where it fits. */
@@ -439,6 +481,12 @@ class DownloadResolver(
 
         /** As the player's launch reads its own: what a later version adds is passed over. */
         private val json = Json { ignoreUnknownKeys = true }
+
+        /** The connection lost or timed out: said of no release, which may be whole (L382). */
+        private fun UsenetError.isLostConnection() = this is UsenetError.Network || this is UsenetError.Timeout
+
+        /** An indexer out of reach, or failing on its side (a 5xx): no answer about the release, nor a refusal of the account. */
+        private fun NewznabError.isOutage() = this is NewznabError.Network || this is NewznabError.Timeout || this is NewznabError.Server
 
         /** What the probe read of [row]'s video, as Resolve kept it; null where it read none. */
         fun video(row: Download): VideoTiming? = row.video?.let { json.decodeFromString(VideoTiming.serializer(), it) }
