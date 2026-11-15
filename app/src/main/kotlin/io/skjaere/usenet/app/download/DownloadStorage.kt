@@ -178,7 +178,8 @@ class DownloadStorage(
 
     /**
      * What the primary volume can give and what downloads take of it (L348); null while it isn't there. [except]: the
-     * download a check is for, left out of what is set aside, as its own size is the one checked ([DownloadSpace.of]).
+     * download a check is for, left out of what is set aside, as its own size is the one checked, and its file's size,
+     * where it has one made, counted as available to it ([DownloadSpace.of]).
      */
     suspend fun space(except: String? = null): DownloadSpace? = withContext(io) {
         val volume = volumeDir() ?: return@withContext null

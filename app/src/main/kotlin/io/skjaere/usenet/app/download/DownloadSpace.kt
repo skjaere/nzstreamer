@@ -9,9 +9,10 @@ import io.skjaere.usenet.data.DownloadState
  * page's strip and Resolve read them. [available]: what downloads may take there without Android clearing any app's
  * cache to make room, this app's watched video and TMDB's answers among them: what is free on the volume, or what Android
  * can allocate where that is less (getAllocatableBytes counts the caches it would clear, less its own low-storage
- * reserve). [used]: what downloads hold, each file made so far at its whole size, as it is allocated whole before its
- * first byte (C8): the running one counts whole. [queued]: what the downloads still to make their file need, their exact
- * size once resolved, else the indexer's; nothing of it allocated yet.
+ * reserve); for a check for one download whose file is made ([of]'s except), what that file holds too. [used]: what
+ * downloads hold, each file made so far at its whole size, as it is allocated whole before its first byte (C8): the
+ * running one counts whole. [queued]: what the downloads still to make their file need, their exact size once resolved,
+ * else the indexer's; nothing of it allocated yet.
  */
 data class DownloadSpace(val available: Long, val used: Long, val queued: Long) {
     /** What a new download may take: [available] less what is kept free ([KEPT_FREE]) and [queued]; never below 0. */
@@ -37,14 +38,19 @@ data class DownloadSpace(val available: Long, val used: Long, val queued: Long) 
          * The space with [allocatable] bytes Android can give (getAllocatableBytes) and [usable] bytes free on the volume,
          * downloads taking the less of the two, and [rows] downloaded or on their way. A row with its file made (its
          * relative path set) holds its whole size; one without, still to go on, needs it; one being deleted counts as gone,
-         * hidden as it is (L379), though Android counts its file until its Undo has gone. The row [except] names, the one
-         * a check is for (Resolve's of its exact size), counts in neither: its size is the one checked against [free].
+         * hidden as it is (L379), though Android counts its file until its Undo has gone.
+         *
+         * The row [except] names, the one a check is for (Resolve's of its exact size), counts in neither: its size is the
+         * one checked against [free]. With its file made (Try again from its safe offset), what is free on the volume is
+         * less that file's whole size already, and allocating it again asks only for what it lacks, so what it holds counts
+         * as [available]: at its size as its row has it, the size its file was made at. A release of another size replaces
+         * the file, which goes before the new one is made.
          */
         fun of(allocatable: Long, usable: Long, rows: List<Download>, except: String? = null): DownloadSpace {
-            val counted = rows.filter { it.state != DownloadState.Deleting && it.id != except }
+            val (checked, counted) = rows.filter { it.state != DownloadState.Deleting }.partition { it.id == except }
             val (made, toMake) = counted.partition { it.relativePath != null }
             return DownloadSpace(
-                available = minOf(allocatable, usable),
+                available = minOf(allocatable, usable) + checked.filter { it.relativePath != null }.sumOf { it.wholeSize },
                 used = made.sumOf { it.wholeSize },
                 queued = toMake.filter { it.state in GOING_ON }.sumOf { it.wholeSize },
             )

@@ -124,10 +124,33 @@ class DownloadSpaceTest {
         assertTrue(space.fits(25 * GB))
         // Counted with the others, its own size would be taken from what is free twice.
         assertFalse(DownloadSpace.of(42 * GB, 42 * GB, rows).fits(25 * GB))
-        // Its file made already (a retry from its safe offset): what it holds is Android's already, and isn't used here.
-        val made = DownloadSpace.of(42 * GB, 42 * GB, listOf(film.copy(relativePath = "downloads/film/v.mkv"), rows[1]), except = "film")
-        assertEquals(0, made.used)
-        assertEquals(39 * GB, made.free)
+    }
+
+    /**
+     * Try again on a download whose file is made (from its safe offset, after "Storage is full" or a failed resolve)
+     * resolves it once more, and Resolve checks its exact size again. Its file was allocated whole before its first byte
+     * (C8), so what is free on the volume is less its whole size already, and allocating it again asks only for what it
+     * lacks: none of it. 17 GB free after its 25 GB file and 2 GB queued: it fits, as it did when its file was made.
+     */
+    @Test
+    fun `the download a check is for counts what its file holds already as its own`() {
+        val film = row("film", DownloadState.Resolving, size = 25 * GB, indexerSize = 26 * GB, file = true, safeOffset = 9 * GB)
+        val rows = listOf(film, row("q", DownloadState.Queued, indexerSize = 2 * GB))
+        val retry = DownloadSpace.of(17 * GB, 17 * GB, rows, except = "film")
+        assertTrue(retry.fits(25 * GB), "its 25 GB, its file made, with 17 GB free: free ${retry.free}")
+        assertEquals(0, retry.used)
+        assertEquals(2 * GB, retry.queued)
+        assertEquals(17 * GB + 25 * GB, retry.available)
+        assertEquals(39 * GB, retry.free)
+        // Counted with the others, it holds its file, and its whole size again doesn't fit in the 14 GB left.
+        val counted = DownloadSpace.of(17 * GB, 17 * GB, rows)
+        assertEquals(25 * GB, counted.used)
+        assertEquals(14 * GB, counted.free)
+        assertFalse(counted.fits(25 * GB))
+        // With no file made yet (its first resolve), it holds nothing: 25 GB doesn't fit in the 14 GB free.
+        val first = DownloadSpace.of(17 * GB, 17 * GB, listOf(film.copy(relativePath = null, safeOffset = 0), rows[1]), except = "film")
+        assertEquals(14 * GB, first.free)
+        assertFalse(first.fits(25 * GB))
     }
 
     /**
