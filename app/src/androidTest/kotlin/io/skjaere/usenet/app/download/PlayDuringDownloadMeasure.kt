@@ -57,6 +57,10 @@ import java.util.Locale
  * first. Two rounds: the engine at its own concurrency (the provider's 4 connections less a spare, 3 for each stream: one
  * connection always free for the other), then each stream fetching 8 at once on the 4 connections, so their fetches queue
  * for them and priority decides who goes next. The numbers go to the log under [TAG], one "M2 ..." line a case.
+ *
+ * So that no case measures what isn't its own: a first play, discarded, takes the process's cold start before any case;
+ * the download is written again from its first byte each time it ends, so it runs through every case however long the
+ * film's prepare waits behind it; and a case whose download wasn't under way at the film's first frame says so (void).
  */
 @RunWith(AndroidJUnit4::class)
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -110,6 +114,8 @@ class PlayDuringDownloadMeasure {
         val stalledMs: Long,
         val playedMs: Long,
         val downloadedMb: Double?,
+        /** Whether the download was under way at the film's first frame: else nothing ran beside it. */
+        val beside: Boolean = true,
     ) {
         /** What the download wrote a second over the case: from before the film's prepare to the end of its play. */
         private val downloadMbps: String
@@ -117,7 +123,7 @@ class PlayDuringDownloadMeasure {
 
         val line: String
             get() = "M2 case=$case prepareMs=$prepareMs firstFrameMs=$firstFrameMs stalls=$stalls stalledMs=$stalledMs " +
-                "playedMs=$playedMs downloadMBps=$downloadMbps"
+                "playedMs=$playedMs downloadMBps=$downloadMbps" + if (beside) "" else " void=no-download-at-first-frame"
     }
 
     @Test
@@ -135,6 +141,8 @@ class PlayDuringDownloadMeasure {
             "play" to NntpPriority.STREAMING.value,
         )
         val rounds = listOf("own" to null, "queued" to 2 * local.provider.maxConnections)
+        // The process's first launch of the player, discarded: no case pays its cold start.
+        Log.i(TAG, measure("warm-up", film) { true }.line.replace("M2 case=warm-up", "M2 warm-up (discarded)"))
         val measured = rounds.flatMap { (round, concurrency) ->
             engineSetup("the engine for the $round round") { container.engine.configure(EngineSettings(listOf(local.provider), concurrency = concurrency)) }
             cases.mapIndexed { i, (case, priority) -> measured("$round-$case", "$round-$i", priority, film, big, prepared) }
@@ -150,19 +158,28 @@ class PlayDuringDownloadMeasure {
             }
             val id = Download.newId()
             val file = prepared.files.single()
+            // The bytes of the writes before this one: the download is written again from its first byte each time it ends.
+            val laps = java.util.concurrent.atomic.AtomicLong()
             val download = writer?.let { w ->
                 launch(Dispatchers.IO) {
-                    storage.open(id, big.fileName, file.size).use { out -> w.write(id, prepared, file, out, 0, emptyList()) { _, _ -> } }
+                    while (true) {
+                        storage.open(id, big.fileName, file.size).use { out -> w.write(id, prepared, file, out, 0, emptyList()) { _, _ -> } }
+                        storage.deleteVideo(id)
+                        laps.addAndGet(file.size)
+                    }
                 }
             }
+            /** What the download has written in all, its write under way's with those before. */
+            fun written(): Long? = writer?.let { w -> laps.get() + (w.live.value?.written ?: 0) }
             try {
                 // Past its start, where it asks for fewer segments at once: every connection busy, or queued for.
                 writer?.let { w -> waitFor("the download under way", timeoutMs = 60_000) { w.live.value?.takeIf { it.written >= UNDER_WAY } } }
-                val before = writer?.live?.value?.written
-                measure(tag, film).also { m ->
-                    val after = writer?.live?.value?.written
+                val before = written()
+                var beside = true
+                measure(tag, film) { beside = writer == null || writer.live.value != null }.also { m ->
+                    val after = written()
                     val downloaded = if (before != null && after != null) (after - before) / 1e6 else null
-                    Log.i(TAG, Measured(case, m.prepareMs, m.firstFrameMs, m.stalls, m.stalledMs, m.playedMs, downloaded).line)
+                    Log.i(TAG, Measured(case, m.prepareMs, m.firstFrameMs, m.stalls, m.stalledMs, m.playedMs, downloaded, beside).line)
                 }
             } finally {
                 download?.cancelAndJoin()
@@ -173,9 +190,9 @@ class PlayDuringDownloadMeasure {
     /**
      * The film posted anew (nothing of it cached), prepared and put in the store as a play's Open does (with no time limit
      * but a long one: a prepare held behind the download is what is measured), launched and played [WINDOW_MS]:
-     * [Measured]'s numbers, its download's left out.
+     * [Measured]'s numbers, its download's left out. [atFirstFrame] is asked as the film first plays.
      */
-    private suspend fun measure(tag: String, film: ByteArray): Measured {
+    private suspend fun measure(tag: String, film: ByteArray, atFirstFrame: () -> Unit): Measured {
         val prepareStart = SystemClock.elapsedRealtime()
         val posted = local.post("dip.mkv", film, PART, "m2-$tag-${System.nanoTime()}")
         val nzb = local.nzb(posted)
@@ -192,6 +209,7 @@ class PlayDuringDownloadMeasure {
                 }
             }
             val firstFrameMs = SystemClock.elapsedRealtime() - launched
+            atFirstFrame()
             var stalls = 0
             var stalledMs = 0L
             var waitingSince: Long? = null
