@@ -4,12 +4,14 @@ import io.skjaere.usenet.core.ProviderConfig
 import io.skjaere.yenc.YencEncoder
 import java.io.Closeable
 import java.io.IOException
+import java.io.OutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
 /**
@@ -28,6 +30,11 @@ import kotlin.concurrent.thread
  * Null [idleAfterMs]: none die. Only [affected] of every [outOf] connections can die, by accept order from 0 (K of M):
  * connection i when `i % outOf < affected`. On loopback, as through a NAT that dropped the flow, a silent connection's
  * writes are still taken: the client sees no answer, not an error.
+ *
+ * For a download's tests, two more of a provider's ways, set and changed mid-run as [missing] is: a BODY [cut] part way
+ * through its article, as a connection lost mid-transfer (once, or every time), and a [throttle] on each connection's
+ * bytes a second, as a provider's rate for each connection. [bodies] counts BODYs per article, so a test sees what was
+ * fetched again.
  */
 class LocalNntp(
     private val idleAfterMs: Long? = null,
@@ -77,6 +84,40 @@ class LocalNntp(
     /** Commands read and dropped on connections gone silent. */
     val dropped = AtomicInteger()
 
+    /**
+     * A cut of BODY answers ([cut]): the 222 line and the first [bytes] of the article go out, then the connection
+     * closes, as a provider's connection lost mid-transfer. Only BODYs of [ids] are cut (any article's when null), and
+     * only answers with an article: a 430 is no answer to cut. With [everyTime], each such answer is cut while this is
+     * set; without, only the first, after which [cut] is null again.
+     */
+    class Cut(val bytes: Int, val everyTime: Boolean = false, val ids: Set<String>? = null) {
+        init {
+            require(bytes >= 0) { "A cut sends 0 bytes of the article or more" }
+        }
+    }
+
+    private val cutHeld = AtomicReference<Cut?>()
+
+    /** The cut BODY answers meet, or null for none: set and taken away at any time, on any thread. */
+    var cut: Cut?
+        get() = cutHeld.get()
+        set(value) = cutHeld.set(value)
+
+    /** BODY answers cut so far. */
+    val cuts = AtomicInteger()
+
+    /**
+     * At most how many bytes a second each connection's answers go out at, or null for as fast as loopback takes them.
+     * Each connection has this rate of its own, as a provider's connections each have theirs, so N connections can carry
+     * N times it. It is read for each step of an answer, so a change applies to the bytes still to go, mid-answer too.
+     */
+    @Volatile
+    var throttle: Long? = null
+        set(value) {
+            require(value == null || value > 0) { "A throttle is a number of bytes a second above 0" }
+            field = value
+        }
+
     /** The engine's provider for this server. */
     val provider: ProviderConfig get() = ProviderConfig("local", "local", "127.0.0.1", server.localPort, "", "", useTls = false, maxConnections = 4)
 
@@ -118,7 +159,7 @@ class LocalNntp(
     private fun serve(socket: Socket, index: Int) = try {
         socket.use {
             val reader = it.getInputStream().bufferedReader(Charsets.ISO_8859_1)
-            val out = it.getOutputStream()
+            val out = Paced(it.getOutputStream())
             var lastAnswerEnd = System.nanoTime()
             fun reply(line: String) {
                 out.write("$line\r\n".toByteArray(Charsets.ISO_8859_1))
@@ -155,8 +196,14 @@ class LocalNntp(
                         val id = sent.removePrefix("<").removeSuffix(">")
                         bodies.getOrPut(id) { AtomicInteger() }.incrementAndGet()
                         val article = articles[id]?.takeIf { id !in missing }
+                        val cutHere = article?.let { cutFor(id) }
                         if (article == null) {
                             reply("430 no such article")
+                        } else if (cutHere != null) {
+                            out.write("222 0 $sent\r\n".toByteArray(Charsets.ISO_8859_1))
+                            out.write(article, 0, minOf(cutHere.bytes, article.size))
+                            out.flush()
+                            break
                         } else {
                             out.write("222 0 $sent\r\n".toByteArray(Charsets.ISO_8859_1))
                             out.write(article)
@@ -186,5 +233,46 @@ class LocalNntp(
     private fun diesAt(index: Int, lastAnswerEnd: Long): Boolean {
         val after = idleAfterMs ?: return false
         return index % outOf < affected && System.nanoTime() - lastAnswerEnd >= after * 1_000_000
+    }
+
+    /** The cut a BODY of [id]'s answer meets, if any ([cut]). A cut once goes to the first answer that takes it, alone. */
+    private fun cutFor(id: String): Cut? {
+        val cut = cutHeld.get() ?: return null
+        if (cut.ids != null && id !in cut.ids) return null
+        if (!cut.everyTime && !cutHeld.compareAndSet(cut, null)) return null
+        cuts.incrementAndGet()
+        return cut
+    }
+
+    /**
+     * A connection's answers on their way out, held to [throttle] while it is set. They go in steps of a twentieth of a
+     * second's bytes, each after its share of the second, so a client sees the rate from the first byte and never a burst.
+     */
+    private inner class Paced(private val out: OutputStream) : OutputStream() {
+        override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            var at = off
+            val end = off + len
+            while (at < end) {
+                val rate = throttle
+                if (rate == null) {
+                    out.write(b, at, end - at)
+                    return
+                }
+                val step = minOf((end - at).toLong(), maxOf(1L, rate / STEPS_A_SECOND)).toInt()
+                val nanos = step * 1_000_000_000L / rate
+                Thread.sleep(nanos / 1_000_000, (nanos % 1_000_000).toInt())
+                out.write(b, at, step)
+                at += step
+            }
+        }
+
+        override fun flush() = out.flush()
+    }
+
+    private companion object {
+        /** A throttled answer's steps a second ([throttle]). */
+        const val STEPS_A_SECOND = 20
     }
 }
