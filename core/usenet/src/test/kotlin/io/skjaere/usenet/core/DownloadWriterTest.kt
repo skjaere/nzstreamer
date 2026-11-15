@@ -82,6 +82,9 @@ class DownloadWriterTest {
     /** Article [i]'s bytes, as offsets in the file. */
     private fun bytesOf(i: Int) = i * part until (i + 1) * part
 
+    /** The part of this range within [other]; null when none is. */
+    private fun LongRange.within(other: LongRange): LongRange? = (maxOf(first, other.first)..minOf(last, other.last)).takeUnless { it.isEmpty() }
+
     /** The clip with articles [zeroed] as zeros, as a stream fills those no provider has. */
     private fun zeroed(vararg zeroed: Int) = clip.data.copyOf().also { data ->
         zeroed.forEach { i -> data.fill(0, (i * part).toInt(), ((i + 1) * part).toInt()) }
@@ -533,6 +536,56 @@ class DownloadWriterTest {
         assertEquals(Record(size, listOf(bytesOf(10))), wrote.records.last())
         assertContentEquals(zeroed(10), path.readBytes())
         assertTrue(server.bodies(3) >= 2)
+    }
+
+    /**
+     * The end's retry asks each stretch once more (L342); one that fails before the provider answers for it (refused, out
+     * of reach, the network lost) hasn't been asked, and is asked again after the writer's wait, never recorded as missing
+     * for good. A login refused there waits for the providers, the stretch kept, and a write from the file's end asks it then.
+     */
+    @Test
+    fun `the end's retry asks a stretch again after a failure that never reached the provider`() = runTest(timeout = 60.seconds) {
+        val gap = bytesOf(5)
+        val opens = mutableListOf<Pair<Long, Long>>()
+        /** The file with article 5 filled with zeros and said, as a stream does with one no provider has. */
+        fun zeroFilled(range: LongRange): OpenedStream {
+            val gaps = StreamGaps().apply { gap.within(range)?.let(::add) }
+            return OpenedStream(ByteReadChannel(zeroed(5).copyOfRange(range.first.toInt(), range.last.toInt() + 1)), Job(), gaps)
+        }
+        fun whole(range: LongRange) = OpenedStream(ByteReadChannel(clip.data.copyOfRange(range.first.toInt(), range.last.toInt() + 1)), Job())
+
+        // Refused as the stretch is asked again; whole once asked after the wait.
+        val refusedOnce = writer(
+            StreamOpener { _, _, range ->
+                opens += currentTime to range.first
+                when (opens.size) {
+                    1 -> zeroFilled(range)
+                    2 -> refused()
+                    else -> whole(range)
+                }
+            },
+            time = testScheduler.timeSource,
+        ).wrote()
+        assertEquals(Outcome.Done(emptyList()), refusedOnce.outcome)
+        assertEquals(listOf(0L to 0L, 0L to gap.first, 2_000L to gap.first), opens)
+        assertEquals(Record(size, emptyList()), refusedOnce.records.last())
+        assertContentEquals(clip.data, path.readBytes())
+
+        // A login refused as it is asked again: the download waits for the providers, its file written and the stretch kept.
+        opens.clear()
+        val refusedLogin = writer(
+            StreamOpener { _, _, range ->
+                opens += currentTime to range.first
+                if (opens.size == 1) zeroFilled(range) else failed(UsenetException(UsenetError.AuthFailed("481 rejected")))
+            },
+            time = testScheduler.timeSource,
+        ).wrote()
+        assertEquals(Outcome.Waiting(Wait.Provider), refusedLogin.outcome)
+        assertEquals(Record(size, listOf(gap)), refusedLogin.records.last())
+        // Saved again: written from its end, the stretch is asked, and comes.
+        val again = writer(StreamOpener { _, _, range -> whole(range) }, time = testScheduler.timeSource).wrote(out = RandomAccessFile(path, "rw").channel, from = size, gaps = listOf(gap))
+        assertEquals(Outcome.Done(emptyList()), again.outcome)
+        assertContentEquals(clip.data, path.readBytes())
     }
 
     @Test

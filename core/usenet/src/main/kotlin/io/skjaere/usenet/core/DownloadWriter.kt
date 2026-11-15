@@ -323,12 +323,28 @@ class DownloadWriter(
         }
     }
 
-    /** All of [run]'s file written: each stretch missing asked for once more, then the record at its end (L342). */
+    /**
+     * All of [run]'s file written: each stretch missing asked for once more, then the record at its end (L342). A stretch
+     * whose ask failed before the provider answered for it is asked again as a stream is reopened; a login refused, or an
+     * hour out of reach, ends the write waiting, the stretches not yet answered for recorded, for a write from the file's
+     * end to ask once the wait is over.
+     */
     private suspend fun finish(run: Run): Outcome {
         run.save()
         val missing = run.known.all()
         if (missing.isNotEmpty()) {
-            val left = missing.flatMap { retry(run, it) }
+            val left = mutableListOf<LongRange>()
+            missing.forEachIndexed { i, gap ->
+                when (val asked = ask(run, gap)) {
+                    is Asked.Answered -> left += asked.missing
+                    is Asked.Stopped -> {
+                        run.known = StreamGaps().apply { (left + asked.missing + missing.drop(i + 1)).forEach(::add) }
+                        run.save()
+                        log.info("download {}: written, {} of {} missing stretch{} asked for again before it waits", run.id, i, missing.size, plural(missing.size, "es"))
+                        return asked.outcome
+                    }
+                }
+            }
             val whole = missing.count { gap -> left.none { it.first >= gap.first && it.last <= gap.last } }
             log.info("download {}: {} of {} missing stretch{} came whole when asked for again", run.id, whole, missing.size, plural(missing.size, "es"))
             run.known = StreamGaps().apply { left.forEach(::add) }
@@ -339,29 +355,97 @@ class DownloadWriter(
         return Outcome.Done(gaps)
     }
 
-    /** [gap] of [run]'s file streamed once more, what comes written where it goes: what of it is still missing. */
-    private suspend fun retry(run: Run, gap: LongRange): List<LongRange> {
+    /** How asking for a stretch once more ended. */
+    private sealed interface Asked {
+        /** The provider answered for all of it: [missing] is what of it it still has no article for. */
+        class Answered(val missing: List<LongRange>) : Asked
+
+        /** The write ends with [outcome] before the provider answered for it all; [missing]: what of it isn't known to have come. */
+        class Stopped(val outcome: Outcome, val missing: List<LongRange>) : Asked
+    }
+
+    /**
+     * [gap] of [run]'s file asked for once more, what comes written where it goes. A stream that fails before the provider
+     * answers for the rest of it (refused, out of reach, the network lost, the engine's cut) asks again for that rest after
+     * the writer's wait, by the transfer's rules (L382): an hour out of reach, or a login refused, stops the write.
+     */
+    private suspend fun ask(run: Run, gap: LongRange): Asked {
+        var rest = gap
+        val zeros = mutableListOf<LongRange>()
+        var wait = FIRST_BACKOFF
+        var outOfReach: TimeMark? = null
+        while (true) {
+            val since = wakes.mark()
+            val tried = retry(run, rest)
+            zeros += tried.zeros
+            if (tried.at > rest.last) return Asked.Answered(zeros)
+            val progressed = tried.at > rest.first
+            rest = tried.at..rest.last
+            if (progressed) {
+                wait = FIRST_BACKOFF
+                outOfReach = null
+            }
+            // Ended short with no cause: as far as the release gives it.
+            val cause = tried.failure ?: return Asked.Answered(zeros + listOf(rest))
+            val sorted = sort(cause, progressed)
+            when (sorted.into) {
+                // The provider answered: it lacks it, or fails it.
+                Into.Counted, Into.Incomplete, Into.Corrupt -> return Asked.Answered(zeros + listOf(rest))
+                Into.Provider -> return Asked.Stopped(Outcome.Waiting(Wait.Provider), zeros + listOf(rest))
+                Into.Unreachable -> {
+                    val out = outOfReach ?: timeSource.markNow().also { outOfReach = it }
+                    if (out.elapsedNow() >= UNREACHABLE_FOR) return Asked.Stopped(Outcome.Waiting(Wait.Unreachable), zeros + listOf(rest))
+                }
+                Into.Offline -> outOfReach = null
+                Into.Again -> Unit
+            }
+            run.unreachable = sorted.into == Into.Unreachable
+            run.said()
+            log.info(
+                "download {}: asking for the {} missing bytes at {} again failed ({}); asking again in {} s",
+                run.id, rest.last - rest.first + 1, rest.first, sorted.kind, wait.inWholeSeconds,
+            )
+            if (wakes.pause(wait, since)) {
+                wait = FIRST_BACKOFF
+                outOfReach = null
+            } else {
+                wait = minOf(wait * 2, MAX_BACKOFF)
+            }
+        }
+    }
+
+    /** How one stream of a stretch went: every byte before [at] came, [zeros] of them filled with zeros, and what ended it short. */
+    private class Retried(val at: Long, val zeros: List<LongRange>, val failure: Throwable?)
+
+    /** [range] of [run]'s file streamed once more, what comes written where it goes: how far it came, and what ended it short. */
+    private suspend fun retry(run: Run, range: LongRange): Retried {
         val opened = try {
-            opener.open(run.nzb, run.file.index, gap)
+            opener.open(run.nzb, run.file.index, range)
         } catch (e: CancellationException) {
             currentCoroutineContext().ensureActive()
-            return listOf(gap)
+            return Retried(range.first, emptyList(), e)
         } catch (e: Exception) {
-            return listOf(gap)
+            return Retried(range.first, emptyList(), e)
         }
         val pace = throttle()?.let { Pace(it) }
-        var at = gap.first
+        var at = range.first
+        var failure: Throwable? = null
         try {
-            while (at <= gap.last) {
+            while (at <= range.last) {
                 val n = try {
-                    opened.channel.readAvailable(run.buffer, 0, minOf(run.buffer.size.toLong(), gap.last - at + 1).toInt())
+                    opened.channel.readAvailable(run.buffer, 0, minOf(run.buffer.size.toLong(), range.last - at + 1).toInt())
                 } catch (e: CancellationException) {
                     currentCoroutineContext().ensureActive()
+                    failure = e
                     break
                 } catch (e: Exception) {
+                    failure = e
                     break
                 }
-                if (n < 0) break
+                if (n < 0) {
+                    failure = opened.channel.closedCause
+                    break
+                }
                 run.writeAt(at, n, advance = false)
                 at += n
                 pace?.took(n)
@@ -370,9 +454,9 @@ class DownloadWriter(
             opened.job.cancel()
             opened.channel.cancel(null)
         }
-        // What it filled with zeros again, and what it didn't reach.
-        val came = gap.first until at
-        return opened.gaps.all().mapNotNull { it.within(came) } + listOfNotNull((at..gap.last).takeUnless { it.isEmpty() })
+        // What it filled with zeros again.
+        val came = range.first until at
+        return Retried(at, opened.gaps.all().mapNotNull { it.within(came) }, failure)
     }
 
     /** What ended a stream ([cause]: its close's, or its open's; null: it ended short with none), and its kind for the log. */
