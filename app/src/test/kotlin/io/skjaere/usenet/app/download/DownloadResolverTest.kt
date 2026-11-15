@@ -195,7 +195,7 @@ class DownloadResolverTest {
     private val storage = FakeStorage()
     private val store by lazy { PreparedNzbStore(nzbDir) }
 
-    private fun resolver(attempts: Int = 10, tried: TriedReleases = TriedReleases.None, providers: Boolean = true) = DownloadResolver(
+    private fun resolver(attempts: Int = 10, tried: TriedReleases = TriedReleases.None, providers: Boolean? = true) = DownloadResolver(
         downloads = dao,
         storage = storage,
         availability = availability,
@@ -501,6 +501,39 @@ class DownloadResolverTest {
         assertEquals(DownloadState.Waiting, stored().state)
         assertEquals(emptyList(), grabbed)
         assertEquals(emptyList(), stored().tried)
+    }
+
+    /**
+     * In a new process (the boot receiver's service, the job brought back after a kill) the providers saved reach the engine
+     * once the app's start has read and decrypted them: until then Resolve neither grabs nor opens, and backs off as from a
+     * provider out of reach, never parking the download as "Check your Usenet provider".
+     */
+    @Test
+    fun `providers saved that the engine hasn't taken up yet are waited for, on both the reopen and the grab`() = runBlocking<Unit> {
+        row(passworded) { it.resolvedAs(passworded, "c90a4f.mkv", 1_300_000_000L).copy(safeOffset = 400_000_000L) }
+        storage.sources[ID] = DownloadStorage.Source(passworded.nzb, "s3cret-from-indexer")
+        val out = assertIs<DownloadResolver.Resolution.Unreachable>(resolver(providers = null).resolve(ID))
+        assertEquals(UsenetError.NotConfigured, out.error)
+        assertEquals(DownloadState.Resolving, stored().state)
+        assertEquals(DownloadHostRules.CANT_REACH_PROVIDER, stored().reason)
+        assertEquals(emptyList(), opened)
+        assertNotNull(storage.sources[ID])
+        // Taken up: it goes on from its offset.
+        assertEquals(400_000_000L, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.safeOffset)
+
+        reset()
+        row(single)
+        assertIs<DownloadResolver.Resolution.Unreachable>(resolver(providers = null).resolve(ID))
+        assertEquals(emptyList(), grabbed)
+        assertEquals(emptyList(), stored().tried)
+        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+
+        // None saved: the reopen waits for one too, before it opens anything.
+        reset()
+        row(passworded) { it.resolvedAs(passworded, "c90a4f.mkv", 1_300_000_000L) }
+        storage.sources[ID] = DownloadStorage.Source(passworded.nzb, null)
+        assertEquals(DownloadHostRules.CHECK_PROVIDER, assertIs<DownloadResolver.Resolution.Waiting>(resolver(providers = false).resolve(ID)).reason)
+        assertEquals(emptyList(), opened)
     }
 
     @Test

@@ -51,8 +51,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Finds what a download is made from when its turn comes, in the host (L338): a play's pipeline without a sheet. The
@@ -99,8 +101,11 @@ class DownloadResolver(
     private val tried: (items: Map<String, NewznabItem>, indexerName: (String) -> String?) -> TriedReleases,
     /** Settings' "Releases to try". */
     private val attempts: suspend () -> Int,
-    /** Waits for the engine's check of the providers, as a play does before its first release: whether one is in use. */
-    private val providersChecked: suspend () -> Boolean,
+    /**
+     * Waits for the engine's check of the providers, as a play does before its first release: whether one is in use; null
+     * where some are saved and on but the engine hasn't taken them up yet.
+     */
+    private val providersChecked: suspend () -> Boolean?,
     private val providersLeftOut: () -> Boolean = { false },
     private val providerFallback: () -> Boolean = { false },
     private val clock: Clock = Clock.System,
@@ -183,6 +188,7 @@ class DownloadResolver(
         val release = row.release ?: return null
         val size = row.size ?: return null
         val source = storage.source(row.id) ?: return null
+        providersReady(row.id)?.let { return it }
         val prepared = when (val outcome = preparer.prepare(source.nzb, release.title, source.password)) {
             is PrepareOutcome.Ready -> outcome.nzb
             is PrepareOutcome.Failed -> providers(row.id, outcome.error)?.let { return it }
@@ -229,10 +235,7 @@ class DownloadResolver(
             downloads.setState(id, DownloadState.Resolving, words, clock.now())
         }
         say(DownloadHostRules.FINDING_RELEASES)
-        // As a play's: a release is looked up by the providers the engine has checked, which it does first when it hasn't
-        // since they changed (a new process, a provider saved). With none saved and on, nothing is grabbed: the download
-        // waits for one (L382).
-        if (!providersChecked()) return waiting(id, DownloadHostRules.CHECK_PROVIDER)
+        providersReady(id)?.let { return it }
         val byKey = items.associateBy { it.key }
         val newznab = byKey.mapValues { it.value.item }
         val configs = indexers().associateBy { it.id }
@@ -329,6 +332,18 @@ class DownloadResolver(
             is PipelineEvent.Exhausted -> exhausted(id, end, counting, skipped, indexerOutages > 0)
             else -> failed(id, NO_OTHER_RELEASE)
         }
+    }
+
+    /**
+     * As a play's: a release is looked up and opened by the providers the engine has checked, which it does first when it
+     * hasn't since they changed (a new process, a provider saved). With none saved and on, nothing is grabbed or opened:
+     * the download waits for one (L382). With some saved that the engine hasn't taken up yet (a new process, before the
+     * app's start has read them), it backs off as from a provider out of reach. Null once one is in use.
+     */
+    private suspend fun providersReady(id: String): Resolution? = when (providersChecked()) {
+        true -> null
+        false -> waiting(id, DownloadHostRules.CHECK_PROVIDER)
+        null -> unreachable(id, UsenetError.NotConfigured, DownloadHostRules.CANT_REACH_PROVIDER)
     }
 
     /** The attempt under way had its answer about its release: the NZB kept for it is no use now. */
@@ -517,6 +532,9 @@ class DownloadResolver(
 
         private const val OPEN_FAILED = "Couldn't open the release"
 
+        /** How long Resolve waits for the app's start to give the engine the providers saved, in a new process. */
+        private val ENGINE_WAIT = 30.seconds
+
         /**
          * [candidate] as a play tries it: rebuilt as Replay rebuilds a release no search returned ([Replay.candidate]), its
          * size and its indexer's passworded flag kept.
@@ -549,7 +567,16 @@ class DownloadResolver(
             fetchNzb = { indexer, item -> PlaybackCoordinator.fetchNzb(container, indexer, item) },
             tried = { items, indexerName -> container.missingReleases.forPlay(items, chosen = false, indexerName) },
             attempts = attempts,
-            providersChecked = { container.engine.checkedInUse().isNotEmpty() },
+            providersChecked = {
+                when {
+                    // As a play decides whether Usenet can play: by the providers saved and on.
+                    container.settings.usableProviders().isEmpty() -> false
+                    // Saved, and the engine given them by the app's start (AppContainer.start), which a host in a new process
+                    // can come before.
+                    withTimeoutOrNull(ENGINE_WAIT) { container.engine.configuredProviders.first { it.isNotEmpty() } } == null -> null
+                    else -> container.engine.checkedInUse().isNotEmpty()
+                }
+            },
             providersLeftOut = { container.engine.leftOut.value.isNotEmpty() },
             providerFallback = { container.engine.fallback.value },
         )
