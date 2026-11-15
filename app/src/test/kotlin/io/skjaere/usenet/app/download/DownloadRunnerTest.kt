@@ -681,6 +681,34 @@ class DownloadRunnerTest {
     }
 
     /**
+     * Before Android 14 an update force-stops the app, which Android records as the user's stop (REASON_USER_REQUESTED: no
+     * REASON_PACKAGE_UPDATED until 14). An exit the package's update came with is the update's, and a swipe from Recents
+     * ("remove task") isn't Task Manager's Stop or a force stop: both leave the download for its host (L359). A force stop
+     * long before an update, or long after one, is still the user's.
+     */
+    @Test
+    fun `an exit an update came with, or a swipe from Recents, leaves a row for its host`() = test {
+        val r = fake("hl-r")
+        val exit = AT + 1_000
+        suspend fun left(by: DownloadExit): DownloadState {
+            dao.rows.value = emptyMap()
+            row(RUNNING, 1, 0, r) { it.copy(state = DownloadState.Running, updatedAt = AT) }
+            runner(exit = by).reconcile()
+            return stored(RUNNING).state
+        }
+        // Updated as the exit was recorded, or up to minutes after it (the install's commit comes after its kill).
+        assertEquals(DownloadState.Running, left(DownloadExit(DownloadExit.USER_REQUESTED, exit, updated = exit + 2_000)))
+        assertEquals(DownloadState.Running, left(DownloadExit(DownloadExit.USER_REQUESTED, exit, updated = exit + 5 * 60_000)))
+        assertEquals(DownloadState.Running, left(DownloadExit(DownloadExit.USER_REQUESTED, exit, updated = exit - 1_000)))
+        assertEquals(DownloadState.Running, left(DownloadExit(DownloadExit.USER_REQUESTED, exit, description = "remove task")))
+        // The user's: an update a day before, or a day after (the app not opened until then), or none known.
+        assertEquals(DownloadState.Stopped, left(DownloadExit(DownloadExit.USER_REQUESTED, exit, updated = exit - 86_400_000)))
+        assertEquals(DownloadState.Stopped, left(DownloadExit(DownloadExit.USER_REQUESTED, exit, updated = exit + 86_400_000)))
+        assertEquals(DownloadState.Stopped, left(DownloadExit(DownloadExit.USER_REQUESTED, exit, description = "stop")))
+        assertEquals(DownloadState.Stopped, left(DownloadExit(DownloadExit.USER_REQUESTED, exit)))
+    }
+
+    /**
      * The app's start launches reconcile; a host (the boot receiver's service, the job brought back, the start's schedule)
      * can ask first. Whatever asks first, the rows are as reconcile leaves them: a download the user stopped from Android is
      * never taken up by a host that came before it (L359).

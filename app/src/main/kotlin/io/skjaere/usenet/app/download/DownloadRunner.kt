@@ -94,11 +94,34 @@ data class DownloadTarget(
     }
 }
 
-/** How the app's process last ended, as Android keeps it (ApplicationExitInfo, API 30 on): its [reason], at the wall-clock time [at]. */
-data class DownloadExit(val reason: Int, val at: Long) {
+/**
+ * How the app's process last ended, as Android keeps it (ApplicationExitInfo, API 30 on): its [reason], at the wall-clock
+ * time [at], with Android's [description] of it, and when the app's package was last [updated] (installed over).
+ */
+data class DownloadExit(val reason: Int, val at: Long, val description: String? = null, val updated: Long? = null) {
+    /**
+     * Whether the user stopped the app (Task Manager's Stop, a force stop), which holds a download it left running (L359).
+     * Before Android 14 an update's kill is recorded as the user's too (REASON_PACKAGE_UPDATED is 14's): an exit the
+     * package's update came with, from just before it to [UPDATE_WINDOW_MILLIS] after (the install commits after its kill),
+     * is the update's. A swipe from Recents is recorded as the user's, as "remove task", and stops no download either.
+     */
+    val byUser: Boolean
+        get() = reason == USER_REQUESTED &&
+            description?.contains(REMOVE_TASK, ignoreCase = true) != true &&
+            updated?.let { it in at - UPDATE_SLACK_MILLIS..at + UPDATE_WINDOW_MILLIS } != true
+
     companion object {
         /** Task Manager's Stop or a force stop: ApplicationExitInfo.REASON_USER_REQUESTED, Android 11's. */
         const val USER_REQUESTED = 10
+
+        /** How Android describes a process ended by a swipe from Recents (ApplicationExitInfo's subreason, hidden). */
+        private const val REMOVE_TASK = "remove task"
+
+        /** How long an update's install may take to commit after it killed the app. */
+        const val UPDATE_WINDOW_MILLIS = 10 * 60_000L
+
+        /** The clocks' slack the other way. */
+        private const val UPDATE_SLACK_MILLIS = 5_000L
     }
 }
 
@@ -167,11 +190,14 @@ class DownloadRunnerDeps(
             debug = debug,
         )
 
-        /** The app's process's last end, as Android keeps it from Android 11 on; null before. */
+        /** The app's process's last end, as Android keeps it from Android 11 on, with the package's last update; null before. */
         private fun lastExit(context: Context): DownloadExit? {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
             val exits = context.getSystemService(ActivityManager::class.java).getHistoricalProcessExitReasons(context.packageName, 0, 1)
-            return exits.firstOrNull()?.let { DownloadExit(it.reason, it.timestamp) }
+            // The flags' overload is Android 13's; this one serves every level the app runs on.
+            @Suppress("DEPRECATION")
+            val updated = context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
+            return exits.firstOrNull()?.let { DownloadExit(it.reason, it.timestamp, it.description, updated) }
         }
     }
 }
@@ -559,8 +585,9 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /**
      * At the app's start, before any host (L359): storage's reconcile first (item 4); then each download a process left
      * Running or Resolving with no host on it now is Stopped, "Stopped by Android", held until Resume, when the process's
-     * last end was the user's (Task Manager's Stop or a force stop) after the row's last update; any other end (a kill, a
-     * reboot, an update), or one before that update, leaves it for its host to go on with. Runs on a TV too.
+     * last end was the user's (Task Manager's Stop or a force stop, [DownloadExit.byUser]) after the row's last update; any
+     * other end (a kill, a reboot, an update, a swipe from Recents), or one before that update, leaves it for its host to go
+     * on with. Runs on a TV too.
      *
      * Once a process, whoever asks first: the app's start launches it, and a host's walk ([run]) and the start's schedule
      * ([runnable]) wait for it, so a host in a new process never takes up a row before reconcile has judged it.
@@ -593,7 +620,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 null
             }
             left.forEach { row ->
-                val stopped = exit != null && exit.reason == DownloadExit.USER_REQUESTED && exit.at > row.updatedAt
+                val stopped = exit != null && exit.byUser && exit.at > row.updatedAt
                 if (stopped) dao.setState(row.id, DownloadState.Stopped, DownloadHostRules.STOPPED_BY_ANDROID, now())
                 val decision = if (stopped) DownloadTrace.Decision.Stopped else DownloadTrace.Decision.LeftForHost
                 deps.debug.trace(DownloadTrace.Reconciled(row.id, decision, exit?.reason, exit?.at))
