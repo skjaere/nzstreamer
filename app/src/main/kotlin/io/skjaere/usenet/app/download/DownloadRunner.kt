@@ -11,6 +11,7 @@ import io.skjaere.usenet.core.DownloadWriter
 import io.skjaere.usenet.core.MissingOn
 import io.skjaere.usenet.core.NzbStreamOpener
 import io.skjaere.usenet.core.ProviderConfig
+import io.skjaere.usenet.core.StreamOpener
 import io.skjaere.usenet.data.Clock
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
@@ -127,14 +128,18 @@ data class DownloadExit(val reason: Int, val at: Long, val description: String? 
     }
 }
 
-/** What [DownloadRunner] reads and writes, and its clocks: the app's ([of]), or a test's fakes. */
+/**
+ * What [DownloadRunner] reads and writes, and its clocks: the app's ([of]), or a test's fakes. The writer is made here, over
+ * the [opener], from the same [network] the runner follows, so its wait before a reopen ends on the network's return as
+ * Resolve's does (L381), whoever builds the deps.
+ */
 class DownloadRunnerDeps(
     val downloads: DownloadDao,
     val storage: DownloadRunner.Storage,
     /** Resolve (item 5): [DownloadResolver.resolve]. */
     val resolve: suspend (id: String) -> Resolution,
-    /** The writer (item 6), over the engine's download opener. */
-    val writer: DownloadWriter,
+    /** What the writer streams through: the engine's download opener ([NzbStreamOpener.download]). */
+    opener: StreamOpener,
     /** Remembers [release] as missing on the providers [asked], as a play's gap does (L342). */
     val missing: suspend (release: RememberedRelease, asked: List<ProviderConfig>) -> Unit,
     /** The providers in use now: those a write fetches from. */
@@ -145,11 +150,19 @@ class DownloadRunnerDeps(
     val television: Boolean,
     /** The host on this device (L334, L336). */
     val host: () -> DownloadHost,
+    /**
+     * Whether Android calls the device's network validated, the app's one flow of it ([AppContainer.validatedNetwork]):
+     * the runner and its writer read it at each failure, and its return ends their waits (L381, L382).
+     */
+    val network: StateFlow<Boolean>,
     /** Turns the boot and update receiver on or off (L375): the app's switches the component itself ([DownloadBootReceiver.switch]). */
     val receiverSwitch: (on: Boolean) -> Unit = {},
+    /** The debug build's seams: the writer's throttle, asked as each stream opens, and the trace (item 8). */
     val debug: DownloadDebug = DownloadDebug.Off,
-    /** Whether Android calls the network validated, as the writer reads it: its return ends a wait (L381). */
-    val network: StateFlow<Boolean> = MutableStateFlow(true),
+    /** A stretch missing in a row that gives a release up (L342): a test's given small. */
+    longGapBytes: Long = DownloadWriter.LONG_GAP_BYTES,
+    /** Whether a provider is left out of the engine now, which may have what reads as missing (a long gap is asked for again). */
+    providersLeftOut: () -> Boolean = { false },
     val clock: Clock = Clock.System,
     /** The clock of the hour a provider may be out of reach; the waits themselves are the coroutine's own. */
     val timeSource: TimeSource = TimeSource.Monotonic,
@@ -158,13 +171,19 @@ class DownloadRunnerDeps(
     /** How long a removed download can be brought back (L379): the Undo bar's time. */
     val undoMillis: Long = DownloadRunner.UNDO_MILLIS,
 ) {
+    /** The writer (item 6), over [opener], following [network] as the runner does. */
+    val writer = DownloadWriter(
+        opener, network, throttle = { debug.throttle }, timeSource = timeSource, longGapBytes = longGapBytes, providersLeftOut = providersLeftOut,
+    )
+
     companion object {
         /**
          * The app's: the library's downloads, their places on the device, Resolve and the writer over the engine's download
          * opener (the debug build's throttle asked as each stream opens, item 8; a long gap asked for again while a provider
-         * is left out of the engine), the memory of releases found missing, the process's last exit, and the host by the API
-         * level and the debug override, and the boot and update receiver switched as it says (L375). A test gives its own
-         * [resolve] and [debug], and the writer's [longGapBytes] given small.
+         * is left out of the engine), both following the device's validated network, the container's one flow of it (L381);
+         * the memory of releases found missing, the process's last exit, and the host by the API level and the debug
+         * override, and the boot and update receiver switched as it says (L375). A test gives its own [resolve] and
+         * [debug], and the writer's [longGapBytes] given small.
          */
         fun of(
             container: AppContainer,
@@ -173,15 +192,11 @@ class DownloadRunnerDeps(
             debug: DownloadDebug = container.downloadDebug,
             resolve: suspend (String) -> Resolution = DownloadResolver.of(container, storage)::resolve,
             longGapBytes: Long = DownloadWriter.LONG_GAP_BYTES,
-            writer: DownloadWriter = DownloadWriter(
-                NzbStreamOpener.download(container.engine), throttle = { debug.throttle }, longGapBytes = longGapBytes,
-                providersLeftOut = { container.engine.leftOut.value.isNotEmpty() },
-            ),
         ) = DownloadRunnerDeps(
             downloads = container.data.downloads,
             storage = DownloadRunner.Storage.of(storage),
             resolve = resolve,
-            writer = writer,
+            opener = NzbStreamOpener.download(container.engine),
             missing = { release, asked ->
                 val indexer = container.settings.indexers.first().firstOrNull { it.id == release.indexerId }?.name
                 container.missingReleases.record(release.indexerId, release.guid, release.title, indexer, MissingOn.ProvidersFetchedFrom, asked)
@@ -190,8 +205,11 @@ class DownloadRunnerDeps(
             lastExit = { lastExit(context) },
             television = container.television,
             host = { DownloadHostRules.hostFor(Build.VERSION.SDK_INT, debug.serviceHost) },
+            network = container.validatedNetwork,
             receiverSwitch = { on -> DownloadBootReceiver.switch(context, on) },
             debug = debug,
+            longGapBytes = longGapBytes,
+            providersLeftOut = { container.engine.leftOut.value.isNotEmpty() },
         )
 
         /** The app's process's last end, as Android keeps it from Android 11 on, with the package's last update; null before. */

@@ -191,25 +191,27 @@ class DownloadRunnerTest {
 
     private var clock = Clock { NOW }
 
-    /** Whether Android calls the network validated, as the runner and its writer read it. */
+    /** Whether Android calls the network validated: the one flow the deps give the runner and its writer, as the app's container does. */
     private val network = MutableStateFlow(true)
     private val traced get() = File(dir, "debug/${DownloadDebug.TRACE}").takeIf { it.isFile }?.readLines().orEmpty()
 
-    /** The runner of these fakes, in the test's work, on its virtual time. */
+    /** The runner of these fakes, in the test's work, on its virtual time: its writer over the fake opener, made by the deps as the app's are. */
     private fun TestScope.runner(television: Boolean = false, exit: DownloadExit? = null): DownloadRunner {
         clock = Clock { NOW + testScheduler.currentTime }
-        val writer = DownloadWriter(opener, network, timeSource = testScheduler.timeSource, longGapBytes = LONG_GAP)
         return DownloadRunner(
             DownloadRunnerDeps(
-                downloads = dao, storage = storage, resolve = resolver::resolve, writer = writer,
+                downloads = dao, storage = storage, resolve = resolver::resolve, opener = opener,
                 missing = { release, asked -> recorded += release.guid to asked.map { it.id } },
-                inUse = { providers }, lastExit = { exit }, television = television, host = { host }, receiverSwitch = { switches += it },
-                debug = DownloadDebug.On(File(dir, "debug"), clock), network = network, clock = clock, timeSource = testScheduler.timeSource,
-                io = StandardTestDispatcher(testScheduler), undoMillis = DownloadRunner.UNDO_MILLIS,
+                inUse = { providers }, lastExit = { exit }, television = television, host = { host }, network = network,
+                receiverSwitch = { switches += it }, debug = DownloadDebug.On(File(dir, "debug"), clock), longGapBytes = LONG_GAP, clock = clock,
+                timeSource = testScheduler.timeSource, io = StandardTestDispatcher(testScheduler), undoMillis = DownloadRunner.UNDO_MILLIS,
             ),
             work,
         )
     }
+
+    /** When download [id]'s streams opened, from the test's start: each open's trace line, timed by the test's clock. */
+    private fun openedAt(id: String): List<Long> = traced.filter { " reopen id=$id " in it }.map { it.substringBefore(' ').toLong() - NOW }
 
     /** A host lending [runner] its lifetime: it walks the queue until nothing can run. */
     private fun host(runner: DownloadRunner): Job = work.launch { runner.run(host) }
@@ -997,6 +999,31 @@ class DownloadRunnerTest {
         // 2 s after the first; none after the second, the backoff starting again; 2 s; none after the fourth.
         assertEquals(listOf(0L, 2_000, 2_000, 4_000, 4_100), resolver.times)
         assertEquals(DownloadState.Done, stored(id).state)
+    }
+
+    /**
+     * The device's network, the one flow the deps give the runner and the writer they make (L381): lost and back while the
+     * writer waits to open the stream again after a provider out of reach, its return ends that wait at once, the backoff
+     * starting again from 2 s, as Resume's does. The host stays on through it, as a job or service whose need holds does.
+     */
+    @Test
+    fun `the network's return ends the writer's wait before a reopen, through the one flow the deps give it`() = test {
+        // Refused four times: opened at 0, 2 and 6 s, and next at 14 s but for the network.
+        val a = fake("hl-a").apply { refused = setOf(0, 1, 2, 3) }
+        val runner = runner()
+        val id = runner.add(1, a)
+        work.launch {
+            kotlinx.coroutines.delay(7_000)
+            network.value = false
+            kotlinx.coroutines.delay(2_000)
+            network.value = true
+        }
+        host(runner)
+        advanceUntilIdle()
+        // Lost at 7 s and back at 9 s: opened again at once, then 2 s after that.
+        assertEquals(listOf(0L, 2_000, 6_000, 9_000, 11_000), openedAt(id))
+        assertEquals(DownloadState.Done, stored(id).state)
+        assertContentEquals(a.data, storage.video(id).readBytes())
     }
 
     /**

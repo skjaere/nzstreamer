@@ -101,6 +101,8 @@ class ServiceHostDeviceTest {
             "the service's network: validated Wi-Fi (Wi-Fi ${network?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)}, validated ${network?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)})",
             network?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true && network.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
         )
+        // The container's one flow of it, which the runner and its writer follow (L381), says so too, from its callback.
+        waitFor("the container's validated network", 10_000) { container.validatedNetwork.value.takeIf { it } }
         saved = settings.settings.first()
         assertTrue("Only on Wi-Fi or Ethernet, as a new install has it (W110)", saved.downloads.unmeteredOnly)
         assertFalse(saved.downloads.whileCharging)
