@@ -34,6 +34,7 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.logging.LogBuffer
 import io.skjaere.usenet.newznab.IndexerConfig
 import io.skjaere.usenet.newznab.NewznabError
 import io.skjaere.usenet.newznab.NewznabException
@@ -255,6 +256,24 @@ class DownloadResolverTest {
         assertEquals("a8f3c1.mkv", kept.fileName)
         assertEquals(1_200_000_000L, kept.size)
         assertEquals(listOf(key(broken), key(single)), kept.tried)
+    }
+
+    /**
+     * A download's lines in the app's log (logcat, and Settings › Logs, which a user may share) name it by its id and its
+     * release by its place among the row's, never by the release's name: Resolve runs a play's pipeline, whose own lines
+     * name a play's release by its title. Releases of their own here, so no other test's lines can name them.
+     */
+    @Test
+    fun `Resolve's pipeline names a download's releases by their place in its log lines, never by their names`() = runBlocking<Unit> {
+        val missing = Fake("hl-s02e04-plover", "Harbor.Lights.S02E04.2160p.WEB.h265-PLOVER", listOf("e81f07.mkv" to 4_000_000_000L), gone = true)
+        val whole = Fake("hl-s02e04-tern", "Harbor.Lights.S02E04.1080p.WEB.h264-TERN", listOf("f92a18.mkv" to 1_200_000_000L))
+        row(missing, whole)
+        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val lines = LogBuffer.snapshot().map { it.message }
+        assertEquals(emptyList(), lines.filter { missing.title in it || whole.title in it })
+        // The pipeline's lines are there all the same, each release by its place.
+        assertTrue(lines.any { "play_pipeline: download $ID, release 1 " in it }, lines.filter { "play_pipeline" in it }.toString())
+        assertTrue(lines.any { "play_pipeline: download $ID, release 2 " in it }, lines.filter { "play_pipeline" in it }.toString())
     }
 
     @Test

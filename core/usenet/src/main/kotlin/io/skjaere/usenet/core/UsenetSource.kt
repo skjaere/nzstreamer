@@ -140,7 +140,7 @@ class UsenetSource(
                 is VerificationResult.MissingArticles -> "${result.answeredCount} of ${result.totalCount} articles answered, ${result.missingCount} missing"
                 is VerificationResult.Failure -> "${answered.get()} of $of articles answered, then ${result.message}"
             }
-            log.info("play_pipeline: {} availability check in {} ms: {}", candidate.title, started.elapsedNow().inWholeMilliseconds, counts)
+            log.info("play_pipeline: {} availability check in {} ms: {}", named(candidate), started.elapsedNow().inWholeMilliseconds, counts)
             when (result) {
                 VerificationResult.Success -> StepResult.Ok(Unit)
                 is VerificationResult.MissingArticles -> StepResult.Fail(missing(result.message, result.missingCount, result.answeredCount))

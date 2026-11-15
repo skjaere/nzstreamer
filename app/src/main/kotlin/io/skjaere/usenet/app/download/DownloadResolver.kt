@@ -284,7 +284,12 @@ class DownloadResolver(
                 throw e
             }
         }
-        val pipeline = PlayPipeline({ usenet }, probing, maxAttempts = left, tried = tried(newznab) { indexerId -> configs[indexerId]?.name })
+        // Its lines name each release by its place among the row's, as a download's lines name no release.
+        val places = row.candidates.map { ranked(it).key }.distinct().withIndex().associate { (i, key) -> key to i + 1 }
+        val pipeline = PlayPipeline(
+            { usenet }, probing, maxAttempts = left, tried = tried(newznab) { indexerId -> configs[indexerId]?.name },
+            named = { candidate -> "download $id, release ${places[candidate.id] ?: "?"}" },
+        )
         // Counted across its resolves: the second release in all is "release 2", whichever resolve tries it.
         val before = counted.size
         var counting = counted

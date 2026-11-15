@@ -646,6 +646,9 @@ interface AttemptSteps {
     /** Sends [event], what a source says of a step besides [step]'s own: one it skips. */
     suspend fun send(event: PipelineEvent.Step)
 
+    /** How a log line names [candidate]: by its title, unless the pipeline names its candidates otherwise (a download's). */
+    fun named(candidate: PlayCandidate): String = candidate.title
+
     /**
      * Says the attempt goes on with another target of its release after [failure] ([PlaySource.retarget]), before the
      * source's steps run again for it ([PipelineEvent.Retrying]).
@@ -714,6 +717,11 @@ class PlayPipeline(
     private val timeSource: TimeSource = TimeSource.Monotonic,
     private val tried: TriedReleases = TriedReleases.None,
     private val stepWarnAfter: Duration = 20.seconds,
+    /**
+     * How its log lines name a candidate: by its title, as a play's do; a download's by its own words, as its lines name
+     * no release ([AttemptSteps.named]).
+     */
+    private val named: (PlayCandidate) -> String = PlayCandidate::title,
 ) {
     private val log = LoggerFactory.getLogger(PlayPipeline::class.java)
 
@@ -758,7 +766,7 @@ class PlayPipeline(
                 true
             }
             is AttemptResult.Failure -> {
-                log.info("play_pipeline: {} failed: {}", candidate.title, result.failure.text)
+                log.info("play_pipeline: {} failed: {}", named(candidate), result.failure.text)
                 val on = (result.failure as? AttemptFailure.MissingArticles)?.missingOn
                 if (on != null && result.wholeRelease) remembered("remember") { tried.missing(candidate, on) }
                 if (result.failure == AttemptFailure.Passworded) remembered("remember") { tried.passwordNeeded(candidate) }
@@ -777,7 +785,7 @@ class PlayPipeline(
             pending.remove(candidate)
             val reason = knownMissing(candidate)
             if (reason != null) {
-                log.info("play_pipeline: {} skipped without a fetch: {}", candidate.title, reason)
+                log.info("play_pipeline: {} skipped without a fetch: {}", named(candidate), reason)
                 send(PipelineEvent.Skipped(candidate, reason))
                 continue
             }
@@ -786,7 +794,7 @@ class PlayPipeline(
             if (tried(candidate, attempt(candidate, pickFile, stopped))) return@channelFlow
         }
         if (last != null && !noRoute(last)) {
-            log.info("play_pipeline: {}: no other release played, going back to it", last.title)
+            log.info("play_pipeline: {}: no other release played, going back to it", named(last))
             send(PipelineEvent.AttemptStarted(failures.size + 1, failures.size + 1, last))
             if (tried(last, attempt(last, pickFile, stopped))) return@channelFlow
         }
@@ -890,6 +898,8 @@ class PlayPipeline(
             stoppedInPlay += route
         }
 
+        override fun named(candidate: PlayCandidate): String = this@PlayPipeline.named(candidate)
+
         override suspend fun <T> step(candidate: PlayCandidate, step: PipelineStep, block: suspend (StepWatch) -> StepResult<T>): T {
             scope.send(PipelineEvent.Step(candidate, step, StepStatus.Running()))
             val started = timeSource.markNow()
@@ -905,7 +915,7 @@ class PlayPipeline(
                 watch.stop()
             }
             val millis = started.elapsedNow().inWholeMilliseconds
-            log.info("play_pipeline: {} {} {} ms", candidate.title, step, millis)
+            log.info("play_pipeline: {} {} {} ms", named(candidate), step, millis)
             return when (result) {
                 is StepResult.Ok -> result.value.also { scope.send(PipelineEvent.Step(candidate, step, StepStatus.Done(millis, result.detail))) }
                 is StepResult.Fail -> {
@@ -918,7 +928,7 @@ class PlayPipeline(
         override suspend fun send(event: PipelineEvent.Step) = scope.send(event)
 
         override suspend fun retrying(failure: AttemptFailure) {
-            log.info("play_pipeline: {} failed: {}; trying it another way", candidate.title, failure.text)
+            log.info("play_pipeline: {} failed: {}; trying it another way", named(candidate), failure.text)
             scope.send(PipelineEvent.Retrying(candidate, failure))
         }
 
@@ -928,10 +938,10 @@ class PlayPipeline(
 
         override suspend fun <F : ListedFile> chosen(candidate: PlayCandidate, listing: FileListing<F>, pickFile: FilePicker, watch: StepWatch, chooser: FileChooser): F? {
             val choices = pickFile.choices(listing).ifEmpty { return null }
-            log.info("play_pipeline: {}: no file named for what plays, asking which of {} videos it is", candidate.title, choices.size)
+            log.info("play_pipeline: {}: no file named for what plays, asking which of {} videos it is", named(candidate), choices.size)
             val answer = watch.whileAsking { chooser.choose(candidate, listing, choices) }
             return choices.firstOrNull { it == answer }
-                .also { log.info("play_pipeline: {}: {}", candidate.title, it?.let { file -> "${file.name} chosen" } ?: "nothing chosen") }
+                .also { log.info("play_pipeline: {}: {}", named(candidate), it?.let { file -> "${file.name} chosen" } ?: "nothing chosen") }
         }
 
         override suspend fun <T> guarded(block: suspend () -> T): T = withContext(dispatcher) { block() }
@@ -949,7 +959,7 @@ class PlayPipeline(
         private fun start(): Job = scope.launch(Dispatchers.Default) {
             repeat(STEP_LINES) {
                 delay(stepWarnAfter)
-                log.warn("play_pipeline: {} {} still running after {} s", candidate.title, step, since.elapsedNow().inWholeSeconds)
+                log.warn("play_pipeline: {} {} still running after {} s", named(candidate), step, since.elapsedNow().inWholeSeconds)
             }
         }
 
