@@ -37,12 +37,14 @@ fun interface StreamOpener {
  * streamer until the stream ends; one in its download scope doesn't ([download]).
  *
  * [options] are how each stream fetches where it differs from a play's; null, as a play's and a
- * cast's: the streamer's own.
+ * cast's: the streamer's own. [streamName] is what nzb-streamer's log lines call a stream: by default the
+ * file's name, as a play's have always said it.
  */
 class NzbStreamOpener(
     private val engine: UsenetEngine,
     private val scope: CoroutineScope = engine.sessionScope,
     private val options: StreamOptions? = null,
+    private val streamName: (FileCandidate) -> String = { it.name },
 ) : StreamOpener {
     override suspend fun open(nzb: PreparedNzb, fileIndex: Int, range: LongRange): OpenedStream {
         val candidate = nzb.candidates.getOrNull(fileIndex)
@@ -60,9 +62,9 @@ class NzbStreamOpener(
                 val onGap = { gap: Gap -> gaps.add(gap.fileRange) }
                 handoff.complete(
                     if (options == null) {
-                        streamer.launchStreamFile(nzb.metadata, candidate.file, range, candidate.name, onGap = onGap)
+                        streamer.launchStreamFile(nzb.metadata, candidate.file, range, streamName(candidate), onGap = onGap)
                     } else {
-                        streamer.launchStreamFile(nzb.metadata, candidate.file, range, candidate.name, options, onGap)
+                        streamer.launchStreamFile(nzb.metadata, candidate.file, range, streamName(candidate), options, onGap)
                     },
                 )
             } catch (e: Throwable) {
@@ -102,7 +104,12 @@ class NzbStreamOpener(
             missingArticles = MissingArticlePolicy.ZERO_FILL,
         )
 
-        /** A download's opener: its streams in the engine's download scope ([UsenetEngine.downloadScope]), fetching as [DOWNLOAD_OPTIONS] say. */
-        fun download(engine: UsenetEngine) = NzbStreamOpener(engine, engine.downloadScope, DOWNLOAD_OPTIONS)
+        /**
+         * A download's opener: its streams in the engine's download scope ([UsenetEngine.downloadScope]), fetching as
+         * [DOWNLOAD_OPTIONS] say, and named in nzb-streamer's log lines by the file's place alone ("download file 0"). Its
+         * name is the release's as posted, and a download opens a stream at each reopen and each gap asked for again, for
+         * hours: the app's own lines never name a release, so neither do these.
+         */
+        fun download(engine: UsenetEngine) = NzbStreamOpener(engine, engine.downloadScope, DOWNLOAD_OPTIONS) { "download file ${it.index}" }
     }
 }

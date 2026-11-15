@@ -11,12 +11,15 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.io.path.createTempDirectory
+import java.io.ByteArrayOutputStream
+import java.io.PrintStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -188,5 +191,46 @@ class NzbStreamOpenerTest {
             cache.close()
             dir.toFile().deleteRecursively()
         }
+    }
+
+    /**
+     * The file's name is the release's, as it was posted: the library names each stream by it in its log lines (its first
+     * byte, each article it fills with zeros), and a log shared from Settings › Logs carries them. A download's streams are
+     * named by the file's place alone; a play's keep the name, as they always have.
+     */
+    @Test
+    fun `a download's streams leave the file's name out of the log, where a play's name it`() = runBlocking<Unit> {
+        serve { i -> if (i == gap) FakeNntpServer.Body.Missing else FakeNntpServer.Body.Article(clip.article(i)) }
+        // In any order: nothing here reads the bytes in front of the gap first.
+        inFrontRead.countDown()
+        val named = PreparedNzb(clip.nzb.id, clip.nzb.title, clip.nzb.metadata, listOf(FileCandidate(0, clip.nzb.candidates.single().file.copy(path = RELEASE_FILE))))
+        val whole = 0L until clip.data.size.toLong()
+
+        val (downloaded, log) = stderrOf { withTimeout(30_000) { NzbStreamOpener.download(engine).open(named, 0, whole).readToEnd() } }
+        assertContentEquals(zeroFilled, downloaded.first)
+        // The library's lines were there to be read: the stream's first byte, and the article it filled.
+        assertTrue("Stream startup trace" in log && "zero bytes in its place" in log, log)
+        assertFalse(RELEASE_FILE in log, log)
+        assertFalse("Harbor.Lights" in log, log)
+
+        val (_, played) = stderrOf { withTimeout(30_000) { NzbStreamOpener(engine).open(named, 0, whole).readToEnd() } }
+        assertTrue(RELEASE_FILE in played, played)
+    }
+
+    /** What [block] logs: slf4j-simple writes to System.err as it is at the time. */
+    private suspend fun <T> stderrOf(block: suspend () -> T): Pair<T, String> {
+        val original = System.err
+        val captured = ByteArrayOutputStream()
+        System.setErr(PrintStream(captured, true))
+        try {
+            return block() to captured.toString()
+        } finally {
+            System.setErr(original)
+        }
+    }
+
+    private companion object {
+        /** A posted file's name, as a release names it (invented). */
+        const val RELEASE_FILE = "Harbor.Lights.S02E04.1080p.WEB.h264-KESTREL.mkv"
     }
 }
