@@ -7,6 +7,7 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
+import android.view.KeyEvent
 import android.widget.ImageButton
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsNode
@@ -253,6 +254,13 @@ class DownloadPlayerDeviceTest {
             assertTrue(card.toString(), "Not downloaded · offline" in card && "Close" in card)
             assertFalse(card.toString(), "Play now" in card || "Stop" in card || "Next episode plays automatically" in card)
             assertFalse("the controls' Next plays it", scenario.read { a -> playerView(a).player?.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT) == true })
+            // A keyboard's or a remote's next-track key plays nothing either.
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_MEDIA_NEXT)
+            delay(KEY_MILLIS)
+            assertEquals("the next-track key closed the player", Lifecycle.State.RESUMED, scenario.state)
+            // The key may bring up the controls, under which the card is one low row: the whole card again without them.
+            scenario.onActivity { a -> playerView(a).hideController() }
+            waitFor("the card after the key") { scenario.read { a -> cardWords(a).takeIf { w -> w.any { "S01E03" in it } } } }
             online()
             // A few of the card's ticks with the network back.
             delay(STAND_IN_MILLIS)
@@ -584,6 +592,8 @@ class DownloadPlayerDeviceTest {
         const val BACK_MILLIS = 90_000L
         const val CARD_MILLIS = 30_000L
         const val LAUNCH_MILLIS = 15_000L
+        /** Long enough for a key's hand-over to close the player. */
+        const val KEY_MILLIS = 2_000L
         /** Where Previous is pressed: inside the file's first seconds, where it goes to the episode before when it can. */
         const val PREVIOUS_AT_MS = 1_500L
         /** How long a card the row stood in for is watched with the network back: several of its ticks. */

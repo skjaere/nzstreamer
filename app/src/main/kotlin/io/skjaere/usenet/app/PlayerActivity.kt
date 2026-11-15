@@ -198,6 +198,7 @@ import io.skjaere.usenet.app.play.WatchSaver
 import io.skjaere.usenet.app.play.WindowOff
 import io.skjaere.usenet.app.play.fileChapters
 import io.skjaere.usenet.app.play.nextAiredEpisodeOrFail
+import io.skjaere.usenet.app.play.offersPlayNow
 import io.skjaere.usenet.app.play.previousAiredEpisode
 import io.skjaere.usenet.app.ui.AppColors
 import io.skjaere.usenet.app.ui.AppTheme
@@ -850,7 +851,7 @@ class PlayerActivity : ComponentActivity() {
                 AppTheme(formFactor) {
                     nextCard?.let { c ->
                         NextEpisodeCard(
-                            c.next, c.card, c.showStill, compact = controlsShown, takeFocus = c.takeFocus, onStop = ::stopCard, onPlayNow = { playNow(c.next) },
+                            c.next, c.card, c.showStill, compact = controlsShown, takeFocus = c.takeFocus, onStop = ::stopCard, onPlayNow = { playNow(c) },
                             playNow = cardPlayNow,
                         )
                     }
@@ -2267,7 +2268,8 @@ class PlayerActivity : ComponentActivity() {
             // Play on's list takes the keys as the sheet does.
             sheet = panel == Panel.Tracks || panel == Panel.PlayOn,
             failure = failure != null,
-            cardHasNext = nextCard != null,
+            // Not a card for what can't play offline (L354): the next-track key passes, as with no card.
+            cardHasNext = nextCard?.let { offersPlayNow(it.card) } == true,
             seekingKey = seekingKey,
             details = panel == Panel.Details,
             switching = matching != null,
@@ -2289,7 +2291,7 @@ class PlayerActivity : ComponentActivity() {
             RemoteKeys.Action.ToggleDetails -> if (panel == Panel.Details) closePanel() else openDetailsByKey()
             RemoteKeys.Action.ToggleSubtitles -> toggleSubtitles()
             RemoteKeys.Action.NextAudio -> nextAudio()
-            RemoteKeys.Action.PlayNext -> nextCard?.let { playNow(it.next) }
+            RemoteKeys.Action.PlayNext -> nextCard?.let(::playNow)
             // As the top bar's back arrow.
             RemoteKeys.Action.Leave -> leave()
             RemoteKeys.Action.PlayAtOnce -> matching?.complete(Unit)
@@ -3551,8 +3553,9 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
-    private fun playNow(next: EpisodePlay) {
-        if (autoAdvance?.playNow() == true) switchTo(next)
+    /** Play now, from the card or a remote's key: only for what the card offers it (not an episode that can't play offline, L354). */
+    private fun playNow(card: NextCard) {
+        if (offersPlayNow(card.card) && autoAdvance?.playNow() == true) switchTo(card.next)
     }
 
     /**
