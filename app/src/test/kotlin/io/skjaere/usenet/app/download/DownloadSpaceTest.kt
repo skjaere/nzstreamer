@@ -93,6 +93,27 @@ class DownloadSpaceTest {
     }
 
     /**
+     * Resolve checks the exact size against the space with the row it resolves among the rows, Resolving: its own size
+     * is what is checked, so it is not also set aside from what is free. A 25 GB film fits in 39 GB free.
+     */
+    @Test
+    fun `the download a check is for is left out of what is set aside`() {
+        val film = row("film", DownloadState.Resolving, size = 25 * GB, indexerSize = 26 * GB)
+        val rows = listOf(film, row("q", DownloadState.Queued, indexerSize = 2 * GB), row("done", DownloadState.Done, size = GB, file = true))
+        val space = DownloadSpace.of(42 * GB, rows, except = "film")
+        assertEquals(2 * GB, space.queued)
+        assertEquals(GB, space.used)
+        assertEquals(39 * GB, space.free)
+        assertTrue(space.fits(25 * GB))
+        // Counted with the others, its own size would be taken from what is free twice.
+        assertFalse(DownloadSpace.of(42 * GB, rows).fits(25 * GB))
+        // Its file made already (a retry from its safe offset): what it holds is Android's already, and isn't used here.
+        val made = DownloadSpace.of(42 * GB, listOf(film.copy(relativePath = "downloads/film/v.mkv"), rows[1]), except = "film")
+        assertEquals(0, made.used)
+        assertEquals(39 * GB, made.free)
+    }
+
+    /**
      * DlPhoneWontFit's numbers: "✕ Won't fit on this device", "Needs about 4.3 GB · 3.0 GB free on this device", "That is
      * after the 1.2 GB the queued download still needs, and the 1 GB kept free for the phone."
      */

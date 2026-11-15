@@ -33,10 +33,11 @@ data class DownloadSpace(val allocatable: Long, val used: Long, val queued: Long
         /**
          * The space with [allocatable] bytes to give and [rows] downloaded or on their way. A row with its file made (its
          * relative path set) holds its whole size; one without, still to go on, needs it; one being deleted counts as gone,
-         * hidden as it is (L379), though Android counts its file until its Undo has gone.
+         * hidden as it is (L379), though Android counts its file until its Undo has gone. The row [except] names, the one
+         * a check is for (Resolve's of its exact size), counts in neither: its size is the one checked against [free].
          */
-        fun of(allocatable: Long, rows: List<Download>): DownloadSpace {
-            val counted = rows.filter { it.state != DownloadState.Deleting }
+        fun of(allocatable: Long, rows: List<Download>, except: String? = null): DownloadSpace {
+            val counted = rows.filter { it.state != DownloadState.Deleting && it.id != except }
             val (made, toMake) = counted.partition { it.relativePath != null }
             return DownloadSpace(
                 allocatable = allocatable,

@@ -132,6 +132,8 @@ class DownloadStorageDeviceTest {
         }
         // Before its row says its file is made it still needs its whole size; after, it holds it and needs nothing more.
         assertEquals(4096L, checkNotNull(storage.space()).queued)
+        // Checked for itself (Resolve), it isn't set aside from what is free.
+        assertEquals(0L, checkNotNull(storage.space(except = id)).queued)
         downloads.update(row(id).copy(size = size, relativePath = storage.relativePath(id, NAME)))
         val space = checkNotNull(storage.space())
         assertTrue(space.allocatable > 0)

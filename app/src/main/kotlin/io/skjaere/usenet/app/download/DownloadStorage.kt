@@ -176,10 +176,13 @@ class DownloadStorage(
         }
     }
 
-    /** What the primary volume can give and what downloads take of it (L348); null while it isn't there. */
-    suspend fun space(): DownloadSpace? = withContext(io) {
+    /**
+     * What the primary volume can give and what downloads take of it (L348); null while it isn't there. [except]: the
+     * download a check is for, left out of what is set aside, as its own size is the one checked ([DownloadSpace.of]).
+     */
+    suspend fun space(except: String? = null): DownloadSpace? = withContext(io) {
         val volume = volumeDir() ?: return@withContext null
-        DownloadSpace.of(storageManager.getAllocatableBytes(storageManager.getUuidForPath(volume)), downloads.all().first())
+        DownloadSpace.of(storageManager.getAllocatableBytes(storageManager.getUuidForPath(volume)), downloads.all().first(), except)
     }
 
     /**
