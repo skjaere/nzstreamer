@@ -5,6 +5,7 @@ import io.skjaere.usenet.app.search.ChosenPlays
 import io.skjaere.usenet.app.search.rankedFor
 import io.skjaere.usenet.app.search.ranksAs
 import io.skjaere.usenet.releases.RankingContext
+import io.skjaere.usenet.releases.RankingTarget
 import io.skjaere.usenet.search.RankedItem
 import io.skjaere.usenet.search.ResultGroup
 import kotlinx.coroutines.CoroutineDispatcher
@@ -61,7 +62,8 @@ internal class RankedBy(val context: RankingContext, val again: (RankingContext)
  * A list whose search said how it ranked its releases ([ListSearch.rankedBy]) ranks them again, with no search, as a
  * choice is made in Play on ([rankings], L127): for the Cast device chosen, its "Ranked for" line saying so, or for this
  * device; what it marked stays. This phone coming back by itself says nothing there, so the list keeps its order until
- * Choose release opens it again. The ranking runs on [dispatcher], off the main thread.
+ * Choose release opens it again. A list ranked for downloading never ranks again so: a download is this device's, whatever
+ * Play on chose (L355). The ranking runs on [dispatcher], off the main thread.
  */
 class ReleaseChooser<T : Any>(
     private val scope: CoroutineScope,
@@ -97,8 +99,8 @@ class ReleaseChooser<T : Any>(
             }
             combine(found, chosen) { group, by -> group to by }.collectLatest { (foundRanked, by) ->
                 val (group, ranked) = foundRanked
-                // Ranked for another than the choice made: ranked again for it, with no search.
-                val again = ranked?.takeIf { by != null && !it.context.ranksAs(by) }
+                // Ranked for another than the choice made: ranked again for it, with no search; never a download's list.
+                val again = ranked?.takeIf { by != null && it.context.target != RankingTarget.Download && !it.context.ranksAs(by) }
                 val shown = if (again != null && by != null) withContext(dispatcher) { again.again(by) } else group
                 // Only while the user still waits for this one, or looks at its list: a dropped search mustn't pop its list up.
                 val now = _state.value

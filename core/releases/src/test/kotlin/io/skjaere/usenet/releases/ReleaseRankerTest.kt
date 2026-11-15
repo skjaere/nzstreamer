@@ -1440,4 +1440,156 @@ class ReleaseRankerTest {
             }
         }
     }
+
+    // Ranked for downloading (W112, L355, L371): this device's own reasons, nothing of streaming it now and no TV's
+    // larger-first; within a standing the smaller first, held under every release of another standing as the bitrate's
+    // bonus is; above Download size, tried last.
+
+    /** A phone downloading an episode of 45 minutes: 12 GB is ~35.6 Mbps, 8 GB ~23.7, 6 GB ~17.8, 2 GB ~5.9, 1 GB ~3.0. */
+    private val forDownload = RankingContext(phone, runtimeMinutes = 45, target = RankingTarget.Download)
+
+    /** Download size at 4 GB an hour, ~8.9 Mbps. */
+    private val upTo4GbAnHour = forDownload.copy(prefs = RankingPrefs(downloadCapBitsPerSecond = DownloadSize.bitsPerSecond(4)))
+
+    @Test
+    fun `for downloading, a 1080p WEB-DL goes before a remux of its standing, where a play puts the remux first`() {
+        val remux = release("Harbor.Lights.S01E02.1080p.BluRay.REMUX.AVC-FERRY", size = 12 * gb, grabs = 50)
+        val web = release("Harbor.Lights.S01E02.1080p.WEB-DL.H.264-KESTREL", size = 2 * gb)
+        assertEquals(listOf(remux.name, web.name), order(web, remux, context = forDownload.copy(target = RankingTarget.Device)))
+        val ranked = rank(web, remux, context = forDownload)
+        assertEquals(listOf(web.name, remux.name), ranked.map { it.facts.name })
+        // 25 x (1 - 2/12) over the remux's none, the top of its standing: more than the remux's grabs give it (8.5).
+        assertEquals(240.0 + 25.0 * (1 - 2.0 / 12), ranked[0].score, absoluteTolerance = 0.05)
+        assertEquals(240.0 + 8.5, ranked[1].score, absoluteTolerance = 0.05)
+    }
+
+    @Test
+    fun `for downloading, smaller first never lifts a release over one of another resolution, language or HDR standing`() {
+        // A 720p Proper stands 5 under a 1080p WEB-DL; smaller first among the 720p would take it 17 over.
+        val web1080 = release("Harbor.Lights.S01E02.1080p.WEB-DL.H.264-KESTREL", size = 6 * gb)
+        val proper720 = release("Harbor.Lights.S01E02.PROPER.720p.WEB-DL.H.264-ORCHID", size = gb)
+        val big720 = release("Harbor.Lights.S01E02.720p.WEB-DL.H.264-TIDE", size = 8 * gb)
+        val ranked = rank(big720, proper720, web1080, context = forDownload)
+        assertEquals(listOf(web1080, proper720, big720).map { it.name }, ranked.map { it.facts.name })
+        assertEquals(listOf(240.0, 240.0 - 0.001, 210.0), ranked.map { it.score })
+
+        // German first: an English Proper WEB-DL stands 15 under a German HDTV, and stays under it.
+        val germanFirst = forDownload.copy(prefs = RankingPrefs(audioLanguages = listOf("de", "en")))
+        val german = release("Harbor.Lights.S01E02.German.1080p.HDTV.x264-WREN", size = 6 * gb)
+        val properEnglish = release("Harbor.Lights.S01E02.PROPER.1080p.WEB-DL.H.264-GRP", size = gb)
+        val bigEnglish = release("Harbor.Lights.S01E02.1080p.WEB-DL.H.264-KESTREL", size = 8 * gb)
+        assertEquals(listOf(german, properEnglish, bigEnglish).map { it.name }, order(bigEnglish, properEnglish, german, context = germanFirst))
+
+        // On a screen without HDR, ranked by its rules: an HDR Proper stays under the SDR release its penalty put it under.
+        val sdrForDownload = sdrTv.copy(runtimeMinutes = 45, target = RankingTarget.Download)
+        val sdr = release("Harbor.Lights.S01E02.2160p.HDTV.H265-B", size = 6 * gb, grabs = 10)
+        val hdrProper = release("Harbor.Lights.S01E02.PROPER.2160p.WEB-DL.H265.HDR-A", size = 2 * gb)
+        val hdrBig = release("Harbor.Lights.S01E02.2160p.WEB-DL.H265.HDR-C", size = 12 * gb)
+        assertEquals(listOf(sdr, hdrProper, hdrBig).map { it.name }, order(hdrBig, hdrProper, sdr, context = sdrForDownload))
+    }
+
+    @Test
+    fun `for downloading, a release above Download size is tried after every one that fits, says so in GB an hour, and stays playable`() {
+        val remux = release("Harbor.Lights.S01E02.1080p.BluRay.REMUX.AVC-KESTREL", size = 12 * gb, grabs = 900)
+        val web720 = release("Harbor.Lights.S01E02.720p.WEB-DL.H.264-ORCHID", size = gb)
+        val cam = release("Harbor.Lights.S01E02.480p.HDCAM.x264-C", size = gb / 2)
+        // Not set: as a step of quality puts them.
+        assertEquals(listOf(remux.name, web720.name, cam.name), order(remux, web720, cam, context = forDownload))
+        val ranked = rank(remux, web720, cam, context = upTo4GbAnHour)
+        assertEquals(listOf(web720.name, cam.name, remux.name), ranked.map { it.facts.name })
+        assertEquals(listOf(true, true, true), ranked.map { it.playable })
+        val above = ranked.last().reasons.filterIsInstance<ReleaseReason.AboveDownloadSize>().single()
+        assertEquals(Severity.Warning to "Above your 4 GB an hour", above.severity to above.text)
+        assertTrue(ranked.dropLast(1).none { r -> r.reasons.any { it is ReleaseReason.AboveDownloadSize } })
+        // Each size Settings offers, in its own words.
+        listOf(1, 2, 3, 4, 6, 8, 12).forEach { size ->
+            val capped = forDownload.copy(prefs = RankingPrefs(downloadCapBitsPerSecond = DownloadSize.bitsPerSecond(size)))
+            assertEquals("Above your $size GB an hour", rank(remux, context = capped).single().reasons.filterIsInstance<ReleaseReason.AboveDownloadSize>().single().text)
+        }
+    }
+
+    /** As on a TV a release above the maximum isn't the top: the smaller-first bonus is relative to the largest that fits. */
+    @Test
+    fun `for downloading, a release above Download size neither sets its standing's top nor gets a bonus`() {
+        val small = release("Harbor.Lights.S01E02.1080p.WEB-DL.H.264-ORCHID", size = 2 * gb)
+        val larger = release("Harbor.Lights.S01E02.1080p.WEB-DL.H.264-KESTREL", size = 3 * gb)
+        val above = release("Harbor.Lights.S01E02.1080p.BluRay.REMUX.AVC-FERRY", size = 12 * gb)
+        val fitting = rank(small, larger, context = upTo4GbAnHour).map { it.facts.name to it.score }
+        assertEquals(240.0 + 25.0 * (1 - 2.0 / 3), fitting.first().second, absoluteTolerance = 0.05)
+        val ranked = rank(above, small, larger, context = upTo4GbAnHour)
+        assertEquals(fitting, ranked.dropLast(1).map { it.facts.name to it.score })
+        assertEquals(240.0 - 1_000.0, ranked.last().score, absoluteTolerance = 1e-9)
+    }
+
+    @Test
+    fun `for downloading, neither the measured throughput nor Maximum bitrate holds a release back or helps it`() {
+        val remux = release("Harbor.Lights.S01E02.1080p.BluRay.REMUX.AVC-FERRY", size = 12 * gb)
+        val web = release("Harbor.Lights.S01E02.1080p.WEB-DL.H.264-KESTREL", size = 2 * gb)
+        val streaming = forDownload.copy(prefs = RankingPrefs(maxBitrate = 10_000_000, castMaxBitrate = 5_000_000), throughputBitsPerSecond = 20_000_000)
+        val ranked = rank(remux, web, context = streaming)
+        assertEquals(rank(remux, web, context = forDownload), ranked)
+        assertTrue(ranked.none { r -> r.reasons.any { it is ReleaseReason.MayBuffer || it is ReleaseReason.AboveMaxBitrate || it is ReleaseReason.AboveCastMax } })
+        // A play's ranking here reads both.
+        val played = rank(remux, web, context = streaming.copy(target = RankingTarget.Device)).single { it.facts.name == remux.name }
+        assertTrue(played.reasons.any { it is ReleaseReason.MayBuffer } && played.reasons.any { it is ReleaseReason.AboveMaxBitrate }, "${played.reasons}")
+    }
+
+    @Test
+    fun `for downloading, what this device can't play is hidden or tried last as for a play here, and what plays says so`() {
+        val device = softwareUhd.copy(displayHeight = 1080, videoTenBit = emptySet())
+        val releases = arrayOf(
+            release("Harbor.Lights.S01E02.1080p.WEB.x265.10bit-A"),
+            release("Harbor.Lights.S01E02.2160p.WEB.H265.DV-B"),
+            release("Harbor.Lights.S01E02.1080p.BluRay.REMUX.AVC.TrueHD.7.1-C"),
+            release("Harbor.Lights.S01E02.2160p.WEB-DL.x265-D"),
+            release("Harbor.Lights.S01E02.1080p.WEB-DL.H.264-E"),
+        )
+        fun facts(target: RankingTarget) = rank(*releases, context = RankingContext(device, target = target)).associate { it.facts.name to (it.playable to it.reasons) }
+        val forDownload = facts(RankingTarget.Download)
+        assertEquals(facts(RankingTarget.Device), forDownload)
+        assertTrue(forDownload.getValue(releases[0].name).first.not() && ReleaseReason.VideoUnsupported("HEVC 10-bit") in forDownload.getValue(releases[0].name).second)
+        assertTrue(ReleaseReason.DolbyVisionOnly in forDownload.getValue(releases[1].name).second)
+        assertTrue(ReleaseReason.AudioUnsupported("TrueHD") in forDownload.getValue(releases[2].name).second)
+        assertEquals(true to true, forDownload.getValue(releases[3].name).let { (playable, reasons) -> playable to (ReleaseReason.NoHardwareDecoder("2160p HEVC", blocking = false) in reasons && ReleaseReason.AboveScreen(2160) in reasons) })
+        assertTrue(ReleaseReason.PlaysOnDevice in forDownload.getValue(releases[4].name).second)
+        // Tried last, as for a play here: the one with no hardware decoder for its size, after the one that fits.
+        assertEquals(listOf(releases[4].name, releases[3].name), rank(*releases, context = RankingContext(device, target = RankingTarget.Download)).filter { it.playable }.map { it.facts.name })
+    }
+
+    @Test
+    fun `for downloading by a TV's rules there is no larger-first, and the smaller encode goes before the remux of its standing`() {
+        val remux = remux(50)
+        val encode = encode(2_000)
+        assertEquals(listOf(remux.name, encode.name), order(encode, remux, context = fourKTv))
+        assertEquals(listOf(encode.name, remux.name), order(encode, remux, context = fourKTv.copy(target = RankingTarget.Download)))
+    }
+
+    @Test
+    fun `a ranking for downloading prints as one`() {
+        assertEquals("Download", RankingTarget.Download.toString())
+        assertEquals("Download", RankingContext(phone, target = RankingTarget.Download).target.toString())
+    }
+
+    @Test
+    fun `Download size's GB an hour reads in bits a second, 1 GB an hour about 2_22 Mbps, and back`() {
+        assertEquals(2_222_222L, DownloadSize.bitsPerSecond(1))
+        assertEquals(8_888_888L, DownloadSize.bitsPerSecond(4))
+        assertEquals(26_666_666L, DownloadSize.bitsPerSecond(12))
+        listOf(1, 2, 3, 4, 6, 8, 12).forEach { assertEquals(it, DownloadSize.gbPerHour(DownloadSize.bitsPerSecond(it))) }
+        // At 2 GB an hour a 45-minute episode is about 1.5 GB.
+        assertEquals(1_500_000_000.0, DownloadSize.bitsPerSecond(2) * 45 * 60 / 8.0, 1_000.0)
+    }
+
+    @Test
+    fun `a season pack's share of one episode is its size over the season's episodes, as its bitrate is estimated`() {
+        fun share(name: String, size: Long, episodes: Int?) = episodeShare(size, ReleaseParser.parse(name), episodes)
+        assertEquals(1_400_000_000L, share("Harbor.Lights.S02.1080p.WEB-DL.H.264-DRIFTWOOD", 11_200_000_000, 8))
+        assertNull(share("Harbor.Lights.S02.1080p.WEB-DL.H.264-DRIFTWOOD", 11_200_000_000, null))
+        assertNull(share("Harbor.Lights.S02.1080p.WEB-DL.H.264-DRIFTWOOD", 11_200_000_000, 0))
+        assertNull(share("Harbor.Lights.S01-S03.1080p.WEB-DL.H.264-DRIFTWOOD", 33_600_000_000, 8))
+        assertNull(share("Harbor.Lights.S02E04.1080p.WEB-DL.H.264-KESTREL", 1_200_000_000, 8))
+        // The ranker's estimate is the share's: over 45 minutes 1.4 GB is ~4.1 Mbps.
+        val pack = rank(release("Harbor.Lights.S02.1080p.WEB-DL.H.264-DRIFTWOOD", size = 11_200_000_000), context = RankingContext(phone, runtimeMinutes = 45, seasonEpisodes = 8)).single()
+        assertEquals(1_400_000_000L * 8 / (45 * 60), pack.estimatedBitrate)
+    }
 }

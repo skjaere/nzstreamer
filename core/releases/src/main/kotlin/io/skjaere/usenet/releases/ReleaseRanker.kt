@@ -44,6 +44,12 @@ data class RankingPrefs(
      * tried last there, as one above [maxBitrate] is, and the lower of the two set is the bitrate a higher one ranks up to.
      */
     val castMaxBitrate: Long? = null,
+    /**
+     * Settings' "Download size" (W112, L371), in bits per second of video ([DownloadSize]); null when not set. Only a ranking
+     * for downloading ([RankingTarget.Download]) reads it: a release estimated above it is tried last there, as one above
+     * [maxBitrate] is in a play's, which a download's never reads.
+     */
+    val downloadCapBitsPerSecond: Long? = null,
 )
 
 data class RankingContext(
@@ -90,6 +96,13 @@ sealed interface RankingTarget {
     data class Cast(val name: String) : RankingTarget {
         override fun toString() = "Cast"
     }
+
+    /**
+     * A release saved to this device to play later (W112, L355): by this device's decoders and screen, as [Device], but
+     * nothing of streaming it now (no "May buffer", Maximum bitrate not read) and no TV's larger-first. Of one standing the
+     * smaller goes first, and one above Download size ([RankingPrefs.downloadCapBitsPerSecond]) is tried last.
+     */
+    data object Download : RankingTarget
 }
 
 enum class Severity { Blocking, Warning, Neutral, Positive }
@@ -119,6 +132,9 @@ sealed class ReleaseReason(val severity: Severity, val text: String) {
 
     /** Above the maximum when casting (W52, L132), for a Cast device: tried last there, as one [AboveMaxBitrate] is, and castable by hand. */
     data class AboveCastMax(val megabitsPerSecond: Int) : ReleaseReason(Severity.Warning, "Above your $megabitsPerSecond Mbps for casting")
+
+    /** Above Download size (L371), in a ranking for downloading: tried last there, as one [AboveMaxBitrate] is in a play's. */
+    data class AboveDownloadSize(val gbPerHour: Int) : ReleaseReason(Severity.Warning, "Above your $gbPerHour GB an hour")
     data class PoorSource(val source: Source) : ReleaseReason(Severity.Warning, "Low quality source (${source.name})")
     data class AboveScreen(val resolution: Int) : ReleaseReason(Severity.Neutral, "${resolution}p is above this screen")
 
@@ -211,16 +227,23 @@ data class RankedRelease(
 /**
  * Orders releases of one title: playable first, then by preference score. Usenet releases and torrents rank in one list
  * (W72): grabs count within a source ([popularityScale]), and at equal standing Usenet goes first ([usenetFirst]); a list
- * of one source ranks as it always has. On a TV the larger releases of a standing go first ([withTvBonuses]).
+ * of one source ranks as it always has. On a TV the larger releases of a standing go first ([withTvBonuses]); for
+ * downloading, the smaller ([withDownloadBonuses]).
  */
 class ReleaseRanker(private val parse: (String) -> ParsedRelease = ReleaseParser::parse) {
 
     fun rank(releases: List<ReleaseFacts>, context: RankingContext): List<RankedRelease> {
         val scale = popularityScale(releases)
         val scored = releases.map { evaluate(it, parse(it.name).withMediaInfo(it.mediaInfo), context, scale) }
-        // TVs only (W101, L301): a Cast device ranks on the phone, with tv false; the target guards it all the same.
+        // TVs only (W101, L301): a Cast device ranks on the phone, with tv false; the target guards it all the same, and keeps
+        // it from a download, which nobody watches as it comes (L355).
         val tv = context.tv && context.target == RankingTarget.Device
-        val sorted = usenetFirst(withBitrateBonus(if (tv) withTvBonuses(scored) else scored))
+        val bonused = when {
+            tv -> withTvBonuses(scored)
+            context.target == RankingTarget.Download -> withDownloadBonuses(scored)
+            else -> scored
+        }
+        val sorted = usenetFirst(withBitrateBonus(bonused))
             .sortedWith(
                 compareByDescending<Held> { it.ranked.playable }
                     .thenByDescending { it.ranked.score }
@@ -267,6 +290,23 @@ class ReleaseRanker(private val parse: (String) -> ParsedRelease = ReleaseParser
             val bitrate = counted(s)
             val top = tops[s.standing to s.ranked.facts.source]
             Scored(s.ranked, if (bitrate == null || top == null || top <= 0) 0.0 else TV_BITRATE_BONUS * bitrate / top, s.standing, s.base)
+        }
+    }
+
+    /**
+     * For downloading (W112, L355): each release's bonus is [DOWNLOAD_SMALLER_BONUS] x (1 - its bitrate over the top
+     * estimate among the releases of its standing and source that play and fit Download size), so of one standing the
+     * smaller goes first; none for the top, nor for a release with no estimate, one that doesn't play or one above Download
+     * size. Per standing and source as a TV's ([withTvBonuses]), whose bonus [withBitrateBonus] caps alike: a smaller
+     * release never passes one of another resolution, language or HDR standing.
+     */
+    private fun withDownloadBonuses(scored: List<Scored>): List<Scored> {
+        fun counted(s: Scored) = s.ranked.estimatedBitrate?.takeIf { s.ranked.playable && s.ranked.reasons.none { it is ReleaseReason.AboveDownloadSize } }
+        val tops = scored.groupBy { it.standing to it.ranked.facts.source }.mapValues { (_, group) -> group.mapNotNull(::counted).maxOrNull() }
+        return scored.map { s ->
+            val bitrate = counted(s)
+            val top = tops[s.standing to s.ranked.facts.source]
+            Scored(s.ranked, if (bitrate == null || top == null || top <= 0) 0.0 else DOWNLOAD_SMALLER_BONUS * (1 - bitrate.toDouble() / top), s.standing, s.base)
         }
     }
 
@@ -337,6 +377,7 @@ class ReleaseRanker(private val parse: (String) -> ParsedRelease = ReleaseParser
     private fun popularity(grabs: Int?): Double = log10((grabs ?: 0).toDouble() + 1) * 5
 
     private fun evaluate(facts: ReleaseFacts, parsed: ParsedRelease, context: RankingContext, scale: Double): Scored {
+        val download = context.target == RankingTarget.Download
         val bitrate = estimatedBitrate(facts, parsed, context)
         val noHardware = noHardwareDecoder(parsed, context)
         val blocking = blockingReasons(facts, parsed, context) + listOfNotNull(noHardware?.takeIf { it.blocking }) + sourceReasons(facts)
@@ -353,8 +394,9 @@ class ReleaseRanker(private val parse: (String) -> ParsedRelease = ReleaseParser
             hdr,
             // On a phone or tablet: tried after every release that fits, as one above the maximum bitrate is.
             noHardware?.takeUnless { it.blocking }.let { (if (it == null) 0.0 else -ABOVE_MAX_BITRATE) to listOfNotNull(it) },
-            bitrateFit(bitrate, context.throughputBitsPerSecond),
-            aboveMaxBitrate(bitrate, context),
+            // A download isn't watched as it comes (L355): nothing of the stream's speed, only Download size.
+            bitrateFit(bitrate, context.throughputBitsPerSecond.takeUnless { download }),
+            if (download) aboveDownloadSize(bitrate, context) else aboveMaxBitrate(bitrate, context),
             source(parsed),
             (if (parsed.proper) 25.0 else 0.0) to listOfNotNull(ReleaseReason.Proper.takeIf { parsed.proper }),
             grabs,
@@ -364,7 +406,7 @@ class ReleaseRanker(private val parse: (String) -> ParsedRelease = ReleaseParser
             (if (parsed.isSeasonPack) -SEASON_PACK_COST else 0.0) to emptyList(),
         )
         // The phone can't check a Cast device's player: nothing says the release plays there.
-        val plays = listOfNotNull(ReleaseReason.PlaysOnDevice.takeIf { context.target == RankingTarget.Device })
+        val plays = listOfNotNull(ReleaseReason.PlaysOnDevice.takeIf { context.target.here })
         val reasons = blocking.ifEmpty { plays } + scored.flatMap { it.second }
         val ranked = RankedRelease(
             facts = facts,
@@ -405,7 +447,7 @@ class ReleaseRanker(private val parse: (String) -> ParsedRelease = ReleaseParser
         val device = context.device
         val codec = parsed.videoCodec
         val retention = context.prefs.retentionDays
-        val here = context.target == RankingTarget.Device
+        val here = context.target.here
         return listOfNotNull(
             ReleaseReason.DiscImage.takeIf { parsed.discImage },
             codec?.takeIf { here }?.let { videoUnsupported(it, parsed, device) },
@@ -472,7 +514,7 @@ class ReleaseRanker(private val parse: (String) -> ParsedRelease = ReleaseParser
      * hardware limit or the resolution isn't known, and for a Cast device, whose decoders the phone can't know.
      */
     private fun noHardwareDecoder(parsed: ParsedRelease, context: RankingContext): ReleaseReason.NoHardwareDecoder? {
-        if (context.target != RankingTarget.Device) return null
+        if (!context.target.here) return null
         val codec = parsed.videoCodec ?: return null
         val resolution = parsed.resolution?.takeIf { it > SOFTWARE_DECODE_MAX } ?: return null
         if (videoMiss(codec, parsed, context.device) != null) return null
@@ -573,14 +615,25 @@ class ReleaseRanker(private val parse: (String) -> ParsedRelease = ReleaseParser
         return (if (reasons.isEmpty()) 0.0 else -ABOVE_MAX_BITRATE) to reasons
     }
 
+    /**
+     * Above Download size (L371), in a ranking for downloading: tried after every release that fits, as one above Maximum
+     * bitrate is in a play's, and still downloadable. A release with no estimate isn't held back.
+     */
+    private fun aboveDownloadSize(bitrate: Long?, context: RankingContext): Pair<Double, List<ReleaseReason>> {
+        val cap = context.prefs.downloadCapBitsPerSecond?.takeIf { it > 0 }
+        if (bitrate == null || cap == null || bitrate <= cap) return 0.0 to emptyList()
+        return -ABOVE_MAX_BITRATE to listOf(ReleaseReason.AboveDownloadSize(DownloadSize.gbPerHour(cap)))
+    }
+
     /** The maximum when casting, read for a Cast device alone (L132); null for this device's own ranking. */
     private fun castMaxBitrate(context: RankingContext): Long? = context.prefs.castMaxBitrate.takeIf { context.target is RankingTarget.Cast }
 
     /**
      * The bitrate a release is held to: Maximum bitrate, and for a Cast device the lower of it and the maximum when casting,
-     * of those set (the phone still downloads what it casts); null with none set.
+     * of those set (the phone still downloads what it casts); null with none set, and for downloading, which reads neither.
      */
-    private fun maxBitrate(context: RankingContext): Long? = listOfNotNull(context.prefs.maxBitrate, castMaxBitrate(context)).filter { it > 0 }.minOrNull()
+    private fun maxBitrate(context: RankingContext): Long? =
+        if (context.target == RankingTarget.Download) null else listOfNotNull(context.prefs.maxBitrate, castMaxBitrate(context)).filter { it > 0 }.minOrNull()
 
     /**
      * On a phone or tablet, and for a Cast device, with a maximum set ([maxBitrate]): among the releases that fit it, a
@@ -603,7 +656,7 @@ class ReleaseRanker(private val parse: (String) -> ParsedRelease = ReleaseParser
     private fun estimatedBitrate(facts: ReleaseFacts, parsed: ParsedRelease, context: RankingContext): Long? {
         if (facts.sizeBytes <= 0) return null
         val episodes = if (parsed.isSeasonPack) {
-            context.seasonEpisodes?.takeIf { it > 0 && parsed.seasons.size == 1 } ?: return null
+            packEpisodes(parsed, context.seasonEpisodes) ?: return null
         } else {
             parsed.episodes.size.coerceAtLeast(1)
         }
@@ -627,6 +680,8 @@ class ReleaseRanker(private val parse: (String) -> ParsedRelease = ReleaseParser
         const val SEASON_PACK_COST = 10.0
         /** A phone's, and a Cast device's, with a maximum set ([bitrateBonus]): less than a step of quality (30). */
         const val BITRATE_BONUS = 25.0
+        /** For downloading ([withDownloadBonuses]): as much as a phone's for a higher bitrate, the other way. */
+        const val DOWNLOAD_SMALLER_BONUS = 25.0
         /**
          * A TV's ([withTvBonuses], W101, L303): with the top an 80 GB remux, a 24 GB encode of its standing gets 42 less,
          * more than the widest lead grabs and a Proper give one release over another (41.1), while near-equal sizes still go
@@ -650,4 +705,35 @@ class ReleaseRanker(private val parse: (String) -> ParsedRelease = ReleaseParser
          */
         const val HDR_ON_SDR = 45.0
     }
+}
+
+/** Whether a ranking for [this] is by this device's own decoders and screen: a play here, or a download (L355). */
+private val RankingTarget.here: Boolean get() = this == RankingTarget.Device || this == RankingTarget.Download
+
+/** How many episodes a season pack of one season holds: its season's [seasonEpisodes] (TMDB's count); null when not known. */
+private fun packEpisodes(parsed: ParsedRelease, seasonEpisodes: Int?): Int? = seasonEpisodes?.takeIf { it > 0 && parsed.seasons.size == 1 }
+
+/**
+ * What one episode of [parsed], a season pack, comes to: its [sizeBytes] over its season's [seasonEpisodes] (TMDB's
+ * count), the size its bitrate is estimated by. Null for a release that isn't a pack of one season, or with the count not
+ * known.
+ */
+fun episodeShare(sizeBytes: Long, parsed: ParsedRelease, seasonEpisodes: Int?): Long? {
+    if (!parsed.isSeasonPack || sizeBytes <= 0) return null
+    return packEpisodes(parsed, seasonEpisodes)?.let { sizeBytes / it }
+}
+
+/**
+ * Download size (L371): Settings gives it in GB (10^9 bytes) an hour of video, and the ranker reads it in bits a second,
+ * as it estimates a release's bitrate. 1 GB an hour is about 2.22 Mbps.
+ */
+object DownloadSize {
+    private const val BITS_PER_GB = 8_000_000_000L
+    private const val SECONDS_PER_HOUR = 3_600L
+
+    /** [gbPerHour] in bits a second, rounded down. */
+    fun bitsPerSecond(gbPerHour: Int): Long = gbPerHour * BITS_PER_GB / SECONDS_PER_HOUR
+
+    /** [bitsPerSecond] in GB an hour, the nearest whole: the size it was set at. */
+    fun gbPerHour(bitsPerSecond: Long): Int = ((bitsPerSecond * SECONDS_PER_HOUR + BITS_PER_GB / 2) / BITS_PER_GB).toInt()
 }

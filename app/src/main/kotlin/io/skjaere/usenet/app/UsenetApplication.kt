@@ -40,6 +40,7 @@ import io.skjaere.usenet.app.download.DownloadHosts
 import io.skjaere.usenet.app.download.DownloadHostsDeps
 import io.skjaere.usenet.app.download.DownloadNotifications
 import io.skjaere.usenet.app.download.DownloadPlayFiles
+import io.skjaere.usenet.app.download.DownloadRanking
 import io.skjaere.usenet.app.download.DownloadRunner
 import io.skjaere.usenet.app.download.DownloadRunnerDeps
 import io.skjaere.usenet.app.download.DownloadStorage
@@ -665,6 +666,13 @@ class AppContainer(private val context: Context) {
             target = cast?.target ?: RankingTarget.Device,
         )
     }
+
+    /**
+     * What a download's releases are ranked by (L355): this device as it is now (its display read again), a play's quality
+     * and languages, and Download size, whatever Play on chose ([DownloadRanking]).
+     */
+    suspend fun downloadRankingContext(): RankingContext =
+        DownloadRanking.context(device.get(), settings.playback.first(), settings.downloads.first(), Locale.getDefault().language)
 
     /** The Cast devices' profiles, with what each has shown (L128). */
     private suspend fun castProfiles() = CastProfiles(settings.cast.first().devices)

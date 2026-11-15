@@ -11,10 +11,11 @@ import io.skjaere.usenet.search.ResultGroup
 val RankingContext.rankedFor: String? get() = (target as? RankingTarget.Cast)?.name
 
 /**
- * Whether [this] ranks for whom [other] does (L127): this device, however its screen reads now, or one Cast device as one
- * profile has it. A list ranked by one needn't rank again for the other.
+ * Whether [this] ranks for whom [other] does (L127): this device, however its screen reads now, for a play or for a download
+ * (L355), each alone; or one Cast device as one profile has it. A list ranked by one needn't rank again for the other.
  */
-fun RankingContext.ranksAs(other: RankingContext): Boolean = target == other.target && (target == RankingTarget.Device || device == other.device)
+fun RankingContext.ranksAs(other: RankingContext): Boolean =
+    target == other.target && (target == RankingTarget.Device || target == RankingTarget.Download || device == other.device)
 
 /**
  * The same releases ranked again by [context] (another device's, L127): no indexer asked, the group's place kept, each

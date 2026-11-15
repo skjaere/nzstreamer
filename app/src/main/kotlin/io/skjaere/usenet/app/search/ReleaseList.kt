@@ -53,6 +53,7 @@ import io.skjaere.usenet.app.play.playCandidate
 import io.skjaere.usenet.app.tv.LocalRailFocus
 import io.skjaere.usenet.app.ui.AppType
 import io.skjaere.usenet.app.ui.ChipKind
+import io.skjaere.usenet.app.ui.DownloadIcon
 import io.skjaere.usenet.app.ui.FormFactor
 import io.skjaere.usenet.app.ui.HiddenLine
 import io.skjaere.usenet.app.ui.InfoChip
@@ -90,6 +91,11 @@ private val RELEASE_LIST_MARKS = CoroutineName("release list marks")
  * list is as it always was. A press of an order (Best match, Size, Age) starts the list at that order's first release
  * (W105); the order is kept with the list's place as the same list (its group's, on Search its picked title's too:
  * [ForPickedTitle]) shows again.
+ *
+ * In download [mode] ([ReleaseListMode.Download], L355, L386) the list is for this device: "Download S02E04" in a bar with
+ * no Cast button, the download icon's line in the "Ranked for" line's place, each release that won't fit greyed in its
+ * place with what it needs, a season pack's share of the episode under its name, no Choose file, and a tap that
+ * downloads the release at once ([ReleaseListMode.Download.onDownload]) rather than playing it ([onPlay], a play's).
  */
 @Composable
 fun ReleaseList(
@@ -100,8 +106,12 @@ fun ReleaseList(
     onChooseFile: ((RankedItem) -> Unit)? = null,
     listModifier: Modifier = Modifier,
     rankedFor: String? = null,
-    onPlay: (RankedItem) -> Unit,
+    mode: ReleaseListMode = ReleaseListMode.Play,
+    onPlay: (RankedItem) -> Unit = {},
 ) {
+    val download = mode as? ReleaseListMode.Download
+    // One tap downloads: a second one before its caller closes the list queues nothing more.
+    var downloading by remember(group.key) { mutableStateOf(false) }
     // Saved with the list's place, which belongs to the order it was read in (L322). Both under the group's key: a page's
     // saved state outlives a list the page doesn't save (a chooser's, once the process has gone), and another group's list
     // shown there later must open as any list does, not in this one's order and at its place (RFO-1). Search, whose picked
@@ -145,16 +155,21 @@ fun ReleaseList(
             emptyMap()
         }
     }
-    val indexers = (group.playable + group.hidden).map { it.item.indexerId }.distinct().size
     val sorted = when (sort) {
         Sort.Best -> group.playable
         Sort.Size -> group.playable.sortedByDescending { it.item.sizeBytes }
         Sort.Age -> group.playable.sortedByDescending { it.item.postedAt }
     }
     Column(Modifier.fillMaxSize()) {
-        TopBar(group.label, onBack, subtitle = "$title · ${group.size} release${if (group.size == 1) "" else "s"} from $indexers indexer${if (indexers == 1) "" else "s"}") {
-            // A release played from a list plays here with a TV chosen (W11): the list greys the TVs, the face says this phone (W59).
-            CastButton(playOn, { container.playOn.openSheet(SheetPlace.PhoneOnly) }, place = SheetPlace.PhoneOnly)
+        if (download == null) {
+            TopBar(group.label, onBack, subtitle = "$title · ${releasesFrom(group)}") {
+                // A release played from a list plays here with a TV chosen (W11): the list greys the TVs, the face says this phone (W59).
+                CastButton(playOn, { container.playOn.openSheet(SheetPlace.PhoneOnly) }, place = SheetPlace.PhoneOnly)
+            }
+        } else {
+            // No Cast button: a download is for this device, wherever Play goes.
+            val (barTitle, subtitle) = download.bar(group, title)
+            TopBar(barTitle, onBack, subtitle = subtitle)
         }
         Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Sort.entries.forEach { s ->
@@ -170,14 +185,30 @@ fun ReleaseList(
                 )
             }
         }
-        rankedFor?.let { RankedForLine(it) }
+        if (download != null) DownloadLine(download.lines(group)) else rankedFor?.let { RankedForLine(it) }
         LazyColumn(listModifier.fillMaxSize(), state = rows, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)) {
             itemsIndexed(sorted, key = { _, it -> it.key }) { i, item ->
+                val wontFit = download?.wontFit(item)
+                val play = { onPlay(item) }
+                val save = {
+                    if (!downloading) {
+                        downloading = true
+                        download?.onDownload(item)
+                    }
+                }
                 ReleaseCard(
-                    item, if (sort == Sort.Best) (if (i == 0) "Best match" else "#${i + 1}") else null, known[item.key], failed[item.key] ?: serviceMarks[item.key],
-                    onChooseFile = onChooseFile?.takeIf { item.offersFileChoice }?.let { choose -> { choose(item) } },
+                    item, if (sort == Sort.Best) (if (i == 0) "Best match" else "#${i + 1}") else null, known[item.key], wontFit ?: failed[item.key] ?: serviceMarks[item.key],
+                    // Never for a download: a file is picked by the attempt that needs one (L386).
+                    onChooseFile = onChooseFile?.takeIf { download == null && item.offersFileChoice }?.let { choose -> { choose(item) } },
                     tag = sourceTag(item, accounts),
-                ) { onPlay(item) }
+                    note = download?.packLine(item),
+                    // One that won't fit is greyed in its place, as a hidden one is: nothing a tap could start.
+                    onClick = when {
+                        download == null -> play
+                        wontFit != null -> null
+                        else -> save
+                    },
+                )
             }
             if (group.hidden.isNotEmpty()) item {
                 Column {
@@ -206,10 +237,36 @@ private fun RankedForLine(name: String) {
 fun rankedForLine(name: String) = "Ranked for $name"
 
 /**
+ * A download-mode list's line under the sorts (L355), in [RankedForLine]'s place: the download icon, 18 dp in the accent,
+ * by how it is ranked, then the space free and what a tap does, small, and on mobile data that it starts on Wi-Fi, in the
+ * warning colour. TalkBack reads it once, before the releases.
+ */
+@Composable
+private fun DownloadLine(lines: List<String>) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 6.dp).semantics(mergeDescendants = true) {},
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(DownloadIcon, contentDescription = null, tint = colors.accent, modifier = Modifier.padding(top = 1.dp).size(18.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            lines.forEachIndexed { i, line ->
+                when {
+                    i == 0 -> Text(line, style = AppType.secondary, color = colors.textSecondary)
+                    line == ReleaseListMode.Download.STARTS_ON_WIFI -> Text(line, style = AppType.small, color = colors.warn)
+                    else -> Text(line, style = AppType.small, color = colors.muted)
+                }
+            }
+        }
+    }
+}
+
+/**
  * [known]: what is known of its being missing on the providers, which a muted chip says; [failure]: why it didn't start
  * when it was chosen here, in the play sheet's words, or why a play would skip a torrent its debrid service failed before
- * ("No longer cached"). [onChooseFile]: its menu's Choose file, opened from its ⋮ or by a
- * long press (a remote's long OK). [tag]: where it plays from, after its rank (L201; none while no debrid service is on).
+ * ("No longer cached"), or in download mode that it won't fit. [onChooseFile]: its menu's Choose file, opened from its ⋮
+ * or by a long press (a remote's long OK). [tag]: where it plays from, after its rank (L201; none while no debrid service
+ * is on). [note]: a line under its name (a season pack's share of the episode, in download mode). With no [onClick] it is
+ * greyed, and not marked Best match's way even when it ranks first.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -220,9 +277,10 @@ private fun ReleaseCard(
     failure: String?,
     onChooseFile: (() -> Unit)? = null,
     tag: SourceTag? = null,
+    note: String? = null,
     onClick: (() -> Unit)?,
 ) {
-    val best = rank == "Best match"
+    val best = rank == "Best match" && onClick != null
     var menu by remember { mutableStateOf(false) }
     // On a TV an accent border is the focus's (its 3 dp ring): there the best is marked by its words, in a quiet border,
     // so it doesn't look focused while the focus is on another release.
@@ -266,6 +324,7 @@ private fun ReleaseCard(
             }
         }
         Text(item.item.title, style = AppType.release, color = if (onClick == null) colors.muted else colors.chipText)
+        note?.let { Text(it, style = AppType.secondary, color = if (onClick == null) colors.muted else colors.textSecondary) }
         ReasonChips(item, bitrate = true)
         known?.let { InfoChip(missingChip(it, LocalDate.now(), ZoneId.systemDefault()), ChipKind.Muted) }
         failure?.let { Text("✕ $it", style = AppType.secondary, color = colors.warn) }

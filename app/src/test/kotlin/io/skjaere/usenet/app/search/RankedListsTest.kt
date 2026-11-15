@@ -5,6 +5,7 @@ import io.skjaere.usenet.app.ui.StatusKind
 import io.skjaere.usenet.data.CastDeviceMemory
 import io.skjaere.usenet.data.CastVideoCodec
 import io.skjaere.usenet.newznab.NewznabItem
+import io.skjaere.usenet.releases.DownloadSize
 import io.skjaere.usenet.releases.RankingContext
 import io.skjaere.usenet.releases.RankingPrefs
 import io.skjaere.usenet.releases.RankingTarget
@@ -31,15 +32,18 @@ class RankedListsTest {
     private val here = RankingContext(StaticDeviceCapabilities())
     private val kitchen = here.copy(device = CastModel.Chromecast.profile(null), target = RankingTarget.Cast("Kitchen display"))
 
-    private fun item(title: String) = NewznabItem(
-        indexerId = "a", guid = title, title = title, sizeBytes = 4_000_000_000, publishedAt = null, postedAt = null,
+    private fun item(title: String, size: Long = 4_000_000_000) = NewznabItem(
+        indexerId = "a", guid = title, title = title, sizeBytes = size, publishedAt = null, postedAt = null,
         categories = emptyList(), grabs = null, passworded = false, files = null, tvdbId = null, tmdbId = null, imdbId = null,
         tvmazeId = null, season = 2, episode = 5, coverUrl = null, mediaInfo = null, downloadTemplate = null, attributes = emptyMap(),
     )
 
     /** The releases as the episode's list holds them, ranked by [context]. */
-    private fun group(context: RankingContext, vararg titles: String): ResultGroup {
-        val items = titles.map(::item).associateBy { "${it.indexerId}/${it.guid}" }
+    private fun group(context: RankingContext, vararg titles: String): ResultGroup = sized(context, *titles.map { it to 4_000_000_000L }.toTypedArray())
+
+    /** As [group], each release of its own size. */
+    private fun sized(context: RankingContext, vararg releases: Pair<String, Long>): ResultGroup {
+        val items = releases.map { (title, size) -> item(title, size) }.associateBy { "${it.indexerId}/${it.guid}" }
         val ranked = ReleaseRanker().rank(items.values.map { io.skjaere.usenet.releases.ReleaseFacts("${it.indexerId}/${it.guid}", it.title, it.sizeBytes) }, context)
             .map { RankedItem(items.getValue(it.facts.id), it) }
         return ResultGroup("S02E05", GroupKind.Episode, 2, listOf(5), null, null, ranked.filter { it.ranked.playable }, ranked.filterNot { it.ranked.playable })
@@ -86,9 +90,34 @@ class RankedListsTest {
         assertEquals(Triple(52, "en", 8), Triple(bare.runtimeMinutes, bare.originalLanguage, bare.seasonEpisodes))
     }
 
+    private val download = here.copy(target = RankingTarget.Download)
+
+    /** L355: a list ranked for downloading is this device's, whatever Play on chose: it names no Cast device. */
+    @Test
+    fun `a list ranked for downloading names no Cast device, and ranks as another ranked for downloading alone`() {
+        assertNull(download.rankedFor)
+        assertTrue(download.ranksAs(download.copy(device = StaticDeviceCapabilities(displayHeight = 2160), prefs = RankingPrefs(downloadCapBitsPerSecond = DownloadSize.bitsPerSecond(4)))))
+        assertFalse(download.ranksAs(here))
+        assertFalse(here.ranksAs(download))
+        assertFalse(download.ranksAs(kitchen))
+        assertFalse(kitchen.ranksAs(download))
+    }
+
+    /** The list a play found, ranked again for downloading with no search: of one standing the smaller first (W112). */
+    @Test
+    fun `a group's releases rank again for downloading, the smaller of a standing first`() {
+        val found = sized(here, ANCHOR to 12_000_000_000, KESTREL to 2_000_000_000)
+        assertEquals(listOf("a/$ANCHOR", "a/$KESTREL"), found.playable.map { it.key })
+        val again = found.rankedAgain(download)
+        assertEquals(sized(download, ANCHOR to 12_000_000_000, KESTREL to 2_000_000_000), again)
+        assertEquals(listOf("a/$KESTREL", "a/$ANCHOR"), again.playable.map { it.key })
+    }
+
     private companion object {
         const val DTS = "Harbor.Lights.S02E05.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-FERRY"
         const val ORCHID = "Harbor.Lights.S02E05.1080p.BluRay.DD5.1.x264-ORCHID"
+        const val ANCHOR = "Harbor.Lights.S02E05.1080p.BluRay.REMUX.AVC.DD5.1-ANCHOR"
+        const val KESTREL = "Harbor.Lights.S02E05.1080p.WEB-DL.DD5.1.H.264-KESTREL"
     }
 
     /**

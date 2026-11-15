@@ -14,7 +14,9 @@ import io.skjaere.usenet.app.link.PlayTarget
 import io.skjaere.usenet.app.play.CastTo
 import io.skjaere.usenet.app.play.PlayOrigin
 import io.skjaere.usenet.app.ui.FormFactor
+import io.skjaere.usenet.releases.DownloadSize
 import io.skjaere.usenet.releases.RankingTarget
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
@@ -31,7 +33,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  *
  * On a phone it ranks for whom Play goes to (L127): the Cast device chosen in Play on, by its model's profile (a fake
  * session, Google's software never started, L73); inside a cast play's job, the job's own device; inside a play's job on
- * this phone, this phone, a Cast device chosen or not. The devices are invented.
+ * this phone, this phone, a Cast device chosen or not; a download's, this phone, whatever is chosen (L355). The devices are
+ * invented.
  */
 @RunWith(AndroidJUnit4::class)
 class RankingContextDeviceTest {
@@ -77,6 +80,14 @@ class RankingContextDeviceTest {
 
             val here = runBlocking { withContext(PlayOrigin.Here) { container.rankingContext() } }
             assertEquals(RankingTarget.Device, here.target)
+
+            // L355: a download ranks for this phone whatever is chosen, with Download size as saved, and never by a TV's rules.
+            val download = runBlocking { container.downloadRankingContext() }
+            assertEquals(RankingTarget.Download, download.target)
+            assertEquals("this phone's screen, not the Shield's", here.device.displayHeight, download.device.displayHeight)
+            assertEquals(false, download.tv)
+            val saved = runBlocking { container.settings.downloads.first() }.sizeCapGbPerHour
+            assertEquals(saved?.takeIf { it > 0 }?.let(DownloadSize::bitsPerSecond), download.prefs.downloadCapBitsPerSecond)
             container.playOn.choose(PlayChoice.Phone)
             waitUntil("This phone chosen") { container.playOn.target.value == PlayTarget.Phone }
             assertEquals("This phone chosen: this phone's", RankingTarget.Device, runBlocking { container.rankingContext() }.target)

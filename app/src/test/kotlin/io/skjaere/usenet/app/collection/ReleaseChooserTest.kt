@@ -293,6 +293,26 @@ class ReleaseChooserTest {
         assertEquals(mapOf(broken.key to INCOMPLETE), chooser.failed.value, "its marks stay")
     }
 
+    /**
+     * L355: a list ranked for downloading is this device's, so a choice made in Play on doesn't rank it again: not for a Cast
+     * device, nor for a play here.
+     */
+    @Test
+    fun `a list ranked for downloading is never ranked again as a device is chosen in Play on`() = runTest {
+        val download = here.copy(target = RankingTarget.Download)
+        val rankings = MutableStateFlow(here)
+        val chooser = ReleaseChooser<Episode>(backgroundScope, rankings, StandardTestDispatcher(testScheduler))
+        chooser.choose(e3) {
+            rankedBy(download, ::ranked)
+            ranked(download)
+        }
+        runCurrent()
+        assertEquals(ChooseState.Ready(e3, group(e3, good, broken)), chooser.state.value)
+        rankings.value = kitchen
+        runCurrent()
+        assertEquals(ChooseState.Ready(e3, group(e3, good, broken)), chooser.state.value)
+    }
+
     private companion object {
         const val INCOMPLETE = "Incomplete on your providers · 1 of 20 checked articles missing"
     }
