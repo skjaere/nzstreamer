@@ -19,6 +19,7 @@ import androidx.annotation.RequiresApi
 import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.app.AppContainer
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.debrid.seedDevDebrid
 import io.skjaere.usenet.app.engineSetup
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.core.TrackProbe
@@ -26,6 +27,8 @@ import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.ProviderRecord
+import io.skjaere.usenet.data.ServiceSignIn
+import io.skjaere.usenet.debrid.ServiceKind
 import io.skjaere.usenet.newznab.IndexerConfig
 import io.skjaere.usenet.newznab.NzbDownload
 import kotlinx.coroutines.CancellationException
@@ -90,6 +93,8 @@ class PairFixture(
  * - the mock NNTP server as the only Usenet provider (10.0.2.2:1119, no TLS, no login, 4 connections), saved through
  *   the settings as a user saves one, the others hidden (their passwords kept), and the engine on it;
  * - Only on Wi-Fi or Ethernet and Only while charging off, so nothing but a validated network holds the job;
+ * - a debrid account signed out of and a torrent indexer removed, invented, so the debug build's debrid seeding never
+ *   saves the developer's in the app's own processes between the phases (L182);
  * - for the service host (L336), the override (`.host`), written before the rows so the boot receiver's switch reads it
  *   as the queue changes;
  * - [Plan.rows] downloads of [Plan.fixture], each queued through the runner (its folder and marker, L346), then
@@ -133,6 +138,13 @@ object PairSeed {
 
     private val INDEXER = IndexerConfig(INDEXER_ID, "Pair indexer (never asked)", "http://indexer.invalid/api", "pair-key")
 
+    /** The placeholders' key: invented, and never sent. */
+    private const val PLACEHOLDER_KEY = "pair-placeholder-key"
+
+    /** A debrid account and a torrent indexer as the debug build encodes its own (DevServices, DevIndexers): invented. */
+    private const val INVENTED_SERVICES = "TorBox\tpair-invented-key"
+    private const val INVENTED_TORRENT_INDEXERS = "Pair torrents\thttp://indexer.invalid/torznab\tpair-invented-key"
+
     private const val SETUP_MILLIS = 30_000L
     private const val RESOLVE_MILLIS = 120_000L
 
@@ -149,6 +161,7 @@ object PairSeed {
         withTimeout(SETUP_MILLIS) { container.devSettingsSaved.await() }
         empty(context, container)
         val mock = mockAlone(container)
+        debridHeldOff(container)
         val folder = File(context.filesDir, DownloadStorage.DIR).apply { mkdirs() }
         if (plan.serviceHost) File(folder, DownloadDebug.HOST).writeText("service")
         val nzb = plan.fixture.nzbBytes()
@@ -194,6 +207,22 @@ object PairSeed {
         // The app's own provider sync gives the engine what was just saved.
         engineSetup("the engine on the pairs' mock alone") { container.engine.configuredProviders.first { it == listOf(mock) } }
         return mock
+    }
+
+    /**
+     * The debug build's debrid seeding held off in the app's own processes between the phases (L182): the runner's open,
+     * JobScheduler's runs and the service's sticky restart aren't the instrumentation's, so the test runner's switch doesn't
+     * reach them, and on the fresh install each pair has they would save the developer's accounts and torrent indexers.
+     * The seeding saves only while none was ever saved, so an account signed out of and a torrent indexer removed, both
+     * invented and never asked, leave the records that keep it from ever doing so.
+     */
+    private suspend fun debridHeldOff(container: AppContainer) {
+        val settings = container.settings
+        val saved = settings.settings.first()
+        if (saved.services.isEmpty()) settings.signOut(settings.saveService(ServiceKind.TorBox.name, PLACEHOLDER_KEY) { ServiceSignIn(accountName = "") })
+        if (saved.torrentIndexers.isEmpty()) {
+            settings.deleteTorrentIndexer(settings.saveTorrentIndexer(null, "Pair placeholder", "http://indexer.invalid/torznab", PLACEHOLDER_KEY))
+        }
     }
 
     /**
@@ -254,6 +283,13 @@ object PairSeed {
         expect(container.engine.configuredProviders.value == listOf(mock)) { "the engine isn't on the mock alone" }
         val prefs = container.settings.downloads.first()
         expect(!prefs.unmeteredOnly && !prefs.whileCharging) { "Only on Wi-Fi ${prefs.unmeteredOnly}, Only while charging ${prefs.whileCharging}" }
+        // The debug build's debrid seeding as the app's next process runs it (L182): invented entries here, never asked, so a
+        // seeding that would run saves these, not the developer's.
+        seedDevDebrid(container.settings, INVENTED_SERVICES, INVENTED_TORRENT_INDEXERS, enabled = true, shown = true)
+        val after = container.settings.settings.first()
+        expect(after.activeServices.isEmpty() && after.activeTorrentIndexers.isEmpty()) {
+            "the debug build's debrid seeding would save ${after.activeServices.size} account(s) and ${after.activeTorrentIndexers.size} torrent indexer(s) in the app's next process"
+        }
         return problems
     }
 

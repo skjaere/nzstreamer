@@ -46,7 +46,7 @@ class PairCheck(private val fixture: PairFixture = PairFixture.HARBOR_LIGHTS) {
      * Room's [count] rows, in the queue's order, as the step left them (this process's start changes no row Done,
      * Stopped or Queued); and the trace as a whole before them: every line of a shape this reads, and the app's open by
      * the runner seen scheduling its host (L391) before any byte came, so what follows is the host the app's open asked
-     * for.
+     * for. And no debrid account or torrent indexer saved by the app's processes between the phases (L182).
      */
     suspend fun rows(count: Int): List<Download> {
         val unread = PairRecord.traceLines(context).filter { PairRecord.parse(it) == null }.map { "${it.substringBefore(' ')} (${it.length} chars)" }
@@ -56,6 +56,12 @@ class PairCheck(private val fixture: PairFixture = PairFixture.HARBOR_LIGHTS) {
         assertTrue(
             "the app's open scheduled its host before the transfer: ${opened.map { it.fields }}",
             opened.any { it["result"] == DownloadTrace.ScheduleResult.Scheduled.word || it["result"] == DownloadTrace.ScheduleResult.Service.word },
+        )
+        // The app's own processes between the phases (the runner's open, JobScheduler's runs) saved none of the debug
+        // build's debrid accounts or torrent indexers (L182): counted, never named.
+        val saved = container.settings.settings.first()
+        assertEquals(
+            "debrid accounts and torrent indexers saved between the phases", 0 to 0, saved.activeServices.size to saved.activeTorrentIndexers.size,
         )
         val rows = dao.all().first()
         assertEquals("the downloads Start seeded", count, rows.size)
