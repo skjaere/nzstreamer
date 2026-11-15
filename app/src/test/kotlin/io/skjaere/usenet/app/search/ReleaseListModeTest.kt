@@ -7,7 +7,10 @@ import io.skjaere.usenet.releases.ReleaseParser
 import io.skjaere.usenet.search.GroupKind
 import io.skjaere.usenet.search.RankedItem
 import io.skjaere.usenet.search.ResultGroup
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import java.util.Locale
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -18,6 +21,15 @@ import kotlin.test.assertTrue
  * starts, a release that won't fit and what it needs, and a season pack's share of the one episode. Invented releases.
  */
 class ReleaseListModeTest {
+    private val saved = Locale.getDefault()
+
+    // formatSize follows the default locale; pin one so the decimal separator is predictable.
+    @BeforeEach
+    fun pin() = Locale.setDefault(Locale.US)
+
+    @AfterEach
+    fun unpin() = Locale.setDefault(saved)
+
     private val gb = 1_000_000_000L
 
     private fun item(title: String, size: Long, indexer: String = "a") = RankedItem(
