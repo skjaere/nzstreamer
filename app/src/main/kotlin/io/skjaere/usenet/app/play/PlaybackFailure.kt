@@ -50,10 +50,10 @@ import kotlinx.coroutines.flow.first
  * fails on one of them. While [of]'s providersLeftOut says a provider is left out (its login
  * rejected, or out of reach), an article the others lack may be on that one: not the release's fault.
  * [remote]: the same, as a paired phone whose play this is is told it (L37): in the TV's words, from the failure's kind
- * alone, with nothing of the TV's settings to open there. [fileGone]: a finished download's file is gone, which says
- * nothing of its release.
+ * alone, with nothing of the TV's settings to open there. [missingParts]: a finished download's play met a part its
+ * download had no article for, which a stream of its release would meet too.
  */
-internal data class PlaybackFailure(val reason: String, val releaseAtFault: Boolean, val remote: String, val fileGone: Boolean = false) {
+internal data class PlaybackFailure(val reason: String, val releaseAtFault: Boolean, val remote: String, val missingParts: Boolean = false) {
     companion object {
         fun of(usenet: UsenetError?, errorCode: Int, providersLeftOut: Boolean = false): PlaybackFailure = when (usenet) {
             is UsenetError.MissingArticle -> if (providersLeftOut) {
@@ -138,12 +138,13 @@ internal data class PlaybackFailure(val reason: String, val releaseAtFault: Bool
          * A finished download's play stopped (L354, its [causes] and [errorCode]): a stretch its download had no article for
          * where the file's index can't go past it ([GapReached]), or its file gone (deleted, or its volume away), in the
          * download's words, the Downloads page's for the second. Neither is the release's fault, nor the providers' (the play
-         * asked none): the title still streams. Anything else by its code, as any file's.
+         * asked none): the title still streams. Only the first says the release is missing parts, which its stream would
+         * meet again ([missingParts]); a file gone says nothing of it. Anything else by its code, as any file's.
          */
         private fun downloadFailure(causes: List<Throwable>, errorCode: Int): PlaybackFailure = when {
-            causes.any { it is GapReached } -> PlaybackFailure(MISSING_HERE, releaseAtFault = false, remote = MISSING_HERE)
+            causes.any { it is GapReached } -> PlaybackFailure(MISSING_HERE, releaseAtFault = false, remote = MISSING_HERE, missingParts = true)
             errorCode == PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND ->
-                PlaybackFailure(DownloadStorage.FILE_GONE, releaseAtFault = false, remote = DownloadStorage.FILE_GONE, fileGone = true)
+                PlaybackFailure(DownloadStorage.FILE_GONE, releaseAtFault = false, remote = DownloadStorage.FILE_GONE)
             else -> of(usenet = null, errorCode)
         }
 

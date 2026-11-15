@@ -256,19 +256,20 @@ class PlaybackFailureTest {
     /**
      * L354: a download's file gone (deleted, or its volume away) and a part no provider had where the file's
      * index can't go past it, in the download's words; neither the release's fault, nor said as the providers' (a download's
-     * play asks none), a provider left out or not. Anything else as for any file.
+     * play asks none), a provider left out or not. Only the second says the release is missing parts, which Stream instead
+     * leaves out for; its file gone says nothing of it. Anything else as for any file.
      */
     @Test
     fun `a download's play says its file is gone, or that it is missing a part there`() {
         val gone = DataSourceException("Download d1 has no finished file", null, PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND)
         assertEquals(
-            PlaybackFailure("The downloaded file is gone", releaseAtFault = false, remote = "The downloaded file is gone", fileGone = true),
+            PlaybackFailure("The downloaded file is gone", releaseAtFault = false, remote = "The downloaded file is gone"),
             PlaybackFailure.of(IOException("load failed", gone), PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND, download = true),
         )
         val gap = GapReached(4_000_000L..4_999_999L)
         listOf(false, true).forEach { leftOut ->
             assertEquals(
-                PlaybackFailure("This download is missing a part here", releaseAtFault = false, remote = "This download is missing a part here"),
+                PlaybackFailure("This download is missing a part here", releaseAtFault = false, remote = "This download is missing a part here", missingParts = true),
                 PlaybackFailure.of(IOException("load failed", gap), PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND, providersLeftOut = leftOut, download = true),
             )
         }

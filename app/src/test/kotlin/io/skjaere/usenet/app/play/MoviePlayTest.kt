@@ -116,17 +116,25 @@ class MoviePlayTest {
         assertEquals("Searched 2 indexers · 2 found", request.searchLine)
     }
 
-    /** Stream instead of a download missing parts (L354): its release, remembered and even stored, is neither played alone nor searched for. */
+    /**
+     * Stream instead of a download missing parts or at fault (L354): its release, remembered and even stored, is neither
+     * played alone nor searched for, and the sheet says why: its missing parts, or only that it failed.
+     */
     @Test
     fun `a release left out from the start is neither played alone nor among the search's`() {
-        val leftOut = Retry.streamInstead(SavedRelease(remembered.indexerId, remembered.guid, remembered.title, null, 0, "nzb-cc"))
-        val (r, end) = run(stored = true, leftOut = leftOut)
-        assertNull(end)
-        assertEquals(1, r.finds)
-        assertEquals(listOf("The release that played it was missing parts · Searching your indexers…"), r.lines)
-        val (request, retry) = r.plays.single()
-        assertEquals(leftOut, retry)
-        assertEquals(listOf(other), request.candidates)
+        listOf(
+            true to "The release that played it was missing parts · Searching your indexers…",
+            false to "The release that played it failed · Searching your indexers…",
+        ).forEach { (missingParts, line) ->
+            val leftOut = Retry.streamInstead(SavedRelease(remembered.indexerId, remembered.guid, remembered.title, null, 0, "nzb-cc"), missingParts)
+            val (r, end) = run(stored = true, leftOut = leftOut)
+            assertNull(end)
+            assertEquals(1, r.finds)
+            assertEquals(listOf(line), r.lines)
+            val (request, retry) = r.plays.single()
+            assertEquals(leftOut, retry)
+            assertEquals(listOf(other), request.candidates)
+        }
     }
 
     @Test

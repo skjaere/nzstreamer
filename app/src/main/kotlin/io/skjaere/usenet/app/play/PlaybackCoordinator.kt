@@ -1167,15 +1167,16 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
      * TMDB and searched for, a film by its remembered release while stored, else its search, its ids looked up on TMDB
      * first (its year and length from its download where TMDB doesn't answer). From [positionMs], where the player was
      * (null: where its place was saved), as Try another release starts where the release stopped: its place saved past
-     * nine tenths reads as watched, from the start. With [leaveOut] (the download missing parts), the download's release is
-     * left out ([Retry.streamInstead]), which would meet the same parts missing; else (its file gone) it goes first as the
-     * one that played the title. The player offers it only while the network is validated. Nothing for a launch that is
-     * neither an episode nor a film.
+     * nine tenths reads as watched, from the start. With [leaveOut] (the download missing parts, or at fault), the
+     * download's release is left out ([Retry.streamInstead]), which would meet the same, the sheet saying it was missing
+     * parts after its [missingParts], else that it failed; otherwise (its file gone, the device's own failure) it goes first
+     * as the one that played the title. The player offers it only while the network is validated. Nothing for a launch
+     * that is neither an episode nor a film.
      */
-    fun streamInstead(launch: PlayerLaunch, positionMs: Long?, leaveOut: Boolean, origin: PlayOrigin = PlayOrigin.after(launch)) {
-        val again: (PlayOrigin) -> Unit = { streamInstead(launch, positionMs, leaveOut, it) }
+    fun streamInstead(launch: PlayerLaunch, positionMs: Long?, leaveOut: Boolean, missingParts: Boolean, origin: PlayOrigin = PlayOrigin.after(launch)) {
+        val again: (PlayOrigin) -> Unit = { streamInstead(launch, positionMs, leaveOut, missingParts, it) }
         val from = origin.copy(start = positionMs ?: origin.start)
-        val retry = Retry.streamInstead(launch.release).takeIf { leaveOut }
+        val retry = Retry.streamInstead(launch.release, missingParts).takeIf { leaveOut }
         launch.watch.episodeTarget?.let { return streamEpisode(it, from, retry, again) }
         val film = launch.watch.movieTmdbId?.takeIf { launch.watch.kind == WatchKind.Movie } ?: return
         val row = container.downloads.done.value[launch.watchKey]

@@ -234,13 +234,29 @@ class PlaySessionsTest {
     @Test
     fun `stream instead of a download missing parts leaves its release out and says why`() {
         val downloaded = SavedRelease("a", "1", "Harbor.Lights.S02E05.1080p.WEB.h264-1", null, 0, "nzb-1", "Harbor.Lights.S02E05.1080p.WEB.h264-1.mkv", 1_400_000_000)
-        val retry = Retry.streamInstead(downloaded)
+        val retry = Retry.streamInstead(downloaded, missingParts = true)
         assertEquals(listOf("b/2", "c/3"), retry.leaveOut(releases).map { it.key })
         assertNull(retry.startPositionMs)
         assertEquals(false, retry.midStream)
         assertNull(retry.notice)
         assertEquals("The release that played it was missing parts", retry.searchingNotice)
         assertEquals("The release that played it was missing parts · Checking your providers…", checkingProvidersLine(retry))
+    }
+
+    /**
+     * Stream instead of a finished download whose release is at fault (a damaged file, what this device can't decode): it is
+     * left out as well, but the sheet says only that it failed, never that it was missing parts.
+     */
+    @Test
+    fun `stream instead of a download at fault leaves its release out and says it failed`() {
+        val downloaded = SavedRelease("a", "1", "Harbor.Lights.S02E05.1080p.WEB.h264-1", null, 0, "nzb-1", "Harbor.Lights.S02E05.1080p.WEB.h264-1.mkv", 1_400_000_000)
+        val retry = Retry.streamInstead(downloaded, missingParts = false)
+        assertEquals(listOf("b/2", "c/3"), retry.leaveOut(releases).map { it.key })
+        assertNull(retry.startPositionMs)
+        assertEquals(false, retry.midStream)
+        assertNull(retry.notice)
+        assertEquals("The release that played it failed", retry.searchingNotice)
+        assertEquals("The release that played it failed · Checking your providers…", checkingProvidersLine(retry))
     }
 
     /** [item] with the ranker's estimate of its bitrate, [mbps] (null: none, as for a pack whose season isn't counted). */

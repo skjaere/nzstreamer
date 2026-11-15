@@ -1,11 +1,14 @@
 package io.skjaere.usenet.app.download
 
 import androidx.media3.common.C
+import androidx.media3.common.PlaybackException
+import androidx.media3.datasource.DataSourceException
 import io.skjaere.usenet.app.play.Prefetch
 import io.skjaere.usenet.app.play.STREAM_INSTEAD
 import io.skjaere.usenet.app.play.STREAM_INSTEAD_QUESTION
 import io.skjaere.usenet.app.play.TRY_ANOTHER
 import io.skjaere.usenet.app.play.MISSING_PARTS_QUESTION
+import io.skjaere.usenet.app.play.PlaybackFailure
 import io.skjaere.usenet.app.play.missingPartsWords
 import io.skjaere.usenet.core.UsenetUris
 import io.skjaere.usenet.data.Download
@@ -14,9 +17,11 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.player.GapReached
 import io.skjaere.usenet.player.PlayUris
 import org.junit.jupiter.api.Test
 import java.io.File
+import java.io.IOException
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -207,7 +212,10 @@ class PlayerBranchesTest {
             "the next-track key only for what can play" to Regex("""cardHasNext = nextCard\?\.let \{ offersPlayNow\(it\.card\) \} == true"""),
             "Previous offline only to a download" to Regex("""if \(PlayerBranches\.previousPlays\(previous\.key, nextOnline\(\), finishedDownloads\(\)\)\) switchTo\(previous\)"""),
             "the offline lines a download's alone" to Regex("""PlayerBranches\.nextOnline\(playingDownload, online\(\)\)"""),
-            "Stream instead's release by its failure" to Regex("""streamInstead\(leaveOut = PlayerBranches\.streamLeavesOut\(failure\?\.fileGone == true\)\)"""),
+            "Stream instead's release by its failure" to Regex(
+                """val missingParts = failure\?\.missingParts == true\s*return streamInstead\(PlayerBranches\.streamLeavesOut\(missingParts, failure\?\.releaseAtFault == true\), missingParts\)""",
+            ),
+            "Stream instead from the prompt for its missing parts" to Regex("""if \(playingDownload\) return streamInstead\(leaveOut = true, missingParts = true\)"""),
         ).filterValues { !it.containsMatchIn(source) }.keys
         val once = mapOf(
             "PlayerFactory.create(" to count("PlayerFactory.create("),
@@ -219,13 +227,26 @@ class PlayerBranchesTest {
     }
 
     /**
-     * Stream instead leaves the download's own release out of the stream after its missing parts or a fault of its own,
-     * as the stream would meet the same; not for its file gone, which says nothing of the release.
+     * Stream instead leaves the download's own release out of the stream after its missing parts or a fault of its own
+     * (a damaged file, what this device can't decode), as the stream would meet the same. Not after what says nothing of
+     * the release: its file gone, this device's decoder or sound output stopping, a read that failed, anything else; there
+     * it goes first, as the one that played the title. Each failure as the player reads it for a download's play.
      */
     @Test
-    fun `Stream instead leaves the download's release out unless only its file is gone`() {
-        assertTrue(PlayerBranches.streamLeavesOut(fileGone = false))
-        assertFalse(PlayerBranches.streamLeavesOut(fileGone = true))
+    fun `Stream instead leaves the download's release out for its missing parts or a fault of its own`() {
+        fun leavesOut(error: Throwable, code: Int) =
+            PlaybackFailure.of(error, code, download = true).let { PlayerBranches.streamLeavesOut(it.missingParts, it.releaseAtFault) }
+        val gap = IOException("load failed", GapReached(4_000_000L..4_999_999L))
+        assertTrue(leavesOut(gap, PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND), "a part missing")
+        assertTrue(leavesOut(IOException("bad"), PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED), "a damaged file")
+        assertTrue(leavesOut(IOException("bad"), PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED), "what this device can't decode")
+        assertTrue(PlaybackFailure.noVideo(listOf("HEVC")).let { PlayerBranches.streamLeavesOut(it.missingParts, it.releaseAtFault) }, "no video to play")
+        val gone = IOException("load failed", DataSourceException("Download d1 has no finished file", null, PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND))
+        assertFalse(leavesOut(gone, PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND), "its file gone")
+        assertFalse(leavesOut(IOException("sound"), PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED), "the sound output stopped")
+        assertFalse(leavesOut(IOException("decoder"), PlaybackException.ERROR_CODE_DECODER_INIT_FAILED), "the decoder stopped")
+        assertFalse(leavesOut(IOException("read"), PlaybackException.ERROR_CODE_IO_UNSPECIFIED), "a read that failed")
+        assertFalse(leavesOut(IOException("other"), PlaybackException.ERROR_CODE_UNSPECIFIED), "anything else")
     }
 
     /**
@@ -240,6 +261,6 @@ class PlayerBranchesTest {
         val body = source.substring(at).substringBefore("\n    }\n")
         assertFalse("downloadHook" in body, body)
         assertTrue("streamEpisode(" in body && "streamMovie(" in body, body)
-        assertTrue("Retry.streamInstead(launch.release)" in body, body)
+        assertTrue("Retry.streamInstead(launch.release, missingParts).takeIf { leaveOut }" in body, body)
     }
 }

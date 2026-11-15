@@ -80,12 +80,12 @@ internal data class Retry(
         private const val PLAYING_FAILED = "The release that was playing couldn't play it"
 
         /**
-         * Stream instead of a finished download missing parts (L354): its [release] left out of the stream, which would meet
-         * the same parts missing. Nothing failed mid-stream, and the sheet says the release that played it was missing
-         * parts, as for one left for them ([downloadMissingParts]).
+         * Stream instead of a finished download missing parts or at fault (L354): its [release] left out of the stream,
+         * which would meet the same. Nothing failed mid-stream. The sheet says the release that played it was missing parts
+         * after its [missingParts], as for one left for them ([downloadMissingParts]); else only that it failed.
          */
-        fun streamInstead(release: SavedRelease): Retry =
-            Retry(setOf(release.key), startPositionMs = null, midStream = false, downloadMissingParts = true)
+        fun streamInstead(release: SavedRelease, missingParts: Boolean): Retry =
+            Retry(setOf(release.key), startPositionMs = null, midStream = false, downloadMissingParts = missingParts)
 
         /**
          * After the remembered release [key] played alone ([failed]: its failure, null when it was passed over), the search
