@@ -34,6 +34,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -161,9 +162,9 @@ class DownloadRunnerDeps(
         /**
          * The app's: the library's downloads, their places on the device, Resolve and the writer over the engine's download
          * opener (the debug build's throttle asked as each stream opens, item 8; a long gap asked for again while a provider
-         * is left out of the engine), the memory of releases found missing, the
-         * process's last exit, and the host by the API level and the debug override. A test gives its own [resolve] and
-         * [debug], and the writer's [longGapBytes] given small.
+         * is left out of the engine), the memory of releases found missing, the process's last exit, and the host by the API
+         * level and the debug override. A test gives its own [resolve] and [debug], and the writer's [longGapBytes] given
+         * small.
          */
         fun of(
             container: AppContainer,
@@ -295,7 +296,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      * Whether a host's walk is under way and will take up what is queued now: what the app's schedule asks instead of the
      * job's own state (L335, [DownloadHostRules.schedules]).
      */
-    val walking: StateFlow<Boolean> = _walking
+    val walking: StateFlow<Boolean> = _walking.asStateFlow()
 
     /** Reconcile once a process, before anything reads the queue to run it ([reconcile]). */
     private val reconciling = Mutex()
@@ -710,7 +711,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         }
     }
 
-    // The network followed meanwhile: its return ends a wait between Resolve's tries.
+    /** Download [id]'s releases, resolved and written in turn, the network followed meanwhile: its return ends a wait between Resolve's tries. */
     private suspend fun releases(id: String): Walk = wakes.watching { tryReleases(id) }
 
     private suspend fun tryReleases(id: String): Walk {

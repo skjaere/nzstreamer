@@ -15,8 +15,8 @@ import io.skjaere.usenet.app.play.skippedNotice
 import io.skjaere.usenet.core.AttemptFailure
 import io.skjaere.usenet.core.AvailabilityBackend
 import io.skjaere.usenet.core.EngineAvailabilityBackend
-import io.skjaere.usenet.core.FileCandidate
 import io.skjaere.usenet.core.FetchedNzb
+import io.skjaere.usenet.core.FileCandidate
 import io.skjaere.usenet.core.FileChooser
 import io.skjaere.usenet.core.FilePicker
 import io.skjaere.usenet.core.NzbPreparer
@@ -291,6 +291,12 @@ class DownloadResolver(
         // The attempt under way, and whether it has had its answer about its release (a step of it failed for the release).
         var current: String? = null
         var answered = false
+
+        // The release had its answer: the NZB kept for it is no use now.
+        suspend fun answer() {
+            answered = true
+            storage.dropGrab(id)
+        }
         // The connection lost or timed out in the attempt before: no other release is grabbed while it lasts (L382).
         var lost: UsenetError? = null
         // Grabs that failed for an outage on the indexer's side, uncounted.
@@ -317,17 +323,16 @@ class DownloadResolver(
                         is StepStatus.Failed -> when (val failure = status.failure) {
                             // The providers failing is no answer about the release, nor a connection lost.
                             is AttemptFailure.Provider -> Unit
-                            is AttemptFailure.Failed -> if (failure.error.isLostConnection()) lost = failure.error else answered(id).also { answered = true }
+                            is AttemptFailure.Failed -> if (failure.error.isLostConnection()) lost = failure.error else answer()
                             is AttemptFailure.FetchFailed -> if (indexerOut) {
                                 // No NZB came: the release isn't counted, and the next may be another indexer's.
                                 current?.let { counting = counting - it }
                                 count(id, counting)
                                 indexerOutages++
                             } else {
-                                answered(id).also { answered = true }
+                                answer()
                             }
-                            // The release's answer: its NZB is no use kept.
-                            else -> answered(id).also { answered = true }
+                            else -> answer()
                         }
                         is StepStatus.Done -> Unit
                     }
@@ -369,9 +374,6 @@ class DownloadResolver(
         false -> waiting(id, DownloadHostRules.CHECK_PROVIDER)
         null -> unreachable(id, UsenetError.NotConfigured, DownloadHostRules.CANT_REACH_PROVIDER)
     }
-
-    /** The attempt under way had its answer about its release: the NZB kept for it is no use now. */
-    private suspend fun answered(id: String) = storage.dropGrab(id)
 
     /** A connection lost in an attempt ([lost]): it ends the resolve before another release is grabbed. */
     private class OutOfReach(val error: UsenetError) : Exception(error::class.simpleName)

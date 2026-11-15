@@ -113,14 +113,18 @@ class DownloadHostRulesTest {
         val provider = listOf(
             row("a", DownloadState.Waiting, reason = "Can't reach your Usenet provider"),
             row("b", DownloadState.Waiting, reason = "Check your Usenet provider"),
+            row("j", DownloadState.Waiting, reason = "Can't reach your indexer"),
         )
         assertEquals(emptyList(), DownloadHostRules.runnable(provider))
         assertEquals(emptyList(), DownloadHostRules.runnable(provider, storageBack = true))
         val storage = listOf(row("c", DownloadState.Waiting, reason = "Storage isn't available"))
         assertEquals(emptyList(), DownloadHostRules.runnable(storage))
         assertEquals(listOf("c"), DownloadHostRules.runnable(storage, storageBack = true).map { it.id })
-        // The storage's own words, as DownloadStorage says them.
+        // The storage's own words, as DownloadStorage says them; the waits' words as the rows keep them.
         assertEquals(DownloadStorage.Unavailable().message, DownloadHostRules.STORAGE_UNAVAILABLE)
+        assertEquals(listOf("Can't reach your Usenet provider", "Check your Usenet provider", "Can't reach your indexer"), listOf(
+            DownloadHostRules.CANT_REACH_PROVIDER, DownloadHostRules.CHECK_PROVIDER, DownloadHostRules.CANT_REACH_INDEXER,
+        ))
     }
 
     @Test
@@ -208,6 +212,7 @@ class DownloadHostRulesTest {
         // The waits a host ends on say what is wrong alone.
         assertEquals("Can't reach your Usenet provider", text(episode(DownloadState.Waiting, reason = "Can't reach your Usenet provider")))
         assertEquals("Check your Usenet provider", text(episode(DownloadState.Waiting, reason = "Check your Usenet provider")))
+        assertEquals("Can't reach your indexer", text(episode(DownloadState.Waiting, reason = "Can't reach your indexer")))
         assertEquals("Storage isn't available", text(episode(DownloadState.Waiting, reason = "Storage isn't available")))
         // While the writer backs off, its row says why beside how far it is.
         assertEquals("Can't reach your Usenet provider · 0.5 of 1.2 GB", text(episode(DownloadState.Running, reason = "Can't reach your Usenet provider")))
