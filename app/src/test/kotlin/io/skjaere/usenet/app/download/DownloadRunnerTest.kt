@@ -904,6 +904,48 @@ class DownloadRunnerTest {
         assertEquals(DownloadState.Done, stored(id).state)
     }
 
+    /**
+     * The download's file is allocated whole before its first byte, so a device that fills meanwhile fails the record's
+     * write to Room first (SQLITE_FULL, no IOException): it fails as "Storage is full" (L382). Where even that can't be
+     * written, the walk ends rather than take the same row up again at once, and the next host goes on with it.
+     */
+    @Test
+    fun `a full device fails a download as Storage is full, and a failure that can't be kept ends the walk`() = test {
+        val a = fake("hl-a").apply { hold = HOLD }
+        val runner = runner()
+        val id = runner.add(1, a)
+        resolver.during = { call -> if (call > 2) throw AssertionError("download $id resolved again at once: resolve $call") }
+        val walk = host(runner)
+        runCurrent()
+        dao.full = setOf("progress")
+        a.gate.complete(Unit)
+        advanceUntilIdle()
+        assertTrue(walk.isCompleted)
+        assertEquals(DownloadState.Failed, stored(id).state)
+        assertEquals(DownloadWriter.STORAGE_FULL, stored(id).reason)
+
+        // Nothing can be written: the walk ends, the row as it was, for the next host.
+        val b = fake("hl-b").apply { hold = HOLD }
+        dao.full = emptySet()
+        resolver.calls.clear()
+        val second = runner.add(2, b)
+        val again = host(runner)
+        runCurrent()
+        dao.full = setOf("progress", "update", "setState")
+        b.gate.complete(Unit)
+        advanceUntilIdle()
+        assertTrue(again.isCompleted, "the walk took the row up again and again")
+        assertEquals(listOf(second), resolver.calls)
+        assertEquals(DownloadState.Running, stored(second).state)
+
+        // Room again: the next host goes on with it from its offset.
+        dao.full = emptySet()
+        host(runner)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Done, stored(second).state)
+        assertContentEquals(b.data, storage.video(second).readBytes())
+    }
+
     @Test
     fun `the boot receiver is switched on while the host is the service and something can run`() = test {
         host = DownloadHost.Service
@@ -1021,6 +1063,13 @@ class DownloadRunnerTest {
     private class FakeDao : DownloadDao {
         val rows = MutableStateFlow<Map<String, Download>>(emptyMap())
 
+        /** Which writes fail as SQLite's do on a full device, while set. */
+        var full: Set<String> = emptySet()
+
+        private fun write(what: String) {
+            if (what in full) throw android.database.sqlite.SQLiteFullException("database or disk is full (code 13 SQLITE_FULL)")
+        }
+
         private fun sorted(filter: (Download) -> Boolean): Flow<List<Download>> =
             rows.map { all -> all.values.filter(filter).sortedWith(compareBy(Download::position, Download::createdAt)) }
 
@@ -1032,13 +1081,20 @@ class DownloadRunnerTest {
         override fun forShow(showTmdbId: Int) = sorted { it.showTmdbId == showTmdbId && it.state != DownloadState.Deleting }
         override fun forMovie(movieTmdbId: Int) = rows.map { all -> all.values.firstOrNull { it.movieTmdbId == movieTmdbId && it.state != DownloadState.Deleting } }
         override suspend fun insert(download: Download) = rows.update { it + (download.id to download) }
-        override suspend fun update(download: Download) = rows.update { if (download.id in it) it + (download.id to download) else it }
+        override suspend fun update(download: Download) {
+            write("update")
+            rows.update { if (download.id in it) it + (download.id to download) else it }
+        }
 
-        override suspend fun progress(id: String, safeOffset: Long, gaps: List<DownloadGap>, updatedAt: Long) =
+        override suspend fun progress(id: String, safeOffset: Long, gaps: List<DownloadGap>, updatedAt: Long) {
+            write("progress")
             change(id) { it.copy(safeOffset = safeOffset, gaps = gaps, updatedAt = updatedAt) }
+        }
 
-        override suspend fun setState(id: String, state: DownloadState, reason: String?, updatedAt: Long) =
+        override suspend fun setState(id: String, state: DownloadState, reason: String?, updatedAt: Long) {
+            write("setState")
             change(id) { it.copy(state = state, reason = reason, updatedAt = updatedAt) }
+        }
 
         override suspend fun move(id: String, position: Long) = change(id) { it.copy(position = position) }
         override suspend fun delete(id: String) = rows.update { it - id }

@@ -2,6 +2,7 @@ package io.skjaere.usenet.app.download
 
 import android.app.ActivityManager
 import android.content.Context
+import android.database.sqlite.SQLiteFullException
 import android.os.Build
 import io.skjaere.usenet.app.AppContainer
 import io.skjaere.usenet.app.download.DownloadResolver.Resolution
@@ -661,22 +662,33 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /** What the walk does after an item. */
     private enum class Walk { Next, End }
 
-    /** Resolves and writes download [id], and the next release after one given up; what the walk does then. */
+    /**
+     * Resolves and writes download [id], and the next release after one given up; what the walk does then. A failure it
+     * didn't expect fails it, its file and record kept, rather than run into the same failure again: a device so full that
+     * Room can't write (its file was allocated whole before, so its record is what fails first) as "Storage is full" (L382).
+     * Where even that can't be kept, the row is as it was: the walk ends, rather than take it up again at once, and the
+     * next host goes on with it.
+     */
     private suspend fun item(id: String): Walk = try {
         releases(id)
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        // Nothing the item expects: it fails, its file and record kept, rather than run into the same failure again.
         log.warn("download {}: failed on {}", id, e::class.simpleName)
+        val reason = when {
+            generateSequence<Throwable>(e) { it.cause }.take(16).any { it is SQLiteFullException } -> DownloadWriter.STORAGE_FULL
+            e is IOException -> DownloadWriter.WRITE_FAILED
+            else -> FAILED_IN_APP
+        }
         try {
-            failed(id, if (e is IOException) DownloadWriter.WRITE_FAILED else FAILED_IN_APP)
+            failed(id, reason)
+            Walk.Next
         } catch (again: CancellationException) {
             throw again
         } catch (again: Exception) {
-            log.warn("download {}: couldn't say it failed: {}", id, again::class.simpleName)
+            log.warn("download {}: couldn't say it failed ({}): the walk ends", id, again::class.simpleName)
+            Walk.End
         }
-        Walk.Next
     }
 
     // The network followed meanwhile: its return ends a wait between Resolve's tries.
