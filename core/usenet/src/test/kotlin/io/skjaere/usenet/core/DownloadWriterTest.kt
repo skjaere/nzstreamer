@@ -269,6 +269,22 @@ class DownloadWriterTest {
         assertEquals((2 + 4 + 8 + 16 + 32 + 64).seconds.inWholeMilliseconds, currentTime)
     }
 
+    /**
+     * The reader gets ktor's wrapper of what ended the stream, an IOException, whatever that was: a failure the libraries
+     * don't name (a check of theirs that failed) is no dropped connection, and counts toward the six (L382), never toward an
+     * hour of a provider out of reach.
+     */
+    @Test
+    fun `a failure the libraries don't name counts toward the six with no progress, not as a provider out of reach`() = runTest(timeout = 60.seconds) {
+        val wrote = writer(
+            StreamOpener { _, _, _ -> failed(IllegalStateException("A check of the library's that failed")) },
+            time = testScheduler.timeSource,
+        ).wrote()
+        assertEquals(Outcome.Failed(DownloadWriter.NO_PROGRESS), wrote.outcome)
+        assertEquals(List(7) { 0L }, wrote.opens)
+        assertEquals((2 + 4 + 8 + 16 + 32 + 64).seconds.inWholeMilliseconds, currentTime)
+    }
+
     @Test
     fun `ten minutes of refused connections on a validated network fail nothing, and it goes on from its offset`() = runTest(timeout = 60.seconds) {
         var cutting = true

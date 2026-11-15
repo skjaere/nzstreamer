@@ -1,5 +1,6 @@
 package io.skjaere.usenet.core
 
+import io.ktor.utils.io.ClosedByteChannelException
 import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -365,13 +366,16 @@ class DownloadWriter(
     /** What ended a stream ([cause]: its close's, or its open's; null: it ended short with none), and its kind for the log. */
     private fun sort(cause: Throwable?, progressed: Boolean): Sorted {
         if (cause == null) return Sorted(Into.Counted, "EndedShort")
-        val chain = cause.causeChain()
+        // A read of a stream that failed throws ktor's wrapper of the failure, an IOException whatever it wraps: sorted as
+        // it, any failure would be a dropped connection. What it wraps says what ended the stream.
+        val origin = cause.causeChain().firstOrNull { it !is ClosedByteChannelException } ?: cause
+        val chain = origin.causeChain()
         // Classified where it was thrown: it says what it is.
         if (chain.none { it is UsenetException }) {
             // The engine's own: it closed the streamer (a rebuild, the providers saved) or its scope under the stream.
             if (chain.any { it is CancellationException || it is IllegalStateException && it.message == POOL_CLOSED }) return Sorted(Into.Again, "EngineCut")
         }
-        val error = cause.toUsenetError()
+        val error = origin.toUsenetError()
         val into = when (error) {
             is UsenetError.AuthFailed, UsenetError.NotConfigured -> Into.Provider
             is UsenetError.MissingArticle -> Into.Incomplete
