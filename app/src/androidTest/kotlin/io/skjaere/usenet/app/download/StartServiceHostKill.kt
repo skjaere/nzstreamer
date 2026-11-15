@@ -2,6 +2,7 @@ package io.skjaere.usenet.app.download
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.runBlocking
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -13,6 +14,10 @@ import org.junit.runner.RunWith
  */
 @RunWith(AndroidJUnit4::class)
 class StartServiceHostKill {
+    /** Only where its run names it, on a phone ([PairRun]). */
+    @get:Rule
+    val pair = PairRun()
+
     @Test
     fun seedsOneQueuedDownload() = runBlocking<Unit> {
         PairSeed.seed(PairSeed.Plan(serviceHost = true))

@@ -6,6 +6,7 @@ import androidx.test.filters.SdkSuppress
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -20,6 +21,10 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 @SdkSuppress(minSdkVersion = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
 class CheckDownloadForceStop {
+    /** Only where its run names it, on a phone ([PairRun]). */
+    @get:Rule
+    val pair = PairRun()
+
     private val check = PairCheck()
 
     @After

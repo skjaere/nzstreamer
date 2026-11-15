@@ -4,6 +4,7 @@ import android.os.Build
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SdkSuppress
 import kotlinx.coroutines.runBlocking
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -16,6 +17,10 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 @SdkSuppress(minSdkVersion = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
 class StartDownloadReboot {
+    /** Only where its run names it, on a phone ([PairRun]). */
+    @get:Rule
+    val pair = PairRun()
+
     @Test
     fun seedsTwoQueuedDownloads() = runBlocking<Unit> {
         PairSeed.seed(PairSeed.Plan(rows = 2))

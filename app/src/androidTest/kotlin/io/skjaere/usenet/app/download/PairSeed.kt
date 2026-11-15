@@ -32,6 +32,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import org.junit.Assume.assumeFalse
+import org.junit.Assume.assumeTrue
+import org.junit.rules.TestRule
+import org.junit.runner.Description
+import org.junit.runners.model.Statement
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -136,7 +141,7 @@ object PairSeed {
         require(plan.rows >= 1) { "A pair needs a download" }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val container = context.container
-        if (container.television) throw AssertionError("downloads never run on a TV (L369)")
+        assumeFalse("downloads never run on a TV (L369)", container.television)
         // What the boundary before left, before any of it goes. Reconciled first: the app's start does that anyway.
         PairRecord.record("found", plan.fixture, strict = false)
         if (!reachable()) throw AssertionError("the mock NNTP server isn't reachable at $MOCK_HOST:$MOCK_PORT")
@@ -261,6 +266,24 @@ object PairSeed {
 
     /** The app's folder on the primary volume, as DownloadStorage finds it; null while it isn't there. */
     internal fun volume(context: Context): File? = context.getExternalFilesDirs(null).firstOrNull()?.takeIf { it.isDirectory }
+}
+
+/**
+ * Runs a pair's class only where its run names it (`-e class`, as the pairs' runner passes each phase and a run by name
+ * passes its classes), on a phone, and skips it anywhere else: a whole suite's run, a shard, a filter by package or
+ * pattern. A Check passes only after the step the runner takes between the phases, and a Start leaves the app seeded for
+ * its Check (the mock alone as the provider, the switches off, the seams' files, rows queued): run unnamed, the one would
+ * fail and the other leave its seeding to the classes after it. Neither half runs on a TV (L369).
+ */
+class PairRun : TestRule {
+    override fun apply(base: Statement, description: Description): Statement = object : Statement() {
+        override fun evaluate() {
+            val named = InstrumentationRegistry.getArguments().getString("class").orEmpty().split(',').map { it.substringBefore('#').trim() }
+            assumeTrue("${description.testClass.simpleName} runs only when its run names it: a two-phase pair (L367)", description.className in named)
+            assumeFalse("downloads never run on a TV (L369)", InstrumentationRegistry.getInstrumentation().targetContext.container.television)
+            base.evaluate()
+        }
+    }
 }
 
 /**

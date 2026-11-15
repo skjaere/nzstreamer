@@ -339,7 +339,9 @@ The download pairs' 48 MB file is made by
 `python3 -I app/src/androidTest/fixtures/pair-download.py build/Harbor.Lights.S03E07.1080p.WEB.h264-KESTREL.mkv` and
 seeded under that name with the default segment size
 (`./gradlew :tools:mock-seed:run --args="seed --video build/Harbor.Lights.S03E07.1080p.WEB.h264-KESTREL.mkv --out build/pair-download.nzb"`),
-as its `.nzb` asset names its articles and its file so.
+as its `.nzb` asset names its articles and its file so. The pairs' classes (`Start…` and `Check…` in the `download`
+package) run only when a run names them (`-e class`), each pair's halves in turn with the app opened, and stopped or
+restarted, between them; any other run skips them.
 
 The fake indexer seeds an invented show and movie into the mock and serves them as a Newznab indexer; it prints its
 address and API key. It needs a second clip too, a copy with E-AC-3 audio that one of its releases plays. Make it once:
