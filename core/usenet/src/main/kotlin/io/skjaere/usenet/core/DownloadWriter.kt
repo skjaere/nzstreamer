@@ -60,7 +60,7 @@ import kotlin.time.TimeSource
  *   (a long gap, L342), whose bytes are no use, and a reopen that ends short with no cause where the stream before it did
  *   (the file's last listed article shorter than its guessed size); a long gap while a provider is left out of the engine
  *   ([providersLeftOut]), which may have it, is asked for again from its first byte after the wait, for an hour before the
- *   release is given up;
+ *   release is given up, each long gap past the one before its own hour;
  * - a login refused, or no provider ([UsenetError.AuthFailed], [UsenetError.NotConfigured]), waits for the providers;
  * - a write or force the volume has no room for (ENOSPC, EFBIG) fails it as [STORAGE_FULL], with no reopen: its file and
  *   record are kept, and Try again goes on from the safe offset once there is room.
@@ -200,8 +200,10 @@ class DownloadWriter(
         var outOfReach: TimeMark? = null
         // Where the last stream that ended short with no cause ended.
         var shortAt: Long? = null
-        // Since when long gaps have been found with a provider left out, reopen after reopen.
+        // Since when a long gap has been found with a provider left out, reopen after reopen, and the stretch last asked
+        // for again for it.
         var leftOutSince: TimeMark? = null
+        var askedAgain: LongRange? = null
         while (run.written < run.size) {
             val from = run.written
             // A retry asked for, or the network back, from here on ends the wait after this stream.
@@ -209,12 +211,22 @@ class DownloadWriter(
             onOpen(from)
             val ended = stream(run, from)
             if (ended == Ended.Complete) break
+            askedAgain?.let { asked ->
+                // Past the stretch asked for again: what is written within it is no sign, zeros moving the write on too.
+                // A long gap after it is another, hours later perhaps, a provider left out again: an hour of its own.
+                if (run.written > asked.last || ended == Ended.LongGap && run.longGap?.let { it.first > asked.last } == true) {
+                    leftOutSince = null
+                    askedAgain = null
+                    wait = FIRST_BACKOFF
+                }
+            }
             if (ended == Ended.LongGap) {
                 val stretch = run.longGap
                 val leftOut = stretch != null && providersLeftOut()
                 if (stretch != null && leftOut && (leftOutSince ?: timeSource.markNow().also { leftOutSince = it }).elapsedNow() < UNREACHABLE_FOR) {
                     // A provider left out may have it all: back to the stretch's first byte, to ask for it again once the
                     // engine has checked that provider again. Only an hour of it gives the release up.
+                    askedAgain = stretch
                     run.goBack(stretch)
                     run.save()
                     log.info(

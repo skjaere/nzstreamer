@@ -2,6 +2,8 @@ package io.skjaere.usenet.core
 
 import io.ktor.utils.io.ByteChannel
 import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.writeFully
+import io.ktor.utils.io.writer as channelWriter
 import io.skjaere.nzbstreamer.metadata.ExtractedMetadata
 import io.skjaere.nzbstreamer.metadata.NzbMetadataResponse
 import io.skjaere.nzbstreamer.nzb.NzbDocument
@@ -9,6 +11,7 @@ import io.skjaere.usenet.core.DownloadWriter.GiveUp
 import io.skjaere.usenet.core.DownloadWriter.Outcome
 import io.skjaere.usenet.core.DownloadWriter.Wait
 import io.skjaere.usenet.core.FakeNntpServer.Body
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -103,6 +106,27 @@ class DownloadWriterTest {
         servers += server
         engine.configure(EngineSettings(listOf(server.provider())))
         return server
+    }
+
+    /**
+     * A stream of the clip's [range] as the engine's makes one, on [scope]'s clock: article by article, those [missing]
+     * says filled with zeros, each of their stretches said ([OpenedStream.gaps]) before its zeros come. [missing] may say
+     * stretches further on, as the engine's fetches ahead find them.
+     */
+    private fun streamOf(scope: CoroutineScope, range: LongRange, missing: suspend StreamGaps.(Int) -> Boolean): OpenedStream {
+        val gaps = StreamGaps()
+        val job = scope.channelWriter(autoFlush = true) {
+            ((range.first / part).toInt()..(range.last / part).toInt()).forEach { i ->
+                val bytes = bytesOf(i).within(range) ?: return@forEach
+                if (gaps.missing(i)) {
+                    gaps.add(bytes)
+                    channel.writeFully(ByteArray((bytes.last - bytes.first + 1).toInt()))
+                } else {
+                    channel.writeFully(clip.data, bytes.first.toInt(), (bytes.last + 1).toInt())
+                }
+            }
+        }
+        return OpenedStream(job.channel, job.job, gaps)
     }
 
     /** How many BODYs of article [i] the server answered. */
@@ -294,6 +318,76 @@ class DownloadWriterTest {
         assertEquals(Outcome.NextRelease(GiveUp.LongGap), gone.outcome)
         assertTrue(currentTime - start >= 1.hours.inWholeMilliseconds, "gave up after ${(currentTime - start) / 1000} s")
         assertTrue(gone.opens.drop(1).all { it == bytesOf(4).first }, "opens ${gone.opens}")
+    }
+
+    /**
+     * One write covers a whole download, hours of it. A long gap asked for again that came once the provider was back is
+     * behind the write: a provider left out again hours later (another rebuild) gives the next long gap an hour of its own,
+     * and a wait from 2 s again, rather than the first one's hour, long gone, giving the release up at once.
+     */
+    @Test
+    fun `a later long gap with a provider left out again has an hour of its own, the first having come when asked again`() = runTest(timeout = 60.seconds) {
+        var leftOut = true
+        val opens = mutableListOf<Pair<Long, Long>>()
+        val wrote = writer(
+            StreamOpener { _, _, range ->
+                opens += currentTime to range.first
+                // Checked again and back in by the reopen after each long gap.
+                if (opens.size > 1) leftOut = false
+                val stream = opens.size
+                streamOf(backgroundScope, range) { i ->
+                    // 70 minutes on, before article 8: the provider left out again, by a play's recheck.
+                    if (i == 8 && stream == 2) {
+                        delay(70.minutes)
+                        leftOut = true
+                    }
+                    (i in 4..6 || i in 10..12) && leftOut
+                }
+            },
+            time = testScheduler.timeSource,
+            longGapBytes = 3 * part,
+            leftOut = { leftOut },
+        ).wrote()
+        assertEquals(Outcome.Done(emptyList()), wrote.outcome)
+        val later = FIRST_WAIT + 70.minutes.inWholeMilliseconds
+        assertEquals(listOf(0L to 0L, FIRST_WAIT to bytesOf(4).first, later + FIRST_WAIT to bytesOf(10).first), opens)
+        // Gone back to the second stretch's first byte, nothing recorded missing, and every byte of both came.
+        assertTrue(wrote.records.any { it.offset == bytesOf(10).first && it.gaps.isEmpty() }, "records ${wrote.records}")
+        assertContentEquals(clip.data, path.readBytes())
+    }
+
+    /**
+     * The engine's fetches run ahead of the reader, which can be a channel's buffer behind: a long gap found just past the
+     * stretch asked for again is another, though the reader is still within the first.
+     */
+    @Test
+    fun `a later long gap found ahead of the reader, just past the stretch asked for again, has an hour of its own too`() = runTest(timeout = 60.seconds) {
+        var leftOut = true
+        val opens = mutableListOf<Pair<Long, Long>>()
+        val wrote = writer(
+            StreamOpener { _, _, range ->
+                opens += currentTime to range.first
+                if (opens.size > 1) leftOut = false
+                val stream = opens.size
+                streamOf(backgroundScope, range) { i ->
+                    // 70 minutes on, the reader at article 6: left out again, and articles 8 to 10 found missing ahead.
+                    if (i == 6 && stream == 2) {
+                        delay(70.minutes)
+                        leftOut = true
+                        (8..10).forEach { add(bytesOf(it)) }
+                    }
+                    (i in 4..6 || i in 8..10) && leftOut && !(stream == 2 && i == 6)
+                }
+            },
+            time = testScheduler.timeSource,
+            longGapBytes = 3 * part,
+            leftOut = { leftOut },
+        ).wrote()
+        assertEquals(Outcome.Done(emptyList()), wrote.outcome)
+        // Back to where the reader was, before the second stretch: it goes back, never on.
+        val later = FIRST_WAIT + 70.minutes.inWholeMilliseconds
+        assertEquals(listOf(0L to 0L, FIRST_WAIT to bytesOf(4).first, later + FIRST_WAIT to bytesOf(6).first), opens)
+        assertContentEquals(clip.data, path.readBytes())
     }
 
     @Test
