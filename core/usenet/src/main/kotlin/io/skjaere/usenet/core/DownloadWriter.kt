@@ -58,7 +58,9 @@ import kotlin.time.TimeSource
  * - a part the NZB lists no article for, or one of a guessed size ([UsenetError.MissingArticle]), and a damaged release
  *   ([UsenetError.Corrupt]) give the release up for the next, as does a stretch missing in a row of [longGapBytes] or more
  *   (a long gap, L342), whose bytes are no use, and a reopen that ends short with no cause where the stream before it did
- *   (the file's last listed article shorter than its guessed size);
+ *   (the file's last listed article shorter than its guessed size); a long gap while a provider is left out of the engine
+ *   ([providersLeftOut]), which may have it, is asked for again from its first byte after the wait, for an hour before the
+ *   release is given up;
  * - a login refused, or no provider ([UsenetError.AuthFailed], [UsenetError.NotConfigured]), waits for the providers;
  * - a write or force the volume has no room for (ENOSPC, EFBIG) fails it as [STORAGE_FULL], with no reopen: its file and
  *   record are kept, and Try again goes on from the safe offset once there is room.
@@ -79,6 +81,8 @@ class DownloadWriter(
     private val recordBytes: Long = RECORD_BYTES,
     private val recordEvery: Duration = RECORD_EVERY,
     private val longGapBytes: Long = LONG_GAP_BYTES,
+    /** Whether a provider is left out of the engine now ([UsenetEngine.leftOut]), which may have what reads as missing. */
+    private val providersLeftOut: () -> Boolean = { false },
 ) {
     /** The write under way: [written] bytes of download [id]'s file (forced or not), and whether its provider is out of reach now. */
     data class Live(val id: String, val written: Long, val unreachable: Boolean)
@@ -196,6 +200,8 @@ class DownloadWriter(
         var outOfReach: TimeMark? = null
         // Where the last stream that ended short with no cause ended.
         var shortAt: Long? = null
+        // Since when long gaps have been found with a provider left out, reopen after reopen.
+        var leftOutSince: TimeMark? = null
         while (run.written < run.size) {
             val from = run.written
             // A retry asked for, or the network back, from here on ends the wait after this stream.
@@ -204,7 +210,24 @@ class DownloadWriter(
             val ended = stream(run, from)
             if (ended == Ended.Complete) break
             if (ended == Ended.LongGap) {
-                log.info("download {}: {} bytes or more missing in a row by byte {}: giving its release up", run.id, longGapBytes, run.written)
+                val stretch = run.longGap
+                val leftOut = stretch != null && providersLeftOut()
+                if (stretch != null && leftOut && (leftOutSince ?: timeSource.markNow().also { leftOutSince = it }).elapsedNow() < UNREACHABLE_FOR) {
+                    // A provider left out may have it all: back to the stretch's first byte, to ask for it again once the
+                    // engine has checked that provider again. Only an hour of it gives the release up.
+                    run.goBack(stretch)
+                    run.save()
+                    log.info(
+                        "download {}: {} bytes or more missing in a row with a provider left out: asking for them again from byte {} in {} s",
+                        run.id, longGapBytes, run.written, wait.inWholeSeconds,
+                    )
+                    wait = if (wakes.pause(wait, since)) FIRST_BACKOFF else minOf(wait * 2, MAX_BACKOFF)
+                    continue
+                }
+                log.info(
+                    "download {}: {} bytes or more missing in a row by byte {}{}: giving its release up",
+                    run.id, longGapBytes, run.written, if (leftOut) ", a provider left out for an hour" else "",
+                )
                 return Outcome.NextRelease(GiveUp.LongGap)
             }
             ended as Ended.Failed
@@ -543,10 +566,22 @@ class DownloadWriter(
         private var recordedGaps = known.all()
         private var since = timeSource.markNow()
 
-        /** Adds [range], a stream's stretch of zeros; true when it makes a stretch missing in a row a long gap. */
+        /** The stretch missing in a row that made the last long gap. */
+        @Volatile
+        var longGap: LongRange? = null
+
+        /** Adds [range], a stream's stretch of zeros; true when it makes a stretch missing in a row a long gap ([longGap]). */
         fun missing(range: LongRange): Boolean {
             known.add(range)
-            return known.next(range.first)?.let { it.last - it.first + 1 >= longGapBytes } == true
+            val stretch = known.next(range.first)?.takeIf { it.last - it.first + 1 >= longGapBytes } ?: return false
+            longGap = stretch
+            return true
+        }
+
+        /** Back to [stretch]'s first byte: what lies from there, the stretch with it, is asked for again, so none of it is missing yet. */
+        fun goBack(stretch: LongRange) {
+            written = minOf(written, stretch.first)
+            known = StreamGaps().apply { known.all().filter { it.last < stretch.first }.forEach(::add) }
         }
 
         /** [n] bytes of [buffer] came: written at [written], and recorded when the cadence says. */

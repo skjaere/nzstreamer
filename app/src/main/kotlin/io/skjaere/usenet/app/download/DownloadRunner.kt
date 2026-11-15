@@ -132,7 +132,8 @@ class DownloadRunnerDeps(
     companion object {
         /**
          * The app's: the library's downloads, their places on the device, Resolve and the writer over the engine's download
-         * opener (the debug build's throttle asked as each stream opens, item 8), the memory of releases found missing, the
+         * opener (the debug build's throttle asked as each stream opens, item 8; a long gap asked for again while a provider
+         * is left out of the engine), the memory of releases found missing, the
          * process's last exit, and the host by the API level and the debug override. A test gives its own [resolve],
          * [writer] and [debug].
          */
@@ -142,7 +143,10 @@ class DownloadRunnerDeps(
             storage: DownloadStorage = container.downloadStorage,
             debug: DownloadDebug = container.downloadDebug,
             resolve: suspend (String) -> Resolution = DownloadResolver.of(container, storage)::resolve,
-            writer: DownloadWriter = DownloadWriter(NzbStreamOpener.download(container.engine), throttle = { debug.throttle }),
+            writer: DownloadWriter = DownloadWriter(
+                NzbStreamOpener.download(container.engine), throttle = { debug.throttle },
+                providersLeftOut = { container.engine.leftOut.value.isNotEmpty() },
+            ),
         ) = DownloadRunnerDeps(
             downloads = container.data.downloads,
             storage = DownloadRunner.Storage.of(storage),

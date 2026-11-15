@@ -119,7 +119,8 @@ class DownloadWriterTest {
         recordBytes: Long = DownloadWriter.RECORD_BYTES,
         recordEvery: Duration = DownloadWriter.RECORD_EVERY,
         longGapBytes: Long = DownloadWriter.LONG_GAP_BYTES,
-    ) = DownloadWriter(opener, network, { throttle }, time, recordBytes, recordEvery, longGapBytes)
+        leftOut: () -> Boolean = { false },
+    ) = DownloadWriter(opener, network, { throttle }, time, recordBytes, recordEvery, longGapBytes, leftOut)
 
     /** A record the writer made: its safe offset and gaps. */
     private data class Record(val offset: Long, val gaps: List<LongRange>)
@@ -258,6 +259,37 @@ class DownloadWriterTest {
         val short = withTimeout(60_000) { writer(longGapBytes = 3 * part).wrote() }
         assertEquals(Outcome.Done(listOf(bytesOf(4).first..bytesOf(5).last)), short.outcome)
         assertContentEquals(zeroed(4, 5), path.readBytes())
+    }
+
+    /**
+     * With a provider left out of the engine (its login refused or out of reach as it was checked), what only it has reads
+     * as missing on the others: a long gap then isn't the release's (UsenetSource's "Incomplete on the providers in use").
+     * The writer goes back to the stretch's first byte and opens it again after its wait, while the engine checks the
+     * provider again; only an hour of it gives the release up.
+     */
+    @Test
+    fun `a long gap while a provider is left out is asked for again from its first byte, and given up only after an hour`() = runTest(timeout = 60.seconds) {
+        var leftOut = true
+        val opens = mutableListOf<Pair<Long, Long>>()
+        serve { i -> if (i in 4..6 && leftOut) Body.Missing else Body.Article(clip.article(i)) }
+        val back = writer(time = testScheduler.timeSource, longGapBytes = 3 * part, leftOut = { leftOut }).wrote(opened = { offset ->
+            opens += currentTime to offset
+            // Checked again and back in by the second.
+            if (opens.size == 2) leftOut = false
+        })
+        assertEquals(Outcome.Done(emptyList()), back.outcome)
+        assertEquals(listOf(0L to 0L, 2_000L to bytesOf(4).first), opens)
+        // Gone back before the stretch: never recorded missing past it, and every byte of it came.
+        assertTrue(back.records.any { it.offset == bytesOf(4).first && it.gaps.isEmpty() }, "records ${back.records}")
+        assertContentEquals(clip.data, path.readBytes())
+
+        // Left out for an hour: given up for the next.
+        leftOut = true
+        val start = currentTime
+        val gone = writer(time = testScheduler.timeSource, longGapBytes = 3 * part, leftOut = { true }).wrote()
+        assertEquals(Outcome.NextRelease(GiveUp.LongGap), gone.outcome)
+        assertTrue(currentTime - start >= 1.hours.inWholeMilliseconds, "gave up after ${(currentTime - start) / 1000} s")
+        assertTrue(gone.opens.drop(1).all { it == bytesOf(4).first }, "opens ${gone.opens}")
     }
 
     @Test
