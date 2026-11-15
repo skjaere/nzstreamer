@@ -4,7 +4,9 @@ import org.junit.jupiter.api.Test
 import org.w3c.dom.Comment
 import org.w3c.dom.Element
 import org.w3c.dom.Node
+import org.xml.sax.InputSource
 import java.io.File
+import java.io.StringReader
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -26,14 +28,46 @@ class DownloadManifestTest {
 
     @Test
     fun `the six permissions the downloads need are declared, each with a comment saying why`() {
-        val permissions = manifest.elements("uses-permission")
-        val declared = permissions.map { it.android("name") }
+        val declared = manifest.elements("uses-permission").map { it.android("name") }
         DOWNLOADS.forEach { name -> assertTrue(name in declared, "uses-permission $name is missing") }
-        permissions.filter { it.android("name") in DOWNLOADS }.forEach { permission ->
-            val why = permission.comment(sharedWith = DOWNLOADS) ?: fail("uses-permission ${permission.android("name")} has no comment saying why")
-            assertTrue("ownload" in why, "the comment over ${permission.android("name")} doesn't say it is the downloads': $why")
-        }
+        assertEquals(emptyMap(), uncommented(manifest), "the downloads' permissions without a comment of their own saying why")
     }
+
+    @Test
+    fun `a permission under another's comment has none of its own, but the dataSync type's goes with the foreground service's`() {
+        val written = """
+            <manifest xmlns:android="$ANDROID_NS">
+                <!-- Downloads' notifications. -->
+                <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+                <uses-permission android:name="android.permission.RUN_USER_INITIATED_JOBS" />
+                <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+                <!-- Downloads' service, and its type's. -->
+                <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+                <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+                <!-- The TV's set-up page. -->
+                <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+            </manifest>
+        """.trimIndent()
+        val parsed = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }.newDocumentBuilder().parse(InputSource(StringReader(written))).documentElement
+        assertEquals(
+            mapOf(
+                "android.permission.RUN_USER_INITIATED_JOBS" to null, "android.permission.RECEIVE_BOOT_COMPLETED" to null,
+                "android.permission.ACCESS_NETWORK_STATE" to " The TV's set-up page. ",
+            ),
+            uncommented(parsed),
+        )
+    }
+
+    /**
+     * The downloads' permissions in [root] without a comment of their own that says they are the downloads', each with the
+     * comment it has (null with none): only the comment just above it counts, with nothing but whitespace between, and
+     * the one above the foreground service's for its dataSync type's, declared after it.
+     */
+    private fun uncommented(root: Element): Map<String, String?> =
+        root.elements("uses-permission").filter { it.android("name") in DOWNLOADS }.associate { permission ->
+            val name = permission.android("name")
+            name to permission.comment(sharedWith = SHARES[name])
+        }.filterValues { why -> why == null || "ownload" !in why }
 
     @Test
     fun `none of the permissions the downloads were built not to need, and no new hardware feature`() {
@@ -91,16 +125,16 @@ class DownloadManifestTest {
     private fun Element.android(attribute: String): String = getAttributeNS(ANDROID_NS, attribute)
 
     /**
-     * The comment just above this element, over the elements of [sharedWith] it goes with: the text of the nearest comment
-     * before it with nothing but whitespace and those between; null with none.
+     * The comment just above this element, or above the permission it goes with ([sharedWith], declared just before it):
+     * the text of the nearest comment before it with nothing but whitespace and that permission between; null with none.
      */
-    private fun Element.comment(sharedWith: Set<String>): String? {
+    private fun Element.comment(sharedWith: String? = null): String? {
         var node: Node? = previousSibling
         while (node != null) {
             when {
                 node is Comment -> return node.data
                 node.nodeType == Node.TEXT_NODE && node.textContent.isBlank() -> Unit
-                node is Element && node.tagName == "uses-permission" && node.android("name") in sharedWith -> Unit
+                node is Element && node.tagName == "uses-permission" && node.android("name") == sharedWith -> Unit
                 else -> return null
             }
             node = node.previousSibling
@@ -121,6 +155,9 @@ class DownloadManifestTest {
             "android.permission.RUN_USER_INITIATED_JOBS", "android.permission.RECEIVE_BOOT_COMPLETED", "android.permission.FOREGROUND_SERVICE",
             "android.permission.FOREGROUND_SERVICE_DATA_SYNC", "android.permission.POST_NOTIFICATIONS", "android.permission.ACCESS_NETWORK_STATE",
         )
+
+        /** A permission that goes with the one before it, under its comment: Android 14's dataSync type's, with the service's. */
+        val SHARES = mapOf("android.permission.FOREGROUND_SERVICE_DATA_SYNC" to "android.permission.FOREGROUND_SERVICE")
 
         /**
          * What the downloads don't ask for: a battery-optimisation exemption (L361), any storage or media permission (they
