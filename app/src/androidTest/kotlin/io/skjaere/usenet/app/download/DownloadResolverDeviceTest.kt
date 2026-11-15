@@ -37,7 +37,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  * A download's Resolve on the device (item 5), the app's own pieces over the test's own NNTP server (LocalNntp) and the
  * engine: the full check, prepare, the track probe and the store. The releases' NZBs come through the coordinator's grab
  * (its test seam), so no indexer is asked. Three releases of an invented Harbor Lights S03E02, in download order: the first
- * names an article the server never had (STAT 430), the second is a pack of two episodes, the third is the episode alone.
+ * names an article the server never had (STAT 430) where only a check of every article finds it, the second is a pack of
+ * two episodes, the third is the episode alone.
  * The first fails its check; the pack's S03E02 is opened and probed, its video and tracks kept with the row; nothing is
  * grabbed after it. The test assets' film is the episodes' bytes, as the probe reads a real file.
  *
@@ -84,10 +85,15 @@ class DownloadResolverDeviceTest {
     fun aReleaseMissingAnArticleFallsToAPackWhoseEpisodeIsOpenedProbedAndKept() = runBlocking<Unit> {
         val film = DownloadFixtures.media("chapters.mkv")
 
-        // The episode alone, its NZB naming one article the server never had: STAT answers 430 for it.
-        val first = fixtures.post(Packing.Plain, "Harbor.Lights.S03E02.1080p.WEB.h264-KESTREL", film, partSize = PART)
-        val gone = "lnntp-never-posted-${first.ids[3].substringAfter("lnntp-")}"
-        nzbs[FIRST] = first.nzb.decodeToString().replace(">${first.ids[3]}<", ">$gone<").encodeToByteArray()
+        // The episode alone, larger than the play's sample of 256 articles, its NZB naming one article the server never
+        // had: STAT answers 430 for it. It is the second, which the sample's spread passes over (0, 3, 7, …, and the ends):
+        // only the full check finds it (L341).
+        val first = fixtures.post(
+            Packing.Plain, "Harbor.Lights.S03E02.1080p.WEB.h264-KESTREL", DownloadFixtures.seeded(16 * DownloadFixtures.MB, System.nanoTime()), partSize = SMALL_PART,
+        )
+        assertTrue("${first.ids.size} articles", first.ids.size > 2 * 256)
+        val gone = "lnntp-never-posted-${first.ids[1].substringAfter("lnntp-")}"
+        nzbs[FIRST] = first.nzb.decodeToString().replace(">${first.ids[1]}<", ">$gone<").encodeToByteArray()
         assertFalse(nzbs.getValue(FIRST).contentEquals(first.nzb))
 
         // A pack of two episodes, the second the one wanted.
@@ -101,7 +107,7 @@ class DownloadResolverDeviceTest {
             id = Download.newId(), watchKey = WatchKey.episode(SHOW, 3, 2), kind = DownloadKind.Episode, title = "Harbor Lights", showTmdbId = SHOW,
             season = 3, episode = 2, seasonEpisodes = 8, episodeName = "Slack Tide", position = 0,
             candidates = listOf(
-                DownloadCandidate(INDEXER.id, FIRST, "Harbor.Lights.S03E02.1080p.WEB.h264-KESTREL", size = film.size.toLong()),
+                DownloadCandidate(INDEXER.id, FIRST, "Harbor.Lights.S03E02.1080p.WEB.h264-KESTREL", size = first.size),
                 DownloadCandidate(INDEXER.id, PACK, "Harbor.Lights.S03.1080p.WEB.h264-GRP", size = 2L * film.size),
                 DownloadCandidate(INDEXER.id, THIRD, "Harbor.Lights.S03E02.720p.WEB.h264-WREN", size = film.size.toLong()),
             ),
@@ -114,8 +120,10 @@ class DownloadResolverDeviceTest {
         val ready = withTimeout(120_000) { resolver.resolve(added.id) } as? DownloadResolver.Resolution.Ready
             ?: throw AssertionError("not resolved: ${container.data.downloads.get(added.id)?.let { "${it.state}, ${it.reason}" }}")
 
-        // The first failed its full check, the pack played its part, and the third was never grabbed.
+        // The first failed its full check, before anything of it was fetched; the pack played its part, and the third was
+        // never grabbed.
         assertEquals(listOf(FIRST, PACK), grabbed)
+        assertEquals("BODYs of the first's articles", 0, first.ids.sumOf { fixtures.local.bodies[it]?.get() ?: 0 })
         assertEquals("Harbor.Lights.S03E02.1080p.WEB.h264-GRP.mkv", ready.file.name)
         assertEquals(film.size.toLong(), ready.file.size)
 
@@ -157,6 +165,9 @@ class DownloadResolverDeviceTest {
 
     private companion object {
         const val PART = 64 * 1024
+
+        /** The first release's articles: 16 MB in 977 of them. */
+        const val SMALL_PART = 16 * 1024
         const val SHOW = 900_731
         const val FIRST = "hl-s03e02-kestrel"
         const val PACK = "hl-s03-pack-grp"
