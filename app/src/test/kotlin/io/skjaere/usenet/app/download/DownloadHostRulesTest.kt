@@ -156,9 +156,9 @@ class DownloadHostRulesTest {
     }
 
     @Test
-    fun `the app schedules only while visible, with something to run, and neither running nor pending, but for a changed switch`() {
-        fun schedules(cause: ScheduleCause, visible: Boolean = true, runnable: Boolean = true, running: Boolean = false, pending: Boolean = false, television: Boolean = false) =
-            DownloadHostRules.schedules(cause, television = television, visible = visible, runnable = runnable, running = running, pending = pending)
+    fun `the app schedules only while visible, with something to run, and with no walk to take it up nor a job pending, but for a changed switch`() {
+        fun schedules(cause: ScheduleCause, visible: Boolean = true, runnable: Boolean = true, walking: Boolean = false, pending: Boolean = false, television: Boolean = false) =
+            DownloadHostRules.schedules(cause, television = television, visible = visible, runnable = runnable, walking = walking, pending = pending)
 
         ScheduleCause.entries.forEach { cause ->
             assertTrue(schedules(cause), "$cause")
@@ -169,11 +169,11 @@ class DownloadHostRulesTest {
         }
         // A schedule stops a running job of the same id (C5): once only, as the job runs or waits for its needs.
         listOf(ScheduleCause.Download, ScheduleCause.Resume, ScheduleCause.ProviderSaved, ScheduleCause.AppStart).forEach { cause ->
-            assertFalse(schedules(cause, running = true), "$cause")
+            assertFalse(schedules(cause, walking = true), "$cause")
             assertFalse(schedules(cause, pending = true), "$cause")
         }
         // A changed Wi-Fi or charging switch: a pending job takes the new needs, a running item stops and goes on under them.
-        assertTrue(schedules(ScheduleCause.SwitchChanged, running = true))
+        assertTrue(schedules(ScheduleCause.SwitchChanged, walking = true))
         assertTrue(schedules(ScheduleCause.SwitchChanged, pending = true))
     }
 

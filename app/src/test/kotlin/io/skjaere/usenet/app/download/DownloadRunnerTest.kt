@@ -440,6 +440,50 @@ class DownloadRunnerTest {
         assertTrue(storage.part(stopped).isFile)
     }
 
+    /**
+     * Whether a live walk will take up what is queued now, for the app's schedule (L335): from a walk's start until its
+     * last look finds nothing to run, false in that same step, before its host can end. A Download or Resume that comes as
+     * the walk ends is scheduled, never left with no host; one while it runs is taken up by it.
+     */
+    @Test
+    fun `the runner says whether a live walk will take up what is queued now`() = test {
+        val runner = runner()
+        val seen = mutableListOf<Boolean>()
+        work.launch { runner.walking.collect { seen += it } }
+        fun schedules() = DownloadHostRules.schedules(
+            DownloadHostRules.ScheduleCause.Resume, television = false, visible = true, runnable = true, walking = runner.walking.value, pending = false,
+        )
+        runCurrent()
+        assertFalse(runner.walking.value)
+        val a = fake("hl-a").apply { hold = HOLD }
+        val first = runner.add(1, a)
+        val walk = host(runner)
+        runCurrent()
+        assertTrue(runner.walking.value)
+        // Queued as it runs: the walk takes it up, nothing to schedule.
+        val second = runner.add(2, fake("hl-b"))
+        assertFalse(schedules())
+        a.gate.complete(Unit)
+        advanceUntilIdle()
+        assertTrue(walk.isCompleted)
+        assertEquals(DownloadState.Done, stored(second).state)
+        assertEquals(listOf(false, true, false), seen)
+
+        // Paused: the walk ends with it, and Resume schedules a host again.
+        val c = fake("hl-c").apply { hold = HOLD }
+        val third = runner.add(3, c)
+        host(runner)
+        runCurrent()
+        assertTrue(runner.walking.value)
+        runner.pause()
+        runCurrent()
+        assertFalse(runner.walking.value)
+        runner.resume()
+        assertTrue(schedules())
+        assertEquals(listOf(third), runner.runnable().map { it.id })
+        assertEquals(DownloadState.Done, stored(first).state)
+    }
+
     @Test
     fun `move takes a queued one up and down past its queued neighbours`() = test {
         val runner = runner()

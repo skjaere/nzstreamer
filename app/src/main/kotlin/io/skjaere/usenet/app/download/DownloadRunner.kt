@@ -286,7 +286,15 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     private val changes = Mutex()
 
     /** One walk at a time: a host that starts while another's walk ends waits for it. */
-    private val walking = Mutex()
+    private val walks = Mutex()
+
+    private val _walking = MutableStateFlow(false)
+
+    /**
+     * Whether a host's walk is under way and will take up what is queued now: what the app's schedule asks instead of the
+     * job's own state (L335, [DownloadHostRules.schedules]).
+     */
+    val walking: StateFlow<Boolean> = _walking
 
     /** Reconcile once a process, before anything reads the queue to run it ([reconcile]). */
     private val reconciling = Mutex()
@@ -563,26 +571,36 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      * Walks the queue under [host] while it lives: the next runnable download, one left running by a kill first, resolved
      * then written, then the next. Returns once nothing can run (L388): all done or failed, the queue held, or a wait for
      * the providers or for storage. The host ends then; cancelled by its host, the item under way stops at its safe offset,
-     * its row as a kill leaves it, for the next walk.
+     * its row as a kill leaves it, for the next walk. [walking] says it is under way until it has found nothing more.
      */
     suspend fun run(host: DownloadHost) {
         if (!runs) return
         // A host in a new process can start before the app's start has reconciled: its walk takes the rows as reconcile
         // leaves them, never one the user stopped from Android.
         reconcile()
-        walking.withLock {
+        walks.withLock {
             log.info("Downloads: the {} runs the queue", host.name.lowercase())
-            coroutineScope {
-                while (true) {
-                    var walk = Walk.Next
-                    val job = changes.withLock {
-                        val row = next() ?: return@withLock null
-                        launch(deps.io) { walk = item(row.id) }.also { current = Current(row.id, it) }
-                    } ?: break
-                    job.join()
-                    changes.withLock { if (current?.job === job) current = null }
-                    if (walk == Walk.End) break
+            try {
+                coroutineScope {
+                    while (true) {
+                        var walk = Walk.Next
+                        val job = changes.withLock {
+                            val row = next()
+                            // Said under the queue's lock: a change made after this finds the walk taking it up, or ended.
+                            _walking.value = row != null
+                            if (row == null) return@withLock null
+                            launch(deps.io) { walk = item(row.id) }.also { current = Current(row.id, it) }
+                        } ?: break
+                        job.join()
+                        changes.withLock {
+                            if (current?.job === job) current = null
+                            if (walk == Walk.End) _walking.value = false
+                        }
+                        if (walk == Walk.End) break
+                    }
                 }
+            } finally {
+                _walking.value = false
             }
             log.info("Downloads: nothing more runs under the {}", host.name.lowercase())
         }

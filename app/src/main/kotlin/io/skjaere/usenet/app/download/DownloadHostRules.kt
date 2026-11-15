@@ -174,14 +174,16 @@ object DownloadHostRules {
 
     /**
      * Whether the app schedules the host now (L335): only from the [visible] app (Android refuses a user-initiated job from
-     * the background, C4), only with something [runnable], and only while the job is neither [running] nor [pending], as
-     * a schedule stops a running job of the same id (C5). A changed Wi-Fi or charging switch schedules all the same: a
-     * pending job takes the new needs, and a running item stops at its safe offset and goes on under them. Never on a TV.
+     * the background, C4), only with something [runnable], and only while no host's walk will take it up ([walking]: the
+     * runner's [DownloadRunner.walking], false as soon as a walk has found nothing more to run, before its job ends) and no
+     * job is [pending], as a schedule stops a running job of the same id (C5): one whose walk has ended is stopped with
+     * nothing left to do. A changed Wi-Fi or charging switch schedules all the same: a pending job takes the new needs, and
+     * a running item stops at its safe offset and goes on under them. Never on a TV.
      */
-    fun schedules(cause: ScheduleCause, television: Boolean, visible: Boolean, runnable: Boolean, running: Boolean, pending: Boolean): Boolean = when {
+    fun schedules(cause: ScheduleCause, television: Boolean, visible: Boolean, runnable: Boolean, walking: Boolean, pending: Boolean): Boolean = when {
         !runs(television) || !visible || !runnable -> false
         cause == ScheduleCause.SwitchChanged -> true
-        else -> !running && !pending
+        else -> !walking && !pending
     }
 
     /** Whether the [host] holds a wake lock of its own: the service does; the job's is the system's, which vitals don't count. */
