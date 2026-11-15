@@ -469,16 +469,23 @@ class DownloadResolver(
         return failed(row.id, WONT_FIT)
     }
 
-    /** [row] with nothing written, any file it made deleted; null while its volume isn't there to delete it from. */
+    /**
+     * [row] with nothing written, any file it made deleted; null while its volume isn't there to delete it from. A row with
+     * a file names none, at no offset, before its file goes, whatever stops the call meanwhile: one left naming a deleted
+     * file at its offset would open its release again into a file of zeros.
+     */
     private suspend fun startOver(row: Download): Download? {
-        if (row.relativePath != null) {
+        val reset = row.copy(safeOffset = 0, gaps = emptyList(), relativePath = null)
+        if (row.relativePath == null) return reset
+        return withContext(NonCancellable) {
+            downloads.update(reset.copy(updatedAt = clock.now()))
             try {
                 storage.deleteVideo(row.id)
+                reset
             } catch (e: DownloadStorage.Unavailable) {
-                return null
+                null
             }
         }
-        return row.copy(safeOffset = 0, gaps = emptyList(), relativePath = null)
     }
 
     /** Keeps [counted] as the releases [id] has tried. */

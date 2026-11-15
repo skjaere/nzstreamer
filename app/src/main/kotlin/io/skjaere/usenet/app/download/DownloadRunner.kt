@@ -24,9 +24,12 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -38,6 +41,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.nio.channels.FileChannel
@@ -470,20 +474,24 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         changes.withLock {
             stop(id)
             val row = dao.get(id)?.takeIf { it.state != DownloadState.Deleting && it.state != DownloadState.Done } ?: return@withLock
-            try {
-                deps.storage.deleteVideo(id)
-            } catch (e: DownloadStorage.Unavailable) {
-                // Its file can't go while the volume is away: the new release's is written over it from its first byte.
-                log.info("download {}: its file stays until its volume is back", id)
+            // Its NZB and the row's file, offset and release gone before the file is, and all of it whatever stops the call
+            // meanwhile: a row left naming a deleted file at its offset would open its release again into a file of zeros.
+            withContext(NonCancellable) {
+                deps.storage.dropSource(id)
+                dao.update(
+                    row.copy(
+                        state = DownloadState.Queued, reason = null, candidates = candidates.take(MAX_CANDIDATES), tried = emptyList(), oneVideo = false,
+                        release = null, fileName = null, size = null, indexerSize = candidates.first().size, safeOffset = 0, gaps = emptyList(),
+                        relativePath = null, video = null, tracks = null, completedAt = null, updatedAt = now(),
+                    ),
+                )
+                try {
+                    deps.storage.deleteVideo(id)
+                } catch (e: DownloadStorage.Unavailable) {
+                    // Its file can't go while the volume is away: the new release's is written over it from its first byte.
+                    log.info("download {}: its file stays until its volume is back", id)
+                }
             }
-            deps.storage.dropSource(id)
-            dao.update(
-                row.copy(
-                    state = DownloadState.Queued, reason = null, candidates = candidates.take(MAX_CANDIDATES), tried = emptyList(), oneVideo = false,
-                    release = null, fileName = null, size = null, indexerSize = candidates.first().size, safeOffset = 0, gaps = emptyList(),
-                    relativePath = null, video = null, tracks = null, completedAt = null, updatedAt = now(),
-                ),
-            )
             log.info("download {}: {} other release{} to try", id, candidates.size, if (candidates.size == 1) "" else "s")
         }
     }
@@ -646,6 +654,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                         is Written.GaveUp -> {
                             gaveUp = written.why
                             if (!discard(id)) return Walk.End
+                            // A stop asked for as it was discarded stops the walk here, before the next release is resolved.
+                            currentCoroutineContext().ensureActive()
                         }
                     }
                 }
@@ -770,26 +780,28 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     }
 
     /**
-     * Download [id]'s release given up: its file deleted and its room given back, its NZB and password gone, so Resolve
-     * finds the next rather than opening this one again from the copy, and its row back to nothing written. False when its
-     * volume isn't there to delete it from: it waits for it.
+     * Download [id]'s release given up: its NZB and password gone, so Resolve finds the next rather than opening this one
+     * again from the copy, its row back to nothing written, then its file deleted and its room given back: in that order,
+     * and all of it whatever stops the walk meanwhile, so the row never names a file that is gone. False when its volume
+     * isn't there to delete it from: it waits for it, the next open writing over what is left.
      */
-    private suspend fun discard(id: String): Boolean {
+    private suspend fun discard(id: String): Boolean = withContext(NonCancellable) {
+        deps.storage.dropSource(id)
+        dao.get(id)?.let { row ->
+            dao.update(
+                row.copy(
+                    release = null, fileName = null, size = null, oneVideo = false, video = null, tracks = null, safeOffset = 0, gaps = emptyList(),
+                    relativePath = null, updatedAt = now(),
+                ),
+            )
+        }
         try {
             deps.storage.deleteVideo(id)
+            true
         } catch (e: DownloadStorage.Unavailable) {
             waiting(id, DownloadHostRules.STORAGE_UNAVAILABLE)
-            return false
+            false
         }
-        deps.storage.dropSource(id)
-        val row = dao.get(id) ?: return true
-        dao.update(
-            row.copy(
-                release = null, fileName = null, size = null, oneVideo = false, video = null, tracks = null, safeOffset = 0, gaps = emptyList(),
-                relativePath = null, updatedAt = now(),
-            ),
-        )
-        return true
     }
 
     /** Download [id] failed, for [reason]: its NZB and password go (L346), its file and record stay, for Try again. */

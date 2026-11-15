@@ -58,6 +58,7 @@ import java.net.ConnectException
 import java.util.Collections
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
@@ -730,6 +731,19 @@ class DownloadResolverTest {
         assertEquals(listOf(ID), storage.deletedVideos)
     }
 
+    /** A start again from 0 cut short as the old file goes leaves the row naming no file and no offset (the file's own gone). */
+    @Test
+    fun `a start from 0 stopped as its file is deleted leaves the row at 0 naming no file`() = runBlocking<Unit> {
+        row(single) { it.resolvedAs(single, "a8f3c1.mkv", 1_200_000_001L).copy(safeOffset = 600_000_000L, relativePath = "downloads/$ID/v.mkv") }
+        storage.sources[ID] = DownloadStorage.Source(single.nzb, null)
+        storage.afterDeleteVideo = { throw kotlinx.coroutines.CancellationException("the host stopped") }
+        assertFailsWith<kotlinx.coroutines.CancellationException> { resolver().resolve(ID) }
+        assertEquals(listOf(ID), storage.deletedVideos)
+        assertEquals(0L, stored().safeOffset)
+        assertNull(stored().relativePath)
+        assertEquals(emptyList(), stored().gaps)
+    }
+
     @Test
     fun `an own NZB that no longer gives the file is dropped and the next release resolved`() = runBlocking<Unit> {
         // No file of its name, nor one of its size at its place.
@@ -794,6 +808,7 @@ class DownloadResolverTest {
         storage.sources.clear()
         storage.grabs.clear()
         storage.events.clear()
+        storage.afterDeleteVideo = {}
         onGrab = {}
         storage.deletedVideos.clear()
         storage.spaceAsked.clear()
@@ -878,8 +893,12 @@ class DownloadResolverTest {
             grabs.remove(id)
         }
 
+        /** Called once a video is deleted, before the call returns: where a cancel finds a delete that has happened. */
+        var afterDeleteVideo: suspend () -> Unit = {}
+
         override suspend fun deleteVideo(id: String) {
             deletedVideos += id
+            afterDeleteVideo()
         }
 
         override suspend fun space(except: String): DownloadSpace? {

@@ -448,6 +448,79 @@ class DownloadRunnerTest {
         assertEquals(listOf(id, id, second), resolver.calls)
     }
 
+    /**
+     * The file goes only once the row no longer names it, its NZB gone first, whatever stops the call as the file is
+     * deleted (a Pause, the host's end, the sheet's scope closing): a row left naming a deleted file at its offset would
+     * reopen its release into a new file of zeros and finish it with its first bytes zeros.
+     */
+    @Test
+    fun `a replace or a give-up stopped as the file is deleted leaves the row naming no file and no NZB`() = test {
+        val a = fake("hl-a").apply { hold = HOLD }
+        val x = fake("hl-x")
+        val runner = runner()
+        val id = runner.add(1, a)
+        host(runner)
+        runCurrent()
+        val deleting = CompletableDeferred<Unit>()
+        val letGo = CompletableDeferred<Unit>()
+        storage.afterDeleteVideo = {
+            deleting.complete(Unit)
+            letGo.await()
+        }
+        val replace = work.launch { runner.replace(id, listOf(x.candidate)) }
+        runCurrent()
+        assertTrue(deleting.isCompleted)
+        // The sheet's scope closes as the file goes.
+        replace.cancel()
+        letGo.complete(Unit)
+        replace.join()
+        storage.afterDeleteVideo = {}
+        val replaced = stored(id)
+        assertNull(replaced.release)
+        assertNull(replaced.relativePath)
+        assertEquals(0L, replaced.safeOffset)
+        assertEquals(listOf(x.candidate), replaced.candidates)
+        assertNull(storage.source(id))
+        // The new release from its first byte, its file its own.
+        a.gate.complete(Unit)
+        host(runner)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Done, stored(id).state)
+        assertContentEquals(x.data, storage.video(id).readBytes())
+
+        // A release given up as it is written, the walk paused as its file goes.
+        val gap = fake("hl-gap").apply { missing = listOf(SIZE / 2L until SIZE) }
+        val next = fake("hl-next")
+        val second = runner.add(2, gap, next)
+        val stopping = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        storage.afterDeleteVideo = {
+            stopping.complete(Unit)
+            release.await()
+        }
+        host(runner)
+        advanceUntilIdle()
+        assertTrue(stopping.isCompleted)
+        val pause = work.launch { runner.pause() }
+        runCurrent()
+        release.complete(Unit)
+        pause.join()
+        storage.afterDeleteVideo = {}
+        val paused = stored(second)
+        assertEquals(DownloadState.Paused, paused.state)
+        assertNull(paused.release)
+        assertNull(paused.relativePath)
+        assertEquals(0L, paused.safeOffset)
+        assertNull(storage.source(second))
+        runner.resume()
+        host(runner)
+        advanceUntilIdle()
+        // The next release, never the one given up opened again from its copy.
+        assertEquals(DownloadState.Done, stored(second).state)
+        assertEquals(next.guid, stored(second).release?.guid)
+        assertContentEquals(next.data, storage.video(second).readBytes())
+    }
+
     @Test
     fun `retry of a failed one resets its tries and goes on from its offset with the same release, else from 0`() = test {
         val r = fake("hl-r")
@@ -507,8 +580,8 @@ class DownloadRunnerTest {
         assertEquals(four.take(3).map { it.key }, failed.tried)
         assertNull(storage.source(id))
         assertFalse(storage.videoFolder(id).exists())
-        // Each given up: its file deleted and its NZB dropped before the next is resolved; then the failure's drop.
-        val given = listOf("keep source $id", "delete video $id", "drop source $id")
+        // Each given up: its NZB dropped, then its file deleted, before the next is resolved; then the failure's drop.
+        val given = listOf("keep source $id", "drop source $id", "delete video $id")
         assertEquals(given + given + given + "drop source $id", storage.events.filter { it in given })
 
         // A damaged one goes to the next too.
@@ -918,10 +991,14 @@ class DownloadRunnerTest {
 
         override fun relativePath(id: String, fileName: String) = "downloads/$id/v.mkv"
 
+        /** Called once a video is deleted, before the call returns: where a cancel finds a delete that has happened. */
+        var afterDeleteVideo: suspend () -> Unit = {}
+
         override suspend fun deleteVideo(id: String) {
             if (!there) throw DownloadStorage.Unavailable()
             events += "delete video $id"
             videoFolder(id).deleteRecursively()
+            afterDeleteVideo()
         }
 
         fun keepSource(id: String, nzb: ByteArray, password: String?) {
