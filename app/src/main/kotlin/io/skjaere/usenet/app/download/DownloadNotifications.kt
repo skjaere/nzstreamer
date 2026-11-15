@@ -448,7 +448,7 @@ class DownloadNotifications(private val context: Context, television: Boolean) {
         private const val REQUEST_PAUSE = 5
         private const val REQUEST_CANCEL = 6
 
-        /** The small icon's circle, the app's accent, as the boards draw it. */
+        /** The small icon's circle, the app's accent, as drawn for the app. */
         private val ACCENT = AppColors().accent.toArgb()
     }
 }

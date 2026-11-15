@@ -20,14 +20,14 @@ import kotlin.test.assertTrue
 
 /**
  * The two drawn download icons (D7, DlPhoneNotification): Download, an arrow into a tray, and Downloaded, a tick over the
- * tray, as the boards draw them, in 2 dp round strokes on Material's 24 dp grid. The app's (tinted as the core set's are)
+ * tray, as drawn for the app, in 2 dp round strokes on Material's 24 dp grid. The app's (tinted as the core set's are)
  * and the notification's small icons draw the same strokes.
  */
 class DownloadIconsTest {
     private val drawables = File("src/main/res/drawable")
 
     @Test
-    fun `the paths are the boards' strokes`() {
+    fun `the paths are the drawn strokes`() {
         assertEquals("M12 3.5v10.5M7.5 9.5 12 14l4.5-4.5M4 14.5v3.5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3.5", DOWNLOAD_PATH)
         assertEquals("M4 14.5v3.5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3.5M7.5 10.2l3.1 3.1 6-6.3", DOWNLOADED_PATH)
     }

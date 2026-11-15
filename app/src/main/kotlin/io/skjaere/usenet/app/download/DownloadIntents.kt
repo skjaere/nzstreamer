@@ -58,7 +58,7 @@ object DownloadIntents {
 
 /**
  * The ways into the Downloads page (L369): null where downloads don't show, as debrid's are while it is hidden, and null
- * until the page is in the graph (item 19). [downloads]: the page; [chooseRelease]: the page at a download's list of
+ * until the page is in the graph. [downloads]: the page; [chooseRelease]: the page at a download's list of
  * releases; [play]: a finished download played.
  */
 data class DownloadPages(
@@ -85,8 +85,8 @@ data class DownloadPages(
 
 /**
  * The downloads' part of the phone's graph (L369): while [shown], [register] adds their screens, and the ways into them
- * open their routes by [open]; where downloads don't show, neither runs. The page and its routes come with item 19, which
- * fills the ways in here; until then there are none. AppNav's `downloadScreens` is this over its graph and navigation.
+ * open their routes by [open]; where downloads don't show, neither runs. The page and its routes fill the ways in here
+ * once they are built; until then there are none. AppNav's `downloadScreens` is this over its graph and navigation.
  */
 fun downloadPages(shown: Boolean, register: () -> Unit, @Suppress("UNUSED_PARAMETER") open: (route: Any) -> Unit): DownloadPages {
     if (!shown) return DownloadPages()

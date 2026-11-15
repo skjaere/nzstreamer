@@ -97,7 +97,7 @@ class NotificationAsk(
     }
 }
 
-/** The activity's notification ask, for the Download sheet (item 17): none outside MainActivity. */
+/** The activity's notification ask, for the Download sheet: none outside MainActivity. */
 val LocalNotificationAsk = staticCompositionLocalOf<NotificationAsk?> { null }
 
 private val log = LoggerFactory.getLogger(NotificationAsk::class.java)

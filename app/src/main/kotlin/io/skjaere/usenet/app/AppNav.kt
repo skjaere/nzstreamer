@@ -447,8 +447,8 @@ fun NavGraphBuilder.appGraph(nav: NavController, container: AppContainer, jumps:
 
 /**
  * The downloads' screens (W108, L369), in the phone's graph alone, while [shown] (DownloadPlaces.shown): where downloads
- * don't show, none is there and the ways into them it gives back are null, so nothing opens one. The page comes with item
- * 19, which registers it here; until then there are none.
+ * don't show, none is there and the ways into them it gives back are null, so nothing opens one. The Downloads page
+ * registers itself here once it is built; until then there are none.
  */
 fun NavGraphBuilder.downloadScreens(nav: NavController, shown: Boolean): DownloadPages =
     io.skjaere.usenet.app.download.downloadPages(shown, register = {}, open = { route -> nav.navigate(route) })

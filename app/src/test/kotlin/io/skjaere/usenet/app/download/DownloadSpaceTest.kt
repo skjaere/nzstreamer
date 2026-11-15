@@ -14,7 +14,7 @@ import kotlin.test.assertTrue
  * What downloads take of the device's storage and what a new one may take (L348): what is free on the volume (or what
  * Android can allocate, where less), less the 1 GB the video cache leaves free, less what the queued downloads still need. A download whose file is made holds its
  * whole size already (its allocation before the first byte, C8), so the running one counts whole and needs nothing more.
- * The numbers are the Download sheet's and the Downloads page's strip's. Sizes in GB of 10^9 bytes, as the boards count.
+ * The numbers are the Download sheet's and the Downloads page's strip's. Sizes in GB of 10^9 bytes, as the sheet and the page count them.
  */
 class DownloadSpaceTest {
     @Test

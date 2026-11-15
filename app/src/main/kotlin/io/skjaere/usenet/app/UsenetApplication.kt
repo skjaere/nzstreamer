@@ -314,7 +314,7 @@ class AppContainer(private val context: Context) {
     /** The downloads' notifications (L358): the hosts' ongoing one and the status one, and each finished or failed one. */
     val downloadNotifications: DownloadNotifications by lazy { DownloadNotifications(context, television) }
 
-    /** The token the download notifications' Resume and Play carry, so another sender's ask only opens the page (item 11). */
+    /** The token the download notifications' Resume and Play carry, so another sender's ask only opens the page. */
     val downloadToken: DownloadToken by lazy { DownloadToken(File(context.filesDir, DownloadStorage.DIR)) }
 
     /** Asks the downloads' host to run them (L335, L388): from the visible app alone, never on a TV. */
