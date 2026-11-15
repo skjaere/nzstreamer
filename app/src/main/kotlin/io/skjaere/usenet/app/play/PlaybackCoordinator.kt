@@ -1120,8 +1120,9 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
     /**
      * [playMovie]'s stream: the remembered release alone while its NZB is stored, else the film's search. [again]: the play
      * asked for again from another origin. With [lookUp], [known]'s ids are looked up on TMDB first ([withTmdbIds]).
+     * [leftOut]: what it leaves out from the start ([streamInstead]).
      */
-    private fun streamMovie(known: MovieTarget, origin: PlayOrigin, lookUp: Boolean = false, again: (PlayOrigin) -> Unit) {
+    private fun streamMovie(known: MovieTarget, origin: PlayOrigin, lookUp: Boolean = false, leftOut: Retry? = null, again: (PlayOrigin) -> Unit) {
         replaceJob(origin, known.title, known.subtitle, known.watch, again = again)
         job = launchPlay(known.title, known.subtitle, origin = origin) {
             val target = if (lookUp) withTmdbIds(known) else known
@@ -1135,6 +1136,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
                 searching = { line -> _state.value = PlayState.Searching(target.title, target.subtitle, line) },
                 // Play's own pick shows no list, and can't take one back: it waits for torrents still checked, 10 s at most (L199).
                 find = { io.skjaere.usenet.app.search.findMovieReleases(container, target).last() },
+                leftOut = leftOut,
             )?.let { _state.value = it }
         }
     }
@@ -1149,11 +1151,14 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         streamEpisode(target, origin) { playEpisode(target, it) }
     }
 
-    /** [playEpisode]'s stream: the episode looked up on TMDB, then searched for. [again]: the play asked for again from another origin. */
-    private fun streamEpisode(target: EpisodeTarget, origin: PlayOrigin, again: (PlayOrigin) -> Unit) {
+    /**
+     * [playEpisode]'s stream: the episode looked up on TMDB, then searched for. [again]: the play asked for again from
+     * another origin. [retry]: what it leaves out from the start ([streamInstead]).
+     */
+    private fun streamEpisode(target: EpisodeTarget, origin: PlayOrigin, retry: Retry? = null, again: (PlayOrigin) -> Unit) {
         val watch = WatchTarget(WatchKind.Episode, WatchTitle.episode(target.showName, target.season, target.episode), showTmdbId = target.showTmdbId, season = target.season, episode = target.episode)
         replaceJob(origin, target.showName, target.label, watch, again = again)
-        job = launchPlay(target.showName, target.label, origin = origin) { lookUpAndPlay(target, retry = null) }
+        job = launchPlay(target.showName, target.label, origin = origin) { lookUpAndPlay(target, retry) }
     }
 
     /**
@@ -1162,17 +1167,20 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
      * TMDB and searched for, a film by its remembered release while stored, else its search, its ids looked up on TMDB
      * first (its year and length from its download where TMDB doesn't answer). From [positionMs], where the player was
      * (null: where its place was saved), as Try another release starts where the release stopped: its place saved past
-     * nine tenths reads as watched, from the start. The player offers it only while the network is validated. Nothing for
-     * a launch that is neither an episode nor a film.
+     * nine tenths reads as watched, from the start. With [leaveOut] (the download missing parts), the download's release is
+     * left out ([Retry.streamInstead]), which would meet the same parts missing; else (its file gone) it goes first as the
+     * one that played the title. The player offers it only while the network is validated. Nothing for a launch that is
+     * neither an episode nor a film.
      */
-    fun streamInstead(launch: PlayerLaunch, positionMs: Long?, origin: PlayOrigin = PlayOrigin.after(launch)) {
-        val again: (PlayOrigin) -> Unit = { streamInstead(launch, positionMs, it) }
+    fun streamInstead(launch: PlayerLaunch, positionMs: Long?, leaveOut: Boolean, origin: PlayOrigin = PlayOrigin.after(launch)) {
+        val again: (PlayOrigin) -> Unit = { streamInstead(launch, positionMs, leaveOut, it) }
         val from = origin.copy(start = positionMs ?: origin.start)
-        launch.watch.episodeTarget?.let { return streamEpisode(it, from, again) }
+        val retry = Retry.streamInstead(launch.release).takeIf { leaveOut }
+        launch.watch.episodeTarget?.let { return streamEpisode(it, from, retry, again) }
         val film = launch.watch.movieTmdbId?.takeIf { launch.watch.kind == WatchKind.Movie } ?: return
         val row = container.downloads.done.value[launch.watchKey]
         log.info("play: a film streams in place of its download")
-        streamMovie(MovieTarget(film, launch.watch.title, row?.year, imdb = null, row?.runtimeMinutes), from, lookUp = true, again)
+        streamMovie(MovieTarget(film, launch.watch.title, row?.year, imdb = null, row?.runtimeMinutes), from, lookUp = true, leftOut = retry, again = again)
     }
 
     /** [target] with TMDB's ids and facts for the film, which indexers search by; as it is where TMDB doesn't answer. */

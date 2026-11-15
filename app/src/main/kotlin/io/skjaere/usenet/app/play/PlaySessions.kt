@@ -35,6 +35,8 @@ internal data class Retry(
     val left: Left? = null,
     val stopped: Set<String> = emptySet(),
     val skippedFor: String? = null,
+    /** The release left out is a finished download's, missing parts, which the title streams instead of ([streamInstead]). */
+    val downloadMissingParts: Boolean = false,
 ) {
     /**
      * [candidates] without the failed releases, wherever they came from (a search, or the remembered release the store adds
@@ -67,7 +69,7 @@ internal data class Retry(
     val searchingNotice: String
         get() = when {
             left?.why == Left.Why.Smaller -> "Switching to a smaller release"
-            left != null -> "The release that played it was missing parts"
+            left != null || downloadMissingParts -> "The release that played it was missing parts"
             skippedFor != null -> "The release that played it was skipped: ${skippedFor.replaceFirstChar { it.lowercase() }}"
             foundIncomplete -> "The release that played it was found incomplete before"
             fromPlaying -> PLAYING_FAILED
@@ -76,6 +78,14 @@ internal data class Retry(
 
     companion object {
         private const val PLAYING_FAILED = "The release that was playing couldn't play it"
+
+        /**
+         * Stream instead of a finished download missing parts (L354): its [release] left out of the stream, which would meet
+         * the same parts missing. Nothing failed mid-stream, and the sheet says the release that played it was missing
+         * parts, as for one left for them ([downloadMissingParts]).
+         */
+        fun streamInstead(release: SavedRelease): Retry =
+            Retry(setOf(release.key), startPositionMs = null, midStream = false, downloadMissingParts = true)
 
         /**
          * After the remembered release [key] played alone ([failed]: its failure, null when it was passed over), the search

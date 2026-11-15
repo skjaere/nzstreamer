@@ -65,6 +65,7 @@ class MoviePlayTest {
         target: MovieTarget = copperCrown,
         find: MovieFind = found(good, other),
         outcomes: List<PlayState.Failed?> = listOf(null),
+        leftOut: Retry? = null,
     ): Pair<Run, PlayState?> {
         val r = Run()
         val left = outcomes.toMutableList()
@@ -74,6 +75,7 @@ class MoviePlayTest {
                 play = { request, retry -> r.plays += request to retry; left.removeAt(0) },
                 searching = { r.lines += it },
                 find = { r.finds++; find },
+                leftOut = leftOut,
             )
         }
         return r to end
@@ -112,6 +114,19 @@ class MoviePlayTest {
         assertEquals(FilePicker.Largest, request.picker)
         assertEquals(watch, request.watch)
         assertEquals("Searched 2 indexers · 2 found", request.searchLine)
+    }
+
+    /** Stream instead of a download missing parts (L354): its release, remembered and even stored, is neither played alone nor searched for. */
+    @Test
+    fun `a release left out from the start is neither played alone nor among the search's`() {
+        val leftOut = Retry.streamInstead(SavedRelease(remembered.indexerId, remembered.guid, remembered.title, null, 0, "nzb-cc"))
+        val (r, end) = run(stored = true, leftOut = leftOut)
+        assertNull(end)
+        assertEquals(1, r.finds)
+        assertEquals(listOf("The release that played it was missing parts · Searching your indexers…"), r.lines)
+        val (request, retry) = r.plays.single()
+        assertEquals(leftOut, retry)
+        assertEquals(listOf(other), request.candidates)
     }
 
     @Test

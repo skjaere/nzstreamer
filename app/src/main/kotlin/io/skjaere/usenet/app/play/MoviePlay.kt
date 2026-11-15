@@ -60,7 +60,8 @@ internal object MoviePlay {
     /**
      * Plays [target]: [play] runs a request through the pipeline (null once the player starts, else
      * the failure); [searching] puts the sheet's line up as a search starts; [find] searches the
-     * indexers. Returns what the sheet shows at the end, or null once the player starts.
+     * indexers. [leftOut]: releases the play leaves out from the start, and says why. Returns what
+     * the sheet shows at the end, or null once the player starts.
      */
     suspend fun run(
         target: MovieTarget,
@@ -70,11 +71,14 @@ internal object MoviePlay {
         play: suspend (PlayRequest, Retry?) -> PlayState.Failed?,
         searching: (line: String) -> Unit,
         find: suspend () -> MovieFind,
+        leftOut: Retry? = null,
     ): PlayState? {
-        val alone = plan(remembered, stored) as? Plan.RememberedAlone
+        // A release left out from the start (Stream instead of a download missing parts) isn't played alone either.
+        val alone = (plan(remembered, stored) as? Plan.RememberedAlone)?.takeUnless { leftOut?.failed?.contains(Replay.key(it.remembered)) == true }
         val failed = alone?.let { play(remembered(target, it.remembered), null) ?: return null }
         // It just failed, or was skipped as found incomplete before: not tried again, nor put first.
         val retry = alone?.let { Retry.afterRemembered(Replay.key(it.remembered), failed) }
+            ?.let { r -> leftOut?.let { r.copy(failed = r.failed + it.failed) } ?: r } ?: leftOut
         searching(retry?.let { "${it.searchingNotice} · $SEARCHING" } ?: SEARCHING)
         val found = find()
         val candidates = retry?.leaveOut(found.playable) ?: found.playable

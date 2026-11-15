@@ -86,6 +86,13 @@ internal object PlayerBranches {
      */
     fun previousPlays(key: String, online: Boolean, done: Map<String, Download>): Boolean = online || key in done
 
+    /**
+     * Whether Stream instead leaves the download's own release out of the stream: after its missing parts (a gap its file
+     * can't go past, the missing-parts prompt) or a fault of its own, as the stream would meet the same; not after its
+     * [fileGone], which says nothing of the release, so it goes first as the one that played the title.
+     */
+    fun streamLeavesOut(fileGone: Boolean): Boolean = !fileGone
+
     /** A download not yet finished but still to finish: queued, under way, waiting, or held until Resume. */
     private val ON_ITS_WAY = setOf(
         DownloadState.Queued, DownloadState.Resolving, DownloadState.Running, DownloadState.Waiting, DownloadState.Paused, DownloadState.Stopped,

@@ -38,6 +38,7 @@ import io.skjaere.usenet.app.play.PlayState
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.play.PlayerLaunch
 import io.skjaere.usenet.app.play.Prefetch
+import io.skjaere.usenet.app.play.WatchSaver
 import io.skjaere.usenet.app.read
 import io.skjaere.usenet.app.views
 import io.skjaere.usenet.app.waitFor
@@ -127,6 +128,8 @@ class DownloadPlayerDeviceTest {
     private val realTimings = PlayerActivity.timings
     private val prefetches = AtomicInteger()
     private val made = mutableListOf<Download>()
+    /** What a test watches the coordinator by, cancelled at its end. */
+    private val watching = mutableListOf<CoroutineScope>()
     private var tmdb: FakeTmdb? = null
 
     /**
@@ -170,6 +173,7 @@ class DownloadPlayerDeviceTest {
         PlayerActivity.readPlayback = realRead
         PlayerActivity.timings = realTimings
         back { tmdb?.close() }
+        watching.forEach { it.cancel() }
         container.playback.cancel()
         // No job of the downloads' left behind, then the rows, their files and any notification of theirs.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) back { DownloadJobService.scheduler(context).cancelAll() }
@@ -240,7 +244,7 @@ class DownloadPlayerDeviceTest {
      * Three recorded gaps within ten minutes of film: the player skips each as its loader passes it and counts them, and the
      * missing-parts prompt says so. Offline it is the count alone, with nothing to offer; with the network back it asks to
      * stream instead, and Stream instead streams the episode by its stream path (looked up, searched for, grabbed over the
-     * mock).
+     * mock), another release than the download's, which would meet the same parts missing.
      */
     @Test
     fun threeGapsBringThePromptWhichOffersStreamInsteadOnlyOnline() = runBlocking<Unit> {
@@ -253,6 +257,7 @@ class DownloadPlayerDeviceTest {
         // The prompt's time runs as the film plays: long enough here for the test to answer it.
         PlayerActivity.timings = PlayerActivity.Timings(missingPartsAnswerForMs = PROMPT_MILLIS, missingPartsCountOnlyForMs = PROMPT_MILLIS)
         val launch = checkNotNull(DownloadLaunch.of(row)).copy(startPositionMs = GAP_START_MS)
+        val tried = triedReleases()
         ActivityScenario.launch<PlayerActivity>(PlayerActivity.intent(context, launch)).use { scenario ->
             val count = waitFor("the missing parts counted", 60_000) { scenario.read { a -> overlayWords(a).takeIf { "This release is missing parts (3 so far)" in it } } }
             assertFalse(count.toString(), "Stream instead" in count || "Try another release" in count || "Keep watching" in count)
@@ -265,6 +270,9 @@ class DownloadPlayerDeviceTest {
         }
         val streamed = launchFor(row.watchKey)
         assertTrue("S01E01 plays from ${PlayUris.scheme(streamed.uri)}", PlayUris.parse(streamed.uri) is PlayUris.Target.Usenet)
+        // Not the download's own release, which would meet the same parts missing: neither tried nor played.
+        assertTrue("the download's own release streams again", streamed.release.guid != GOOD.guid)
+        assertFalse("the download's own release was tried: $tried", GOOD.title in tried)
     }
 
     /**
@@ -454,6 +462,10 @@ class DownloadPlayerDeviceTest {
         checkNotNull(storage.file(row)).delete()
         offline()
         val launch = checkNotNull(DownloadLaunch.of(row)).copy(startPositionMs = GONE_AT_MS)
+        // Played from its file before, as its player saves it: its release is the one that played the episode.
+        val before = checkNotNull(WatchSaver.of(launch, GONE_AT_MS, PLAYED_MS, releaseFailed = false))
+        container.library.recordProgress(before.template, before.positionMs, before.durationMs, before.release)
+        val tried = triedReleases()
         ActivityScenario.launch<PlayerActivity>(PlayerActivity.intent(context, launch)).use { scenario ->
             val panel = waitFor("Playback stopped", 30_000) { scenario.read { a -> overlayWords(a).takeIf { "Playback stopped" in it } } }
             assertTrue(panel.toString(), "The downloaded file is gone" in panel && "Close" in panel)
@@ -465,6 +477,9 @@ class DownloadPlayerDeviceTest {
         }
         val streamed = launchFor(row.watchKey)
         assertTrue("S01E01 plays from ${PlayUris.scheme(streamed.uri)}", PlayUris.parse(streamed.uri) is PlayUris.Target.Usenet)
+        // Its file gone says nothing of its release, which is tried first as the one that played the episode, never left
+        // out. (Which plays may be another: the first connection after the network came back can be cut.)
+        assertEquals(GOOD.title, tried.firstOrNull())
         // From where the player was, which its place saved wouldn't give past nine tenths or under a minute.
         val at = checkNotNull(streamed.startPositionMs) { "the stream starts where its place was saved, not where the player was" }
         assertTrue("the stream starts at $at ms", abs(at - GONE_AT_MS) < PLACE_SLACK_MS)
@@ -534,6 +549,14 @@ class DownloadPlayerDeviceTest {
         servicesOff = container.settings.services.first().filter { it.enabled }.map { it.id }
         servicesOff.forEach { container.settings.setServiceEnabled(it, false) }
         container.settings.saveIndexer(FAKE_INDEXER, "Fake (download player test)", "http://10.0.2.2:8089", "fake-indexer-key")
+    }
+
+    /** The releases the play sheet tries from now on, in turn, as its states name them; gathered until the test ends. */
+    private fun triedReleases(): List<String> {
+        val tried = CopyOnWriteArrayList<String>()
+        val scope = CoroutineScope(Dispatchers.Default).also { watching += it }
+        scope.launch { container.playback.state.collect { s -> (s as? PlayState.Running)?.release?.takeIf { it != tried.lastOrNull() }?.let(tried::add) } }
+        return tried
     }
 
     /** The coordinator's next launch for [watchKey], or a failure as soon as the play sheet shows one. */
@@ -628,6 +651,8 @@ class DownloadPlayerDeviceTest {
         const val BACK_MILLIS = 90_000L
         const val CARD_MILLIS = 30_000L
         const val LAUNCH_MILLIS = 15_000L
+        /** How long the file played before, as its player saved it: chapters.mkv's six minutes. */
+        const val PLAYED_MS = 360_000L
         /** How long the missing-parts prompt shows unanswered, in playback: past the test's answer. */
         const val PROMPT_MILLIS = 600_000L
         /** Where the player of a download whose file is gone was asked to start: what its stream starts from. */

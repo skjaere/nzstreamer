@@ -262,7 +262,7 @@ class PlaybackFailureTest {
     fun `a download's play says its file is gone, or that it is missing a part there`() {
         val gone = DataSourceException("Download d1 has no finished file", null, PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND)
         assertEquals(
-            PlaybackFailure("The downloaded file is gone", releaseAtFault = false, remote = "The downloaded file is gone"),
+            PlaybackFailure("The downloaded file is gone", releaseAtFault = false, remote = "The downloaded file is gone", fileGone = true),
             PlaybackFailure.of(IOException("load failed", gone), PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND, download = true),
         )
         val gap = GapReached(4_000_000L..4_999_999L)

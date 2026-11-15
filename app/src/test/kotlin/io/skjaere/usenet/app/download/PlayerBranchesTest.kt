@@ -185,7 +185,20 @@ class PlayerBranchesTest {
         assertTrue(Prefetch.NothingFound.canPlay)
     }
 
-    /** L354: Stream instead plays the title by its stream path, never through the hooks, which would play the file again. */
+    /**
+     * Stream instead leaves the download's own release out of the stream after its missing parts or a fault of its own,
+     * as the stream would meet the same; not for its file gone, which says nothing of the release.
+     */
+    @Test
+    fun `Stream instead leaves the download's release out unless only its file is gone`() {
+        assertTrue(PlayerBranches.streamLeavesOut(fileGone = false))
+        assertFalse(PlayerBranches.streamLeavesOut(fileGone = true))
+    }
+
+    /**
+     * L354: Stream instead plays the title by its stream path, never through the hooks, which would play the file again,
+     * leaving the download's release out where the player says so.
+     */
     @Test
     fun `the coordinator's Stream instead streams past the download hooks`() {
         val source = File("src/main/kotlin/io/skjaere/usenet/app/play/PlaybackCoordinator.kt").readText()
@@ -194,5 +207,6 @@ class PlayerBranchesTest {
         val body = source.substring(at).substringBefore("\n    }\n")
         assertFalse("downloadHook" in body, body)
         assertTrue("streamEpisode(" in body && "streamMovie(" in body, body)
+        assertTrue("Retry.streamInstead(launch.release)" in body, body)
     }
 }

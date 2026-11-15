@@ -50,9 +50,10 @@ import kotlinx.coroutines.flow.first
  * fails on one of them. While [of]'s providersLeftOut says a provider is left out (its login
  * rejected, or out of reach), an article the others lack may be on that one: not the release's fault.
  * [remote]: the same, as a paired phone whose play this is is told it (L37): in the TV's words, from the failure's kind
- * alone, with nothing of the TV's settings to open there.
+ * alone, with nothing of the TV's settings to open there. [fileGone]: a finished download's file is gone, which says
+ * nothing of its release.
  */
-internal data class PlaybackFailure(val reason: String, val releaseAtFault: Boolean, val remote: String) {
+internal data class PlaybackFailure(val reason: String, val releaseAtFault: Boolean, val remote: String, val fileGone: Boolean = false) {
     companion object {
         fun of(usenet: UsenetError?, errorCode: Int, providersLeftOut: Boolean = false): PlaybackFailure = when (usenet) {
             is UsenetError.MissingArticle -> if (providersLeftOut) {
@@ -141,7 +142,8 @@ internal data class PlaybackFailure(val reason: String, val releaseAtFault: Bool
          */
         private fun downloadFailure(causes: List<Throwable>, errorCode: Int): PlaybackFailure = when {
             causes.any { it is GapReached } -> PlaybackFailure(MISSING_HERE, releaseAtFault = false, remote = MISSING_HERE)
-            errorCode == PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> PlaybackFailure(DownloadStorage.FILE_GONE, releaseAtFault = false, remote = DownloadStorage.FILE_GONE)
+            errorCode == PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND ->
+                PlaybackFailure(DownloadStorage.FILE_GONE, releaseAtFault = false, remote = DownloadStorage.FILE_GONE, fileGone = true)
             else -> of(usenet = null, errorCode)
         }
 

@@ -3057,7 +3057,7 @@ class PlayerActivity : ComponentActivity() {
      * that goes. This one is remembered as missing only once another plays, and played again from here if none does (W3).
      */
     private fun tryAnotherForMissingParts() {
-        if (playingDownload) return streamInstead()
+        if (playingDownload) return streamInstead(leaveOut = true)
         val l = launch ?: return
         if (isFinishing) return
         val position = controlsPlayer?.currentPosition ?: resumePosition.takeIf { it != C.TIME_UNSET } ?: 0
@@ -3899,7 +3899,7 @@ class PlayerActivity : ComponentActivity() {
         fileDetails.stopped()
         val download = playingDownload
         // A download has no request to try another release of: it offers its stream instead, while online (L354).
-        failure = Failure(failed.reason, failed.remote, canTryAnother = !download && l != null && container.playback.canTryAnother(l, stops), stops, download)
+        failure = Failure(failed.reason, failed.remote, canTryAnother = !download && l != null && container.playback.canTryAnother(l, stops), stops, download, failed.fileGone)
         sessionPlayer?.failed = true
         updateControlsUse()
         backLeavesFailure.isEnabled = true
@@ -3925,7 +3925,7 @@ class PlayerActivity : ComponentActivity() {
      * shows how that goes.
      */
     private fun tryAnother() {
-        if (playingDownload) return streamInstead()
+        if (playingDownload) return streamInstead(leaveOut = PlayerBranches.streamLeavesOut(failure?.fileGone == true))
         val l = launch ?: return
         if (isFinishing) return
         val p = player
@@ -3941,24 +3941,32 @@ class PlayerActivity : ComponentActivity() {
      * "Stream instead" (L354), on "Playback stopped" or the missing-parts prompt of a download's play: saves where it is,
      * its release kept as the one that played (no fault of it is known), closes, and has the coordinator play the title by
      * its stream path, past the download hooks, from there (the place itself, which the one saved isn't past nine tenths);
-     * the play sheet shows how that goes. Offered only online.
+     * the play sheet shows how that goes. Offered only online. [leaveOut]: the stream leaves the download's release out,
+     * after its missing parts or a fault of its own ([PlayerBranches.streamLeavesOut]).
      */
-    private fun streamInstead() {
+    private fun streamInstead(leaveOut: Boolean) {
         val l = launch ?: return
         if (isFinishing) return
         val position = controlsPlayer?.currentPosition ?: resumePosition.takeIf { it != C.TIME_UNSET } ?: 0
         log.info("Download: streaming the title instead, from {}", format(position))
         player?.let { saveProgress(position, it.duration) }
         val handedOver = handOverMode()
-        container.playback.streamInstead(l, position)
+        container.playback.streamInstead(l, position, leaveOut)
         finishHandingOver(handedOver)
     }
 
     /**
      * The panel's [reason], and [remote], the same in the words a paired phone is told it (L37); [stops], the routes it
-     * stopped; [download], a finished download's play, which offers its stream instead (L354).
+     * stopped; [download], a finished download's play, which offers its stream instead (L354), [fileGone] its file gone.
      */
-    private data class Failure(val reason: String, val remote: String, val canTryAnother: Boolean, val stops: Set<String> = emptySet(), val download: Boolean = false)
+    private data class Failure(
+        val reason: String,
+        val remote: String,
+        val canTryAnother: Boolean,
+        val stops: Set<String> = emptySet(),
+        val download: Boolean = false,
+        val fileGone: Boolean = false,
+    )
 
     /**
      * The picture-in-picture window as the player tells Android of it: its shape ([aspect], null: not known yet), where it
