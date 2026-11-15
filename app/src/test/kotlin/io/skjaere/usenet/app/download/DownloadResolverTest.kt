@@ -735,10 +735,27 @@ class DownloadResolverTest {
         // No file of its name, nor one of its size at its place.
         row(single, pack, tried = listOf(single)) { it.resolvedAs(single, "gone.mkv", 1_300_000_000L) }
         storage.sources[ID] = DownloadStorage.Source(single.nzb, null)
+        onGrab = { item -> storage.events += "grab ${item.guid}" }
         val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
         assertEquals(listOf(pack.guid), grabbed)
         assertEquals(pack.guid, ready.row.release?.guid)
         assertContentEquals(pack.nzb, storage.sources[ID]?.nzb)
+        // Dropped before the next release was grabbed: a resolve that ends before it keeps a new one never opens it again.
+        assertEquals(listOf("drop source $ID", "grab ${pack.guid}"), storage.events.filter { it.startsWith("drop source") || it.startsWith("grab") })
+
+        // The candidates' resolve waiting (no provider saved after all): the copy is gone, not opened again at the next.
+        reset()
+        row(single, pack, tried = listOf(single)) { it.resolvedAs(single, "gone.mkv", 1_300_000_000L) }
+        storage.sources[ID] = DownloadStorage.Source(single.nzb, null)
+        var checks = 0
+        assertIs<DownloadResolver.Resolution.Waiting>(
+            DownloadResolver(
+                dao, storage, availability, NzbPreparer(prepareBackend, Dispatchers.Unconfined), store, probe, { listOf(indexer) }, { _, item -> grab(item) },
+                { _, _ -> TriedReleases.None }, { 10 }, providersChecked = { ++checks == 1 }, clock = { NOW },
+            ).resolve(ID),
+        )
+        assertNull(storage.sources[ID])
+        assertEquals(listOf(single.guid), opened.map { it.first })
     }
 
     @Test
@@ -776,6 +793,8 @@ class DownloadResolverTest {
         dao.states.clear()
         storage.sources.clear()
         storage.grabs.clear()
+        storage.events.clear()
+        onGrab = {}
         storage.deletedVideos.clear()
         storage.spaceAsked.clear()
         storage.space = ROOM
@@ -830,6 +849,9 @@ class DownloadResolverTest {
     private class FakeStorage : DownloadResolver.Storage {
         val sources = mutableMapOf<String, DownloadStorage.Source>()
         val grabs = mutableMapOf<String, DownloadStorage.Grab>()
+
+        /** What was asked of it, in order, with the test's own steps beside. */
+        val events = mutableListOf<String>()
         var space: DownloadSpace? = ROOM
         val deletedVideos = mutableListOf<String>()
         val spaceAsked = mutableListOf<String>()
@@ -841,6 +863,7 @@ class DownloadResolverTest {
         override suspend fun source(id: String) = sources[id]
 
         override suspend fun dropSource(id: String) {
+            events += "drop source $id"
             sources.remove(id)
             grabs.remove(id)
         }
