@@ -4,11 +4,13 @@ import io.skjaere.usenet.core.FakeNntpServer.Body
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.net.Socket
-import java.util.concurrent.Callable
+import java.util.concurrent.BrokenBarrierException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.Executors
+import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -17,8 +19,7 @@ import kotlin.test.assertTrue
 
 /**
  * [FakeNntpServer]'s throttle holds each connection's answers to its bytes a second, as its KDoc says, seen from plain
- * sockets. The waits are kept rather than slept (virtual time), but for one case that sleeps them, for about a fifth
- * of a second, to show the connections' throttles apart.
+ * sockets. The waits are kept rather than slept (virtual time): no case depends on a clock.
  */
 class FakeNntpServerThrottleTest {
     /** The throttle's waits by connection, kept and not slept. */
@@ -143,24 +144,49 @@ class FakeNntpServerThrottleTest {
         }
     }
 
+    /**
+     * Four connections asked for an answer at once each wait for their own bytes, inside their waits at the same time: a
+     * throttle shared under one lock would let one wait at a time, and its four would never meet; one shared byte budget
+     * would make each wait longer than its own bytes take.
+     */
     @Test
-    fun `each connection has a throttle of its own, in real time`() {
-        val big = Random(SEED).nextBytes(BIG)
-        FakeNntpServer(body = { Body.Article(big) }, throttle = REAL_RATE).use { server ->
+    fun `each connection has a throttle of its own, four waiting at once each for its own bytes`() {
+        val waits = Waits()
+        // Armed once the greetings are read: then each connection's first wait, for its answer, waits for the others'.
+        val armed = AtomicBoolean(false)
+        val together = CyclicBarrier(CONNECTIONS)
+        val entered = ConcurrentHashMap.newKeySet<Int>()
+        val met = ConcurrentHashMap.newKeySet<Int>()
+        val wait = { connection: Int, nanos: Long ->
+            waits.wait(connection, nanos)
+            if (armed.get() && entered.add(connection)) {
+                try {
+                    together.await(MEET_LIMIT_MS, TimeUnit.MILLISECONDS)
+                    met += connection
+                } catch (_: TimeoutException) {
+                    // Not all four came: they never waited at once.
+                } catch (_: BrokenBarrierException) {
+                    // Another's wait for them ran out first.
+                }
+            }
+        }
+        FakeNntpServer(body = { Body.Article(ARTICLE) }, throttle = RATE, throttleWait = wait).use { server ->
+            // Each connects after the one before has its greeting, so accept order is the list's.
             val clients = List(CONNECTIONS) { Client(server) }
-            val threads = Executors.newFixedThreadPool(CONNECTIONS)
             try {
-                val started = System.nanoTime()
-                val tookMs = clients.mapIndexed { i, client ->
-                    threads.submit(Callable { client.body("<$i@x>", big).let { (System.nanoTime() - started) / 1_000_000 } })
-                }.map { it.get(READ_LIMIT_MS.toLong(), TimeUnit.MILLISECONDS) }
-                // The least one answer takes: each byte waits its share before it goes.
-                val leastMs = ("222 0 <0@x>\r\n".length + BIG + ".\r\n".length) * 1_000L / REAL_RATE - 1
-                tookMs.forEachIndexed { i, ms -> assertTrue(ms >= leastMs, "connection $i: $ms ms, against at least $leastMs ms") }
-                // At once, they take about what one alone takes; a throttle they shared would take them four times that.
-                assertTrue(tookMs.max() < 3 * leastMs, "$CONNECTIONS connections at once: $tookMs ms, against at least $leastMs ms for one")
+                armed.set(true)
+                clients.forEachIndexed { i, client -> client.send("BODY <$i@x>") }
+                clients.forEachIndexed { i, client ->
+                    assertEquals("222 0 <$i@x>", client.line())
+                    assertContentEquals(ARTICLE, client.bytes(ARTICLE.size))
+                    assertEquals(".", client.line())
+                }
+                assertEquals((0 until CONNECTIONS).toSet(), met.toSet(), "connections that waited at once")
+                repeat(CONNECTIONS) { i ->
+                    val sent = "$GREETING\r\n".length + "222 0 <$i@x>\r\n".length + ARTICLE.size + ".\r\n".length
+                    assertEquals(sent * NANOS_A_BYTE, waits.of(i).sum(), "connection $i waited for its own bytes alone")
+                }
             } finally {
-                threads.shutdownNow()
                 clients.forEach { it.close() }
             }
         }
@@ -180,11 +206,9 @@ class FakeNntpServerThrottleTest {
 
         val ARTICLE = Random(7).nextBytes(4_500)
 
-        const val SEED = 11
         const val CONNECTIONS = 4
 
-        /** A fifth of a second for each connection's answer, in real time. */
-        const val BIG = 40_000
-        const val REAL_RATE = 200_000L
+        /** How long a connection's first wait waits for the others' to come at once: only a failing test waits it out. */
+        const val MEET_LIMIT_MS = 5_000L
     }
 }
