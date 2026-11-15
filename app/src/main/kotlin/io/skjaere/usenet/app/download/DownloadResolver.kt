@@ -22,6 +22,7 @@ import io.skjaere.usenet.core.FilePicker
 import io.skjaere.usenet.core.NzbPreparer
 import io.skjaere.usenet.core.NzbSource
 import io.skjaere.usenet.core.PipelineEvent
+import io.skjaere.usenet.core.PipelineStep
 import io.skjaere.usenet.core.PlayCandidate
 import io.skjaere.usenet.core.PlayPipeline
 import io.skjaere.usenet.core.PlaybackTarget
@@ -249,7 +250,8 @@ class DownloadResolver(
         val byKey = items.associateBy { it.key }
         val newznab = byKey.mapValues { it.value.item }
         val configs = indexers().associateBy { it.id }
-        // Whether the last grab failed for an outage on the indexer's side (out of reach, a 5xx): no NZB came, nothing spent.
+        // Whether this attempt's last grab failed for an outage on the indexer's side (out of reach, a 5xx): no NZB came,
+        // nothing spent. An attempt whose grab never reached an indexer (none set up for it) had no outage.
         var indexerOut = false
         val grabs = indexerGrab(newznab, configs) { indexer, item ->
             try {
@@ -314,6 +316,7 @@ class DownloadResolver(
                         of = before + event.of
                         current = event.candidate.id
                         answered = false
+                        indexerOut = false
                         // Before its grab: a process that dies mid-attempt never grabs it a fourth time (L340).
                         counting = counting + event.candidate.id
                         count(id, counting)
@@ -323,7 +326,7 @@ class DownloadResolver(
                         is StepStatus.Failed -> when (val failure = status.failure) {
                             // The providers failing is no answer about the release, nor a connection lost.
                             is AttemptFailure.Provider -> Unit
-                            is AttemptFailure.Failed -> if (failure.error.isLostConnection()) lost = failure.error else answer()
+                            is AttemptFailure.Failed -> if (event.step in READS_PROVIDERS && failure.error.isLostConnection()) lost = failure.error else answer()
                             is AttemptFailure.FetchFailed -> if (indexerOut) {
                                 // No NZB came: the release isn't counted, and the next may be another indexer's.
                                 current?.let { counting = counting - it }
@@ -536,8 +539,15 @@ class DownloadResolver(
         /** The connection lost or timed out: said of no release, which may be whole (L382). */
         private fun UsenetError.isLostConnection() = this is UsenetError.Network || this is UsenetError.Timeout
 
+        /**
+         * The steps whose lost connection is no answer about the release: the check and the open, which ask the providers.
+         * The probe's are its answer, as a play takes them: its own deadline times out where a file stalls it, and any
+         * IOException Media3 meets as it reads says Network, whatever it was.
+         */
+        private val READS_PROVIDERS = setOf(PipelineStep.CheckAvailability, PipelineStep.Open)
+
         /** An indexer out of reach, or failing on its side (a 5xx): no answer about the release, nor a refusal of the account. */
-        private fun NewznabError.isOutage() = this is NewznabError.Network || this is NewznabError.Timeout || this is NewznabError.Server
+        internal fun NewznabError.isOutage() = this is NewznabError.Network || this is NewznabError.Timeout || this is NewznabError.Server
 
         /** What the probe read of [row]'s video, as Resolve kept it; null where it read none. */
         fun video(row: Download): VideoTiming? = row.video?.let { json.decodeFromString(VideoTiming.serializer(), it) }

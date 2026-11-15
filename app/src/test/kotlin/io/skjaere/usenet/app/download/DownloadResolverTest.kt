@@ -190,11 +190,14 @@ class DownloadResolverTest {
     /** Called once the probe has kept its target, before it reads it. */
     private var onProbe: suspend () -> Unit = {}
 
+    /** The probe's answer for a candidate (by key) in place of what it read, where it gives one: its own deadline, say. */
+    private var probeAnswer: (String) -> ProbeResult? = { null }
+
     private val probe = TrackProbe { target ->
         target.keep()
         onProbe()
         probed += target.candidate.id
-        ProbeResult.Playable(video, tracks)
+        probeAnswer(target.candidate.id) ?: ProbeResult.Playable(video, tracks)
     }
 
     private val dao = FakeDao()
@@ -595,11 +598,11 @@ class DownloadResolverTest {
     }
 
     /**
-     * The connection lost or a timeout as a release is checked, opened or probed says nothing of the release (L382): it isn't
+     * The connection lost or a timeout as a release is checked or opened says nothing of the release (L382): it isn't
      * counted, no other release is grabbed while it lasts, and the download backs off and asks again, from the NZB kept.
      */
     @Test
-    fun `a connection lost while a release is checked is backed off from, nothing counted and nothing more grabbed`() = runBlocking<Unit> {
+    fun `a connection lost while a release is checked or opened is backed off from, nothing counted and nothing more grabbed`() = runBlocking<Unit> {
         row(single, pack)
         checkFails = java.io.IOException("Connection reset by peer")
         val out = assertIs<DownloadResolver.Resolution.Unreachable>(resolver().resolve(ID))
@@ -615,6 +618,41 @@ class DownloadResolverTest {
         assertEquals(single.guid, ready.row.release?.guid)
         assertEquals(listOf(single.guid), grabbed)
         assertEquals(listOf(key(single)), stored().tried)
+
+        // The same as it is opened.
+        reset()
+        row(single, pack)
+        single.opening = java.io.IOException("Connection reset by peer")
+        assertIs<UsenetError.Network>(assertIs<DownloadResolver.Resolution.Unreachable>(resolver().resolve(ID)).error)
+        assertEquals(emptyList(), stored().tried)
+        single.opening = null
+        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(listOf(single.guid), grabbed)
+    }
+
+    /**
+     * The probe's own deadline ("No track list within 20 s", where a file stalls it) and an IOException Media3 met as it
+     * read, which reads as a lost connection whatever it was, are the probe's answer about the release, as a play takes
+     * them: counted, and the next release tried. Backed off from instead, a release whose probe stalls would be checked,
+     * opened and probed again for an hour, and the others never tried.
+     */
+    @Test
+    fun `a probe that times out or fails as it reads is the release's answer, counted, and the next release is tried`() = runBlocking<Unit> {
+        val next = Fake("hl-s02e04-wren", "Harbor.Lights.S02E04.720p.WEB.h264-WREN", listOf("d4.mkv" to 900_000_000L))
+        listOf(
+            ProbeResult.Failed(UsenetError.Timeout("No track list within 20 s")),
+            ProbeResult.Failed(UsenetError.Network("Source error"), null, java.io.IOException("Source error")),
+        ).forEach { failed ->
+            reset()
+            row(single, next)
+            probeAnswer = { key -> failed.takeIf { key == key(single) } }
+            val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID), "for $failed")
+            assertEquals(next.guid, ready.row.release?.guid, "for $failed")
+            assertEquals(listOf(single.guid, next.guid), grabbed, "for $failed")
+            assertEquals(listOf(key(single), key(next)), stored().tried, "for $failed")
+            assertEquals(listOf(key(single), key(next)), probed, "for $failed")
+            assertNull(storage.grabs[ID], "for $failed")
+        }
     }
 
     /** An indexer that can't be reached or answers 5xx gave no NZB: nothing was grabbed, so nothing is counted (L340). */
@@ -629,10 +667,16 @@ class DownloadResolverTest {
         assertEquals(DownloadState.Resolving, stored().state)
         assertEquals(emptyList(), stored().tried)
 
-        // A dropped connection the same (one release: the grab's own retry of it waits a second).
-        indexerFails = NewznabError.Network("Unable to resolve host")
-        assertIs<DownloadResolver.Resolution.Unreachable>(resolver(attempts = 1).resolve(ID))
-        assertEquals(emptyList(), stored().tried)
+        // A dropped connection and a timeout are outages as a 5xx is; a refusal of the account or its allowance isn't. Their
+        // kinds alone: a grab retries the first two after a second's wait of its own.
+        with(DownloadResolver) {
+            listOf(NewznabError.Network("Unable to resolve host"), NewznabError.Timeout("Read timed out"), NewznabError.Server("HTTP 503")).forEach {
+                assertTrue(it.isOutage(), "for $it")
+            }
+            listOf(NewznabError.Auth("Bad key"), NewznabError.ApiLimitReached("Request limit reached"), NewznabError.DownloadLimitReached("Download limit reached")).forEach {
+                assertFalse(it.isOutage(), "for $it")
+            }
+        }
 
         // Back: the first release, as it ranked.
         indexerFails = null
@@ -645,6 +689,22 @@ class DownloadResolverTest {
         row(*five.toTypedArray())
         indexerFails = NewznabError.DownloadLimitReached("Download limit reached")
         assertIs<DownloadResolver.Resolution.Failed>(resolver().resolve(ID))
+    }
+
+    /**
+     * A grab that never reached an indexer (one no longer set up) is no outage of it, whatever the grab before it met: its
+     * release is counted, as a play counts it, while the one whose indexer was out isn't.
+     */
+    @Test
+    fun `a release whose indexer is no longer set up is counted after another's indexer was out`() = runBlocking<Unit> {
+        val elsewhere = Fake("hl-s02e04-gone", "Harbor.Lights.S02E04.1080p.WEB.h264-GRP", listOf("g.mkv" to 900_000_000L))
+        row(single, elsewhere) { row ->
+            row.copy(candidates = row.candidates.map { if (it.guid == elsewhere.guid) it.copy(indexerId = GONE_INDEXER) else it })
+        }
+        indexerFails = NewznabError.Server("HTTP 503")
+        val out = assertIs<DownloadResolver.Resolution.Unreachable>(resolver().resolve(ID))
+        assertEquals(DownloadHostRules.CANT_REACH_INDEXER, out.words)
+        assertEquals(listOf(ReleaseKey.of(GONE_INDEXER, elsewhere.guid)), stored().tried)
     }
 
     @Test
@@ -815,6 +875,7 @@ class DownloadResolverTest {
         storage.space = ROOM
         indexerFails = null
         checkFails = null
+        probeAnswer = { null }
         grabbed.clear()
         checked.clear()
         opened.clear()
@@ -910,6 +971,9 @@ class DownloadResolverTest {
     private companion object {
         const val ID = "0b6c1d2e-download"
         const val INDEXER = "fake-indexer"
+
+        /** An indexer a candidate came from that is no longer set up. */
+        const val GONE_INDEXER = "removed-indexer"
         const val SHOW = 900002
         const val NOW = 1_800_000_000_000L
 
