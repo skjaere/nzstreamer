@@ -295,15 +295,17 @@ class ReleaseRanker(private val parse: (String) -> ParsedRelease = ReleaseParser
 
     /**
      * For downloading (W112, L355): each release's bonus is [DOWNLOAD_SMALLER_BONUS] x (1 - its bitrate over the top
-     * estimate among the releases that play of its standing and source, and of its side of Download size), so of one
-     * standing the smaller goes first; none for the top, nor for a release with no estimate or one that doesn't play. The
-     * releases above Download size, tried after every one that fits, are a side of their own: the largest of them is no top
-     * for those that fit, and they still go smaller first among themselves, so a list all above the cap doesn't fall back to
-     * grabs and names. Per standing and source as a TV's ([withTvBonuses]), whose bonus [withBitrateBonus] caps alike: a
-     * smaller release never passes one of another resolution, language or HDR standing.
+     * estimate among the releases that play of its standing and source, and tried as late), so of one standing the smaller
+     * goes first; none for the top, nor for a release with no estimate or one that doesn't play. The releases tried after
+     * every other, above Download size or with no hardware decoder for their size, go by themselves: the largest of them is
+     * no top for those tried before, and they still go smaller first among themselves, so a list all above the cap doesn't
+     * fall back to grabs and names. Per standing and source as a TV's ([withTvBonuses]), whose bonus [withBitrateBonus]
+     * caps alike: a smaller release never passes one of another resolution, language or HDR standing.
      */
     private fun withDownloadBonuses(scored: List<Scored>): List<Scored> {
-        fun side(s: Scored) = Triple(s.standing, s.ranked.facts.source, s.ranked.reasons.any { it is ReleaseReason.AboveDownloadSize })
+        // Each of these costs ABOVE_MAX_BITRATE: those with as many are tried together.
+        fun late(s: Scored) = s.ranked.reasons.count { it is ReleaseReason.AboveDownloadSize || (it is ReleaseReason.NoHardwareDecoder && !it.blocking) }
+        fun side(s: Scored) = Triple(s.standing, s.ranked.facts.source, late(s))
         fun counted(s: Scored) = s.ranked.estimatedBitrate?.takeIf { s.ranked.playable }
         val tops = scored.groupBy(::side).mapValues { (_, group) -> group.mapNotNull(::counted).maxOrNull() }
         return scored.map { s ->

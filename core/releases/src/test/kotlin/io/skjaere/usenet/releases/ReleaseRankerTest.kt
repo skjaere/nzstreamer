@@ -1576,6 +1576,28 @@ class ReleaseRankerTest {
         assertEquals(listOf(releases[4].name, releases[3].name), rank(*releases, context = RankingContext(device, target = RankingTarget.Download)).filter { it.playable }.map { it.facts.name })
     }
 
+    /** A release tried last for want of a hardware decoder is no more the top of those tried before it than one above the cap. */
+    @Test
+    fun `for downloading, a release with no hardware decoder for its size doesn't set the top of those tried before it`() {
+        // A 4K phone decoding HEVC in hardware and AV1 only in software.
+        val av1InSoftware = phone.copy(
+            displayHeight = 2160,
+            video = phone.video + VideoCodec.Av1,
+            videoMaxHeight = mapOf(VideoCodec.Hevc to 2160, VideoCodec.Av1 to 2160),
+            videoHardwareMaxHeight = mapOf(VideoCodec.Av1 to 1080),
+        )
+        val context = forDownload.copy(device = av1InSoftware)
+        val small = release("Harbor.Lights.S01E02.2160p.WEB-DL.H265-KESTREL", size = 6 * gb)
+        val larger = release("Harbor.Lights.S01E02.2160p.WEB-DL.H265-WREN", size = 12 * gb, grabs = 100)
+        val av1 = release("Harbor.Lights.S01E02.2160p.WEB-DL.AV1-GRP", size = 40 * gb)
+        val ranked = rank(av1, larger, small, context = context)
+        assertEquals(listOf(small.name, larger.name, av1.name), ranked.map { it.facts.name })
+        assertTrue(ReleaseReason.NoHardwareDecoder("2160p AV1", blocking = false) in ranked.last().reasons, "${ranked.last().reasons}")
+        // 25 x (1 - 6/12), relative to the largest tried before it as without the AV1, more than the larger one's grabs (10.0).
+        assertEquals(rank(larger, small, context = context).map { it.facts.name to it.score }, ranked.dropLast(1).map { it.facts.name to it.score })
+        assertEquals(240.0 + 25.0 * (1 - 6.0 / 12), ranked[0].score, absoluteTolerance = 0.05)
+    }
+
     @Test
     fun `for downloading by a TV's rules there is no larger-first, and the smaller encode goes before the remux of its standing`() {
         val remux = remux(50)
