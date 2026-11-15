@@ -166,6 +166,28 @@ class DownloadStorageDeviceTest {
         assertArrayEquals("the finished file, a .part beside it", bytes, done.readBytes())
     }
 
+    /**
+     * What another release left in the download's folder (its file couldn't go while the volume was away: Choose another
+     * release then) goes as the next file is opened, its room with it: one of another name is deleted, and a longer one of
+     * the same name is cut to the new file's size, so a finished file never carries the old release's tail.
+     */
+    @Test
+    fun anOpenFromAnotherReleaseLeavesNothingOfTheFileBefore() = runBlocking<Unit> {
+        val storage = storage()
+        storage.add(row("replaced"))
+        val folder = File(volume, "downloads/replaced")
+        storage.open("replaced", NAME, 8 * MIB).use { it.write(ByteBuffer.wrap(Random(3).nextBytes(MIB.toInt())), 0) }
+        val stale = File(folder, "v.mp4.part").apply { writeBytes(Random(4).nextBytes(MIB.toInt())) }
+        // The new release: the same extension, half the size.
+        val bytes = Random(5).nextBytes((4 * MIB).toInt())
+        storage.open("replaced", NAME, bytes.size.toLong()).use { it.write(ByteBuffer.wrap(bytes), 0) }
+        assertFalse("another release's file of another name", stale.exists())
+        assertEquals(setOf("v.mkv.part"), folder.list()!!.toSet())
+        val done = storage.finish("replaced", NAME)
+        assertEquals("the old release's tail cut off", bytes.size.toLong(), done.length())
+        assertArrayEquals(bytes, done.readBytes())
+    }
+
     @Test
     fun theNzbAndItsPasswordAreKeptBesideTheMarkerUntilDropped() = runBlocking<Unit> {
         val storage = storage()

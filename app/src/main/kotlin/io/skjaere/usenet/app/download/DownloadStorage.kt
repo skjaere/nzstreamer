@@ -119,18 +119,22 @@ class DownloadStorage(
      * Opens [id]'s video to write: its `.part`, made if new, with its whole [size] allocated before the first byte (C8), so
      * the room is taken at once and progress is the row's alone. Opened again (a resume) it keeps what was written, and a
      * file [finish] renamed already, by a run that died before its row said so, is taken back whole as the `.part`: a new
-     * one beside it would be zeros, which its finish would rename over it. Throws [Unavailable] while the volume isn't
-     * there, and an IOException when Android can't allocate it. The caller closes it.
+     * one beside it would be zeros, which its finish would rename over it. What another release left in its folder (its
+     * file couldn't go while the volume was away) goes, its room with it: a file of another name is deleted, and a longer
+     * one of this name cut to [size]. Throws [Unavailable] while the volume isn't there, and an IOException when Android
+     * can't allocate it. The caller closes it.
      */
     suspend fun open(id: String, fileName: String, size: Long): FileChannel = withContext(io) {
         require(size >= 0) { "A size of $size" }
         val volume = volumeDir() ?: throw Unavailable()
-        File(downloadsDir(volume), checked(id)).mkdirs()
+        val folder = File(downloadsDir(volume), checked(id)).apply { mkdirs() }
         val part = part(volume, id, fileName)
         val done = File(volume, relativePath(id, fileName))
+        folder.listFiles().orEmpty().filter { it != part && it != done }.forEach(::deleteFolder)
         if (done.isFile && !part.exists() && !done.renameTo(part)) throw IOException("Couldn't reopen download $id's file")
         val file = RandomAccessFile(part, "rw")
         try {
+            if (file.length() > size) file.setLength(size)
             // Android's fallocate refuses an empty length.
             if (size > 0) storageManager.allocateBytes(file.fd, size)
             file.channel
