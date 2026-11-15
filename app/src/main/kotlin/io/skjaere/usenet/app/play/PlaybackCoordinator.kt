@@ -29,6 +29,7 @@ import io.skjaere.usenet.app.debrid.ServiceFiles
 import io.skjaere.usenet.app.debrid.ServicePlayFailure
 import io.skjaere.usenet.app.debrid.ServiceSource
 import io.skjaere.usenet.app.debrid.triedBySource
+import io.skjaere.usenet.app.download.DownloadHook
 import io.skjaere.usenet.app.search.IndexerConfigs
 import io.skjaere.usenet.app.search.SourceTag
 import io.skjaere.usenet.app.search.playTag
@@ -88,12 +89,10 @@ import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -346,6 +345,9 @@ internal fun importedLaunch(nzbId: String, file: FileCandidate, request: PlayReq
 /** An episode known by its TMDB numbers, looked up on TMDB and then found and played as the Show screen's Play does. */
 data class EpisodeTarget(val showTmdbId: Int, val showName: String, val season: Int, val episode: Int) {
     val label: String get() = label(season, episode)
+
+    /** Its watch key, as [EpisodePlay.key]: what its progress is saved under, and its download found by. */
+    val key: String get() = WatchKey.episode(showTmdbId, season, episode)
 
     /** What a search for it by name types: in ASCII digits whatever the locale, as [EpisodePlay.nameQuery]. */
     val query: String get() = "$showName ${"S%02dE%02d".format(Locale.ROOT, season, episode)}"
@@ -843,11 +845,14 @@ sealed interface PlayOutcome {
  * play sheet how it's going. On success it emits a [PlayerLaunch] for the activity to start.
  */
 class PlaybackCoordinator(private val container: AppContainer, private val scope: CoroutineScope) {
+    /** The play on its way, which the next one stops ([PlayInFlight]): its sheet's writes, its job, its launches. */
+    private val inFlight = PlayInFlight(container.playerInFront) { container.castLauncher() }
+
     /**
      * The sheet's state: each write sets [state] and [sheet] together, and a job another play replaced writes nothing more
      * ([SheetWrites]).
      */
-    private val _state = SheetWrites()
+    private val _state = inFlight.writes
     val state: StateFlow<PlayState> = _state.state
 
     /**
@@ -856,13 +861,11 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
      */
     val sheet: StateFlow<SheetNow> = _state.sheet
 
-    // A channel, not a SharedFlow: a launch emitted while no activity is collecting (the player
-    // just finished for auto-advance, the app is in the background) waits instead of being lost.
-    private val _launches = kotlinx.coroutines.channels.Channel<PlayerLaunch>(kotlinx.coroutines.channels.Channel.BUFFERED)
+    // A launch emitted while no activity is collecting waits instead of being lost (PlayInFlight's channel).
+    private val _launches = inFlight.launches
     val launches: kotlinx.coroutines.flow.Flow<PlayerLaunch> = _launches.receiveAsFlow()
 
-    // Heard only by whoever listens as a play starts, and never waited on: a play starting is no news later.
-    private val _starting = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    private val _starting = inFlight.starts
 
     /** Each play the sheet starts, as it starts: a player in the picture-in-picture window pauses for it (L9). */
     val starting: SharedFlow<Unit> = _starting.asSharedFlow()
@@ -913,8 +916,14 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
      */
     private var again: ((PlayOrigin) -> Unit)? = null
 
-    private var job: Job? = null
+    private var job: Job? by inFlight::job
     private val sessions = PlaySessions()
+
+    /**
+     * The hooks (L353): a play asked for on this device of a title with a finished download plays its file at once, from
+     * the runner's map of them, never a wait on the library; never on a TV.
+     */
+    private val downloadHook = DownloadHook(inFlight, television = { container.television }, done = { container.downloads.done.value })
 
     /** Whether the sheet is starting a play now: searching, trying releases, or asking which file plays. */
     val startingPlay: Boolean get() = job?.isActive == true
@@ -953,15 +962,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         origin: PlayOrigin, title: String = "", subtitle: String? = null, watch: WatchTarget? = null, goesOn: String? = null,
         again: ((PlayOrigin) -> Unit)? = null,
     ) {
-        // A cast play still on its way, replaced by a play here, is stopped there (L85); one replaced by another cast is
-        // given up by that one's start.
-        val casting = _state.origin.cast != null && job?.isActive == true
-        // The sheet is this play's before the one before is cancelled: what that one still does as it ends is dropped.
-        _state.begin(origin)
-        job?.cancel()
-        if (casting && origin.cast == null) container.castLauncher()?.stop()
-        // A launch the one before sent and no screen took is no longer coming (withdraw drops those it can).
-        container.playerInFront.notLaunching()
+        stopInFlight(origin)
         _expanded.value = true
         _startedFrom.value = StartedFrom.of(origin)
         _castTo.value = origin.cast
@@ -972,6 +973,14 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
             if (container.castLauncher()?.starting(cast, said) == true) null else CastStart.notStarted(title, subtitle, cast)
         }
     }
+
+    /**
+     * What is in flight stops for a play from [origin] (L32), the sheet opening for nothing: the sheet becomes that play's,
+     * so whatever the one before still sends is dropped; its job is cancelled; a cast play still on its way, replaced by a
+     * play here, is stopped there (L85); and a launch the one before sent and no screen took is no longer coming
+     * ([PlayInFlight.stop]). The first half of [replaceJob], and all a download's hook stops (L353).
+     */
+    private fun stopInFlight(origin: PlayOrigin) = inFlight.stop(origin)
 
     /** Shows [failure] on the sheet, open, in place of what it showed: a paired phone's Play this TV can't start yet (L32). */
     fun tell(failure: PlayState.Failed) {
@@ -1025,9 +1034,10 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
      * Resumes [state] from Home: the release that played it, from where it stopped, its NZB from
      * the store while it is there and else grabbed again. An episode whose release fails is
      * searched for as Play on the Show screen does; a film or release shows the failure. [origin]: a cast's (L80), or
-     * this device's.
+     * this device's. On this device, a title with a finished download plays its file instead, from where it stopped (L353).
      */
     fun resume(state: WatchState, origin: PlayOrigin = PlayOrigin.Here) {
+        if (downloadHook.play(state.key, origin)) return
         val plan = ResumePlan.of(state)
         val watch = WatchTarget(state.kind, state.title, state.showTmdbId, state.season, state.episode, state.movieTmdbId)
         replaceJob(origin, plan.title, plan.subtitle, watch) { resume(state, it) }
@@ -1053,9 +1063,11 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
     /**
      * Play on a movie's page ([MoviePlay]): the release that played it before, alone, while its NZB
      * is stored; else, or when that fails, the best one the Search tab's search for the movie finds.
-     * [origin]: a paired phone's play (L33), which the TV starts as from its own Movie page.
+     * [origin]: a paired phone's play (L33), which the TV starts as from its own Movie page. On this device, a film with a
+     * finished download plays its file instead (L353).
      */
     fun playMovie(target: MovieTarget, origin: PlayOrigin = PlayOrigin.Here) {
+        if (downloadHook.play(WatchKey.movie(target.tmdbId), origin)) return
         replaceJob(origin, target.title, target.subtitle, target.watch) { playMovie(target, it) }
         job = launchPlay(target.title, target.subtitle, origin = origin) {
             val remembered = container.library.lastRelease(WatchKey.movie(target.tmdbId))
@@ -1074,9 +1086,11 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
 
     /**
      * Plays an episode known by its TMDB numbers (a next episode on Home): looks it up on TMDB, then as [playEpisode].
-     * [origin]: a cast's (L80), or this device's.
+     * [origin]: a cast's (L80), or this device's. On this device, an episode with a finished download plays its file
+     * instead, with no lookup (L353).
      */
     fun playEpisode(target: EpisodeTarget, origin: PlayOrigin = PlayOrigin.Here) {
+        if (downloadHook.play(target.key, origin)) return
         val watch = WatchTarget(WatchKind.Episode, WatchTitle.episode(target.showName, target.season, target.episode), showTmdbId = target.showTmdbId, season = target.season, episode = target.episode)
         replaceJob(origin, target.showName, target.label, watch) { playEpisode(target, it) }
         job = launchPlay(target.showName, target.label, origin = origin) { lookUpAndPlay(target, retry = null) }
@@ -2066,9 +2080,11 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
      * the best one; the release that played this episode before goes first. From the player, the
      * episode either side of the one playing ([playing]: the release it plays) plays from that
      * release when it is a season pack that holds it, with no search ([PlayingPack]). [origin]: a paired phone's play
-     * (L33), which the TV starts as from its own Show page, or the one the player hands on in its session.
+     * (L33), which the TV starts as from its own Show page, or the one the player hands on in its session. On this device,
+     * an episode with a finished download plays its file instead, with no search (L353).
      */
     fun playEpisode(ep: EpisodePlay, playing: SavedRelease? = null, origin: PlayOrigin = PlayOrigin.Here) {
+        if (downloadHook.play(ep.key, origin)) return
         replaceJob(origin, ep.showName, ep.subtitle, ep.watch) { playEpisode(ep, playing, it) }
         val inPlaying = playing?.let { fileInPlaying(ep, it) } != null
         // A pack named per episode that plainly lacks this one would be grabbed and prepared again for nothing: the search leaves it out.
