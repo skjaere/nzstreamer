@@ -3163,14 +3163,20 @@ class PlayerActivity : ComponentActivity() {
 
     /**
      * Looks up the episode before [playing] once per setup, for the controls' Previous within the
-     * episode's first seconds. Without one (a show's first episode, no TMDB key, TMDB failing),
-     * Previous only starts this one again.
+     * episode's first seconds. Without one (a show's first episode, no TMDB key, TMDB failing), or
+     * during a download's play offline with one not downloaded, Previous only starts this one again.
      */
     private suspend fun offerPreviousEpisode(p: ControlsPlayer, playing: AutoAdvance.Episode) {
         // TMDB's answer, else the one the play's download says, a finished one alone (L354).
         val previous = previousEpisode(container, playing) ?: playingRow()?.let { OfflineNext.previous(it, container.downloads.done.value) } ?: return
-        p.playPrevious = { switchTo(previous) }
+        // As Next: offline only one that plays from its file, as it is when pressed; else this one from the start.
+        p.playPrevious = {
+            if (PlayerBranches.previousPlays(previous.key, nextOnline(), finishedDownloads())) switchTo(previous) else p.seekTo(0)
+        }
     }
+
+    /** The finished downloads by watch key; none on a TV, which has no downloads (W108). */
+    private fun finishedDownloads(): Map<String, Download> = if (container.television) emptyMap() else container.downloads.done.value
 
     /** The finished download of the episode playing, whatever plays it; none on a TV, which has no downloads (W108). */
     private fun playingRow(): Download? = launch?.watchKey?.takeUnless { container.television }?.let { container.downloads.done.value[it] }

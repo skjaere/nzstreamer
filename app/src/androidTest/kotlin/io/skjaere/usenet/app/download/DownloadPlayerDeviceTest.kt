@@ -31,6 +31,7 @@ import io.skjaere.usenet.app.momentLabel
 import io.skjaere.usenet.app.overlayNodes
 import io.skjaere.usenet.app.overlayWords
 import io.skjaere.usenet.app.play.AutoAdvance
+import io.skjaere.usenet.app.play.ControlsPlayer
 import io.skjaere.usenet.app.play.EpisodePlay
 import io.skjaere.usenet.app.play.PlayState
 import io.skjaere.usenet.app.play.PlaybackCoordinator
@@ -286,6 +287,37 @@ class DownloadPlayerDeviceTest {
             }
         }
         assertEquals("searches for the next episode", 0, prefetches.get())
+    }
+
+    /**
+     * Offline, Previous in the first seconds, with TMDB naming an episode before that isn't downloaded (from what it kept):
+     * no stream can start, so Previous starts this one again, and the player stays, nothing handed to the coordinator.
+     */
+    @Test
+    fun offlinePreviousToAnEpisodeNotDownloadedStartsThisOneAgain() = runBlocking<Unit> {
+        val row = seed(episode(QUIET, 2))
+        offline()
+        PlayerActivity.previousEpisode = { _, playing -> play(QUIET, 1).takeIf { playing == AutoAdvance.Episode(QUIET.id, 1, 2) } }
+        val states = CopyOnWriteArrayList<PlayState>()
+        val watching = CoroutineScope(Dispatchers.Default)
+        watching.launch { container.playback.state.collect { states += it } }
+        try {
+            ActivityScenario.launch<PlayerActivity>(PlayerActivity.intent(context, checkNotNull(DownloadLaunch.of(row)))).use { scenario ->
+                waitFor("the file playing", 30_000) { scenario.read { a -> a.player?.takeIf { it.isPlaying } } }
+                waitFor("Previous looked up") { scenario.read { a -> (playerView(a).player as ControlsPlayer).playPrevious } }
+                // Paused, so the place it is left at reads as it was put.
+                scenario.onActivity { a -> playerView(a).player!!.run { pause(); seekTo(PREVIOUS_AT_MS) } }
+                scenario.onActivity { a -> playerView(a).player!!.seekToPrevious() }
+                // Long enough for a hand-over to close the player.
+                delay(STAND_IN_MILLIS)
+                assertEquals("the player closed", Lifecycle.State.RESUMED, scenario.state)
+                val position = scenario.read { a -> a.player!!.currentPosition }
+                assertTrue("at $position ms, not started again", position < PREVIOUS_AT_MS)
+            }
+            assertTrue("the play sheet showed $states", states.all { it == PlayState.Idle })
+        } finally {
+            watching.cancel()
+        }
     }
 
     /**
@@ -552,6 +584,8 @@ class DownloadPlayerDeviceTest {
         const val BACK_MILLIS = 90_000L
         const val CARD_MILLIS = 30_000L
         const val LAUNCH_MILLIS = 15_000L
+        /** Where Previous is pressed: inside the file's first seconds, where it goes to the episode before when it can. */
+        const val PREVIOUS_AT_MS = 1_500L
         /** How long a card the row stood in for is watched with the network back: several of its ticks. */
         const val STAND_IN_MILLIS = 3_000L
     }

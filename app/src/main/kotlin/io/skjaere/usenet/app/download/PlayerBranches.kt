@@ -79,6 +79,13 @@ internal object PlayerBranches {
         return Prefetch.StillDownloading(percent)
     }
 
+    /**
+     * Whether Previous plays the episode before, by its watch [key]: while [online] ([nextOnline]) as before, streamed or
+     * from its file; offline only one with a finished download in [done], from its file, as no stream can start then.
+     * Otherwise Previous starts the playing one again, as with no episode before.
+     */
+    fun previousPlays(key: String, online: Boolean, done: Map<String, Download>): Boolean = online || key in done
+
     /** A download not yet finished but still to finish: queued, under way, waiting, or held until Resume. */
     private val ON_ITS_WAY = setOf(
         DownloadState.Queued, DownloadState.Resolving, DownloadState.Running, DownloadState.Waiting, DownloadState.Paused, DownloadState.Stopped,

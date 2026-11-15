@@ -149,6 +149,19 @@ class PlayerBranchesTest {
         assertEquals(Prefetch.Downloaded(partsMissing = 0), PlayerBranches.nextStatus(next, PlayerBranches.nextOnline(download = false, online = false), mapOf(next to row(6)), emptyList()))
     }
 
+    /**
+     * Previous plays the episode before as Next plays the one after: online as before, offline only one with a finished
+     * download, from its file; else it starts this one again, as no stream can start offline.
+     */
+    @Test
+    fun `offline, Previous plays only an episode with a finished download, and online any`() {
+        val previous = WatchKey.episode(900002, 1, 4)
+        assertTrue(PlayerBranches.previousPlays(previous, online = true, emptyMap()))
+        assertTrue(PlayerBranches.previousPlays(previous, online = false, mapOf(previous to row(4))))
+        assertFalse(PlayerBranches.previousPlays(previous, online = false, emptyMap()))
+        assertFalse(PlayerBranches.previousPlays(previous, online = false, mapOf(next to row(6))))
+    }
+
     /** The episode a download's row stood in for, TMDB not reached, has nothing to be searched by: never searched for. */
     @Test
     fun `an episode the row stood in for is never searched for, the network back or not`() {
