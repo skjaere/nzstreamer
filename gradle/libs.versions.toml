@@ -28,7 +28,7 @@ coil = "3.5.0"  # 3.6 needs Compose 1.12 (AGP 9.1 + compileSdk 37)
 # The usenet libraries' releases on JitPack: the first ones built for Java 17. Every earlier tag is a Java 25 build,
 # which the app's Java 17 modules can't use. The root build.gradle.kts makes these versions win wherever a library's
 # POM names another one.
-nzb-streamer = "v0.11.0"
+nzb-streamer = "v0.12.0"
 ktor-nntp-client = "v0.8.0"
 kotlin-compression-utils = "v0.4.1"
 rapidyenc-wrapper = "v0.4.0"
