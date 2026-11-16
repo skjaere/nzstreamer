@@ -233,7 +233,7 @@ class DownloadSheetDeviceTest {
      * or mobile data where [metered]) and the host's schedule, counted.
      */
     private fun deps(metered: Boolean = false, space: DownloadSpace = DownloadSpace(available = 15 * GB, used = 0, queued = 0)) =
-        DownloadSheetDeps.of(container, ask = null).copy(
+        DownloadSheetDeps.of(container, ask = null, context).copy(
             findEpisode = { request, _ ->
                 flow {
                     answer.await()

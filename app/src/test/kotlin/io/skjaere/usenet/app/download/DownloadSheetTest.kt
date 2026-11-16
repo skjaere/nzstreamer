@@ -81,6 +81,7 @@ class DownloadSheetTest {
         var rows: List<Download> = emptyList()
         var prefs = DownloadPrefs()
         var network = WIFI
+        var charging = false
         var ask: NotificationAsk? = null
 
         /** Whether the runner queues it: not on a TV, where it queues nothing (L369). */
@@ -106,6 +107,7 @@ class DownloadSheetTest {
             rows = { rows },
             prefs = { prefs },
             network = { network },
+            charging = { charging },
             askDue = { ask?.due() == true },
             enqueue = { target, candidates, need ->
                 calls += "enqueue"
@@ -222,13 +224,36 @@ class DownloadSheetTest {
         // One at a time (L337): those still to go on wait ahead of it, the finished and failed don't.
         assertEquals(DownloadStart.AfterQueue(1), start(Fakes().apply { rows = listOf(row("q", DownloadState.Queued)) }))
         assertEquals(DownloadStart.Now, start(Fakes().apply { rows = listOf(row("d", DownloadState.Done), row("f", DownloadState.Failed), row("x", DownloadState.Deleting)) }))
-        assertEquals(DownloadStart.AfterQueue(2), start(Fakes().apply { rows = listOf(row("r", DownloadState.Running), row("p", DownloadState.Paused)) }))
+        assertEquals(DownloadStart.AfterQueue(2), start(Fakes().apply { rows = listOf(row("r", DownloadState.Running), row("w", DownloadState.Waiting)) }))
         assertEquals(DownloadStart.OnWifi, start(Fakes().apply { network = MOBILE; rows = listOf(row("q", DownloadState.Queued)) }), "Wi-Fi first: it can't start before")
+        // No connection now: not mobile data, whatever the switch says.
+        assertEquals(DownloadStart.Online(wifiOnly = true), start(Fakes().apply { network = NetworkNow.NONE }))
+        assertEquals(DownloadStart.Online(wifiOnly = false), start(Fakes().apply { network = NetworkNow.NONE; prefs = DownloadPrefs(unmeteredOnly = false) }))
+        // Only while charging (L365), off the charger: it waits for it, as the host does.
+        assertEquals(DownloadStart.Charging, start(Fakes().apply { prefs = DownloadPrefs(whileCharging = true) }))
+        assertEquals(DownloadStart.Now, start(Fakes().apply { prefs = DownloadPrefs(whileCharging = true); charging = true }))
+        assertEquals(DownloadStart.Now, start(Fakes().apply { charging = false }), "the charger asked for only while the switch is on")
+        // A paused or stopped download holds the whole queue until Resume (L380): nothing starts after it by itself.
+        assertEquals(DownloadStart.Held, start(Fakes().apply { rows = listOf(row("r", DownloadState.Running), row("p", DownloadState.Paused)) }))
+        assertEquals(DownloadStart.Held, start(Fakes().apply { network = MOBILE; rows = listOf(row("s", DownloadState.Stopped)) }), "the hold first: only Resume ends it")
 
         assertEquals("Starts now" to null, DownloadSheetModel.start(DownloadStart.Now))
         assertEquals(
             "Starts on Wi-Fi" to "This phone is on mobile data. Downloads wait for Wi-Fi or Ethernet: Settings › Downloads.",
             DownloadSheetModel.start(DownloadStart.OnWifi),
+        )
+        assertEquals(
+            "Starts on Wi-Fi" to "This phone has no connection now. Downloads wait for Wi-Fi or Ethernet: Settings › Downloads.",
+            DownloadSheetModel.start(DownloadStart.Online(wifiOnly = true)),
+        )
+        assertEquals("Starts when this phone is online" to "This phone has no connection now.", DownloadSheetModel.start(DownloadStart.Online(wifiOnly = false)))
+        assertEquals(
+            "Starts when this phone is charging" to "Downloads wait until this phone is plugged in: Settings › Downloads.",
+            DownloadSheetModel.start(DownloadStart.Charging),
+        )
+        assertEquals(
+            "Starts when downloads resume" to "Downloads are on hold until you resume them on the Downloads page.",
+            DownloadSheetModel.start(DownloadStart.Held),
         )
         assertEquals("Starts after the download in the queue" to "One download runs at a time.", DownloadSheetModel.start(DownloadStart.AfterQueue(1)))
         assertEquals("Starts after the downloads in the queue" to "One download runs at a time.", DownloadSheetModel.start(DownloadStart.AfterQueue(3)))
@@ -243,6 +268,12 @@ class DownloadSheetTest {
         val pick = assertIs<DownloadSheetState.Pick>(open(EPISODE, fakes).state.value)
         assertTrue(pick.mode.startsOnWifi)
         assertEquals(8, pick.mode.seasonEpisodes)
+        // With no connection at all, the list says nothing of mobile data.
+        val offline = Fakes().apply {
+            network = NetworkNow.NONE
+            finder = inOrder(nzb(KESTREL, 1_200_000_000))
+        }
+        assertFalse(assertIs<DownloadSheetState.Pick>(open(EPISODE, offline).state.value).mode.startsOnWifi)
     }
 
     @Test

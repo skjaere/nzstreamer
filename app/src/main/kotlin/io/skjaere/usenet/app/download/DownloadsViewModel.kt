@@ -130,7 +130,7 @@ data class DownloadsDeps(
                     ?: throw NoSuchElementException("TMDB doesn't list the episode")
                 EpisodePlay.of(details, found)
             },
-            search = DownloadSheetDeps.of(container, ask = null),
+            search = DownloadSheetDeps.of(container, ask = null, context),
             get = container.data.downloads::get,
             play = { row -> playHere(container, row) },
             mark = { row, watched -> mark(container, row, watched) },

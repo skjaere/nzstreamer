@@ -85,7 +85,8 @@ fun DownloadSheet(request: DownloadRequest, onClose: () -> Unit) {
         return
     }
     val ask = LocalNotificationAsk.current
-    val deps = remember(container, ask) { DownloadSheetDeps.of(container, ask) }
+    val context = LocalContext.current.applicationContext
+    val deps = remember(container, ask) { DownloadSheetDeps.of(container, ask, context) }
     DownloadSheet(request, onClose, deps)
 }
 
@@ -228,13 +229,16 @@ private fun Release(item: RankedItem, need: Long, mode: ReleaseListMode.Download
     }
 }
 
-/** When it starts, by its dot: now in the good colour, on Wi-Fi in the warning colour, after the queue muted. */
+/**
+ * When it starts, by its dot: now in the good colour; on Wi-Fi, once online, on the charger or resumed in the warning
+ * colour; after the queue muted.
+ */
 @Composable
 private fun StartLine(start: DownloadStart) {
     val (words, sub) = DownloadSheetModel.start(start)
     val (color, dot) = when (start) {
         DownloadStart.Now -> colors.good to colors.goodDot
-        DownloadStart.OnWifi -> colors.warn to colors.warnStrong
+        DownloadStart.OnWifi, is DownloadStart.Online, DownloadStart.Charging, DownloadStart.Held -> colors.warn to colors.warnStrong
         is DownloadStart.AfterQueue -> colors.textSecondary to colors.muted
     }
     Line(words, color, lead = { Dot(dot) }, sub = sub)

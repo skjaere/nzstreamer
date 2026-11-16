@@ -2,8 +2,11 @@ package io.skjaere.usenet.app.download
 
 import android.app.job.JobScheduler
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.BatteryManager
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
@@ -165,6 +168,15 @@ class DownloadHostsDeps(
             return result == JobScheduler.RESULT_SUCCESS
         }
     }
+}
+
+/**
+ * Whether the device is on the charger now, as Android's last battery broadcast says it (sticky, so no receiver is kept):
+ * what Only while charging waits for (L365), as the service reads it from the same broadcast.
+ */
+internal fun pluggedIn(context: Context): Boolean {
+    val battery = ContextCompat.registerReceiver(context, null, IntentFilter(Intent.ACTION_BATTERY_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
+    return (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
 }
 
 private val log = LoggerFactory.getLogger(DownloadHosts::class.java)

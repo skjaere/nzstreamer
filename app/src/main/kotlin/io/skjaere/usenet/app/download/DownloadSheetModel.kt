@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.download
 
+import android.content.Context
 import io.skjaere.usenet.app.AppContainer
 import io.skjaere.usenet.app.NetworkNow
 import io.skjaere.usenet.app.collection.ChooseState
@@ -84,12 +85,24 @@ sealed interface DownloadRequest {
     }
 }
 
-/** When a download queued now starts (L335, L337, W110): [Now], [OnWifi] (on mobile data), or after the [ahead] in the queue. */
+/**
+ * When a download queued now starts (L335, L337, L365, L380, W110): [Now]; [OnWifi] (on mobile data); [Online] (no
+ * connection now); [Charging]; [Held] (until Resume); or after the [AfterQueue.ahead] in the queue.
+ */
 sealed interface DownloadStart {
     data object Now : DownloadStart
 
     /** This phone is on mobile data (the default network metered) while downloads wait for Wi-Fi or Ethernet. */
     data object OnWifi : DownloadStart
+
+    /** This phone has no connection now: it starts once there is one, Wi-Fi or Ethernet where [wifiOnly]. */
+    data class Online(val wifiOnly: Boolean) : DownloadStart
+
+    /** Only while charging is on (L365) and this phone isn't on the charger: it starts once it is. */
+    data object Charging : DownloadStart
+
+    /** A download paused or stopped by Android holds the whole queue (L380): nothing starts until Resume. */
+    data object Held : DownloadStart
 
     /** [ahead] downloads go first, one at a time. */
     data class AfterQueue(val ahead: Int) : DownloadStart
@@ -138,7 +151,8 @@ sealed interface DownloadSheetState {
 
 /**
  * What the Download sheet reads and asks: the app's ([of]), or a test's fakes. [findEpisode] and [findMovie] are the
- * searches, by the ranking [context] given; [space], [rows], [prefs] and [network] what the sheet says of the device;
+ * searches, by the ranking [context] given; [space], [rows], [prefs], [network] and [charging] what the sheet says of the
+ * device;
  * [askDue] and [beforeDownload] Android's notification ask (L358); [enqueue] and [schedule] the download, counted at what
  * the sheet reckoned its pick needs until it is resolved, and its host. What Download starts runs in [outlive], on the
  * main thread, so the sheet's close never cuts it short.
@@ -155,6 +169,8 @@ data class DownloadSheetDeps(
     val prefs: suspend () -> DownloadPrefs,
     /** What the device's default network offers now ([AppContainer.defaultNetwork]): metered is mobile data. */
     val network: () -> NetworkNow,
+    /** Whether the device is on the charger now, which Only while charging waits for (L365). */
+    val charging: () -> Boolean = { true },
     val askDue: suspend () -> Boolean,
     val enqueue: suspend (target: DownloadTarget, candidates: List<DownloadCandidate>, need: Long) -> Download?,
     val beforeDownload: suspend () -> Unit,
@@ -165,10 +181,11 @@ data class DownloadSheetDeps(
     companion object {
         /**
          * The app's: the episode finder and the film's search over the Usenet indexers alone (L370), ranked for downloading;
-         * the downloads' storage, rows and settings; the default network; the activity's notification [ask] (none outside
-         * MainActivity); the runner's queue, and its host scheduled from the visible app (L335).
+         * the downloads' storage, rows and settings; the default network and the charger, as [context] reads it; the
+         * activity's notification [ask] (none outside MainActivity); the runner's queue, and its host scheduled from the
+         * visible app (L335).
          */
-        fun of(container: AppContainer, ask: NotificationAsk?) = DownloadSheetDeps(
+        fun of(container: AppContainer, ask: NotificationAsk?, context: Context) = DownloadSheetDeps(
             findEpisode = { request, context -> flow { emitAll(container.finder.find(request, usenetIndexers(container), context)) } },
             findMovie = { movie, context -> findMovieReleases(container, movie, indexers = { usenetIndexers(container) }, context = { context }) },
             context = { container.downloadRankingContext() },
@@ -176,6 +193,7 @@ data class DownloadSheetDeps(
             rows = { container.data.downloads.all().first() },
             prefs = { container.settings.downloads.first() },
             network = { container.defaultNetwork.now.value },
+            charging = { pluggedIn(context) },
             askDue = { ask?.due() == true },
             enqueue = { target, candidates, need -> container.downloads.enqueue(target, candidates, need) },
             beforeDownload = { ask?.beforeDownload() },
@@ -328,14 +346,22 @@ class DownloadSheetModel(private val request: DownloadRequest, private val deps:
         val best = group.playable.firstOrNull() ?: return said
         val space = deps.space()
         val free = space?.free ?: 0
-        val startsOnWifi = deps.prefs().unmeteredOnly && !deps.network().unmetered
+        val prefs = deps.prefs()
+        val network = deps.network()
+        // Mobile data: a connection, metered, while downloads wait for Wi-Fi or Ethernet (W110); none at all isn't.
+        val startsOnWifi = prefs.unmeteredOnly && network.usable && !network.unmetered
         lateinit var mode: ReleaseListMode.Download
         mode = ReleaseListMode.Download(free, startsOnWifi, request.seasonEpisodes) { item -> download(item, group, mode) }
         val need = mode.need(best)
         if (!mode.fits(best)) return DownloadSheetState.WontFit(group, best, mode, need, free, space?.queued ?: 0, space?.queuedDownloads ?: 0, deps.askDue())
-        val ahead = deps.rows().count { it.state in AHEAD }
+        val rows = deps.rows()
+        val ahead = rows.count { it.state in AHEAD }
+        // What holds it first: a hold only Resume ends, then the network and the charger the host waits for, then the queue.
         val start = when {
+            rows.any { it.state in HOLDS } -> DownloadStart.Held
+            !network.usable -> DownloadStart.Online(prefs.unmeteredOnly)
             startsOnWifi -> DownloadStart.OnWifi
+            prefs.whileCharging && !deps.charging() -> DownloadStart.Charging
             ahead > 0 -> DownloadStart.AfterQueue(ahead)
             else -> DownloadStart.Now
         }
@@ -360,9 +386,12 @@ class DownloadSheetModel(private val request: DownloadRequest, private val deps:
         private const val KEPT = DownloadRunner.MAX_CANDIDATES
 
         /** The downloads a new one waits behind: those that go on without the user's word, one at a time. */
-        private val AHEAD = setOf(
-            DownloadState.Queued, DownloadState.Resolving, DownloadState.Running, DownloadState.Waiting, DownloadState.Paused, DownloadState.Stopped,
-        )
+        private val AHEAD = setOf(DownloadState.Queued, DownloadState.Resolving, DownloadState.Running, DownloadState.Waiting)
+
+        /** The downloads that hold the whole queue until Resume (L380). */
+        private val HOLDS = setOf(DownloadState.Paused, DownloadState.Stopped)
+
+        private const val SETTINGS = "Settings › Downloads"
 
         /**
          * What a download of [chosen] keeps to try (L338, L340): [chosen], then [group]'s other Usenet releases that fit
@@ -381,10 +410,20 @@ class DownloadSheetModel(private val request: DownloadRequest, private val deps:
         /** "14.0 GB free on this device". */
         fun free(free: Long): String = "${formatSize(free)} free on this device"
 
-        /** When it starts, and the line under that: "Starts now"; "Starts on Wi-Fi", and why; after the queue, and why. */
+        /**
+         * When it starts, and the line under that: "Starts now"; "Starts on Wi-Fi", and why; once online, on the charger, or
+         * resumed, and why; after the queue, and why.
+         */
         fun start(start: DownloadStart): Pair<String, String?> = when (start) {
             DownloadStart.Now -> "Starts now" to null
-            DownloadStart.OnWifi -> "Starts on Wi-Fi" to "This phone is on mobile data. Downloads wait for Wi-Fi or Ethernet: Settings › Downloads."
+            DownloadStart.OnWifi -> "Starts on Wi-Fi" to "This phone is on mobile data. Downloads wait for Wi-Fi or Ethernet: $SETTINGS."
+            is DownloadStart.Online -> if (start.wifiOnly) {
+                "Starts on Wi-Fi" to "This phone has no connection now. Downloads wait for Wi-Fi or Ethernet: $SETTINGS."
+            } else {
+                "Starts when this phone is online" to "This phone has no connection now."
+            }
+            DownloadStart.Charging -> "Starts when this phone is charging" to "Downloads wait until this phone is plugged in: $SETTINGS."
+            DownloadStart.Held -> "Starts when downloads resume" to "Downloads are on hold until you resume them on the Downloads page."
             is DownloadStart.AfterQueue ->
                 (if (start.ahead == 1) "Starts after the download in the queue" else "Starts after the downloads in the queue") to "One download runs at a time."
         }
