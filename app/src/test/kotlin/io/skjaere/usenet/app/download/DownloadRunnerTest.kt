@@ -646,6 +646,22 @@ class DownloadRunnerTest {
     }
 
     @Test
+    fun `asked to, a second download of a title still to finish is queued beside it, as the pairs' seeding queues its two`() = test {
+        val runner = runner()
+        val a = fake("hl-a")
+        val b = fake("hl-b")
+        val first = runner.add(4, a)
+        // The pairs' seeding (L367): two rows of its one fixture episode, the first resolved and Queued again.
+        val second = assertNotNull(runner.enqueue(target(4), listOf(b.candidate), onePerTitle = false)).id
+        assertTrue(second != first, "a row of its own")
+        assertEquals(listOf(first, second), order())
+        assertEquals(listOf(b.candidate), stored(second).candidates)
+        // A user's Download of the title still has the first.
+        assertEquals(first, runner.add(4, b))
+        assertEquals(2, dao.rows.value.size)
+    }
+
+    @Test
     fun `a download counts what the sheet reckoned it needs until it is resolved, its releases keeping the indexer's sizes`() = test {
         val runner = runner()
         // A season pack: the sheet reckons this episode's share of it; the pack's own size is what Resolve ranks by.

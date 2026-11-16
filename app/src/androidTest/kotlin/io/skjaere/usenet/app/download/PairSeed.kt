@@ -233,7 +233,9 @@ object PairSeed {
         val dao = container.data.downloads
         val guid = "pair-${n + 1}"
         val candidate = DownloadCandidate(INDEXER_ID, guid, fixture.release, size = fixture.size)
-        val row = container.downloads.enqueue(fixture.target, listOf(candidate)) ?: throw AssertionError("not queued: the runner runs nothing here")
+        // Beside the rows before it, all of the one episode, where a user's Download would have the first.
+        val row = container.downloads.enqueue(fixture.target, listOf(candidate), onePerTitle = false)
+            ?: throw AssertionError("not queued: the runner runs nothing here")
         val real = PlaybackCoordinator.fetchNzb
         PlaybackCoordinator.fetchNzb = { _, _, item -> if (item.guid == guid) NzbDownload(nzb) else throw IllegalStateException("not the pair's release") }
         val resolution = try {

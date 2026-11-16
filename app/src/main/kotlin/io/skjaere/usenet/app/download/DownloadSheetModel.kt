@@ -196,7 +196,8 @@ data class DownloadSheetDeps(
             network = { container.defaultNetwork.now.value },
             charging = { pluggedIn(context) },
             askDue = { ask?.due() == true },
-            enqueue = { target, candidates, need -> container.downloads.enqueue(target, candidates, need) },
+            // One per title: a sheet restored after its Download, or a second tap, has the download already queued.
+            enqueue = { target, candidates, need -> container.downloads.enqueue(target, candidates, need, onePerTitle = true) },
             beforeDownload = { ask?.beforeDownload() },
             schedule = { container.downloadHosts.schedule(ScheduleCause.Download) },
             outlive = container.appScope + Dispatchers.Main.immediate,

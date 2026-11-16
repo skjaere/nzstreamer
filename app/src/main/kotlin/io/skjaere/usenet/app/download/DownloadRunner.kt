@@ -406,18 +406,27 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      * L338): the row Queued at the queue's end, made with its bookkeeping folder and marker (L346). Until Resolve has its
      * file's own size the row counts [need], what the sheet reckoned the first needs (a season pack's share of its
      * episode), so the space a queued download holds back is that, while its releases keep the indexer's sizes, which
-     * Resolve ranks by. A title whose download is still to finish has that one: it is returned, and nothing more is queued
-     * (a sheet restored with its page after a Download, a second tap meanwhile). Scheduling its host is the visible app's
-     * (L335). Null on a TV.
+     * Resolve ranks by. With [onePerTitle], as a user's Download has it, a title whose download is still to finish has
+     * that one: it is returned, and nothing more is queued (a sheet restored with its page after a Download, a second tap
+     * meanwhile). One removed with its Undo still pending isn't still to finish: a Download meanwhile queues another, and
+     * an Undo then brings the removed one back beside it. Without, it is queued beside that one, as the pairs' seeding
+     * queues two rows of its one fixture episode (L367). Scheduling its host is the visible app's (L335). Null on a TV.
      */
-    suspend fun enqueue(target: DownloadTarget, candidates: List<DownloadCandidate>, need: Long = candidates.first().size): Download? {
+    suspend fun enqueue(
+        target: DownloadTarget,
+        candidates: List<DownloadCandidate>,
+        need: Long = candidates.first().size,
+        onePerTitle: Boolean = true,
+    ): Download? {
         if (!runs) return null
         require(candidates.isNotEmpty()) { "A download needs a release to try" }
         return changes.withLock {
             val rows = dao.all().first()
-            rows.firstOrNull { it.watchKey == target.watchKey && it.state in GOING_ON }?.let { queued ->
-                log.info("download {}: already queued", queued.id)
-                return@withLock queued
+            if (onePerTitle) {
+                rows.firstOrNull { it.watchKey == target.watchKey && it.state in GOING_ON }?.let { queued ->
+                    log.info("download {}: already queued", queued.id)
+                    return@withLock queued
+                }
             }
             val at = now()
             val position = (rows.maxOfOrNull { it.position } ?: -1) + 1
