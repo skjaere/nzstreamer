@@ -188,6 +188,14 @@ class DownloadEdits(private val deps: DownloadsDeps, scope: CoroutineScope) {
     private val undo = UndoTimer<List<String>>(scope)
     val offer: StateFlow<UndoTimer.Offer<List<String>>?> = undo.offer
 
+    private val _undone = MutableStateFlow(false)
+
+    /**
+     * Whether the last offer was taken (Undo) rather than left to go: its downloads come back once the runner says so,
+     * a moment after the bar has gone, so a page they leave empty meanwhile stays.
+     */
+    val undone: StateFlow<Boolean> = _undone.asStateFlow()
+
     fun startSelect(key: String? = null) {
         _selection.value = setOfNotNull(key)
     }
@@ -212,6 +220,7 @@ class DownloadEdits(private val deps: DownloadsDeps, scope: CoroutineScope) {
     fun remove(downloads: List<Download>, keepFor: Long) {
         if (downloads.isEmpty()) return
         _selection.value = null
+        _undone.value = false
         undo.offer(DownloadsPage.deleted(downloads), downloads.map { it.id })
         deps.work.launch { logged("remove ${downloads.size} downloads") { deps.remove(downloads.map { it.id }, keepFor + UNDO_SLACK_MILLIS) } }
     }
@@ -222,6 +231,7 @@ class DownloadEdits(private val deps: DownloadsDeps, scope: CoroutineScope) {
      */
     fun undo() {
         val ids = undo.take() ?: return
+        _undone.value = true
         deps.work.launch {
             logged("bring ${ids.size} downloads back") {
                 deps.undoRemove(ids)
@@ -351,6 +361,14 @@ class DownloadsShowViewModel(private val deps: DownloadsDeps, val showTmdbId: In
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     val states: StateFlow<Map<Pair<Int, Int>, WatchState>> = deps.episodeStates(showTmdbId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /**
+     * Whether nothing is left to show, so the page closes: every episode gone, no Undo waiting, and none taken whose
+     * downloads the runner hasn't brought back yet.
+     */
+    val gone: StateFlow<Boolean> = combine(episodes, edits.offer, edits.undone) { episodes, offer, undone ->
+        episodes?.isEmpty() == true && offer == null && !undone
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     val undoMillis: Long get() = deps.undoMillis
 

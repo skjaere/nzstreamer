@@ -62,7 +62,7 @@ import io.skjaere.usenet.data.WatchState
  * watched, and its parts missing; a tap plays the file, online or not. Each row's ⋮: Remove download (with Undo), Mark
  * watched or unwatched, and Open the show's page ([onOpenShow]). Select with Delete, as on the Downloads page. Its names
  * are the rows', so it works offline (L368). Phones and tablets alone (W108, L369). Once every episode is gone, and no Undo
- * waits, it closes.
+ * waits or was taken, it closes.
  */
 @Composable
 fun DownloadsShowScreen(showTmdbId: Int, onBack: () -> Unit, onOpenShow: (showTmdbId: Int) -> Unit) {
@@ -90,7 +90,8 @@ internal fun DownloadsShowScreen(deps: DownloadsDeps, showTmdbId: Int, onBack: (
     var named by remember { mutableStateOf("") }
     val title = episodes?.firstOrNull()?.title ?: named
     SideEffect { named = title }
-    LaunchedEffect(episodes, offer) { if (episodes?.isEmpty() == true && offer == null) onBack() }
+    val gone by vm.gone.collectAsStateWithLifecycle()
+    LaunchedEffect(gone) { if (gone) onBack() }
     BackHandler(enabled = selection != null, onBack = vm.edits::exitSelect)
 
     val rows = episodes ?: return

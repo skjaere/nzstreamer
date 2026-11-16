@@ -28,7 +28,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -37,6 +39,8 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.time.LocalDate
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * Select mode's Delete and the Undo bar of the Downloads page and a show's downloads (L379), over fakes of the runner and
@@ -103,6 +107,41 @@ class DownloadEditsTest {
         assertEquals(listOf("replace run 1400000000"), fakes.calls)
     }
 
+    @Test
+    fun `Undo of a show's last download keeps its page, which closes once a removal's bar has gone`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fakes = PageFakes()
+        val done = episode("e1", 1, DownloadState.Done)
+        fakes.items.value = listOf(DownloadRunner.Item(done, 0, null))
+        val store = ViewModelStore()
+        val vm = ViewModelProvider(store, viewModelFactory { initializer { DownloadsShowViewModel(fakes.deps(backgroundScope), HL) } })[DownloadsShowViewModel::class.java]
+        backgroundScope.launch { vm.gone.collect {} }
+        runCurrent()
+        assertFalse(vm.gone.value)
+
+        // Removed: hidden at once, the Undo bar up.
+        vm.edits.remove(listOf(done), keepFor = 10_000)
+        fakes.items.value = emptyList()
+        runCurrent()
+        assertFalse(vm.gone.value, "the bar is up")
+        // Undo: the bar goes at once, and the row comes back only once the runner has said so.
+        vm.edits.undo()
+        runCurrent()
+        assertFalse(vm.gone.value, "brought back, not closed")
+        fakes.items.value = listOf(DownloadRunner.Item(done, 0, null))
+        runCurrent()
+        assertFalse(vm.gone.value)
+
+        // Removed again and left: once its bar has gone, nothing is left to show.
+        vm.edits.remove(listOf(done), keepFor = 10_000)
+        fakes.items.value = emptyList()
+        vm.edits.shown(10_000)
+        advanceTimeBy(10_001)
+        runCurrent()
+        assertTrue(vm.gone.value)
+        store.clear()
+    }
+
     internal companion object {
         const val HL = 990_617
 
@@ -119,12 +158,15 @@ internal class PageFakes {
     val rows = mutableMapOf<String, Download>()
     val online = MutableStateFlow(true)
 
+    /** The runner's queue as the page reads it. */
+    val items = MutableStateFlow<List<DownloadRunner.Item>>(emptyList())
+
     /** What a Pause and a Remove wait for before the runner has done them: the running download stopping. */
     var pausing: suspend () -> Unit = {}
     var removing: suspend () -> Unit = {}
 
     fun deps(outlive: CoroutineScope) = DownloadsDeps(
-        items = flowOf(emptyList()),
+        items = items,
         space = { DownloadSpace(available = 20_000_000_000, used = 0, queued = 0) },
         prefs = flowOf(DownloadPrefs()),
         network = MutableStateFlow(NetworkNow(usable = true, unmetered = true, wifi = true)),
