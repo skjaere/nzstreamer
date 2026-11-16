@@ -1,11 +1,13 @@
 package io.skjaere.usenet.app.download
 
 import android.content.res.Configuration
-import androidx.compose.runtime.CompositionLocalProvider
+import android.view.ContextThemeWrapper
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.getOrNull
@@ -20,7 +22,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.unit.Density
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.app.link.CastButtonLook
@@ -69,20 +71,34 @@ class DownloadReleaseListDeviceTest {
             close()
         }
 
-    /** [group]'s list in [mode], at [fontScale]; a play's Choose file offered too, as a play's list of an episode offers it. */
+    /**
+     * [group]'s list in [mode], at [fontScale]; a play's Choose file offered too, as a play's list of an episode offers it.
+     * Laid out in a view of its own whose context has that font scale, so its card's menu, a popup with a window of its own
+     * that takes its density from that context, is at that size too, as the page around it is.
+     */
     private fun show(mode: ReleaseListMode, group: ResultGroup = episode(), title: String = "Harbor Lights", fontScale: Float = 1f) {
+        this.fontScale = fontScale
         var shown by mutableStateOf(mode)
         showing = { shown = it }
-        val scaled = context.createConfigurationContext(Configuration(context.resources.configuration).apply { this.fontScale = fontScale })
         compose.setContent {
-            CompositionLocalProvider(LocalDensity provides Density(scaled)) {
-                AppTheme { ReleaseList(group, title, onBack = {}, onChooseFile = { choseFile++ }, mode = shown, onPlay = { error("a play's tap in $shown") }) }
-            }
+            AndroidView(modifier = Modifier.fillMaxSize(), factory = { base ->
+                val scaled = ContextThemeWrapper(base, base.theme).apply {
+                    applyOverrideConfiguration(Configuration(base.resources.configuration).apply { this.fontScale = fontScale })
+                }
+                ComposeView(scaled).apply {
+                    setContent {
+                        AppTheme { ReleaseList(group, title, onBack = {}, onChooseFile = { choseFile++ }, mode = shown, onPlay = { error("a play's tap in $shown") }) }
+                    }
+                }
+            })
         }
         compose.waitUntil(10_000) { exists(hasText(group.playable.first().item.title)) }
     }
 
     private var showing: (ReleaseListMode) -> Unit = {}
+
+    /** The font scale the case lays its list out at. */
+    private var fontScale = 1f
 
     @Test
     fun theTitleAndTheLineSayItIsForDownloadingAndThereIsNoCastButton() {
@@ -245,6 +261,8 @@ class DownloadReleaseListDeviceTest {
         val node = compose.onAllNodes(hasText(text), useUnmergedTree = true).fetchSemanticsNodes().firstOrNull { it.textLayout() != null }
             ?: throw AssertionError("no text '$text'")
         val layout = node.textLayout()!!
+        // At the font size the case asked for: a window of its own (a menu's popup) lays out at its context's.
+        assertEquals("'$text' laid out at font scale ${layout.layoutInput.density.fontScale}", fontScale, layout.layoutInput.density.fontScale)
         val last = layout.lineCount - 1
         assertFalse(
             "'$text' is cut: ${layout.lineCount} lines in ${layout.layoutInput.constraints}",
