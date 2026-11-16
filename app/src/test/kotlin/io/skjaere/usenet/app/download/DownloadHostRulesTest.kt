@@ -175,11 +175,17 @@ class DownloadHostRulesTest {
         assertEquals(NotificationWords("Harbor Lights · S02E04", "Paused: no connection · Tap to resume", null), words)
     }
 
+    private fun schedules(
+        cause: ScheduleCause,
+        visible: Boolean = true,
+        runnable: Boolean = true,
+        walking: Boolean = false,
+        pending: DownloadHostRules.JobPending = DownloadHostRules.JobPending(),
+        television: Boolean = false,
+    ) = DownloadHostRules.schedules(cause, television = television, visible = visible, runnable = runnable, walking = walking, pending = pending)
+
     @Test
     fun `the app schedules only while visible, with something to run, and with no walk to take it up nor a job pending, but for a changed switch`() {
-        fun schedules(cause: ScheduleCause, visible: Boolean = true, runnable: Boolean = true, walking: Boolean = false, pending: Boolean = false, television: Boolean = false) =
-            DownloadHostRules.schedules(cause, television = television, visible = visible, runnable = runnable, walking = walking, pending = pending)
-
         ScheduleCause.entries.forEach { cause ->
             assertTrue(schedules(cause), "$cause")
             // From the background, Android refuses a user-initiated job: never asked there (L335, C4).
@@ -190,11 +196,33 @@ class DownloadHostRulesTest {
         // A schedule stops a running job of the same id (C5): once only, as the job runs or waits for its needs.
         listOf(ScheduleCause.Download, ScheduleCause.Resume, ScheduleCause.ProviderSaved, ScheduleCause.AppStart).forEach { cause ->
             assertFalse(schedules(cause, walking = true), "$cause")
-            assertFalse(schedules(cause, pending = true), "$cause")
+            assertFalse(schedules(cause, pending = AHEAD), "$cause")
+        }
+        listOf(ScheduleCause.Download, ScheduleCause.Resume, ScheduleCause.ProviderSaved).forEach { cause ->
+            assertFalse(schedules(cause, pending = WAITING), "$cause")
         }
         // A changed Wi-Fi or charging switch: a pending job takes the new needs, a running item stops and goes on under them.
         assertTrue(schedules(ScheduleCause.SwitchChanged, walking = true))
-        assertTrue(schedules(ScheduleCause.SwitchChanged, pending = true))
+        assertTrue(schedules(ScheduleCause.SwitchChanged, pending = WAITING))
+        assertTrue(schedules(ScheduleCause.SwitchChanged, pending = AHEAD))
+    }
+
+    /**
+     * L404: the app's start schedules again a job that waits to run and isn't executing (under its network or the charger,
+     * or its backoff after a stop), as a schedule from the visible app undoes Android's demotion of a user-initiated job
+     * after 24 hours of its runtime, and a waiting job has no walk to cut. One executing, its walk under way, or ahead of its
+     * walk is left alone, as a schedule would stop it (C5). Still only from the visible app, with something to run, never on
+     * a TV.
+     */
+    @Test
+    fun `the app's start schedules a job that waits to run again, never one executing or ahead of its walk`() {
+        assertTrue(schedules(ScheduleCause.AppStart, pending = WAITING))
+        assertFalse(schedules(ScheduleCause.AppStart, pending = AHEAD))
+        assertFalse(schedules(ScheduleCause.AppStart, walking = true))
+        assertFalse(schedules(ScheduleCause.AppStart, walking = true, pending = WAITING))
+        assertFalse(schedules(ScheduleCause.AppStart, pending = WAITING, visible = false))
+        assertFalse(schedules(ScheduleCause.AppStart, pending = WAITING, runnable = false))
+        assertFalse(schedules(ScheduleCause.AppStart, pending = WAITING, television = true))
     }
 
     @Test
@@ -305,6 +333,10 @@ class DownloadHostRulesTest {
     )
 
     private companion object {
+        /** A job scheduled and waiting to run, not executing; one ahead of its walk. */
+        val WAITING = DownloadHostRules.JobPending(waiting = true)
+        val AHEAD = DownloadHostRules.JobPending(ahead = true)
+
         const val RELEASE = "Harbor.Lights.S02E04.1080p.WEB-DL.H.264-KESTREL"
         const val HALF = 500_000_000L
     }

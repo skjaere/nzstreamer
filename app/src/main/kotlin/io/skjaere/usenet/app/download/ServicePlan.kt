@@ -34,9 +34,10 @@ object ServicePlan {
      * the host, from the [visible] app, with something [runnable], and only while no walk under way will take it up
      * ([walking]) and no service stands ready to ([standing]: started and not yet walking, or waiting in place for its
      * need). A changed switch starts it all the same, as the job takes the new needs: a service under way reads them itself.
+     * One standing is ahead of its walk, as a job started and not yet at the queue is, so the app's start leaves it be too.
      */
     fun starts(cause: ScheduleCause, television: Boolean, sdk: Int, override: Boolean, visible: Boolean, runnable: Boolean, walking: Boolean, standing: Boolean): Boolean =
-        runsHere(television, sdk, override) && DownloadHostRules.schedules(cause, television, visible, runnable, walking, pending = standing)
+        runsHere(television, sdk, override) && DownloadHostRules.schedules(cause, television, visible, runnable, walking, pending = DownloadHostRules.JobPending(ahead = standing))
 
     /** What holds a download back now: nothing, the network its needs ask for, or the charger. */
     sealed interface Need {

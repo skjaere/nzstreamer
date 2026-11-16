@@ -357,6 +357,60 @@ class UidtHostDeviceTest {
     }
 
     /**
+     * L404: the app's start schedules again a job that waits to run and isn't executing, here one stopped for its network
+     * and waiting for Wi-Fi: traced as the app's own schedule, still user-initiated, still waiting, never started on mobile
+     * data. Back on Wi-Fi it runs, and with its walk under way the app's start leaves it alone, traced as skipped: it is
+     * never stopped and started again.
+     */
+    @Test
+    fun theAppsStartSchedulesAWaitingJobAgainAndLeavesAnExecutingOneAlone() = runBlocking<Unit> {
+        queue(10)
+        val id = made.single()
+        launchApp()
+        waitFor("a progress record", 60_000) { runBlocking { dao.get(id) }?.takeIf { it.state == DownloadState.Running && it.safeOffset > 0 } }
+
+        // Off Wi-Fi with Only on Wi-Fi on: stopped for the network, the job waiting for it, not executing.
+        dataWas = shell("settings get global mobile_data").trim()
+        shell("svc data enable")
+        wifiOff = true
+        shell("svc wifi disable")
+        waitFor("stopped for the network", 60_000) { runBlocking { dao.get(id) }?.takeIf { it.state == DownloadState.Waiting } }
+        waitFor("the job waiting to run, not executing", 30_000) {
+            scheduler.getPendingJob(JobPlan.ID)?.takeIf {
+                DownloadJobService.starts.value == 0 && scheduler.getPendingJobReason(JobPlan.ID) != JobScheduler.PENDING_JOB_REASON_EXECUTING
+            }
+        }
+        val starts = starts().size
+        val asked = appStarts().size
+        ActivityScenario.launch(MainActivity::class.java).use {
+            waitFor("the app's start's schedule", 30_000) { appStarts().takeIf { it.size > asked } }
+        }
+        assertEquals("the waiting job scheduled again (L404)", "scheduled", appStarts()[asked])
+        val again = scheduler.getPendingJob(JobPlan.ID) ?: throw AssertionError("no job after the app's start")
+        assertTrue(again.isUserInitiated)
+        assertTrue("still Only on Wi-Fi or Ethernet", again.requiredNetwork?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == true)
+        assertTrue("still waiting", scheduler.getPendingJobReason(JobPlan.ID) != JobScheduler.PENDING_JOB_REASON_EXECUTING)
+        assertEquals("never started on mobile data", starts, starts().size)
+        assertEquals(DownloadState.Waiting, dao.get(id)?.state)
+
+        // Back on Wi-Fi it runs; with its walk under way, the app's start leaves it alone.
+        shell("svc wifi enable")
+        wifiOff = false
+        waitFor("the job again on Wi-Fi", 120_000) { starts().size.takeIf { it > starts } }
+        val running = underWay(id, dao.get(id)?.safeOffset?.plus(1) ?: 1)
+        assertTrue("its walk under way", container.downloads.walking.value)
+        val runs = starts().size
+        val skippedFrom = appStarts().size
+        ActivityScenario.launch(MainActivity::class.java).use {
+            waitFor("the app's start's ask", 30_000) { appStarts().takeIf { it.size > skippedFrom } }
+        }
+        assertEquals("the executing job left alone", "skipped", appStarts()[skippedFrom])
+        underWay(id, running.written + 1)
+        assertEquals("never stopped and started again", runs, starts().size)
+        assertEquals(DownloadState.Running, dao.get(id)?.state)
+    }
+
+    /**
      * Android runs the job again after a timeout when its backoff lets it, which on phone34 came 110 s, 156 s and over 300 s
      * after the stop in three runs: the case runs it as soon as the stop is seen, its backoff cut short from the shell and
      * its constraints still asked (`cmd jobscheduler run` without -f).
@@ -482,6 +536,9 @@ class UidtHostDeviceTest {
 
     /** The trace's lines since the test began: all of them where it started again past its cap. */
     private fun mine(): List<String> = traced().let { lines -> if (lines.size >= traceFrom) lines.drop(traceFrom) else lines }
+
+    /** How each of the app's start's schedules since the test began went, in order: "scheduled", "skipped", … */
+    private fun appStarts(): List<String> = mine().filter { " schedule cause=${ScheduleCause.AppStart.name} " in it }.map { it.substringAfter("result=") }
 
     /** When each start of the job came, as the trace times them. */
     private fun starts(): List<Long> = mine().filter { it.endsWith(" start host=job cause=job") }.map { it.substringBefore(' ').toLong() }

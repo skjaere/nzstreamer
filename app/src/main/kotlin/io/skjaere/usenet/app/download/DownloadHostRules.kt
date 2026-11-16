@@ -183,17 +183,31 @@ object DownloadHostRules {
     enum class ScheduleCause { Download, Resume, ProviderSaved, SwitchChanged, AppStart }
 
     /**
+     * How the job stands for the app's schedule (L335, L404): [waiting] to run, scheduled and not executing, nothing of the
+     * app's ahead of it (under its network or the charger, or its backoff after a stop); or [ahead] of its walk, the app's
+     * schedule of it or a start of it not yet at the queue ([JobAhead]), which a schedule would stop as it starts (C5).
+     * Neither: not scheduled, or executing with its walk at the queue or past it, which [DownloadRunner.walking] tells apart.
+     */
+    data class JobPending(val waiting: Boolean = false, val ahead: Boolean = false) {
+        /** Waiting or ahead: a job that will take up what is queued. */
+        val any: Boolean get() = waiting || ahead
+    }
+
+    /**
      * Whether the app schedules the host now (L335): only from the [visible] app (Android refuses a user-initiated job from
      * the background, C4), only with something [runnable], and only while no host's walk will take it up ([walking]: the
      * runner's [DownloadRunner.walking], false as soon as a walk has found nothing more to run, before its job ends) and no
      * job is [pending], as a schedule stops a running job of the same id (C5): one whose walk has ended is stopped with
      * nothing left to do. A changed Wi-Fi or charging switch schedules all the same: a pending job takes the new needs, and
-     * a running item stops at its safe offset and goes on under them. Never on a TV.
+     * a running item stops at its safe offset and goes on under them. The app's start schedules again a job that waits to
+     * run (L404): Android demotes a user-initiated job once it has run 24 hours in all, and a schedule from the visible app
+     * undoes that; a waiting job has no walk to cut, unlike one ahead of its walk or walking. Never on a TV.
      */
-    fun schedules(cause: ScheduleCause, television: Boolean, visible: Boolean, runnable: Boolean, walking: Boolean, pending: Boolean): Boolean = when {
+    fun schedules(cause: ScheduleCause, television: Boolean, visible: Boolean, runnable: Boolean, walking: Boolean, pending: JobPending): Boolean = when {
         !runs(television) || !visible || !runnable -> false
         cause == ScheduleCause.SwitchChanged -> true
-        else -> !walking && !pending
+        cause == ScheduleCause.AppStart -> !walking && !pending.ahead
+        else -> !walking && !pending.any
     }
 
     /** Whether the [host] holds a wake lock of its own: the service does; the job's is the system's, which vitals don't count. */

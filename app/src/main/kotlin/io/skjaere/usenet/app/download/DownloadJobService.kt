@@ -245,15 +245,17 @@ class DownloadJobService : JobService() {
         fun scheduler(context: Context): JobScheduler = context.getSystemService(JobScheduler::class.java).forNamespace(JobPlan.NAMESPACE)
 
         /**
-         * Whether the job waits to run (L335): scheduled, and not running, or running ahead of its walk ([JobAhead]: the app
-         * scheduled it and its start hasn't come here yet, or it has and its walk hasn't taken the queue up), which a
-         * schedule would stop as it starts (C5). A running one whose walk has ended is about to end itself, so the runner's
-         * [DownloadRunner.walking] says whether a running one will take up what is queued. Read before it (DownloadHosts),
-         * so a walk that takes the queue up between the two reads is seen by the second.
+         * How the job stands (L335, L404): scheduled and running ahead of its walk ([JobAhead]: the app scheduled it and its
+         * start hasn't come here yet, or it has and its walk hasn't taken the queue up), which a schedule would stop as it
+         * starts (C5); else waiting to run, scheduled and not executing. A running one whose walk has ended is about to end
+         * itself, so the runner's [DownloadRunner.walking] says whether a running one will take up what is queued. Read
+         * before it (DownloadHosts), so a walk that takes the queue up between the two reads is seen by the second.
          */
-        fun pending(scheduler: JobScheduler): Boolean =
-            scheduler.getPendingJob(JobPlan.ID) != null &&
-                (ahead.ahead || scheduler.getPendingJobReason(JobPlan.ID) != JobScheduler.PENDING_JOB_REASON_EXECUTING)
+        fun pending(scheduler: JobScheduler): DownloadHostRules.JobPending = when {
+            scheduler.getPendingJob(JobPlan.ID) == null -> DownloadHostRules.JobPending()
+            ahead.ahead -> DownloadHostRules.JobPending(ahead = true)
+            else -> DownloadHostRules.JobPending(waiting = scheduler.getPendingJobReason(JobPlan.ID) != JobScheduler.PENDING_JOB_REASON_EXECUTING)
+        }
 
         /**
          * The app schedules the job: ahead of its walk from before Android has it, as its start can come before the

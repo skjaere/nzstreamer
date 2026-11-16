@@ -26,7 +26,8 @@ import org.slf4j.LoggerFactory
  * provider saved, a changed switch, and the app's start with downloads to run and no host on them. The host is the job
  * from Android 14 ([DownloadJobService], L334), scheduled only while it is neither running a walk nor waiting to run, as a
  * schedule stops a running job of the same id (C5), but for a changed switch: a waiting job takes the new needs, and a
- * running one stops the download at its safe offset and goes on under them. Below Android 14, or with the debug override
+ * running one stops the download at its safe offset and goes on under them; and for the app's start, which schedules a
+ * waiting job again (L404). Below Android 14, or with the debug override
  * (L336), it is the app's own service ([DownloadService]), started only while no walk runs and none stands ready to take
  * the queue up, but for a changed switch, which a service under way reads itself. Never on a TV (L369). Each ask is
  * traced in the debug build with its cause and how it went (L391).
@@ -91,7 +92,7 @@ class DownloadHosts(private val deps: DownloadHostsDeps) {
         val walking = deps.walking()
         val schedules = DownloadHostRules.schedules(cause, deps.television, visible, rows.isNotEmpty(), walking, pending)
         if (!schedules) {
-            if (visible && rows.isNotEmpty() && pending && !walking) sayWait()
+            if (visible && rows.isNotEmpty() && pending.any && !walking) sayWait()
             return ScheduleResult.Skipped
         }
         if (!deps.scheduleJob(cause, rows)) return ScheduleResult.Refused
@@ -154,7 +155,7 @@ class DownloadHostsDeps(
     /** Whether the service stands ready to take up what is queued ([DownloadService.standing]). */
     val standing: () -> Boolean,
     val startService: () -> Unit,
-    val pending: () -> Boolean,
+    val pending: () -> DownloadHostRules.JobPending,
     val scheduleJob: suspend (cause: ScheduleCause, rows: List<Download>) -> Boolean,
     val need: suspend () -> ServicePlan.Need = { ServicePlan.Need.Met },
     val waits: suspend (words: String) -> Unit = {},
@@ -171,7 +172,7 @@ class DownloadHostsDeps(
             visible = { container.inFront.value.value },
             standing = { DownloadService.standing },
             startService = { ContextCompat.startForegroundService(context, DownloadService.start(context, DownloadTrace.StartCause.Activity)) },
-            pending = { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) pendingJob(context) else false },
+            pending = { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) pendingJob(context) else DownloadHostRules.JobPending() },
             scheduleJob = { cause, rows ->
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) scheduleJob(context, container, cause, rows) else false
             },
@@ -184,9 +185,9 @@ class DownloadHostsDeps(
             limitsEnded = { container.downloads.limitsEnded() },
         )
 
-        /** Whether the job waits to run ([DownloadJobService.pending]). */
+        /** How the job stands: waiting to run, or ahead of its walk ([DownloadJobService.pending]). */
         @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-        private fun pendingJob(context: Context): Boolean = DownloadJobService.pending(DownloadJobService.scheduler(context))
+        private fun pendingJob(context: Context): DownloadHostRules.JobPending = DownloadJobService.pending(DownloadJobService.scheduler(context))
 
         /** Schedules the job for [cause] and the [rows] that can run, by the settings' needs: whether Android took it. */
         @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)

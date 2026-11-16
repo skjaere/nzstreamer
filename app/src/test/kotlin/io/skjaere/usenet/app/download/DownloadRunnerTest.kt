@@ -546,7 +546,7 @@ class DownloadRunnerTest {
         val seen = mutableListOf<Boolean>()
         work.launch { runner.walking.collect { seen += it } }
         fun schedules() = DownloadHostRules.schedules(
-            DownloadHostRules.ScheduleCause.Resume, television = false, visible = true, runnable = true, walking = runner.walking.value, pending = false,
+            DownloadHostRules.ScheduleCause.Resume, television = false, visible = true, runnable = true, walking = runner.walking.value, pending = DownloadHostRules.JobPending(),
         )
         runCurrent()
         assertFalse(runner.walking.value)

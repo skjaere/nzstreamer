@@ -35,7 +35,7 @@ class DownloadHostsTest {
     private var rows = listOf(row())
     private var walking = false
     private var standing = false
-    private var pending = false
+    private var pending = DownloadHostRules.JobPending()
     private var jobTaken = true
     private var serviceRefused = false
 
@@ -108,15 +108,17 @@ class DownloadHostsTest {
         rows = emptyList()
         assertFalse(hosts.schedule(ScheduleCause.AppStart))
         rows = listOf(row())
-        // A walk under way will take it up; a job waiting to run will too.
+        // A walk under way will take it up; a job waiting to run will too, and one ahead of its walk.
         walking = true
         assertFalse(hosts.schedule(ScheduleCause.Resume))
         walking = false
-        pending = true
+        pending = WAITING
+        assertFalse(hosts.schedule(ScheduleCause.Download))
+        pending = AHEAD
         assertFalse(hosts.schedule(ScheduleCause.AppStart))
         assertEquals(emptyList(), android)
         assertEquals(
-            listOf("ProviderSaved", "AppStart", "Resume", "AppStart").map { "$NOW schedule cause=$it result=skipped" },
+            listOf("ProviderSaved", "AppStart", "Resume", "Download", "AppStart").map { "$NOW schedule cause=$it result=skipped" },
             traced(),
         )
         // A changed switch schedules all the same, the waiting job taking the new needs (L335).
@@ -131,11 +133,11 @@ class DownloadHostsTest {
      */
     @Test
     fun `a job started but not yet at the queue holds the ask back, its walk taking the queue up as the ask reads`() = runBlocking<Unit> {
-        pending = true
+        pending = AHEAD
         walking = false
         afterRead = {
             walking = true
-            pending = false
+            pending = DownloadHostRules.JobPending()
         }
         assertFalse(hosts().schedule(ScheduleCause.AppStart))
         assertEquals(emptyList(), android)
@@ -151,8 +153,8 @@ class DownloadHostsTest {
             scheduleJob = {
                 scheduling.complete(Unit)
                 taken.await()
-                // Android has it now: waiting to run, or started and not yet at the queue.
-                pending = true
+                // Android has it now, the app's schedule ahead of its start until one comes.
+                pending = AHEAD
                 true
             },
         )
@@ -225,11 +227,11 @@ class DownloadHostsTest {
         assertTrue(hosts().schedule(ScheduleCause.Download))
         assertEquals(listOf(DownloadHostRules.WAITING_FOR_WIFI), said)
         // A job already waiting: still said, of whichever download is next now.
-        pending = true
+        pending = WAITING
         need = ServicePlan.Need.Charger
-        assertFalse(hosts().schedule(ScheduleCause.AppStart))
+        assertFalse(hosts().schedule(ScheduleCause.Download))
         assertEquals(listOf(DownloadHostRules.WAITING_FOR_WIFI, DownloadHostRules.WAITING_TO_CHARGE), said)
-        pending = false
+        pending = DownloadHostRules.JobPending()
         // Its needs met: it runs, and says nothing.
         need = ServicePlan.Need.Met
         assertTrue(hosts().schedule(ScheduleCause.Resume))
@@ -269,6 +271,27 @@ class DownloadHostsTest {
         assertEquals(emptyList(), asked)
     }
 
+    /**
+     * L404: at the app's start a job that waits to run and isn't executing is scheduled again from the visible app, traced
+     * as scheduled, the download it would run next saying what it waits for; one ahead of its walk, or with its walk under
+     * way, is left alone, traced as skipped.
+     */
+    @Test
+    fun `the app's start schedules a job that waits to run again, and leaves one executing or ahead of its walk alone`() = runBlocking<Unit> {
+        pending = WAITING
+        need = ServicePlan.Need.Network(DownloadHostRules.WAITING_FOR_WIFI)
+        assertTrue(hosts().schedule(ScheduleCause.AppStart))
+        assertEquals(listOf("job AppStart"), android)
+        assertEquals(listOf(DownloadHostRules.WAITING_FOR_WIFI), said)
+        pending = AHEAD
+        assertFalse(hosts().schedule(ScheduleCause.AppStart))
+        pending = DownloadHostRules.JobPending()
+        walking = true
+        assertFalse(hosts().schedule(ScheduleCause.AppStart))
+        assertEquals(listOf("job AppStart"), android)
+        assertEquals(listOf("scheduled", "skipped", "skipped").map { "$NOW schedule cause=AppStart result=$it" }, traced())
+    }
+
     /** A download that can run: Harbor Lights' episode, queued. */
     private fun row() = Download(
         id = ID, watchKey = WatchKey.episode(900002, 2, 4), kind = DownloadKind.Episode, title = "Harbor Lights", position = 0, createdAt = 1,
@@ -276,6 +299,10 @@ class DownloadHostsTest {
     )
 
     private companion object {
+        /** A job scheduled and waiting to run, not executing; one ahead of its walk. */
+        val WAITING = DownloadHostRules.JobPending(waiting = true)
+        val AHEAD = DownloadHostRules.JobPending(ahead = true)
+
         const val NOW = 1_763_164_800_000
         const val ID = "c0ffee00-0000-4000-8000-000000000001"
     }
