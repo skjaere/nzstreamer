@@ -1437,6 +1437,38 @@ class DownloadRunnerTest {
         assertEquals(DownloadState.Waiting, stored(first).state)
     }
 
+    /**
+     * L392, L434: a season row waiting on an indexer's limit after its turn's search keeps what that search found through
+     * Resume and the app's start: queued again with its releases and its facts as searched, so its next turn searches
+     * nothing again and asks the indexers only for its grab.
+     */
+    @Test
+    fun `a season row waiting on a limit keeps what its turn found through Resume and the app's start, searching nothing again`() = test {
+        val runner = runner()
+        val found = listOf(fake("hl-found-a"), fake("hl-found-b"))
+        val id = "hl-limited"
+        row(id, 4, 0, *found.toTypedArray()) {
+            it.copy(
+                state = DownloadState.Waiting, reason = DownloadHostRules.LIMIT_REACHED, search = DownloadColumns.text(facts(4, searched = true)),
+                limitWait = DownloadColumns.text(LimitWait(INDEXER, LimitWait.Kind.Download, NOW, null)),
+            )
+        }
+        runner.resume()
+        val resumed = stored(id)
+        assertEquals(DownloadState.Queued, resumed.state)
+        assertEquals(found.map { it.candidate }, resumed.candidates)
+        assertEquals(facts(4, searched = true), DownloadColumns.search(resumed))
+
+        // The app's start, once its limit has ended: the same.
+        dao.setState(id, DownloadState.Waiting, DownloadHostRules.LIMIT_REACHED, NOW)
+        advanceTimeBy(30 * MINUTE)
+        runner.limitsEnded()
+        val started = stored(id)
+        assertEquals(DownloadState.Queued, started.state)
+        assertEquals(found.map { it.candidate }, started.candidates)
+        assertEquals(facts(4, searched = true), DownloadColumns.search(started))
+    }
+
     @Test
     fun `the state says the running one's bytes and rate, and the rows say why they wait`() = test {
         val a = fake("hl-a").apply { hold = HOLD }
