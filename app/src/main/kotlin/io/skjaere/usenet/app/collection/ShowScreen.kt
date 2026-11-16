@@ -431,10 +431,10 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}) {
         e?.let(vm::downloadRequest)?.let { request -> DownloadSheet(request, onClose = { downloading = null }) }
     }
     // The season's Download sheet, over the page, once its season is there (again, after a rotation). Its request is
-    // built once as it opens: what it counts apart changes as it queues, and a new request would search again.
+    // built once as it opens (seasonSheetKey): what it counts apart changes as it queues, and a new request would search again.
     downloadingSeason?.let { number ->
         val loaded = (season as? SeasonState.Loaded)?.season?.takeIf { it.number == number }
-        val request = remember(number, d != null, loaded) { vm.seasonDownloadRequest(number) }
+        val request = remember(seasonSheetKey(number, d, season)) { vm.seasonDownloadRequest(number) }
         if (request != null) {
             DownloadSeasonSheet(request, onClose = { downloadingSeason = null })
         } else if (d != null && loaded != null) {
@@ -571,6 +571,15 @@ internal fun seasonDownloadRequest(show: ShowDetails, episodes: List<Episode>, t
         posterPath = show.posterPath,
     )
 }
+
+/**
+ * What the season [number]'s Download sheet's request is built once for (L433): the season, and whether the page's
+ * [details] and that season ([season], the page's) are loaded. Never the season's copy itself: one TMDB refreshed while
+ * the sheet is up (back from Android's storage page past an airing season's hour) would build a new request, and the
+ * sheet would search again rather than weigh what it found.
+ */
+internal fun seasonSheetKey(number: Int, details: ShowDetails?, season: SeasonState): Any =
+    Triple(number, details != null, (season as? SeasonState.Loaded)?.season?.number == number)
 
 /** Choose release's "Choose file" on [item]'s row: its Play for [ep], asking which of its videos is the episode. */
 internal fun chooseFileRequest(ep: EpisodePlay, item: RankedItem, alternatives: List<RankedItem> = emptyList()) =

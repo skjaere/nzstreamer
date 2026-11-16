@@ -6,6 +6,7 @@ import io.skjaere.usenet.app.play.EpisodePlay
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.metadata.Episode
 import io.skjaere.usenet.metadata.EpisodeSummary
+import io.skjaere.usenet.metadata.Season
 import io.skjaere.usenet.metadata.ExternalIds
 import io.skjaere.usenet.metadata.SeasonSummary
 import io.skjaere.usenet.metadata.ShowDetails
@@ -13,6 +14,7 @@ import io.skjaere.usenet.metadata.hasAired
 import org.junit.jupiter.api.Test
 import java.time.LocalDate
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 
 /**
@@ -158,6 +160,22 @@ class SeasonMarkTest {
         assertNull(seasonDownloadRequest(harbor, season2, today, download(all(DownloadState.Done))))
         val specials = listOf(Episode(0, 1, "A Harbor Christmas", null, today.minusDays(300), 44, null))
         assertNull(seasonDownloadRequest(harbor, specials, today, emptyMap()))
+    }
+
+    /**
+     * L433: the season's sheet's request is built once as it opens, whatever copy of the season TMDB gives after (a name or
+     * a still filled in), and again only for another season, or once the page or the season is loaded.
+     */
+    @Test
+    fun `the season's sheet is built once as it opens, not again for a newer copy of its season`() {
+        val loaded = Season(990417, 2, "Season 2", null, season2)
+        val renamed = loaded.copy(episodes = season2.map { if (it.episode == 7) it.copy(name = "Slack Water", stillPath = "/still.jpg") else it })
+        val key = seasonSheetKey(2, harbor, SeasonState.Loaded(loaded))
+        assertEquals(key, seasonSheetKey(2, harbor, SeasonState.Loaded(renamed)))
+        assertNotEquals(key, seasonSheetKey(2, harbor, SeasonState.Loading))
+        assertNotEquals(key, seasonSheetKey(2, null, SeasonState.Loaded(loaded)))
+        assertNotEquals(key, seasonSheetKey(3, harbor, SeasonState.Loaded(loaded)))
+        assertNotEquals(key, seasonSheetKey(2, harbor, SeasonState.Loaded(loaded.copy(number = 1))))
     }
 
     @Test
