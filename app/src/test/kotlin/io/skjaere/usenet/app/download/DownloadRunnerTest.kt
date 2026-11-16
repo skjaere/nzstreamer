@@ -974,9 +974,16 @@ class DownloadRunnerTest {
         assertEquals(mapOf(FAILED to failed), dao.rows.value)
         assertEquals(setOf(FAILED), storage.folders())
 
+        // The failed row's put-back refused: written in the same transaction as the new rows, none of those either.
+        dao.full = setOf("update")
+        assertFailsWith<android.database.sqlite.SQLiteFullException> { runner.enqueueAll(season) }
+        assertEquals(mapOf(FAILED to failed), dao.rows.value)
+        assertEquals(setOf(FAILED), storage.folders())
+
         dao.full = emptySet()
         assertEquals(listOf(1, 2, 3), runner.enqueueAll(season).map { it.episode })
         assertEquals(3, dao.rows.value.size)
+        assertEquals(DownloadState.Queued, stored(FAILED).state)
     }
 
     /** L396, L398: Try again searches a season row's episode afresh; one without search facts, or with a file chosen by hand, keeps its releases. */
@@ -1891,8 +1898,12 @@ class DownloadRunnerTest {
             rows.update { it + (download.id to download) }
         }
 
-        /** As Room's transaction: every row, or none where it fails. */
+        /**
+         * As Room's transaction ([DownloadDao.insertAll]): each row put back updated, then each inserted, and all of it kept,
+         * or none where one of those writes fails.
+         */
         override suspend fun insertAll(downloads: List<Download>, putBack: List<Download>) {
+            putBack.forEach { write("update") }
             write("insertAll")
             downloads.forEach(onInsert)
             rows.update { all -> all + putBack.filter { it.id in all }.associateBy { it.id } + downloads.associateBy { it.id } }
