@@ -86,6 +86,10 @@ class DownloadSettingsDeviceTest {
     private val seeds = DownloadsPageSeeds(context, container)
     private lateinit var saved: AppSettings
 
+    /** Whether the settings were taken, to be put back after; and the stand-in for Android's settings put in place. */
+    private var taken = false
+    private var monitored = false
+
 
     /** Stands in for Android's settings: each page asked for kept, none started. */
     private val androidSettings = object : Instrumentation.ActivityMonitor() {
@@ -106,17 +110,22 @@ class DownloadSettingsDeviceTest {
         // The debug build's seeding first, so what is put back is what it saved.
         withTimeout(SEEDING_MILLIS) { container.devSettingsSaved.await() }
         saved = settings.settings.first()
+        taken = true
         settings.restore(saved.copy(downloads = DownloadPrefs()))
         seeds.before()
         instrumentation.addMonitor(androidSettings)
+        monitored = true
     }
 
     @After
     fun tearDown() = runBlocking<Unit> {
-        instrumentation.removeMonitor(androidSettings)
-        seeds.after()
-        settings.restore(saved)
-        assertEquals(saved, settings.settings.first())
+        if (monitored) instrumentation.removeMonitor(androidSettings)
+        // A case its setUp stopped early (on a TV, where it is skipped, or the seeding's wait) took nothing to put back.
+        if (taken) {
+            seeds.after()
+            settings.restore(saved)
+            assertEquals(saved, settings.settings.first())
+        }
     }
 
     /**
