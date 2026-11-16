@@ -29,6 +29,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -242,14 +243,15 @@ private fun Band(words: String) {
 
 /**
  * A listed episode: its number, its name with what is said under it (failed before, above the Download size), and about
- * how large it is or that nothing is found yet; [dimmed] past the cut. Name and size share a line where they fit, and
- * the size goes under the name where they don't, as at twice the text size. Read as one.
+ * how large it is or that nothing is found yet; [dimmed] past the cut, and read as dimmed there, as a greyed row is, so
+ * TalkBack tells one Download leaves out from one it queues. Name and size share a line where they fit, and the size goes
+ * under the name where they don't, as at twice the text size. Read as one.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EpisodeLine(e: SeasonEpisodeFound, dimmed: Boolean) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(horizontal = 12.dp, vertical = 10.dp).semantics(mergeDescendants = true) {},
+        Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(horizontal = 12.dp, vertical = 10.dp).semantics(mergeDescendants = true) { if (dimmed) disabled() },
         horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(

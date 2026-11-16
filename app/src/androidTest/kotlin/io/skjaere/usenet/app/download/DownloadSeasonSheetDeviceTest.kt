@@ -164,8 +164,10 @@ class DownloadSeasonSheetDeviceTest {
         listOf("The first 3 fit: about 4.1 GB.", "✕ No room for these 3", DownloadSheetModel.STORAGE_SETTINGS, "Cancel").forEach {
             assertTrue("'$it' shown", exists(hasText(it)))
         }
-        // The rows after the cut read as they show.
+        // The rows after the cut read as they show: dimmed, as TalkBack says a greyed row; those that fit as they are.
         assertEquals(listOf("6", "Salt and Iron", "about 1.3 GB"), texts(row("Salt and Iron")))
+        assertTrue("a row after the cut reads as dimmed", dimmed(row("Salt and Iron")))
+        assertFalse("a row that fits reads as it is", dimmed(row("Fog Signal")))
         tap("Download the first 3")
         waitClosed()
         assertEquals(listOf(3, 4, 5), mine().sortedBy { it.position }.map { it.episode })
@@ -214,6 +216,8 @@ class DownloadSeasonSheetDeviceTest {
             "That is after the 1.0 GB kept free for the phone.", DownloadSeasonSheetModel.NONE_FITS_NOTE, DownloadSheetModel.STORAGE_SETTINGS, "Cancel",
         ).forEach(::assertWhole)
         assertFalse("no Download where none fits", exists(downloadButton))
+        // None fits: every row under the band reads as dimmed, the first among them.
+        listOf("Fog Signal", "Undertow").forEach { assertTrue("'$it' reads as dimmed", dimmed(row(it))) }
     }
 
     /** Any Download button of the sheet's. */
@@ -225,6 +229,9 @@ class DownloadSeasonSheetDeviceTest {
     private fun row(name: String): SemanticsNode = compose.onAllNodes(hasText(name)).fetchSemanticsNodes().single()
 
     private fun texts(node: SemanticsNode): List<String> = node.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text }
+
+    /** Whether TalkBack reads [node] as dimmed, as it reads a greyed control. */
+    private fun dimmed(node: SemanticsNode): Boolean = SemanticsProperties.Disabled in node.config
 
     /**
      * The sheet's content for [request] over [deps], at [fontScale], in the test's own window: the sheet's window lays its
