@@ -932,6 +932,36 @@ class DownloadRunnerTest {
         assertEquals(listOf(written, old.fileName, old.size, CHUNK, storage.relativePath(FAILED, old.fileName)), listOf(back.release, back.fileName, back.size, back.safeOffset, back.relativePath))
     }
 
+    /**
+     * L396: a failed row put back never opens again the release it failed with from the NZB a process death left beside it
+     * (one that died after the row failed and before its NZB went). That NZB, and one kept for an attempt, go as the row is
+     * put back, as Try again drops them, so its turn resolves the season's new releases.
+     */
+    @Test
+    fun `a failed row put back has the NZB a process death left with it dropped, as Try again drops it`() = test {
+        val runner = runner()
+        val old = fake("hl-old")
+        row(FAILED, 2, 0, old) {
+            it.copy(
+                state = DownloadState.Failed, reason = DownloadWriter.STORAGE_FULL, tried = listOf(old.key),
+                release = RememberedRelease(INDEXER, old.guid, old.title, null, 0, old.prepared.id, old.fileName, old.size), fileName = old.fileName, size = old.size,
+            )
+        }
+        storage.keepSource(FAILED, old.nzb, "s3cret")
+        storage.keepGrab(FAILED, DownloadStorage.Grab(old.key, DownloadStorage.Source(old.nzb, "s3cret")))
+        val fresh = fake("hl-fresh")
+
+        assertEquals(listOf(FAILED), runner.enqueueAll(listOf(item(2, fresh))).map { it.id })
+        assertNull(storage.source(FAILED))
+        assertNull(storage.grab(FAILED))
+        host(runner)
+        advanceUntilIdle()
+        assertEquals(emptyList(), resolver.reopened)
+        assertEquals(listOf(fresh.guid), resolver.grabbed)
+        assertEquals(DownloadState.Done, stored(FAILED).state)
+        assertEquals(fresh.guid, stored(FAILED).release?.guid)
+    }
+
     @Test
     fun `a season is queued all or none, an insert that fails leaving no row, no folder and no row put back`() = test {
         val runner = runner()

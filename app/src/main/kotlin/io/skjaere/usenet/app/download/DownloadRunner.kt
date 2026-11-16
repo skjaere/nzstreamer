@@ -502,7 +502,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      * new releases, its tries, reason, pick and limit's wait gone, its search facts the new ones, and what it is of as the
      * sheet has it now (TMDB's names, pictures, runtime and season's count, which may have come since it was first queued).
      * Its file and release stay, as Try again keeps them: Resolve goes on from them for the same release, and starts again
-     * for another.
+     * for another. Its NZB goes first, as Try again drops it.
      *
      * All or none: every new row's folder and marker first, then every row written in one transaction ([Storage.addAll]);
      * a failure leaves none of it, and a process that dies between the two leaves folders for reconcile to delete. Returns
@@ -541,6 +541,9 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 row
             }
             if (queued.isEmpty()) return@withLock queued
+            // A failed row's NZB went as it failed, but where its process died in between: dropped first, as Try again drops
+            // it, so its turn never opens again from it the release it failed with. A failed row needs none, whatever comes.
+            putBack.forEach { deps.storage.dropSource(it.id) }
             deps.storage.addAll(added, putBack)
             val back = putBack.mapTo(HashSet()) { it.id }
             queued.forEach { row ->
