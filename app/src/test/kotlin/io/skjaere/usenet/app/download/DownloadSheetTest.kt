@@ -14,6 +14,7 @@ import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.PlaybackPrefs
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.newznab.IndexerConfig
+import io.skjaere.usenet.newznab.IndexerKind
 import io.skjaere.usenet.newznab.NewznabItem
 import io.skjaere.usenet.newznab.TvIds
 import io.skjaere.usenet.releases.RankedRelease
@@ -489,6 +490,16 @@ class DownloadSheetTest {
         sheet.download()
         advanceUntilIdle()
         assertEquals((1..10).map { "Harbor.Lights.S02E04.720p.WEB-DL.H.264-GRP$it" }, fakes.enqueued.single().second.map { it.title })
+    }
+
+    @Test
+    fun `a download searches the Usenet indexers alone, as only their releases download`() {
+        val usenet = IndexerConfig("idx-a", "Indexer A", "https://indexer-a.invalid/api", "")
+        val torrents = IndexerConfig("idx-t", "Indexer T", "https://indexer-t.invalid/api", "", kind = IndexerKind.Torznab)
+        val other = IndexerConfig("idx-b", "Indexer B", "https://indexer-b.invalid/api", "")
+        // A torrent indexer's calls, and the debrid cache checks after them, would be spent on releases left out (L370).
+        assertEquals(listOf(usenet, other), DownloadSheetDeps.usenetOnly(listOf(usenet, torrents, other)))
+        assertEquals(emptyList<IndexerConfig>(), DownloadSheetDeps.usenetOnly(listOf(torrents)))
     }
 
     @Test

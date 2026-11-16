@@ -34,6 +34,8 @@ import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.newznab.NewznabItem
 import io.skjaere.usenet.newznab.TvIds
 import io.skjaere.usenet.releases.RankedRelease
+import io.skjaere.usenet.releases.RankingContext
+import io.skjaere.usenet.releases.RankingTarget
 import io.skjaere.usenet.releases.ReleaseFacts
 import io.skjaere.usenet.releases.ReleaseParser
 import io.skjaere.usenet.search.FindResult
@@ -56,6 +58,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.time.LocalDate
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -87,6 +90,9 @@ class DownloadSheetDeviceTest {
     /** The search answers once it is let go: at once, unless a case holds it. */
     private val answer = CompletableDeferred<Unit>()
 
+    /** What each search was ranked by: the app's own download context ([DownloadSheetDeps.of]'s), which the seams take. */
+    private val rankedBy = CopyOnWriteArrayList<RankingContext>()
+
     @After
     fun tearDown() = runBlocking<Unit> {
         mine().forEach { container.downloadStorage.delete(it.id) }
@@ -105,6 +111,8 @@ class DownloadSheetDeviceTest {
 
         answer.complete(Unit)
         waitFor(hasText(DownloadSheetModel.BEST))
+        // Ranked for downloading (L355): the app's context for it, this device's, never Play's.
+        assertEquals(listOf(RankingTarget.Download), rankedBy.map { it.target })
         listOf(
             "Harbor Lights · S02E04 · Low Water", "1080p · WEB-DL · HEVC · about 1.2 GB", KESTREL, "14.0 GB free on this device",
             DownloadSheetModel.INDEXERS_SIZE, "Starts now", DownloadSheetModel.STAYS,
@@ -190,6 +198,7 @@ class DownloadSheetDeviceTest {
         // 3.0 GB free: after 1.0 GB kept free and the 1.2 GB a queued download still needs.
         show(FILM, deps(space = DownloadSpace(available = 5_200_000_000, used = 0, queued = 1_200_000_000, queuedDownloads = 1)), fontScale = 2f)
         waitFor(hasText(DownloadSheetModel.WONT_FIT))
+        assertEquals("a film ranked for downloading too", listOf(RankingTarget.Download), rankedBy.map { it.target })
         listOf(
             "Copper Crown · 2022", "1080p · WEB-DL · about 4.3 GB", COPPER, DownloadSheetModel.WONT_FIT, "Needs about 4.3 GB · 3.0 GB free on this device",
             "That is after the 1.2 GB the queued download still needs, and the 1.0 GB kept free for the phone.", DownloadSheetModel.WONT_FIT_NOTE,
@@ -234,13 +243,15 @@ class DownloadSheetDeviceTest {
      */
     private fun deps(metered: Boolean = false, space: DownloadSpace = DownloadSpace(available = 15 * GB, used = 0, queued = 0)) =
         DownloadSheetDeps.of(container, ask = null, context).copy(
-            findEpisode = { request, _ ->
+            findEpisode = { request, ranking ->
+                rankedBy += ranking
                 flow {
                     answer.await()
                     emit(FinderEvent.Finished(FindResult(request, EPISODE_RELEASES.map { FoundRelease(it.item, it.ranked, SearchStage.Episode) }, emptyList(), emptyList())))
                 }
             },
             findMovie = { _, context ->
+                rankedBy += context
                 flowOf(
                     MovieFind(
                         ResultGroup("copper crown|2022", GroupKind.Movie, null, emptyList(), null, 2022, FILM_RELEASES, emptyList()),

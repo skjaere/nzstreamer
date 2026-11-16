@@ -22,6 +22,7 @@ import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadPrefs
 import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.newznab.IndexerConfig
 import io.skjaere.usenet.newznab.IndexerKind
 import io.skjaere.usenet.releases.RankingContext
 import io.skjaere.usenet.search.EpisodeRequest
@@ -201,8 +202,14 @@ data class DownloadSheetDeps(
             outlive = container.appScope + Dispatchers.Main.immediate,
         )
 
-        /** The indexers a download searches: the Usenet ones, as only their releases download (L370). */
-        private suspend fun usenetIndexers(container: AppContainer) = container.indexerConfigs().filter { it.kind == IndexerKind.Newznab }
+        /** The indexers a download searches: the app's Usenet ones ([usenetOnly]). */
+        private suspend fun usenetIndexers(container: AppContainer) = usenetOnly(container.indexerConfigs())
+
+        /**
+         * Of [configs], the Usenet indexers alone, as only their releases download (L370): a torrent indexer's calls, and
+         * the debrid cache checks after them, would be spent on releases left out.
+         */
+        internal fun usenetOnly(configs: List<IndexerConfig>): List<IndexerConfig> = configs.filter { it.kind == IndexerKind.Newznab }
     }
 }
 
