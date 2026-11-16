@@ -32,6 +32,7 @@ import io.skjaere.usenet.releases.ReleaseKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -1433,6 +1434,69 @@ class DownloadRunnerTest {
         assertEquals(1, storage.reconciles)
     }
 
+    /**
+     * L394, C1: a season pack's copy is held while a row of its show and season is still to finish, read from the rows, and
+     * goes at the season's last end, whichever end it is: Done; failed by Resolve itself, which fails no row through the
+     * runner's own failed(); cancelled; deleted after a Remove; Delete all.
+     */
+    @Test
+    fun `a season pack's copy goes at its season's last end, whichever end that is`() = test {
+        val runner = runner()
+        storage.packs.write(PACK, PACK_NZB, "s3cret")
+        val b = fake("hl-b").apply { hold = HOLD }
+        val first = runner.add(1, fake("hl-a"))
+        val second = runner.add(2, b)
+        host(runner)
+        advanceUntilIdle()
+        // The first done, the second under way: held.
+        assertEquals(DownloadState.Done, stored(first).state)
+        assertEquals(DownloadState.Running, stored(second).state)
+        assertNotNull(storage.packs.find(PACK.key))
+        b.gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Done, stored(second).state)
+        assertNull(storage.packs.find(PACK.key))
+
+        // Failed at Resolve: no release left to try.
+        storage.packs.write(PACK, PACK_NZB, "s3cret")
+        val failed = runner.add(3, fake("hl-c"))
+        resolver.scripted += Resolution.Failed(DownloadResolver.NO_OTHER_RELEASE)
+        host(runner)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Failed, stored(failed).state)
+        assertNull(storage.packs.find(PACK.key))
+
+        // Cancelled as it is written.
+        storage.packs.write(PACK, PACK_NZB, "s3cret")
+        val cancelled = runner.add(4, fake("hl-d").apply { hold = HOLD })
+        host(runner)
+        advanceUntilIdle()
+        assertNotNull(storage.packs.find(PACK.key))
+        runner.cancel(cancelled)
+        advanceUntilIdle()
+        assertNull(storage.packs.find(PACK.key))
+
+        // Removed: gone once the row is deleted, after the Undo bar's time.
+        storage.packs.write(PACK, PACK_NZB, "s3cret")
+        val removed = runner.add(5, fake("hl-e").apply { hold = HOLD })
+        host(runner)
+        advanceUntilIdle()
+        runner.remove(listOf(removed))
+        advanceTimeBy(DownloadRunner.UNDO_MILLIS + 1)
+        runCurrent()
+        assertNull(dao.get(removed))
+        assertNull(storage.packs.find(PACK.key))
+
+        // Delete all, a row of the season still queued: its reconcile sweeps.
+        storage.packs.write(PACK, PACK_NZB, "s3cret")
+        runner.add(6, fake("hl-f").apply { hold = HOLD })
+        host(runner)
+        advanceUntilIdle()
+        runner.deleteAll()
+        advanceUntilIdle()
+        assertNull(storage.packs.find(PACK.key))
+    }
+
     /** Resolve's fake, answering as DownloadResolver does, as the class says. */
     private inner class FakeResolver {
         val calls = mutableListOf<String>()
@@ -1546,6 +1610,9 @@ class DownloadRunnerTest {
     private inner class FakeStorage : DownloadRunner.Storage {
         private val files = File(dir, "files")
         private val volume = File(dir, "volume")
+
+        /** The season packs' copies, as DownloadStorage keeps them beside the bookkeeping (L394). */
+        val packs = DownloadNzbs(File(files, ".packs"), Dispatchers.Unconfined)
         var there = true
         var reconciles = 0
         val events = mutableListOf<String>()
@@ -1623,6 +1690,13 @@ class DownloadRunnerTest {
         override suspend fun reconcile() {
             reconciles++
             events += "reconcile"
+            // As DownloadStorage's: the season packs' copies swept with the rest.
+            packs.sweep(dao.all().first())
+        }
+
+        override suspend fun sweepPacks() {
+            events += "sweep packs"
+            packs.sweep(dao.all().first())
         }
 
         override fun volumeThere() = there
@@ -1631,6 +1705,13 @@ class DownloadRunnerTest {
     private companion object {
         const val INDEXER = "fake-indexer"
         const val SHOW = 900_002
+
+        /** A season pack of season 2 kept for its season's rows, and its NZB. */
+        val PACK = DownloadNzbs.Meta(
+            ReleaseKey.of(INDEXER, "hl-s02-pack"), "Harbor.Lights.S02.1080p.WEB.h264-PACK",
+            DownloadCandidate(INDEXER, "hl-s02-pack", "Harbor.Lights.S02.1080p.WEB.h264-PACK", size = 8L * SIZE), SHOW, 2, leads = true,
+        )
+        val PACK_NZB = "<nzb><!-- hl-s02-pack --></nzb>".encodeToByteArray()
         const val NOW = 1_800_000_000_000L
         const val AT = NOW - 60_000
 

@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import io.skjaere.usenet.app.AppContainer
 import io.skjaere.usenet.app.play.MissingReleases
 import io.skjaere.usenet.app.play.PlaybackCoordinator
+import io.skjaere.usenet.app.play.PlayingPack
 import io.skjaere.usenet.app.play.ProbedTracksSerializer
 import io.skjaere.usenet.app.play.Replay
 import io.skjaere.usenet.app.play.STEP_LABELS
@@ -13,9 +14,11 @@ import io.skjaere.usenet.app.play.playCandidate
 import io.skjaere.usenet.app.play.savedRelease
 import io.skjaere.usenet.app.play.shortFailure
 import io.skjaere.usenet.app.play.skippedNotice
+import io.skjaere.usenet.app.search.offersFileChoice
 import io.skjaere.usenet.core.AttemptFailure
 import io.skjaere.usenet.core.AvailabilityBackend
 import io.skjaere.usenet.core.EngineAvailabilityBackend
+import io.skjaere.usenet.core.EnginePrepareBackend
 import io.skjaere.usenet.core.FetchedNzb
 import io.skjaere.usenet.core.FileCandidate
 import io.skjaere.usenet.core.FileChooser
@@ -27,6 +30,7 @@ import io.skjaere.usenet.core.PipelineStep
 import io.skjaere.usenet.core.PlayCandidate
 import io.skjaere.usenet.core.PlayPipeline
 import io.skjaere.usenet.core.PlaybackTarget
+import io.skjaere.usenet.core.PrepareBackend
 import io.skjaere.usenet.core.PrepareOutcome
 import io.skjaere.usenet.core.PreparedNzb
 import io.skjaere.usenet.core.PreparedNzbStore
@@ -49,6 +53,10 @@ import io.skjaere.usenet.newznab.NewznabError
 import io.skjaere.usenet.newznab.NewznabException
 import io.skjaere.usenet.newznab.NewznabItem
 import io.skjaere.usenet.newznab.NzbDownload
+import io.skjaere.usenet.releases.RankingContext
+import io.skjaere.usenet.releases.ReleaseFacts
+import io.skjaere.usenet.releases.ReleaseRanker
+import io.skjaere.usenet.releases.ReleaseReason
 import io.skjaere.usenet.search.RankedItem
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -86,6 +94,12 @@ import kotlin.time.Duration.Companion.seconds
  * A download resolved before whose process died isn't grabbed again: its NZB is prepared again from its own copy and its
  * file found by name. One whose size no longer matches starts again from its first byte.
  *
+ * A season pack is fetched once for its season (L394, L432): resolved for one episode while another row of the show's
+ * season is still to finish, its NZB is kept once for the season ([Storage.keepPack]), and a later row's attempt of it takes
+ * that copy rather than grab it again, after the NZB kept for an attempt with no answer and before the indexer. The pack
+ * as this process last prepared it is kept too ([Storage.holdPrepare]), and handed back for that NZB rather than prepared
+ * again ([heldPreparer]); a new process prepares it again from the copy, with no grab.
+ *
  * Its log lines, the pipeline's and the memory of releases tried's among them (which name a play's release by its title),
  * name the download by its id and a release by its place among the row's ([naming]), never by the release's name.
  */
@@ -115,6 +129,13 @@ class DownloadResolver(
     private val providersLeftOut: () -> Boolean = { false },
     private val providerFallback: () -> Boolean = { false },
     private val clock: Clock = Clock.System,
+    /**
+     * A preparer that hands back a season pack's prepare held from an earlier row ([Storage.heldPrepare]) for its own NZB,
+     * and prepares any other as [preparer] does: the app's [PlayingPack.preparer] over the engine.
+     */
+    private val heldPreparer: (PreparedNzb) -> NzbPreparer,
+    /** What a download's releases are ranked by now (W112): whether a season pack's copy leads is read from it (L432). */
+    private val downloadContext: suspend () -> RankingContext,
 ) {
     /** What Resolve keeps in and asks of the download's places on the device: [DownloadStorage]'s ([of]). */
     interface Storage {
@@ -136,6 +157,18 @@ class DownloadResolver(
 
         suspend fun dropGrab(id: String)
 
+        /** The season pack's NZB kept once for its season under its release's [key] (L394); null where none is. */
+        suspend fun pack(key: String): DownloadNzbs.Copy?
+
+        /** Keeps a season pack's [nzb] and its [password] (none: no file) once for its season, as [meta] says (L432). */
+        suspend fun keepPack(meta: DownloadNzbs.Meta, nzb: ByteArray, password: String?)
+
+        /** The last season pack's prepare kept for its season's next rows while its copy lasts; null where none is. */
+        fun heldPrepare(): PreparedNzb?
+
+        /** Keeps [prepared], the season pack [key]'s, for its season's next rows in this process (L394). */
+        fun holdPrepare(key: String, prepared: PreparedNzb)
+
         companion object {
             fun of(storage: DownloadStorage): Storage = object : Storage {
                 override suspend fun keepSource(id: String, nzb: ByteArray, password: String?) = storage.keepSource(id, nzb, password)
@@ -146,6 +179,10 @@ class DownloadResolver(
                 override suspend fun dropGrab(id: String) = storage.dropGrab(id)
                 override suspend fun deleteVideo(id: String) = storage.deleteVideo(id)
                 override suspend fun space(except: String) = storage.space(except)
+                override suspend fun pack(key: String) = storage.packs.find(key)
+                override suspend fun keepPack(meta: DownloadNzbs.Meta, nzb: ByteArray, password: String?) = storage.packs.write(meta, nzb, password)
+                override fun heldPrepare() = storage.packs.held()
+                override fun holdPrepare(key: String, prepared: PreparedNzb) = storage.packs.hold(key, prepared)
             }
         }
     }
@@ -195,7 +232,7 @@ class DownloadResolver(
         val size = row.size ?: return null
         val source = storage.source(row.id) ?: return null
         providersReady(row.id)?.let { return it }
-        val prepared = when (val outcome = preparer.prepare(source.nzb, release.title, source.password)) {
+        val prepared = when (val outcome = preparerNow().prepare(source.nzb, release.title, source.password)) {
             is PrepareOutcome.Ready -> outcome.nzb
             // Only a failure that is the release's says the copy no longer gives the file; any other (a reply garbled, one
             // nobody named) is tried again after a wait, as the writer reopens on it (L382), the copy and what was written kept.
@@ -265,7 +302,13 @@ class DownloadResolver(
                 throw e
             }
         }
-        // Each NZB grabbed kept until its attempt has its answer; the one kept before served from it, with no grab.
+        // Its lines, and the memory of tried releases', name each release by its place among the row's, never by its name.
+        val naming = naming(row)
+        val named = { candidate: PlayCandidate -> naming(candidate.id) }
+        // The releases whose NZB came from their season's copy (L394).
+        val copied = HashSet<String>()
+        // Each NZB grabbed kept until its attempt has its answer; the one kept before served from it, and a season pack's
+        // from its season's copy, with no grab. A copy needs no keeping for the attempt: it lasts while this row is to finish.
         val nzbs = object : NzbSource {
             override suspend fun fetch(candidate: PlayCandidate): ByteArray = fetchWithPassword(candidate).bytes
 
@@ -274,10 +317,15 @@ class DownloadResolver(
                     log.info("download {}: its release tried again from the NZB kept for it, no grab", id)
                     return FetchedNzb(grab.source.nzb, grab.source.password)
                 }
+                storage.pack(candidate.id)?.let { copy ->
+                    log.info("{}: from its season's copy, no grab", named(candidate))
+                    copied += candidate.id
+                    return FetchedNzb(copy.source.nzb, copy.source.password)
+                }
                 return grabs.fetchWithPassword(candidate).also { storage.keepGrab(id, candidate.id, it.bytes, it.password) }
             }
         }
-        val usenet = UsenetSource(nzbs, availability, preparer, store, providersLeftOut, providerFallback, FileChooser.None)
+        val usenet = UsenetSource(nzbs, availability, preparerNow(), store, providersLeftOut, providerFallback, FileChooser.None)
         // The probe keeps its target in the store to read it; the pipeline lets go of it when the probe fails, and resolved()
         // once it is copied. Cut short as it reads, it lets go of it itself (L383).
         val probing = TrackProbe { target ->
@@ -288,9 +336,6 @@ class DownloadResolver(
                 throw e
             }
         }
-        // Its lines, and the memory of tried releases', name each release by its place among the row's, never by its name.
-        val naming = naming(row)
-        val named = { candidate: PlayCandidate -> naming(candidate.id) }
         val pipeline = PlayPipeline(
             { usenet }, probing, maxAttempts = left, tried = tried(newznab, { indexerId -> configs[indexerId]?.name }, named), named = named,
         )
@@ -369,7 +414,7 @@ class DownloadResolver(
             return unreachable(id, e.error, DownloadHostRules.CANT_REACH_PROVIDER)
         }
         return when (val end = ended) {
-            is PipelineEvent.Succeeded -> resolved(id, end, byKey)
+            is PipelineEvent.Succeeded -> resolved(id, end, byKey, end.target.candidate.id in copied)
             is PipelineEvent.Exhausted -> exhausted(id, end, counting, skipped, indexerOutages > 0)
             else -> failed(id, NO_OTHER_RELEASE)
         }
@@ -393,9 +438,10 @@ class DownloadResolver(
     /**
      * [succeeded]'s release kept as the download's, as the class says: the room checked for its exact size, then its NZB
      * and password copied. The release its file was made from, its file of the same name and size, goes on from the safe
-     * offset (Try again after "Storage is full"); another starts from 0, any file made for the one before deleted.
+     * offset (Try again after "Storage is full"); another starts from 0, any file made for the one before deleted. A season
+     * pack is kept for its season's other rows ([keepPack]); [copied]: its NZB came from that copy.
      */
-    private suspend fun resolved(id: String, succeeded: PipelineEvent.Succeeded, byKey: Map<String, RankedItem>): Resolution {
+    private suspend fun resolved(id: String, succeeded: PipelineEvent.Succeeded, byKey: Map<String, RankedItem>, copied: Boolean): Resolution {
         val target = succeeded.target as UsenetTarget
         try {
             val row = downloads.get(id) ?: return Resolution.Gone
@@ -416,8 +462,10 @@ class DownloadResolver(
             // A wait for the volume keeps the NZB grabbed for it: the release is taken up again once the volume is back.
             room(kept)?.let { return it }
             // The archive's password as the NZB store keeps one (the NZB's own, else the indexer's), never logged.
-            storage.keepSource(id, target.nzbBytes, target.prepared.metadata.orderedArchiveNzb.password ?: target.password)
+            val password = target.prepared.metadata.orderedArchiveNzb.password ?: target.password
+            storage.keepSource(id, target.nzbBytes, password)
             storage.dropGrab(id)
+            keepPack(kept, byKey.getValue(target.candidate.id), target, password, copied)
             log.info("download {}: resolved, {} bytes, {}", id, size, if (kept.oneVideo) "its release's one video" else "one of its release's videos")
             return Resolution.Ready(kept, target.prepared, target.file)
         } finally {
@@ -426,6 +474,46 @@ class DownloadResolver(
             withContext(NonCancellable) { letGo(id, target) }
         }
     }
+
+    /**
+     * [row]'s release, [item], kept once for its season when it is a season pack (L394, L432): its NZB [copied] from the
+     * season's copy, or one whose name says it holds several episodes ([offersFileChoice]) while another row of the show's
+     * season is still to finish, for which the copy is written now; otherwise it would have no use. Either way its prepare
+     * is held for the season's next row. The copy leads when it isn't above Download size ([leads]). Nothing of this fails
+     * the resolve: a copy that can't be kept costs the next row a grab.
+     */
+    private suspend fun keepPack(row: Download, item: RankedItem, target: UsenetTarget, password: String?, copied: Boolean) {
+        val show = row.showTmdbId ?: return
+        val season = row.season ?: return
+        if (row.kind != DownloadKind.Episode || !(copied || item.offersFileChoice)) return
+        try {
+            if (!copied) {
+                val others = downloads.queue().first().any { it.id != row.id && it.showTmdbId == show && it.season == season && it.state in DownloadRunner.GOING_ON }
+                val candidate = row.candidates.firstOrNull { ranked(it).key == item.key }
+                if (!others || candidate == null) return
+                storage.keepPack(DownloadNzbs.Meta(item.key, item.item.title, candidate, show, season, leads(row, item.key, candidate)), target.nzbBytes, password)
+                log.info("download {}: its season pack kept for the season's other downloads", row.id)
+            }
+            storage.holdPrepare(item.key, target.prepared)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("download {}: couldn't keep its season pack for the season: {}", row.id, e::class.simpleName)
+        }
+    }
+
+    /**
+     * Whether a season pack's copy leads its season's later rows (L431, L432): ranked alone for downloading, with [row]'s
+     * runtime and its season's episode count as the sheet ranks an episode's, it isn't above Download size.
+     */
+    private suspend fun leads(row: Download, key: String, candidate: DownloadCandidate): Boolean {
+        val context = downloadContext().let { it.copy(runtimeMinutes = row.runtimeMinutes ?: it.runtimeMinutes, seasonEpisodes = row.seasonEpisodes ?: it.seasonEpisodes) }
+        val ranked = ReleaseRanker().rank(listOf(ReleaseFacts(key, candidate.title, candidate.size, candidate.passworded)), context).single()
+        return ranked.reasons.none { it is ReleaseReason.AboveDownloadSize }
+    }
+
+    /** The preparer of this resolve: a season pack's prepare held from an earlier row handed back for its NZB (L394). */
+    private fun preparerNow(): NzbPreparer = storage.heldPrepare()?.let(heldPreparer) ?: preparer
 
     /**
      * Lets go of what [target]'s probe held in the store: its NZB goes where the probe put it there, not where a play kept
@@ -622,8 +710,10 @@ class DownloadResolver(
         /**
          * The app's: the engine checking every article of what would be written (L341), the container's preparer, store and
          * track probe, the indexers the search asks, the coordinator's grab (its test seam), the memory of releases found
-         * missing as a play that wasn't chosen reads it, and Settings' "Releases to try". A test gives its own [indexers] and
-         * [attempts], and a [probe] that reads nothing where its releases are no film.
+         * missing as a play that wasn't chosen reads it, and Settings' "Releases to try"; a season pack's prepare held for its
+         * season handed back over the engine's prepare ([PlayingPack.preparer]), and the download ranking's context. A test
+         * gives its own [indexers] and [attempts], a [probe] that reads nothing where its releases are no film, and a
+         * [prepareBackend] that counts the prepares.
          */
         @SuppressLint("VisibleForTests") // The coordinator's grab, read as each grab is made, so a test serves both.
         fun of(
@@ -632,11 +722,12 @@ class DownloadResolver(
             indexers: suspend () -> List<IndexerConfig> = container::indexerConfigs,
             attempts: suspend () -> Int = { container.settings.playback.first().attempts },
             probe: TrackProbe = TrackProbe { target -> container.trackProbe.probe(target) },
+            prepareBackend: PrepareBackend? = null,
         ) = DownloadResolver(
             downloads = container.data.downloads,
             storage = Storage.of(storage),
             availability = EngineAvailabilityBackend(container.engine, checkAll = { true }),
-            preparer = container.preparer,
+            preparer = prepareBackend?.let { NzbPreparer(it) } ?: container.preparer,
             store = container.store,
             probe = probe,
             indexers = indexers,
@@ -655,6 +746,8 @@ class DownloadResolver(
             },
             providersLeftOut = { container.engine.leftOut.value.isNotEmpty() },
             providerFallback = { container.engine.fallback.value },
+            heldPreparer = { held -> PlayingPack.preparer(held, prepareBackend ?: EnginePrepareBackend(container.engine)) },
+            downloadContext = container::downloadRankingContext,
         )
     }
 }

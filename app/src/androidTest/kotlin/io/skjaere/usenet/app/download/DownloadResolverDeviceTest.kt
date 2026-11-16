@@ -1,15 +1,22 @@
 package io.skjaere.usenet.app.download
 
+import android.os.Bundle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import io.skjaere.nzbstreamer.metadata.ExtractedMetadata
 import io.skjaere.usenet.app.LocalNntp
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.download.DownloadFixtures.Packing
 import io.skjaere.usenet.app.engineSetup
 import io.skjaere.usenet.app.mockOnEngine
 import io.skjaere.usenet.app.play.PlaybackCoordinator
+import io.skjaere.usenet.app.waitFor
+import io.skjaere.usenet.core.EnginePrepareBackend
 import io.skjaere.usenet.core.EngineSettings
+import io.skjaere.usenet.core.PrepareBackend
 import io.skjaere.usenet.core.PreparedNzb
+import io.skjaere.usenet.core.TrackProbe
+import io.skjaere.usenet.data.Clock
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadKind
@@ -19,6 +26,11 @@ import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.newznab.IndexerConfig
 import io.skjaere.usenet.newznab.NzbDownload
 import io.skjaere.usenet.releases.ReleaseKey
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
@@ -31,7 +43,9 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * A download's Resolve on the device (item 5), the app's own pieces over the test's own NNTP server (LocalNntp) and the
@@ -42,8 +56,13 @@ import java.util.concurrent.CopyOnWriteArrayList
  * The first fails its check; the pack's S03E02 is opened and probed, its video and tracks kept with the row; nothing is
  * grabbed after it. The test assets' film is the episodes' bytes, as the probe reads a real file.
  *
- * The row, its folders and what the releases' checks left in the memory of releases found missing are put back as they
- * were; the server ends with its articles.
+ * A season pack fetched once for its season (L394, M-pack): three episodes, each a split RAR4 set, posted as one release,
+ * and three rows of the season, each with that release alone: the first grabs it and prepares it, the others take it from
+ * the season's copy and the prepare held for it, through the app's runner, each file written whole. What the prepare read
+ * is said through the instrumentation's status, never the log.
+ *
+ * The rows, their folders, the season's copy and what the releases' checks left in the memory of releases found missing
+ * are put back as they were; the server ends with its articles.
  */
 @RunWith(AndroidJUnit4::class)
 class DownloadResolverDeviceTest {
@@ -53,11 +72,14 @@ class DownloadResolverDeviceTest {
     private val storage = DownloadStorage.of(context, container.data.downloads)
     private val realFetch = PlaybackCoordinator.fetchNzb
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     /** The coordinator's grabs, by guid, in order. */
     private val grabbed = CopyOnWriteArrayList<String>()
-    private val nzbs = mutableMapOf<String, ByteArray>()
+    private val nzbs = ConcurrentHashMap<String, ByteArray>()
     private lateinit var remembered: List<TriedRelease>
     private var row: Download? = null
+    private val made = CopyOnWriteArrayList<String>()
 
     @Before
     fun setUp() = runBlocking<Unit> {
@@ -74,8 +96,11 @@ class DownloadResolverDeviceTest {
 
     @After
     fun tearDown() = runBlocking<Unit> {
+        scope.cancel()
         PlaybackCoordinator.fetchNzb = realFetch
         row?.let { storage.delete(it.id) }
+        made.forEach { storage.delete(it) }
+        storage.packs.folder(ReleaseKey.of(INDEXER.id, SEASON_PACK)).deleteRecursively()
         container.library.clearTriedReleases()
         container.library.restoreTriedReleases(remembered)
         fixtures.close()
@@ -154,6 +179,75 @@ class DownloadResolverDeviceTest {
         assertTrue(container.library.triedReleases(listOf(ReleaseKey.of(INDEXER.id, FIRST))).isNotEmpty())
     }
 
+    /**
+     * L394: a season pack is grabbed and prepared once for its season's rows. Harbor Lights season 4 as one release of three
+     * episodes, each a split RAR4 set as season packs post them (its volumes named for its episode), fresh bytes under ids
+     * no run used; three rows of the season queued with it as their one release, run by the app's runner over the app's
+     * Resolve. The first grabs it through the coordinator's seam and prepares it, and keeps it for the season; the second and
+     * third take it from that copy, with no grab, and from the prepare held for it, with none: one grab and one prepare in all.
+     * Each file is its episode's, whole. Once the season's last is done, its copy is gone.
+     *
+     * M-pack: what the prepare read from the server (its BODYs times their articles' sizes) during each row's Resolve, the
+     * first time and with the held prepare, said through the instrumentation's status.
+     */
+    @Test
+    fun aSeasonPackIsGrabbedAndPreparedOnceForItsSeasonsRowsEachFileWhole() = runBlocking<Unit> {
+        val salt = System.nanoTime()
+        val episodes = (1..3).map { e ->
+            fixtures.post(Packing.Rar4, "Harbor.Lights.S04E%02d.1080p.WEB.h264-PACK".format(e), DownloadFixtures.seeded(16 * DownloadFixtures.MB, salt + e), salt = "$salt")
+        }
+        nzbs[SEASON_PACK] = fixtures.local.nzb(*episodes.flatMap { it.posted }.toTypedArray())
+        val candidate = DownloadCandidate(INDEXER.id, SEASON_PACK, "Harbor.Lights.S04.1080p.WEB.h264-PACK", size = episodes.sumOf { it.size })
+
+        // The engine's prepare, counted.
+        val prepares = AtomicInteger()
+        val engine = EnginePrepareBackend(container.engine)
+        val counted = object : PrepareBackend {
+            override suspend fun prepare(nzbBytes: ByteArray, password: String?) = engine.prepare(nzbBytes, password).also { prepares.incrementAndGet() }
+            override suspend fun streamableFiles(metadata: ExtractedMetadata) = engine.streamableFiles(metadata)
+        }
+        val resolver = DownloadResolver.of(container, storage, indexers = { listOf(INDEXER) }, attempts = { 3 }, probe = TrackProbe.None, prepareBackend = counted)
+        // What the server sent during each row's Resolve, which runs alone: the walk resolves a row once the one before is written.
+        val read = ConcurrentHashMap<String, Long>()
+        fun sent() = episodes.flatMap { it.posted }.sumOf { posted -> posted.ids.indices.sumOf { i -> (fixtures.local.bodies[posted.ids[i]]?.get() ?: 0) * posted.sizes[i].toLong() } }
+        val runner = DownloadRunner(
+            DownloadRunnerDeps.of(
+                container, context, storage, DownloadDebug.On(fixtures.file("debug"), Clock.System),
+                resolve = { id ->
+                    val before = sent()
+                    resolver.resolve(id).also { read.merge(id, sent() - before) { a, b -> a + b } }
+                },
+            ),
+            scope,
+        )
+        val ids = (1..3).map { e ->
+            val queued = runner.enqueue(DownloadTarget.episode(SHOW, "Harbor Lights", 4, e, seasonEpisodes = 3), listOf(candidate))
+                ?: throw AssertionError("episode $e not queued")
+            made += queued.id
+            queued.id
+        }
+        scope.launch { runner.run(DownloadHost.Job) }
+
+        val done = ids.map { id ->
+            waitFor("download $id done", 120_000) { runner.state.value.firstOrNull { it.row.id == id }?.row?.takeIf { it.state == DownloadState.Done || it.state == DownloadState.Failed } }
+                .also { assertEquals("${it.state}, ${it.reason}", DownloadState.Done, it.state) }
+        }
+        InstrumentationRegistry.getInstrumentation().sendStatus(
+            STATUS, Bundle().apply { putString(M_PACK, "first prepare ${read[ids[0]]} bytes; with the held prepare ${read[ids[1]]} and ${read[ids[2]]} bytes") },
+        )
+        assertEquals(listOf(SEASON_PACK), grabbed)
+        assertEquals("prepares", 1, prepares.get())
+        done.forEachIndexed { i, row ->
+            assertEquals("Harbor.Lights.S04E%02d.1080p.WEB.h264-PACK.mkv".format(i + 1), row.fileName)
+            assertEquals(listOf(ReleaseKey.of(INDEXER.id, SEASON_PACK)), row.tried)
+            assertEquals(episodes[i].sha256, DownloadFixtures.sha256(storage.file(row) ?: throw AssertionError("no file for ${row.id}")))
+        }
+        // The season's last is done: its copy went with it.
+        val copy = storage.packs.folder(ReleaseKey.of(INDEXER.id, SEASON_PACK))
+        waitFor("the season's copy gone", 10_000) { true.takeIf { !copy.exists() } }
+        assertNull(storage.packs.find(ReleaseKey.of(INDEXER.id, SEASON_PACK)))
+    }
+
     /** [data] posted as the file [name], its articles' ids a digest of its name, bytes and part size, as the fixtures' are. */
     private fun post(name: String, data: ByteArray): LocalNntp.Posted {
         val digest = MessageDigest.getInstance("SHA-256").apply {
@@ -172,6 +266,13 @@ class DownloadResolverDeviceTest {
         const val FIRST = "hl-s03e02-kestrel"
         const val PACK = "hl-s03-pack-grp"
         const val THIRD = "hl-s03e02-wren"
+        const val SEASON_PACK = "hl-s04-pack"
+
+        /** The instrumentation status's code for a measurement: 2, "in progress", which no result parser counts as a test. */
+        const val STATUS = 2
+
+        /** Its key for M-pack. */
+        const val M_PACK = "m-pack"
 
         /** Never asked: the grabs come through the coordinator's seam. */
         val INDEXER = IndexerConfig("dl-resolver-test", "Test indexer", "http://indexer.invalid/api", "test-key")

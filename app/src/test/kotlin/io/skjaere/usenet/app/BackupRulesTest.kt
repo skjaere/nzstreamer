@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app
 
+import io.skjaere.usenet.app.download.DownloadNzbs
 import io.skjaere.usenet.app.download.DownloadStorage
 import io.skjaere.usenet.data.DataContainer
 import org.junit.jupiter.api.Test
@@ -13,7 +14,8 @@ import kotlin.test.assertTrue
  * The secrets can't be read off this device, so no backup or device transfer may carry them; nor Play on TV's file,
  * whose pins mean nothing without this device's key (L29). Each with its DataStore temp file. Nor the last crash's log,
  * which leaves the device only when shared from Settings › Logs, as the privacy page says (L139). Nor the debrid folder,
- * whose listings and records of adds are the device's own (L233). Nor the downloads, which stay on this device (L350).
+ * whose listings and records of adds are the device's own (L233). Nor the downloads, which stay on this device (L350),
+ * nor the season packs' NZBs and passwords kept with them (L394).
  */
 class BackupRulesTest {
     private val res = File("src/main/res")
@@ -121,6 +123,23 @@ class BackupRulesTest {
     fun `downloads are left out of full backups up to Android 11, from both domains`() {
         listOf("file", "external").forEach { domain ->
             assertTrue(rules("fullBackupContent").excludesFolder(DownloadStorage.DIR, domain), "full backups don't exclude ${DownloadStorage.DIR}/ of $domain")
+        }
+    }
+
+    /**
+     * L394: a season pack's NZB, and its password, kept once for its season's downloads, is a part of them: its folder sits
+     * under filesDir's downloads/, which every rule leaves out whole, so it needs no rule of its own.
+     */
+    @Test
+    fun `the season packs' copies are under the downloads' folder every rule leaves out`() {
+        val extraction = rules("dataExtractionRules")
+        val sections = listOf("cloud-backup", "device-transfer").associateWith { extraction.children(it).single() } + ("full backup" to rules("fullBackupContent"))
+        sections.forEach { (name, section) ->
+            val under = section.children("exclude").any { exclude ->
+                val folder = exclude.getAttribute("path").trimEnd('/')
+                exclude.getAttribute("domain") == "file" && folder == DownloadStorage.DIR && DownloadNzbs.PATH.startsWith("$folder/")
+            }
+            assertTrue(under, "$name doesn't leave out ${DownloadNzbs.PATH} with ${DownloadStorage.DIR}/")
         }
     }
 

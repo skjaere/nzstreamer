@@ -30,6 +30,8 @@ import java.nio.channels.FileChannel
  *   lasting as long as it; the NZB and its password, kept at Resolve and dropped once the file is complete, failed or
  *   cancelled. Neither place goes in a backup or a transfer, so a row whose marker is missing came from another device
  *   ([reconcile]).
+ * - A season pack's NZB and password, kept once for the season's downloads in filesDir's `downloads/.packs/` ([packs],
+ *   L394) while one of them is still to finish.
  * - A delete goes in the crash-safe order: the row Deleting (hidden), the video, the bookkeeping, the row ([delete]).
  *
  * The rows and the folders change one call at a time, so reconcile never takes a folder [add] has just made for one with
@@ -46,6 +48,12 @@ class DownloadStorage(
     private val afterDeleteStep: (DeleteStep) -> Unit = {},
 ) {
     private val changes = Mutex()
+
+    /** The season packs' NZBs, each kept once for its season's downloads, in filesDir's `downloads/.packs/` (L394). */
+    val packs = DownloadNzbs(File(filesDir, DownloadNzbs.PATH), io)
+
+    /** Drops the season packs' copies no download still to finish holds (L394): at a download's end. */
+    suspend fun sweepPacks() = packs.sweep(downloads.all().first())
 
     /** The steps of a delete, in order, each one a process may die after. */
     enum class DeleteStep { Marked, VideoGone, BookkeepingGone }
@@ -242,7 +250,9 @@ class DownloadStorage(
      * - a row whose marker is missing came from another device (a transfer carries the library, never these folders), and
      *   is dropped; a queued one has its marker from [add], before any NZB, and a finished one keeps it;
      * - a finished row whose file is gone fails, "The downloaded file is gone", holding no file and no progress;
-     * - a folder no row has, in either place, is deleted: what a process left as it died.
+     * - a folder no row has, in either place, is deleted: what a process left as it died; but for the season packs' copies
+     *   (`.packs`, a name no row's id can have), which are swept on their own: those no download still to finish holds,
+     *   and any copy half written, go ([DownloadNzbs.sweep]).
      *
      * Files beside the folders stay. While the volume isn't there, no row is taken for gone and its folders stay.
      */
@@ -263,10 +273,13 @@ class DownloadStorage(
                     }
                 }
             }
-            val rows = downloads.all().first().mapTo(HashSet()) { it.id }
-            val leftOver = listOfNotNull(File(filesDir, DIR), volume?.let { File(it, DIR) })
-                .flatMap { dir -> dir.listFiles().orEmpty().filter { it.isDirectory && it.name !in rows } }
+            val left = downloads.all().first()
+            val rows = left.mapTo(HashSet()) { it.id }
+            val bookkeeping = File(filesDir, DIR)
+            val leftOver = listOfNotNull(bookkeeping, volume?.let { File(it, DIR) })
+                .flatMap { dir -> dir.listFiles().orEmpty().filter { it.isDirectory && it.name !in rows && !(dir == bookkeeping && it.name == DownloadNzbs.DIR) } }
             leftOver.forEach(::deleteFolder)
+            packs.sweep(left)
             if (dropped + failed + leftOver.size > 0) {
                 log.info("Reconciled downloads: {} rows dropped, {} files gone, {} folders without a row deleted", dropped, failed, leftOver.size)
             }

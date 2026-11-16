@@ -252,7 +252,8 @@ class DownloadRunnerDeps(
  * - Pause holds the whole queue: the running item stops at its safe offset, keeping its file and room; nothing else
  *   starts until Resume (L380). "Stopped by Android" holds it the same way (L359).
  * - The waits for the providers and for storage end the walk, so the host ends (L388); the other rows wait their turn.
- * - The NZB and its password go once the file is complete, the item fails or is cancelled (L346).
+ * - The NZB and its password go once the file is complete, the item fails or is cancelled (L346); a season pack's copy
+ *   goes at the end of the last download of its season still to finish, whichever end it is (L394, [Storage.sweepPacks]).
  * - Remove hides a download at once and deletes it once its Undo has gone (L379); Cancel deletes it at once.
  *
  * Nothing runs on a TV (L369): every call but [reconcile] returns at once there. Its log lines name a download by its id,
@@ -288,6 +289,9 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         /** Whether the primary volume's folder is there. */
         fun volumeThere(): Boolean
 
+        /** Drops the season packs' copies no download still to finish holds now (L394). */
+        suspend fun sweepPacks()
+
         companion object {
             fun of(storage: DownloadStorage): Storage = object : Storage {
                 override suspend fun add(row: Download) = storage.add(row)
@@ -303,6 +307,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 override suspend fun delete(id: String) = storage.delete(id)
                 override suspend fun reconcile() = storage.reconcile()
                 override fun volumeThere() = storage.volumeThere()
+                override suspend fun sweepPacks() = storage.sweepPacks()
             }
         }
     }
@@ -507,6 +512,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             val row = dao.get(id) ?: return@withLock
             deps.storage.dropSource(id)
             delete(id)
+            sweepPacks()
             passHold(row)
             log.info("download {}: cancelled", id)
         }
@@ -539,6 +545,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                     removed.remove(id)
                     if (dao.get(id)?.state == DownloadState.Deleting) delete(id)
                 }
+                sweepPacks()
             }
         }
     }
@@ -547,7 +554,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      * Deletes every download (Settings › Downloads' Delete all, which asks first; L379): the running one stopped, then each,
      * its NZB first, then its file, bookkeeping and row in the crash-safe order, those removed and waiting for their Undo's
      * end with them, so their timers find nothing and an Undo brings nothing back. Then the files are brought into step, a
-     * folder no row has deleted too (item 4). Nothing is left to run: the walk ends, and its host.
+     * folder no row has deleted too (item 4), and the season packs' copies with them (L394). Nothing is left to run: the
+     * walk ends, and its host.
      */
     suspend fun deleteAll() {
         if (!runs) return
@@ -888,6 +896,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                             dao.setState(id, DownloadState.Failed, gaveUpWords(why), now())
                         }
                         deps.storage.dropSource(id)
+                        sweepPacks()
                     }
                     log.info("download {}: failed", id)
                     return Walk.Next
@@ -1023,6 +1032,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 ),
             )
             deps.storage.dropSource(id)
+            sweepPacks()
             deps.debug.trace(DownloadTrace.Completed(id, size))
             log.info("download {}: done, {} bytes, {} part{} missing", id, size, gaps.size, if (gaps.size == 1) "" else "s")
         }
@@ -1079,6 +1089,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     private suspend fun failed(id: String, reason: String) = withContext(NonCancellable) {
         dao.setState(id, DownloadState.Failed, reason, now())
         deps.storage.dropSource(id)
+        sweepPacks()
         log.info("download {}: failed", id)
     }
 
@@ -1096,6 +1107,20 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             throw e
         } catch (e: Exception) {
             log.warn("download {}: couldn't delete it: {}", id, e::class.simpleName)
+        }
+    }
+
+    /**
+     * A download's end, whichever it is: the season packs' copies no download still to finish holds now go (L394). A
+     * failure is logged, and the next start's reconcile sweeps them.
+     */
+    private suspend fun sweepPacks() {
+        try {
+            deps.storage.sweepPacks()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("Couldn't drop the season packs' copies: {}", e::class.simpleName)
         }
     }
 
@@ -1120,8 +1145,11 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         /** The states that hold the whole queue until Resume (L380). */
         private val HOLDS = setOf(DownloadState.Paused, DownloadState.Stopped)
 
-        /** A download still to finish: queued, under way, held or waiting; neither done, failed nor removed. */
-        private val GOING_ON = setOf(
+        /**
+         * A download still to finish: queued, under way, held or waiting; neither done, failed nor removed. A season pack's
+         * copy lasts while one of its season's is ([DownloadNzbs]).
+         */
+        internal val GOING_ON = setOf(
             DownloadState.Queued, DownloadState.Resolving, DownloadState.Running, DownloadState.Paused, DownloadState.Waiting, DownloadState.Stopped,
         )
 

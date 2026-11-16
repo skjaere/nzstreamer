@@ -7,12 +7,14 @@ import android.system.Os
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadDao
 import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.LibraryDatabase
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.releases.ReleaseKey
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -38,7 +40,8 @@ import kotlin.random.Random
  * Where a download's files live and how they come and go (L346, L348, L350, C8), on this device's own storage: the video in
  * the app's folder on the primary volume, `.part` until it is renamed, beside a `.nomedia`; the bookkeeping in filesDir,
  * its marker made with the row, its NZB and password while it needs them; the whole size allocated before the first byte;
- * reconcile at start; and a delete that a process dying part way through leaves for the next start to finish.
+ * reconcile at start, which keeps the season packs' copies' folder and sweeps it; and a delete that a process dying part
+ * way through leaves for the next start to finish.
  *
  * The places are checked on the real folders, with ids of the test's own, deleted after. Reconcile and the deletes run over
  * folders of the test's own, so they never meet the app's own downloads. Files are 16 MB at most.
@@ -332,6 +335,49 @@ class DownloadStorageDeviceTest {
         assertTrue("files beside the folders stay", File(files, "downloads/.trace").isFile)
         assertTrue(File(volume, "downloads/.nomedia").isFile)
     }
+
+    /**
+     * L394: reconcile tells the season packs' folder (`.packs`, a name no row's id can have) from a download's left over,
+     * and sweeps it: a copy a row of its season still to finish holds stays, one no row holds goes, and so does one whose
+     * process died before its meta, with its NZB and password. A folder no row has beside it goes, as before.
+     */
+    @Test
+    fun reconcileKeepsTheSeasonPacksFolderSweepsItAndDeletesAStrayFolder() = runBlocking<Unit> {
+        val storage = storage()
+        storage.add(row("queued"))
+        val held = pack("hl-s02-pack", season = 2)
+        val unheld = pack("hl-s03-pack", season = 3)
+        storage.packs.write(held, NZB, "harbor-pw")
+        storage.packs.write(unheld, NZB, "harbor-pw")
+        val halfWritten = storage.packs.folder(ReleaseKey.of("fake-indexer", "hl-s04-pack")).apply { mkdirs() }
+        File(halfWritten, DownloadNzbs.NZB).writeBytes(NZB)
+        File(halfWritten, DownloadNzbs.PASSWORD).writeText("harbor-pw")
+        File(files, "downloads/stray").mkdirs()
+        File(files, "downloads/stray/nzb").writeBytes(NZB)
+
+        storage.reconcile()
+
+        assertTrue(File(files, DownloadNzbs.PATH).isDirectory)
+        assertEquals(held, storage.packs.find(held.key)?.meta)
+        assertNull(storage.packs.find(unheld.key))
+        assertFalse(storage.packs.folder(unheld.key).exists())
+        assertFalse(halfWritten.exists())
+        assertEquals(setOf(storage.packs.folder(held.key).name), File(files, DownloadNzbs.PATH).list()!!.toSet())
+        assertFalse(File(files, "downloads/stray").exists())
+        assertTrue(File(files, "downloads/queued/.row").isFile)
+
+        // The season's last row gone: the next reconcile takes its copy too, and keeps the folder.
+        storage.delete("queued")
+        storage.reconcile()
+        assertNull(storage.packs.find(held.key))
+        assertEquals(emptyList<String>(), File(files, DownloadNzbs.PATH).list()!!.toList())
+    }
+
+    /** A season pack of Harbor Lights' [season], kept under its release's key. */
+    private fun pack(guid: String, season: Int) = DownloadNzbs.Meta(
+        ReleaseKey.of("fake-indexer", guid), "Harbor.Lights.S0$season.1080p.WEB.h264-PACK", DownloadCandidate("fake-indexer", guid, "Harbor.Lights.S0$season.1080p.WEB.h264-PACK", size = 8_400_000_000L),
+        900002, season, leads = true,
+    )
 
     /**
      * A finished download's file found gone as it plays (deleted from outside the app while it runs): reconcile's rule for
