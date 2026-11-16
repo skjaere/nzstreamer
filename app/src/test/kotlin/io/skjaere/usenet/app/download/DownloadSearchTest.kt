@@ -221,6 +221,27 @@ class DownloadSearchTest {
     }
 
     /**
+     * L434, L443: with nothing found while several indexers are limited, the row waits for the limit that ends first, of
+     * those answered now and those the walk keeps out, so the app's start queues it again once any of them may answer: an
+     * indexer held off for a long Retry-After never keeps the row waiting past another's 30 minutes.
+     */
+    @Test
+    fun `with several indexers limited the row waits for the limit that ends first`() = runBlocking<Unit> {
+        reports = listOf(
+            IndexerReport(A, null, error = NewznabError.ApiLimitReached("Request limit reached", Duration.ofHours(20))),
+            IndexerReport(B, null, error = NewznabError.ApiLimitReached("Request limit reached")),
+        )
+        assertEquals(LimitWait(B.id, LimitWait.Kind.Search, NOW, null), assertIs<DownloadSearch.Searched.Limited>(search().search(row())).wait)
+
+        // One kept out until an hour from now, beside one met now that says two hours: the one kept out.
+        reset()
+        val kept = LimitWait(A.id, LimitWait.Kind.Search, NOW - HOUR, NOW + HOUR)
+        limits.out = mapOf(A.id to kept)
+        reports = listOf(IndexerReport(B, null, error = NewznabError.ApiLimitReached("Request limit reached", Duration.ofHours(2))))
+        assertEquals(kept, assertIs<DownloadSearch.Searched.Limited>(search().search(row())).wait)
+    }
+
+    /**
      * L443, as the walk's memory keeps it (DownloadLimits): an indexer that answered a turn's search with its limit, with no
      * Retry-After (Newznab's 429 and 500), is left out of the walk's later searches for 30 minutes from its answer, so the
      * season's next row asks it nothing, and with nothing found elsewhere (an indexer failing beside it included) waits for

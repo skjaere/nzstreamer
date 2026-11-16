@@ -30,7 +30,8 @@ import java.time.Duration
  *   process that dies after it resolves from that list, with no second search.
  * - Found, and none fits: [Searched.WontFit].
  * - Nothing found while an indexer is limited, answering so now or kept out of the walk's searches ([Limits]): a wait
- *   ([Searched.Limited]), never the outage's backoff, which would ask it again every few seconds (L443).
+ *   ([Searched.Limited]) for the limit that ends first, never the outage's backoff, which would ask it again every few
+ *   seconds (L443).
  * - Nothing found, an indexer out of reach or failing (a 5xx): [Searched.Out], backed off from as a grab's outage is.
  * - Nothing found, every indexer answered: [Searched.NoneFound] (L398).
  *
@@ -119,9 +120,10 @@ class DownloadSearch(
         limited.forEach { (indexer, retryAfter) -> limits.answered(indexer, retryAfter, at) }
         val found = result?.playable.orEmpty().map { RankedItem(it.item, it.ranked) }.filter { it.item.infoHash == null && it.key !in leaveOut }
         if (found.isEmpty()) {
-            // A limit met now is the wait, its start now (L434); else one the walk keeps an indexer out for.
-            val wait = limited.firstOrNull()?.let { (indexer, retryAfter) -> LimitWait(indexer.id, LimitWait.Kind.Search, at, retryAfter?.let { at + it.toMillis() }) }
-                ?: keptOut.values.firstOrNull()
+            // The limit that ends first, of those met now, each its start now (L434), and those the walk keeps an indexer
+            // out for: the app's start queues the row again once any of them may answer.
+            val met = limited.map { (indexer, retryAfter) -> LimitWait(indexer.id, LimitWait.Kind.Search, at, retryAfter?.let { at + it.toMillis() }) }
+            val wait = (met + keptOut.values).minByOrNull { it.end() }
             return when {
                 wait != null -> {
                     log.info("download {}: nothing found, an indexer's search limit reached", row.id)
