@@ -1,17 +1,34 @@
 package io.skjaere.usenet.core
 
+import io.skjaere.nntp.YencHeaders
+import io.skjaere.nzbstreamer.enrichment.VerificationResult
+import io.skjaere.nzbstreamer.metadata.ExtractedMetadata
+import io.skjaere.nzbstreamer.metadata.NzbMetadataResponse
+import io.skjaere.nzbstreamer.metadata.PrepareResult
+import io.skjaere.nzbstreamer.nzb.FilenameResolver
+import io.skjaere.nzbstreamer.nzb.NzbDocument
+import io.skjaere.nzbstreamer.nzb.NzbParser
+import io.skjaere.nzbstreamer.stream.StreamableFile
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.io.TempDir
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
  * The pipeline's loop runs any source's attempt ([PlaySource]), not Usenet's alone: a second source, with steps of its own
  * in its own order, plays through it beside Usenet's releases, its failures moving on to the next release as theirs do,
- * and what it opens is probed as any release's file is.
+ * and what it opens is probed as any release's file is. And what Usenet's attempts keep in the store is each one's own: a
+ * play's and a download's of the same NZB let go of it apart (backlog 353).
  */
 class PlaySourceTest {
 
@@ -291,6 +308,102 @@ class PlaySourceTest {
         assertEquals(listOf("c", "b"), probedRoutes)
         assertEquals(listOf("a"), source.tried.getValue("routes/Copper.Crown.2019.2160p.WEB-DL"))
         assertEquals(listOf("c"), source.tried.getValue("routes/Copper.Crown.2019.1080p.BluRay"))
+    }
+
+    @TempDir
+    lateinit var storeDir: File
+
+    /** A release of one video in one article, as its indexer gives its NZB. */
+    private val oneVideo = buildString {
+        append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<nzb xmlns=\"http://www.newzbin.com/DTD/2003/nzb\">\n")
+        append("<file poster=\"fake\" date=\"0\" subject=\"&quot;Harbor.Lights.S01E02.1080p.WEB.h264-GRP.mkv&quot; yEnc (1/1)\">")
+        append("<groups><group>alt.binaries.fake</group></groups><segments><segment bytes=\"900\" number=\"1\">hl-s01e02/1@fake</segment></segments></file>\n")
+        append("</nzb>\n")
+    }.encodeToByteArray()
+
+    /** Opens an NZB as nzb-streamer does a release posted plain: each file a volume, and each volume a file to stream. */
+    private val plain = NzbPreparer(
+        object : PrepareBackend {
+            override suspend fun prepare(nzbBytes: ByteArray, password: String?): PrepareResult {
+                val volumes = NzbParser.parse(nzbBytes).files.onEach {
+                    it.yencHeaders = YencHeaders(line = 128, size = 900, name = checkNotNull(FilenameResolver.extractSubjectFilename(it.subject)))
+                }
+                val response = NzbMetadataResponse(volumes = volumes.map { it.yencHeaders!!.name }, obfuscated = false, entries = emptyList())
+                return PrepareResult.Success(ExtractedMetadata.Raw(response = response, orderedArchiveNzb = NzbDocument(files = volumes)))
+            }
+
+            override suspend fun streamableFiles(metadata: ExtractedMetadata) = metadata.orderedArchiveNzb.files.mapIndexed { i, volume ->
+                StreamableFile(volume.yencHeaders!!.name, 900, startVolumeIndex = i, startOffsetInVolume = 0, continuationHeaderSize = 0, endOfArchiveSize = 0)
+            }
+        },
+        Dispatchers.Unconfined,
+    )
+
+    /** Usenet's releases over [store], each the one video above, whole on the providers, probed by [probe]. */
+    private fun keeping(store: PreparedNzbStore, probe: TrackProbe) =
+        usenetPipeline(NzbSource { oneVideo }, { _, _ -> VerificationResult.Success }, plain, probe, dispatcher = Dispatchers.Unconfined, store = store)
+
+    private val release = PlayCandidate("fake/hl-s01e02", "Harbor.Lights.S01E02.1080p.WEB.h264-GRP", "Indexer A")
+
+    /**
+     * Backlog 353: a download's probe keeps the NZB to read it, a play of the same release keeps it too (its probe's keep
+     * and the coordinator's, for Resume), and the download's Resolve lets go of its own once it has read it. The play's
+     * entry stays, in memory and on disk, for its player and a Resume.
+     */
+    @Test
+    fun `a download letting go of an NZB a play keeps meanwhile leaves the play's entry`() = runTest {
+        val store = PreparedNzbStore(storeDir, ioDispatcher = Dispatchers.Unconfined)
+        val probe = TrackProbe { target ->
+            target.keep()
+            ProbeResult.Playable()
+        }
+        val download = assertIs<PipelineEvent.Succeeded>(keeping(store, probe).play(listOf(release)).last()).target
+        val id = PreparedNzb.idFor(oneVideo)
+        assertEquals(id, (download as UsenetTarget).prepared.id)
+
+        val play = assertIs<PipelineEvent.Succeeded>(keeping(store, probe).play(listOf(release)).last()).target
+        play.keep()
+        download.drop()
+        assertNotNull(store.get(id), "the play's NZB is gone from memory")
+        assertNotNull(store.stored(id), "the play's NZB is gone from disk")
+    }
+
+    /**
+     * The reverse: a play's probe keeps the NZB first, a download's probe of the same release keeps it to read it, and the
+     * play's attempt fails, which lets go of what it kept. The download's probe reads on from the store; once Resolve lets
+     * go too, nothing holds it, and it goes, as nothing kept it before.
+     */
+    @Test
+    fun `a play's failed attempt letting go of an NZB a download's probe reads leaves it until the download lets go`() = runTest {
+        val store = PreparedNzbStore(storeDir, ioDispatcher = Dispatchers.Unconfined)
+        val id = PreparedNzb.idFor(oneVideo)
+        val playKept = CompletableDeferred<Unit>()
+        val downloadKept = CompletableDeferred<Unit>()
+        val play = async {
+            keeping(store) { target ->
+                target.keep()
+                playKept.complete(Unit)
+                downloadKept.await()
+                ProbeResult.NoPlayableVideo(listOf("2160p Dolby Vision profile 5"))
+            }.play(listOf(release)).last()
+        }
+        playKept.await()
+        val resolve = async {
+            keeping(store) { target ->
+                target.keep()
+                downloadKept.complete(Unit)
+                // The play's attempt fails and lets go meanwhile: what the download's probe reads must still be there.
+                play.await()
+                if (store.get(id) == null) ProbeResult.Failed(UsenetError.Unknown("its NZB is gone from the store")) else ProbeResult.Playable()
+            }.play(listOf(release)).last()
+        }
+        assertIs<PipelineEvent.Exhausted>(play.await())
+        assertNotNull(store.get(id), "the download's probe lost its NZB")
+
+        val download = assertIs<PipelineEvent.Succeeded>(resolve.await()).target
+        download.drop()
+        assertNull(store.get(id))
+        assertNull(store.stored(id))
     }
 
     private companion object {

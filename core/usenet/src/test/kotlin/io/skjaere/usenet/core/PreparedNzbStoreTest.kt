@@ -222,22 +222,124 @@ class PreparedNzbStoreTest {
         assertEquals(2, store.storedFiles().count)
     }
 
-    /** A put says whether the store held the NZB before, an earlier process's included; remove lets go of it everywhere. */
+    /**
+     * A put says whether the store held the NZB before, an earlier process's included; the last holder of an entry a hold
+     * added lets go of it everywhere, its password with it.
+     */
     @Test
-    fun `a put says whether the NZB is new, and remove takes it out of memory and off disk`() = runBlocking<Unit> {
+    fun `a put says whether the NZB is new, and an entry a hold added goes everywhere with its last holder`() = runBlocking<Unit> {
         val earlier = leftOver("<a/>".toByteArray(), "A", modified = 1_000_000)
         val store = PreparedNzbStore(dir)
         assertFalse(store.put(nzb("<a/>".toByteArray(), "A"), "<a/>".toByteArray()), "an earlier process's is held")
         val bytes = "<b/>".toByteArray()
         val nzb = nzb(bytes, "B", password = "secret")
-        assertTrue(store.put(nzb, bytes))
-        assertFalse(store.put(nzb, bytes))
+        val hold = store.hold(nzb, bytes)
+        assertEquals(nzb, store.get(nzb.id))
+        assertEquals("secret", store.stored(nzb.id)?.third)
 
-        store.remove(nzb.id)
+        store.release(hold)
         assertNull(store.get(nzb.id))
         assertNull(store.stored(nzb.id))
         assertEquals(setOf("$earlier.nzb", "$earlier.title"), dir.list()?.toSet())
         assertTrue(store.put(nzb, bytes), "new again")
+        assertFalse(store.put(nzb, bytes))
+    }
+
+    /**
+     * Backlog 353: two holders of one entry, a play's and a download's. The first to let go leaves it to the other; the
+     * last takes it out, as a hold added it. A hold let go of twice counts once.
+     */
+    @Test
+    fun `an entry two hold stays until the last lets go`() = runBlocking<Unit> {
+        val store = PreparedNzbStore(dir)
+        val bytes = "<nzb>pack</nzb>".toByteArray()
+        val nzb = nzb(bytes, "Pack")
+        val first = store.hold(nzb, bytes)
+        val second = store.hold(nzb, bytes)
+
+        store.release(first)
+        assertEquals(nzb, store.get(nzb.id))
+        assertContentEquals(bytes, store.stored(nzb.id)?.first)
+        store.release(first)
+        assertEquals(nzb, store.get(nzb.id), "a hold let go of twice took another's")
+
+        store.release(second)
+        assertNull(store.get(nzb.id))
+        assertNull(store.stored(nzb.id))
+        assertEquals(emptyList(), dir.list()?.toList())
+    }
+
+    /**
+     * An entry a put kept, before a hold or while one holds it (Import's plain keep), or one an earlier process left, is
+     * the store's own: its holders letting go never take it out. It goes only as entries are evicted, as before.
+     */
+    @Test
+    fun `a hold never takes out an entry put before or since, or left by an earlier process`() = runBlocking<Unit> {
+        val earlier = leftOver("<a/>".toByteArray(), "A", modified = 1_000_000)
+        val store = PreparedNzbStore(dir)
+        val left = nzb("<a/>".toByteArray(), "A")
+        store.release(store.hold(left, "<a/>".toByteArray()))
+        assertEquals(left, store.get(earlier))
+        assertEquals("A", store.stored(earlier)?.second)
+
+        val putBytes = "<b/>".toByteArray()
+        val put = nzb(putBytes, "B")
+        store.put(put, putBytes)
+        val holds = listOf(store.hold(put, putBytes), store.hold(put, putBytes))
+        holds.forEach { store.release(it) }
+        assertEquals(put, store.get(put.id))
+        assertContentEquals(putBytes, store.stored(put.id)?.first)
+
+        val importedBytes = "<c/>".toByteArray()
+        val imported = nzb(importedBytes, "C")
+        val held = store.hold(imported, importedBytes)
+        store.put(imported, importedBytes)
+        store.release(held)
+        assertEquals(imported, store.get(imported.id))
+        assertContentEquals(importedBytes, store.stored(imported.id)?.first)
+    }
+
+    /**
+     * An entry evicted past maxEntries goes as before, held or not, and its holders' count with it: a hold of the same NZB
+     * after that is counted anew, as the one that added it, and a hold from before the eviction, let go of later, takes
+     * nothing from it.
+     */
+    @Test
+    fun `eviction drops an entry's holders, and a hold from before it takes nothing from a hold after`() = runBlocking<Unit> {
+        val store = PreparedNzbStore(dir, maxEntries = 2)
+        val bytes = "<a/>".toByteArray()
+        val nzb = nzb(bytes, "A")
+        // Put, then held: the store's own until it is evicted.
+        store.put(nzb, bytes)
+        val before = store.hold(nzb, bytes)
+        listOf("<b/>", "<c/>").map { it.toByteArray() }.forEach { b -> store.put(nzb(b, "Next"), b) }
+        assertNull(store.get(nzb.id), "kept past maxEntries")
+        assertNull(store.stored(nzb.id))
+
+        val after = store.hold(nzb, bytes)
+        store.release(before)
+        assertEquals(nzb, store.get(nzb.id), "a hold from before the eviction took a later one's")
+        assertContentEquals(bytes, store.stored(nzb.id)?.first)
+        store.release(after)
+        assertNull(store.get(nzb.id))
+        assertNull(store.stored(nzb.id))
+    }
+
+    /** A hold that can't write throws, as a put does, and holds nothing: the next hold of it is its only holder. */
+    @Test
+    fun `a hold that can't write throws and holds nothing`() = runBlocking<Unit> {
+        val store = PreparedNzbStore(dir)
+        dir.deleteRecursively()
+        dir.writeText("")
+        val bytes = "<a/>".toByteArray()
+        val nzb = nzb(bytes, "A")
+        assertFailsWith<IOException> { store.hold(nzb, bytes) }
+        assertNull(store.get(nzb.id))
+
+        dir.delete()
+        store.release(store.hold(nzb, bytes))
+        assertNull(store.get(nzb.id))
+        assertNull(store.stored(nzb.id))
     }
 
     @Test

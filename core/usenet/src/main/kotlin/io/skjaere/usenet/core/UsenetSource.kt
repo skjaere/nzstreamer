@@ -7,6 +7,7 @@ import io.skjaere.nzbstreamer.nzb.FilenameResolver
 import io.skjaere.nzbstreamer.nzb.NzbDocument
 import io.skjaere.nzbstreamer.nzb.NzbParser
 import org.slf4j.LoggerFactory
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -190,8 +191,9 @@ class UsenetSource(
 
 /**
  * [file] of [prepared], an NZB as its source fetched it ([nzbBytes]) with the archive [password] that came beside it, if
- * one did. Kept in [store], where the player's data source finds the NZB by its id ([UsenetUris]); dropped from it again
- * when its attempt fails, unless the store held it before.
+ * one did. Kept in [store], where the player's data source finds the NZB by its id ([UsenetUris]): each [keep] holds it
+ * there ([PreparedNzbStore.hold]), and [drop] lets go of this target's holds alone, so a play's and a download's of the
+ * same NZB never take it from each other (backlog 353). It goes once nothing holds it, unless the store held it before.
  */
 class UsenetTarget(
     override val candidate: PlayCandidate,
@@ -204,17 +206,15 @@ class UsenetTarget(
     override val listing: PreparedNzb get() = prepared
     override val uri: String get() = UsenetUris.of(prepared.id, file)
 
-    // Whether [keep] put the NZB in the store, which didn't hold it before: [drop] takes it out again.
-    @Volatile
-    private var added = false
+    // The holds [keep] took (the probe's, then the coordinator's for Resume): [drop] lets go of each.
+    private val holds = ConcurrentLinkedQueue<PreparedNzbStore.Hold>()
 
     override suspend fun keep() {
-        if (store.put(prepared, nzbBytes)) added = true
+        holds += store.hold(prepared, nzbBytes)
     }
 
     override suspend fun drop() {
-        if (added) store.remove(prepared.id)
-        added = false
+        generateSequence { holds.poll() }.forEach { store.release(it) }
     }
 
     override fun equals(other: Any?) = other is UsenetTarget && candidate == other.candidate && prepared.id == other.prepared.id && file == other.file

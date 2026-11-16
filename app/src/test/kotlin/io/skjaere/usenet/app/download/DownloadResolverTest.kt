@@ -29,6 +29,7 @@ import io.skjaere.usenet.core.ProviderConfig
 import io.skjaere.usenet.core.TrackProbe
 import io.skjaere.usenet.core.TriedReleases
 import io.skjaere.usenet.core.UsenetError
+import io.skjaere.usenet.core.UsenetTarget
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadDao
@@ -469,6 +470,32 @@ class DownloadResolverTest {
         resolver().resolve(ID)
         assertNotNull(store.get(kept.id))
         assertNotNull(store.stored(kept.id))
+    }
+
+    /**
+     * Backlog 353: a play of the same release keeps its NZB (its probe's keep and the coordinator's) while Resolve's probe
+     * reads it. Resolve's let-go takes off its own hold alone: the play's entry stays, for the player's data source and a
+     * Resume. Once the play lets go too, as a failed attempt does, nothing holds it, and it goes, as a hold added it.
+     */
+    @Test
+    fun `Resolve's let-go leaves an entry a play holds`() = runBlocking<Unit> {
+        row(single)
+        val id = PreparedNzb.idFor(single.nzb)
+        var play: UsenetTarget? = null
+        onProbe = {
+            val prepared = assertNotNull(store.get(id))
+            play = UsenetTarget(PlayCandidate(key(single), single.title, INDEXER), single.nzb, prepared, prepared.candidates.single(), store).apply {
+                keep()
+                keep()
+            }
+        }
+        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertNotNull(store.get(id), "the play's entry is gone from memory")
+        assertNotNull(store.stored(id), "the play's entry is gone from disk")
+
+        assertNotNull(play).drop()
+        assertNull(store.get(id))
+        assertNull(store.stored(id))
     }
 
     @Test

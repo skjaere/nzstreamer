@@ -333,7 +333,7 @@ interface PlaybackTarget {
 
     /**
      * Lets go of what [keep] kept, for an attempt that failed, unless it was kept before: a play's failed attempts take
-     * none of the places in a store that a Resume needs.
+     * none of the places in a store that a Resume needs. What another keeps meanwhile stays (backlog 353).
      */
     suspend fun drop() = Unit
 }

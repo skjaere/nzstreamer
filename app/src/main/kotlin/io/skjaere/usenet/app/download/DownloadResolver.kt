@@ -421,12 +421,16 @@ class DownloadResolver(
             log.info("download {}: resolved, {} bytes, {}", id, size, if (kept.oneVideo) "its release's one video" else "one of its release's videos")
             return Resolution.Ready(kept, target.prepared, target.file)
         } finally {
-            // The probe kept its NZB in the store to read it: out again, unless a play kept it there before (L383).
+            // The probe kept its NZB in the store to read it: out again, unless a play kept it there before or holds it
+            // now (L383, backlog 353).
             withContext(NonCancellable) { letGo(id, target) }
         }
     }
 
-    /** Takes [target]'s NZB out of the store where its probe put it there, not where a play kept it before (L383). */
+    /**
+     * Lets go of what [target]'s probe held in the store: its NZB goes where the probe put it there, not where a play kept
+     * it before (L383), nor while a play holds it too (backlog 353).
+     */
     private suspend fun letGo(id: String, target: PlaybackTarget) {
         try {
             target.drop()
