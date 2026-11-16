@@ -22,6 +22,7 @@ import io.skjaere.usenet.core.AttemptFailure
 import io.skjaere.usenet.core.AvailabilityBackend
 import io.skjaere.usenet.core.EngineAvailabilityBackend
 import io.skjaere.usenet.core.EnginePrepareBackend
+import io.skjaere.usenet.core.FetchException
 import io.skjaere.usenet.core.FetchedNzb
 import io.skjaere.usenet.core.FileCandidate
 import io.skjaere.usenet.core.FileChooser
@@ -104,10 +105,11 @@ import kotlin.time.Duration.Companion.seconds
  * releases. One whose release or file was chosen by hand is tried as chosen. A search that finds nothing fails it
  * (L398); an indexer's limit makes it wait, its limit's facts kept (L443); the indexers out of reach are backed off from.
  *
- * A grab refused for the indexer's download limit (L399) is no answer about the release and counts no try, as an outage
- * isn't: the indexer refuses its other releases alike, so the other indexers' releases are tried, within the tries. Where
- * the limit leaves releases untried and a try is left for them, the download waits as the limit, its facts kept for the
- * page ([LimitWait], L434), which ends the walk; Resume or the app's start after its end asks again.
+ * A grab refused for the indexer's download limit (L399), or for its API limit, which its searches meet too (L443), is no
+ * answer about the release and counts no try, as an outage isn't: the indexer refuses its other releases alike, so the
+ * other indexers' releases are tried, within the tries. Where the limit leaves releases untried and a try is left for
+ * them, the download waits as the limit, its facts kept for the page ([LimitWait], L434), which ends the walk; Resume or
+ * the app's start after its end asks again.
  *
  * A download resolved before whose process died isn't grabbed again: its NZB is prepared again from its own copy and its
  * file found by name. One whose size no longer matches starts again from its first byte.
@@ -159,6 +161,8 @@ class DownloadResolver(
     private val search: DownloadSearch,
     /** The release that played a title last, by its watch key, as the library remembers it: its file is picked (L402). */
     private val lastRelease: suspend (watchKey: String) -> RememberedRelease? = { null },
+    /** The walk's memory of the indexers' limits (L443): the runner's, which the turn's search reads too. */
+    private val limits: DownloadSearch.Limits = DownloadSearch.Limits.None,
 ) {
     /** What Resolve keeps in and asks of the download's places on the device: [DownloadStorage]'s ([of]). */
     interface Storage {
@@ -426,7 +430,7 @@ class DownloadResolver(
      * [candidates] not tried yet by [row], through the play's pipeline, as the class says, each named in its lines by
      * [named] (by key). One whose attempt had no answer (the providers out of reach, the attempt cut short, the volume away
      * as it was picked) is tried again first, from the NZB kept for it ([Storage.keepGrab]) and counted once: its grab is
-     * spent already. A grab refused for its indexer's download limit is counted out, and that limit kept in [limited].
+     * spent already. A grab refused for its indexer's download or API limit is counted out, and that limit kept in [limited].
      */
     private suspend fun attempt(row: Download, candidates: List<RankedItem>, named: (String) -> String, limited: MutableMap<String, LimitWait>): Pass {
         val id = row.id
@@ -452,8 +456,8 @@ class DownloadResolver(
         // Whether this attempt's last grab failed for an outage on the indexer's side (out of reach, a 5xx): no NZB came,
         // nothing spent. An attempt whose grab never reached an indexer (none set up for it) had no outage.
         var indexerOut = false
-        // The indexer that refused this attempt's last grab for its download limit (L399): no NZB came, nothing spent.
-        var limitedBy: IndexerConfig? = null
+        // The limit that refused this attempt's last grab (L399): no NZB came, nothing spent.
+        var limitedBy: LimitWait? = null
         val grabs = indexerGrab(newznab, configs) { indexer, item ->
             try {
                 fetchNzb(indexer, item).also {
@@ -462,10 +466,14 @@ class DownloadResolver(
                 }
             } catch (e: NewznabException) {
                 indexerOut = e.error.isOutage()
-                val limit = e.error is NewznabError.DownloadLimitReached
-                limitedBy = indexer.takeIf { limit }
-                // The limit's kind alone in the pipeline's lines, never what the indexer said of it (L405).
-                throw if (limit) NewznabException(NewznabError.DownloadLimitReached(DOWNLOAD_LIMIT)) else e
+                limitedBy = limitOf(indexer, e.error)
+                // The limit's kind alone in the pipeline's lines, never what the indexer said of it (L405). Either limit
+                // refuses the indexer's other releases alike, so the pipeline passes over them.
+                throw when (e.error) {
+                    is NewznabError.DownloadLimitReached -> NewznabException(NewznabError.DownloadLimitReached(DOWNLOAD_LIMIT))
+                    is NewznabError.ApiLimitReached -> FetchException(API_LIMIT, blocksIndexer = true)
+                    else -> e
+                }
             }
         }
         // Its lines, and the memory of tried releases', name each release by its place among the row's, never by its name.
@@ -561,12 +569,12 @@ class DownloadResolver(
                                         indexerOutages++
                                     }
                                     limit != null -> {
-                                        // Its indexer's download limit (L399): no answer about the release, and no try spent.
+                                        // Its indexer's limit (L399): no answer about the release, and no try spent.
                                         current?.let { counting = counting - it }
                                         count(id, counting)
                                         refusals++
-                                        limited[limit.id] = LimitWait(limit.id, LimitWait.Kind.Download, clock.now())
-                                        log.info("{}: its indexer's download limit reached, not counted", named(event.candidate.id))
+                                        limited[limit.indexerId] = limit
+                                        log.info("{}: its indexer's {} limit reached, not counted", named(event.candidate.id), limit.kind.name.lowercase())
                                     }
                                     else -> answer()
                                 }
@@ -700,6 +708,23 @@ class DownloadResolver(
         val context = downloadContext().let { it.copy(runtimeMinutes = row.runtimeMinutes ?: it.runtimeMinutes, seasonEpisodes = row.seasonEpisodes ?: it.seasonEpisodes) }
         val ranked = ReleaseRanker().rank(listOf(ReleaseFacts(key, candidate.title, candidate.size, candidate.passworded)), context).single()
         return ranked.reasons.none { it is ReleaseReason.AboveDownloadSize }
+    }
+
+    /**
+     * The limit [indexer] refused a grab with ([error]), as its row keeps it (L434): its download limit (a 501), with no end;
+     * its API limit (Newznab's 429 or 500, an HTTP 429), which its searches meet too, so it is the search limit, ending where
+     * it said, and the walk keeps the indexer out of its later searches until then (L443). Null for any other refusal.
+     */
+    private fun limitOf(indexer: IndexerConfig, error: NewznabError): LimitWait? {
+        val at = clock.now()
+        return when (error) {
+            is NewznabError.DownloadLimitReached -> LimitWait(indexer.id, LimitWait.Kind.Download, at)
+            is NewznabError.ApiLimitReached -> {
+                limits.answered(indexer, error.retryAfter, at)
+                LimitWait(indexer.id, LimitWait.Kind.Search, at, error.retryAfter?.let { at + it.toMillis() })
+            }
+            else -> null
+        }
     }
 
     /** The preparer of this resolve: a season pack's prepare held from an earlier row handed back for its NZB (L394). */
@@ -860,6 +885,7 @@ class DownloadResolver(
 
         /** A grab refused for its indexer's download limit, as a download's lines say it, whatever the indexer said (L405). */
         private const val DOWNLOAD_LIMIT = "Download limit reached"
+        private const val API_LIMIT = "API limit reached"
 
         /** A release that lacks articles: the play sheet's words for it, and the runner's for one given up as it was written. */
         const val INCOMPLETE = "Release incomplete"
@@ -987,6 +1013,7 @@ class DownloadResolver(
             downloadContext = container::downloadRankingContext,
             search = search,
             lastRelease = container.library::lastRelease,
+            limits = limits,
         )
     }
 }

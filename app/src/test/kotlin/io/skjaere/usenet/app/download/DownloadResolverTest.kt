@@ -76,6 +76,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.net.ConnectException
+import java.time.Duration
 import java.util.Collections
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -267,9 +268,17 @@ class DownloadResolverTest {
      * Resolve over these fakes, what is known of releases tried [tried], or, where [remembered] is given, the app's memory of
      * them as the app's Resolve reads it. Download size is [cap] GB an hour, none when null; a prepare held for a season's
      * copy is handed back as the app's Resolve hands it back ([PlayingPack.preparer]), over the same fake prepare. The turn's
-     * search finds [finds], each indexer saying [findReports], in the room the storage gives.
+     * search finds [finds], each indexer saying [findReports], in the room the storage gives; the walk's memory of limits is
+     * [limits].
      */
-    private fun resolver(attempts: Int = 10, tried: TriedReleases = TriedReleases.None, providers: Boolean? = true, remembered: MissingReleases? = null, cap: Int? = null) = DownloadResolver(
+    private fun resolver(
+        attempts: Int = 10,
+        tried: TriedReleases = TriedReleases.None,
+        providers: Boolean? = true,
+        remembered: MissingReleases? = null,
+        cap: Int? = null,
+        limits: DownloadSearch.Limits = DownloadSearch.Limits.None,
+    ) = DownloadResolver(
         downloads = dao,
         storage = storage,
         availability = availability,
@@ -296,12 +305,14 @@ class DownloadResolverTest {
             indexers = { listOf(indexer) },
             context = { context(cap) },
             space = { id -> storage.space(id) },
+            limits = limits,
             clock = { NOW },
         ),
         lastRelease = { key ->
             lastAsked += key
             lastPlayed[key]
         },
+        limits = limits,
     )
 
     /** [fake] as the finder gives it: as its indexer lists it, ranked first-come. */
@@ -1241,6 +1252,42 @@ class DownloadResolverTest {
         refusing.remove(OTHER_INDEXER)
         val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
         assertEquals(elsewhere.guid, ready.row.release?.guid)
+    }
+
+    /**
+     * L399, L443: a grab refused with the indexer's API limit (Newznab's 429 or 500, an HTTP 429) is its limit too, as that
+     * answer to a turn's search is: no try counted, the indexer's other releases not asked, another indexer's tried, and with
+     * none left elsewhere the download waits as the limit, its end where the indexer said, the walk told so that its later
+     * searches leave the indexer out. Its lines say the limit's kind, never what the indexer said.
+     */
+    @Test
+    fun `a grab refused for the indexer's API limit counts no try and waits as its limit, the walk keeping the indexer out`() = runBlocking<Unit> {
+        val five = (1..5).map { Fake("hl-api-$it", "Harbor.Lights.S02E04.720p.WEB.h264-GRP$it", listOf("a$it.mkv" to 800_000_000L)) }
+        row(*five.toTypedArray())
+        val memory = DownloadLimits()
+        indexerFails = NewznabError.ApiLimitReached("Request limit reached for plover.indexer.invalid", Duration.ofHours(2))
+        val from = LogBuffer.snapshot().lastOrNull()?.seq ?: 0L
+        assertEquals(DownloadHostRules.LIMIT_REACHED, assertIs<DownloadResolver.Resolution.Waiting>(resolver(limits = memory).resolve(ID)).reason)
+        assertEquals(DownloadState.Waiting, stored().state)
+        assertEquals(emptyList(), stored().tried)
+        val wait = LimitWait(INDEXER, LimitWait.Kind.Search, NOW, NOW + Duration.ofHours(2).toMillis())
+        assertEquals(wait, DownloadColumns.limitWait(stored()))
+        assertEquals(listOf(five[0].guid), asks, "the indexer's other releases aren't asked")
+        assertEquals(mapOf(INDEXER to wait), memory.keptOut(listOf(indexer, other), NOW + 60_000))
+        val lines = LogBuffer.snapshot().filter { it.seq > from }.map { it.message }
+        assertTrue(lines.any { "download $ID" in it && "search limit" in it }, lines.toString())
+        val secret = listOf("plover.indexer", "Request limit", indexer.name, "Harbor.Lights")
+        assertEquals(emptyList(), lines.filter { line -> secret.any { it in line } })
+
+        // With no Retry-After its end is the walk's guess; another indexer's release beside it is tried, and plays.
+        reset()
+        val elsewhere = Fake("hl-s02e04-other", "Harbor.Lights.S02E04.1080p.WEB.h264-WREN", listOf("o1.mkv" to 1_100_000_000L))
+        refusing[INDEXER] = NewznabError.ApiLimitReached("Request limit reached")
+        row(single, elsewhere, edit = otherIndexer(elsewhere))
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(elsewhere.guid, ready.row.release?.guid)
+        assertEquals(listOf(single.guid, elsewhere.guid), asks)
+        assertEquals(listOf(ReleaseKey.of(OTHER_INDEXER, elsewhere.guid)), stored().tried)
     }
 
     /**
