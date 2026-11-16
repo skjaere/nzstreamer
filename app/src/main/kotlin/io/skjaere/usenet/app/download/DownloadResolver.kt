@@ -265,6 +265,7 @@ class DownloadResolver(
             log.info("download {}: its season's pack first, from its copy", row.id)
             val reason = when (val pass = attempt(now, listOf(ranked(copy.meta.candidate)), { "download ${row.id}, its season's pack" }, limited)) {
                 is Pass.Ended -> return pass.resolution
+                Pass.Out -> return indexersOut(row.id)
                 is Pass.Failed -> pass.reason
                 Pass.PassedOver -> WONT_FIT
                 // Its copy gone meanwhile and its grab refused for the indexer's limit: nothing known of it, nothing counted.
@@ -283,7 +284,7 @@ class DownloadResolver(
                     ?: failed(row.id, packFailed ?: DownloadSheetModel.NO_RELEASE)
                 DownloadSearch.Searched.WontFit -> return failed(row.id, WONT_FIT)
                 is DownloadSearch.Searched.Limited -> return limitReached(row.id, found.wait)
-                DownloadSearch.Searched.Out -> return unreachable(row.id, UsenetError.Network(null), DownloadHostRules.CANT_REACH_INDEXER)
+                DownloadSearch.Searched.Out -> return indexersOut(row.id)
                 DownloadSearch.Searched.Unavailable -> return waiting(row.id, DownloadHostRules.STORAGE_UNAVAILABLE)
                 DownloadSearch.Searched.Gone -> return Resolution.Gone
             }
@@ -367,7 +368,9 @@ class DownloadResolver(
      * [row]'s candidates not tried yet, as the class says, run through the play's pipeline again past a release whose exact
      * size won't fit (L401): it fails "Won't fit" only once none is left that fits. Again past a grab refused for its
      * indexer's download limit (L399), the indexers [limited] so left out: their releases are untried, so where the others'
-     * fail with a try left, the download waits as the limit.
+     * fail with a try left, the download waits as the limit. So too where the others' indexers are out of reach then: the
+     * limit wins over the outage across the passes, as within one, never the outage's backoff, whose every retry would ask
+     * the limited indexer again (L443).
      */
     private suspend fun fromCandidates(row: Download, limited: MutableMap<String, LimitWait>): Resolution {
         var now = row
@@ -382,6 +385,11 @@ class DownloadResolver(
                     val left = tries() - (downloads.get(row.id) ?: return Resolution.Gone).tried.size
                     val wait = limited.values.lastOrNull()
                     return if (wait != null && left > 0) limitReached(row.id, wait) else failed(now.id, if (pass.none && passedOver) WONT_FIT else pass.reason)
+                }
+                Pass.Out -> {
+                    val left = tries() - (downloads.get(row.id) ?: return Resolution.Gone).tried.size
+                    val wait = limited.values.lastOrNull()
+                    return if (wait != null && left > 0) limitReached(row.id, wait) else indexersOut(row.id)
                 }
                 Pass.PassedOver -> passedOver = true
                 Pass.Limited -> Unit
@@ -400,6 +408,12 @@ class DownloadResolver(
 
         /** Its release passed every step, and its exact size won't fit the room now (L401): counted, nothing of it kept. */
         data object PassedOver : Pass
+
+        /**
+         * Releases left untried for want of their NZBs, their indexers out of reach or failing (a 5xx), nothing counted:
+         * backed off from and asked again once the wait is over (L382), unless an indexer's limit leaves its own untried.
+         */
+        data object Out : Pass
 
         /**
          * A grab refused for its indexer's download limit (L399), uncounted, left releases untried, and none it tried played:
@@ -722,7 +736,7 @@ class DownloadResolver(
         }
         if (limited) return Pass.Limited
         // Releases left untried for want of their NZBs: the indexers are asked again once the wait is over (L382).
-        if (indexerOut) return Pass.Ended(unreachable(id, UsenetError.Network(null), DownloadHostRules.CANT_REACH_INDEXER))
+        if (indexerOut) return Pass.Out
         log.info("download {}: {} release{} tried, the last failing as {}", id, counted.size, if (counted.size == 1) "" else "s", failure::class.simpleName)
         return Pass.Failed(reason(failure))
     }
@@ -737,6 +751,9 @@ class DownloadResolver(
         is UsenetError.ConnectionFailed, is UsenetError.Network, is UsenetError.Timeout -> unreachable(id, error, DownloadHostRules.CANT_REACH_PROVIDER)
         else -> null
     }
+
+    /** The indexers out of reach or failing: no NZB came, and the host backs off and resolves the download again (L382). */
+    private suspend fun indexersOut(id: String): Resolution = unreachable(id, UsenetError.Network(null), DownloadHostRules.CANT_REACH_INDEXER)
 
     /** Out of reach for [error], the row saying so in [words] while the host backs off and resolves it again. */
     private suspend fun unreachable(id: String, error: UsenetError, words: String): Resolution {

@@ -344,6 +344,11 @@ class DownloadResolverTest {
         return row
     }
 
+    /** [fakes]' releases listed by the second indexer, [other], rather than the first. */
+    private fun otherIndexer(vararg fakes: Fake): (Download) -> Download = { row ->
+        row.copy(candidates = row.candidates.map { c -> if (fakes.any { it.guid == c.guid }) c.copy(indexerId = OTHER_INDEXER) else c })
+    }
+
     private suspend fun stored(): Download = assertNotNull(dao.get(ID))
 
     private suspend fun stored(id: String): Download = assertNotNull(dao.get(id))
@@ -1184,9 +1189,6 @@ class DownloadResolverTest {
     @Test
     fun `one indexer's download limit leaves another indexer's releases to try, and waits for its own untried`() = runBlocking<Unit> {
         val elsewhere = Fake("hl-s02e04-other", "Harbor.Lights.S02E04.1080p.WEB.h264-WREN", listOf("o1.mkv" to 1_100_000_000L))
-        fun otherIndexer(vararg fakes: Fake): (Download) -> Download = { row ->
-            row.copy(candidates = row.candidates.map { c -> if (fakes.any { it.guid == c.guid }) c.copy(indexerId = OTHER_INDEXER) else c })
-        }
         refusing[INDEXER] = NewznabError.DownloadLimitReached("Download limit reached")
         row(single, elsewhere, edit = otherIndexer(elsewhere))
         val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
@@ -1212,6 +1214,33 @@ class DownloadResolverTest {
         assertEquals(DownloadResolver.INCOMPLETE, failed.reason)
         assertEquals(listOf(single.guid, brokenElsewhere.guid), asks)
         assertEquals(listOf(ReleaseKey.of(OTHER_INDEXER, brokenElsewhere.guid)), stored().tried)
+    }
+
+    /**
+     * L399, L443: one indexer's download limit, and the other indexer out of reach (a 5xx) as its release is grabbed, in the
+     * passes after the limit's too. The limit wins over the outage across the resolve, as within one pass: the download waits
+     * as the limit, its facts kept, rather than backing off, which would ask the limited indexer again at every retry for an
+     * hour. Nothing is counted, and the limited indexer is asked once.
+     */
+    @Test
+    fun `one indexer's download limit and another indexer out of reach wait as the limit, the limited one asked once`() = runBlocking<Unit> {
+        val elsewhere = Fake("hl-s02e04-other", "Harbor.Lights.S02E04.1080p.WEB.h264-WREN", listOf("o1.mkv" to 1_100_000_000L))
+        refusing[INDEXER] = NewznabError.DownloadLimitReached("Download limit reached")
+        refusing[OTHER_INDEXER] = NewznabError.Server("HTTP 503")
+        row(single, elsewhere, edit = otherIndexer(elsewhere))
+        val waiting = assertIs<DownloadResolver.Resolution.Waiting>(resolver().resolve(ID))
+        assertEquals(DownloadHostRules.LIMIT_REACHED, waiting.reason)
+        assertEquals(DownloadState.Waiting, stored().state)
+        assertEquals(DownloadHostRules.LIMIT_REACHED, stored().reason)
+        assertEquals(LimitWait(INDEXER, LimitWait.Kind.Download, NOW, null), DownloadColumns.limitWait(stored()))
+        assertEquals(emptyList(), stored().tried)
+        assertEquals(1, asks.count { it == single.guid }, asks.toString())
+        assertEquals(emptyList(), grabbed)
+
+        // The other indexer back while the limit lasts: its release is the download's.
+        refusing.remove(OTHER_INDEXER)
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(elsewhere.guid, ready.row.release?.guid)
     }
 
     /**
