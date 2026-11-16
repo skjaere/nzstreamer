@@ -498,9 +498,11 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      * Queues a season's episodes at once (W114, L392): one row each, at consecutive places at the queue's end in episode
      * order, under one lock and one read of the rows, each with its releases, what the first needs and its search facts,
      * not yet searched. An episode with a download still to finish, or downloaded, keeps that one and is passed over. One
-     * whose download failed has that row put back (L396), never a second: queued in the season's order from the new
-     * releases, its tries, reason, pick and limit's wait gone, its search facts the new ones. Its file and release stay, as
-     * Try again keeps them: Resolve goes on from them for the same release, and starts again for another.
+     * whose download failed has that row put back (L396), never a second: queued anew, now, in the season's order from the
+     * new releases, its tries, reason, pick and limit's wait gone, its search facts the new ones, and what it is of as the
+     * sheet has it now (TMDB's names, pictures, runtime and season's count, which may have come since it was first queued).
+     * Its file and release stay, as Try again keeps them: Resolve goes on from them for the same release, and starts again
+     * for another.
      *
      * All or none: every new row's folder and marker first, then every row written in one transaction ([Storage.addAll]);
      * a failure leaves none of it, and a process that dies between the two leaves folders for reconcile to delete. Returns
@@ -523,13 +525,16 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                     return@mapNotNull null
                 }
                 val failed = own.filter { it.state == DownloadState.Failed }.maxByOrNull { it.createdAt }
+                val target = item.target
                 val row = if (failed == null) {
-                    newRow(item.target, item.candidates, item.need, item.search, position, at).also { added += it }
+                    newRow(target, item.candidates, item.need, item.search, position, at).also { added += it }
                 } else {
                     failed.copy(
+                        title = target.title, subtitle = target.subtitle, seasonEpisodes = target.seasonEpisodes, episodeName = target.episodeName,
+                        year = target.year, runtimeMinutes = target.runtimeMinutes, posterPath = target.posterPath, stillPath = target.stillPath,
                         state = DownloadState.Queued, reason = null, position = position, candidates = item.candidates.take(MAX_CANDIDATES),
                         tried = emptyList(), indexerSize = item.need, search = item.search?.let(::searchText), pick = null, limitWait = null,
-                        updatedAt = at,
+                        createdAt = at, updatedAt = at,
                     ).also { putBack += it }
                 }
                 position++

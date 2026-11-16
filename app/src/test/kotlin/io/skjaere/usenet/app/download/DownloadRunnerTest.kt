@@ -880,8 +880,10 @@ class DownloadRunnerTest {
 
     /**
      * L396: a season queued again leaves an episode still to finish or downloaded as it is, and puts back the row of one
-     * that failed, never a second: queued in the season's order from its new releases, its tries, reason, pick and limit's
-     * wait gone, its search facts the new ones, not yet searched.
+     * that failed, never a second: queued anew in the season's order from its new releases, its tries, reason, pick and
+     * limit's wait gone, its search facts the new ones, not yet searched, and what it is of as the sheet has it now (TMDB's
+     * names, pictures, runtime and season's count may have come since it was first queued), queued now. The release and
+     * file it failed with stay, as Try again keeps them.
      */
     @Test
     fun `an episode still to finish or downloaded keeps its row, and a failed one's row is put back in the season's order`() = test {
@@ -889,18 +891,23 @@ class DownloadRunnerTest {
         val old = fake("hl-old")
         row(QUEUED, 1, 0, old) { it.copy(state = DownloadState.Waiting, reason = DownloadHostRules.CANT_REACH_PROVIDER) }
         row(A, 3, 1, old) { it.copy(state = DownloadState.Done, completedAt = NOW) }
+        val written = RememberedRelease(INDEXER, old.guid, old.title, null, 0, old.prepared.id, old.fileName, old.size)
         row(FAILED, 2, 2, old) {
             it.copy(
                 state = DownloadState.Failed, reason = DownloadResolver.NO_OTHER_RELEASE, tried = listOf(old.key), search = DownloadColumns.text(facts(2, searched = true)),
                 pick = DownloadColumns.text(DownloadPick(1, old.fileName, old.size, old.prepared.id)),
                 limitWait = DownloadColumns.text(LimitWait(INDEXER, LimitWait.Kind.Download, NOW)),
+                // Queued from its menu early in the season, as TMDB had it then.
+                seasonEpisodes = 3, createdAt = AT, release = written, fileName = old.fileName, size = old.size, safeOffset = CHUNK,
+                relativePath = storage.relativePath(FAILED, old.fileName),
             )
         }
         val still = stored(QUEUED)
         val done = stored(A)
         val (n1, n2, n3, n4) = listOf(fake("hl-n1"), fake("hl-n2"), fake("hl-n3"), fake("hl-n4"))
+        val now = target(2).copy(subtitle = "S02E02 · Low Water", runtimeMinutes = 44, posterPath = "/hl-poster.jpg", stillPath = "/hl-s02e02.jpg")
 
-        val queued = runner.enqueueAll(listOf(item(1, n1), item(2, n2), item(3, n3), item(4, n4)))
+        val queued = runner.enqueueAll(listOf(item(1, n1), DownloadRunner.QueueItem(now, listOf(n2.candidate), search = facts(2)), item(3, n3), item(4, n4)))
         assertEquals(listOf(2, 4), queued.map { it.episode })
         assertEquals(FAILED, queued.first().id)
         assertEquals(still, stored(QUEUED))
@@ -917,6 +924,12 @@ class DownloadRunnerTest {
         assertNull(back.limitWait)
         assertEquals(listOf(3L, 4L), queued.map { stored(it.id).position })
         assertEquals(listOf(QUEUED, FAILED, queued[1].id), order())
+        assertEquals(
+            listOf(now.title, now.subtitle, now.seasonEpisodes, now.episodeName, now.year, now.runtimeMinutes, now.posterPath, now.stillPath),
+            listOf(back.title, back.subtitle, back.seasonEpisodes, back.episodeName, back.year, back.runtimeMinutes, back.posterPath, back.stillPath),
+        )
+        assertEquals(NOW, back.createdAt, "queued now")
+        assertEquals(listOf(written, old.fileName, old.size, CHUNK, storage.relativePath(FAILED, old.fileName)), listOf(back.release, back.fileName, back.size, back.safeOffset, back.relativePath))
     }
 
     @Test
