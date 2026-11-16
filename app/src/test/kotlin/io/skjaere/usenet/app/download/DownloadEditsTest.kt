@@ -10,6 +10,7 @@ import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
 import io.skjaere.usenet.app.play.EpisodePlay
 import io.skjaere.usenet.app.search.MovieFind
 import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadPrefs
 import io.skjaere.usenet.data.DownloadState
@@ -92,6 +93,16 @@ class DownloadEditsTest {
         assertEquals(listOf("pause"), fakes.calls)
     }
 
+    @Test
+    fun `a choice's pick replaces the download's releases, counted at what the sheet reckoned it needs`() = runTest {
+        val fakes = PageFakes()
+        val row = episode("run", 4, DownloadState.Running)
+        fakes.rows[row.id] = row
+        val candidates = listOf(DownloadCandidate("idx-a", "pack", "Harbor.Lights.S02.1080p.WEB-DL.H.264-WREN", size = 11_200_000_000))
+        assertEquals(row, fakes.deps(backgroundScope).replacing(row).enqueue(DownloadTarget.episode(HL, "Harbor Lights", 2, 4), candidates, 1_400_000_000))
+        assertEquals(listOf("replace run 1400000000"), fakes.calls)
+    }
+
     internal companion object {
         const val HL = 990_617
 
@@ -133,7 +144,7 @@ internal class PageFakes {
         },
         undoRemove = { ids -> calls += "undo $ids" },
         move = { id, up -> calls += "move $id ${if (up) "up" else "down"}" },
-        replace = { id, _ -> calls += "replace $id" },
+        replace = { id, _, need -> calls += "replace $id $need" },
         retry = { id -> calls += "retry $id" },
         schedule = { cause -> calls += "schedule $cause" },
         lookUp = { show, season, episode ->
@@ -151,7 +162,7 @@ internal class PageFakes {
             prefs = { DownloadPrefs() },
             network = { NetworkNow(usable = true, unmetered = true, wifi = true) },
             askDue = { false },
-            enqueue = { _, _ -> null },
+            enqueue = { _, _, _ -> null },
             beforeDownload = {},
             schedule = {},
             outlive = outlive,

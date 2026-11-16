@@ -89,6 +89,9 @@ class DownloadSheetTest {
         val calls = mutableListOf<String>()
         val enqueued = mutableListOf<Pair<DownloadTarget, List<DownloadCandidate>>>()
 
+        /** What each download queued was counted as needing until it is resolved. */
+        val needs = mutableListOf<Long>()
+
         fun deps(outlive: CoroutineScope) = DownloadSheetDeps(
             findEpisode = { request, context ->
                 contexts += context
@@ -104,9 +107,10 @@ class DownloadSheetTest {
             prefs = { prefs },
             network = { network },
             askDue = { ask?.due() == true },
-            enqueue = { target, candidates ->
+            enqueue = { target, candidates, need ->
                 calls += "enqueue"
                 enqueued += target to candidates
+                needs += need
                 Download(
                     id = "queued", watchKey = target.watchKey, kind = target.kind, title = target.title, position = 0, candidates = candidates,
                     indexerSize = candidates.first().size, createdAt = 0, updatedAt = 0,
@@ -191,6 +195,17 @@ class DownloadSheetTest {
         assertEquals("1080p · WEB-DL · about 1.4 GB", DownloadSheetModel.quality(pick.best, pick.need))
         assertEquals("Season pack · this episode about 1.4 GB", pick.mode.packLine(pick.best))
         assertEquals(14 * GB, pick.mode.free, "the list checks the same space")
+    }
+
+    @Test
+    fun `a season pack is queued at this episode's share of it, its release keeping the indexer's size`() = runTest {
+        val fakes = Fakes().apply { finder = inOrder(nzb(PACK, 11_200_000_000)) }
+        val sheet = open(EPISODE, fakes)
+        sheet.download()
+        advanceUntilIdle()
+        // What the queue counts until Resolve has the file's own size: the next sheet's free space is reckoned after it.
+        assertEquals(listOf(1_400_000_000L), fakes.needs)
+        assertEquals(listOf(11_200_000_000L), fakes.enqueued.single().second.map { it.size })
     }
 
     @Test

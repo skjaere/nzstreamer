@@ -403,10 +403,12 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
     /**
      * Queues a download of [target] from [candidates], the releases the sheet ranked, in download order (up to 10 kept,
-     * L338): the row Queued at the queue's end, made with its bookkeeping folder and marker (L346). Scheduling its host is
-     * the visible app's (L335). Null on a TV.
+     * L338): the row Queued at the queue's end, made with its bookkeeping folder and marker (L346). Until Resolve has its
+     * file's own size the row counts [need], what the sheet reckoned the first needs (a season pack's share of its
+     * episode), so the space a queued download holds back is that, while its releases keep the indexer's sizes, which
+     * Resolve ranks by. Scheduling its host is the visible app's (L335). Null on a TV.
      */
-    suspend fun enqueue(target: DownloadTarget, candidates: List<DownloadCandidate>): Download? {
+    suspend fun enqueue(target: DownloadTarget, candidates: List<DownloadCandidate>, need: Long = candidates.first().size): Download? {
         if (!runs) return null
         require(candidates.isNotEmpty()) { "A download needs a release to try" }
         return changes.withLock {
@@ -417,7 +419,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 showTmdbId = target.showTmdbId, season = target.season, episode = target.episode, seasonEpisodes = target.seasonEpisodes,
                 episodeName = target.episodeName, movieTmdbId = target.movieTmdbId, year = target.year, runtimeMinutes = target.runtimeMinutes,
                 posterPath = target.posterPath, stillPath = target.stillPath, position = position, candidates = candidates.take(MAX_CANDIDATES),
-                indexerSize = candidates.first().size, createdAt = at, updatedAt = at,
+                indexerSize = need, createdAt = at, updatedAt = at,
             )
             deps.storage.add(row)
             log.info("download {}: queued at {}, {} release{} to try", row.id, position, row.candidates.size, if (row.candidates.size == 1) "" else "s")
@@ -595,9 +597,10 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /**
      * Replaces download [id]'s releases with [candidates] (Choose another release, Choose release): stopped where it runs,
      * what it wrote deleted and its room given back, its NZB gone, its tries, gaps and safe offset reset, and queued in its
-     * place, to resolve from the new ones; one that holds the queue (Paused, Stopped) holds it still, until Resume.
+     * place, to resolve from the new ones; one that holds the queue (Paused, Stopped) holds it still, until Resume. Until
+     * resolved it counts [need], as [enqueue] has it.
      */
-    suspend fun replace(id: String, candidates: List<DownloadCandidate>) {
+    suspend fun replace(id: String, candidates: List<DownloadCandidate>, need: Long = candidates.first().size) {
         if (!runs) return
         require(candidates.isNotEmpty()) { "A download needs a release to try" }
         changes.withLock {
@@ -613,7 +616,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                     row.copy(
                         state = if (held) row.state else DownloadState.Queued, reason = if (held) row.reason else null,
                         candidates = candidates.take(MAX_CANDIDATES), tried = emptyList(), oneVideo = false,
-                        release = null, fileName = null, size = null, indexerSize = candidates.first().size, safeOffset = 0, gaps = emptyList(),
+                        release = null, fileName = null, size = null, indexerSize = need, safeOffset = 0, gaps = emptyList(),
                         relativePath = null, video = null, tracks = null, completedAt = null, updatedAt = now(),
                     ),
                 )

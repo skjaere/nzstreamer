@@ -370,7 +370,7 @@ class DownloadsPageTest {
             prefs = { DownloadPrefs() },
             network = { NetworkNow(usable = true, unmetered = true, wifi = true) },
             askDue = { false },
-            enqueue = { _, candidates ->
+            enqueue = { _, candidates, _ ->
                 calls += "replace"
                 replaced += row.id to candidates
                 row

@@ -137,8 +137,9 @@ sealed interface DownloadSheetState {
 /**
  * What the Download sheet reads and asks: the app's ([of]), or a test's fakes. [findEpisode] and [findMovie] are the
  * searches, by the ranking [context] given; [space], [rows], [prefs] and [network] what the sheet says of the device;
- * [askDue] and [beforeDownload] Android's notification ask (L358); [enqueue] and [schedule] the download and its host. What
- * Download starts runs in [outlive], on the main thread, so the sheet's close never cuts it short.
+ * [askDue] and [beforeDownload] Android's notification ask (L358); [enqueue] and [schedule] the download, counted at what
+ * the sheet reckoned its pick needs until it is resolved, and its host. What Download starts runs in [outlive], on the
+ * main thread, so the sheet's close never cuts it short.
  */
 data class DownloadSheetDeps(
     val findEpisode: (request: EpisodeRequest, context: RankingContext) -> Flow<FinderEvent>,
@@ -153,7 +154,7 @@ data class DownloadSheetDeps(
     /** What the device's default network offers now ([AppContainer.defaultNetwork]): metered is mobile data. */
     val network: () -> NetworkNow,
     val askDue: suspend () -> Boolean,
-    val enqueue: suspend (DownloadTarget, List<DownloadCandidate>) -> Download?,
+    val enqueue: suspend (target: DownloadTarget, candidates: List<DownloadCandidate>, need: Long) -> Download?,
     val beforeDownload: suspend () -> Unit,
     val schedule: suspend () -> Unit,
     val outlive: CoroutineScope,
@@ -174,7 +175,7 @@ data class DownloadSheetDeps(
             prefs = { container.settings.downloads.first() },
             network = { container.defaultNetwork.now.value },
             askDue = { ask?.due() == true },
-            enqueue = { target, candidates -> container.downloads.enqueue(target, candidates) },
+            enqueue = { target, candidates, need -> container.downloads.enqueue(target, candidates, need) },
             beforeDownload = { ask?.beforeDownload() },
             schedule = { container.downloadHosts.schedule(ScheduleCause.Download) },
             outlive = container.appScope + Dispatchers.Main.immediate,
@@ -245,7 +246,8 @@ class DownloadSheetModel(private val request: DownloadRequest, private val deps:
         deps.outlive.launch {
             try {
                 val candidates = candidates(chosen, group, mode)
-                deps.enqueue(request.target, candidates) ?: return@launch
+                // Counted at what it needs here, a season pack's share of its episode, not the pack's whole size.
+                deps.enqueue(request.target, candidates, mode.need(chosen)) ?: return@launch
                 deps.beforeDownload()
                 deps.schedule()
             } catch (e: CancellationException) {

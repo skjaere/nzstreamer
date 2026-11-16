@@ -624,6 +624,21 @@ class DownloadRunnerTest {
     }
 
     @Test
+    fun `a download counts what the sheet reckoned it needs until it is resolved, its releases keeping the indexer's sizes`() = test {
+        val runner = runner()
+        // A season pack: the sheet reckons this episode's share of it; the pack's own size is what Resolve ranks by.
+        val pack = fake("hl-pack")
+        val id = assertNotNull(runner.enqueue(target(4), listOf(pack.candidate), need = 1_400)).id
+        assertEquals(1_400, stored(id).indexerSize)
+        assertEquals(listOf(SIZE.toLong()), stored(id).candidates.map { it.size })
+        // Another release chosen in its place: what that one needs.
+        runner.replace(id, listOf(fake("hl-x").candidate, pack.candidate), need = 1_200)
+        assertEquals(1_200, stored(id).indexerSize)
+        // Given nothing, its first release's size, as the indexer says it.
+        assertEquals(SIZE.toLong(), stored(runner.add(5, fake("hl-b"))).indexerSize)
+    }
+
+    @Test
     fun `replace of the running one deletes its file and gives its room back, in its place, the new releases resolved`() = test {
         val a = fake("hl-a")
         val x = fake("hl-x", size = SIZE / 2)
