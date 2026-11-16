@@ -544,18 +544,30 @@ class DownloadResolverTest {
         assertEquals(episodes.map { (_, e) -> "${pack.guid}/Harbor.Lights.S02E%02d.1080p.WEB.h264-GRP.mkv@fake".format(e) }, checked)
     }
 
-    /** A process that dies between two rows of a season loses the prepare it held, never the copy: no second grab. */
+    /**
+     * A process that dies between two rows of a season loses the prepare it held, never the copy: no second grab. The next
+     * row prepares the pack again from the copy and holds that prepare in its turn, so the season's later rows in the new
+     * process prepare nothing: one prepare per process.
+     */
     @Test
     fun `after a process death between a season's rows the next takes the pack from its copy, prepared again`() = runBlocking<Unit> {
         episode(E1, 1, pack, single)
         episode(E2, 2, pack, single)
+        episode(E3, 3, pack, single)
         assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E1))
         dao.setState(E1, DownloadState.Done, null, NOW)
 
         // A new process: the copies on disk, no prepare held.
         storage.packs = packs()
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E2))
+        val resolver = resolver()
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(E2))
         assertEquals("Harbor.Lights.S02E02.1080p.WEB.h264-GRP.mkv", ready.file.name)
+        assertEquals(listOf(pack.guid), grabbed)
+        assertEquals(listOf(pack.guid, pack.guid), opened.map { it.first })
+        dao.setState(E2, DownloadState.Done, null, NOW)
+
+        val third = assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(E3))
+        assertEquals("Harbor.Lights.S02E03.1080p.WEB.h264-GRP.mkv", third.file.name)
         assertEquals(listOf(pack.guid), grabbed)
         assertEquals(listOf(pack.guid, pack.guid), opened.map { it.first })
     }
