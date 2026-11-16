@@ -20,7 +20,7 @@ sealed interface ReleaseListMode {
      */
     class Download(val free: Long, val startsOnWifi: Boolean, val seasonEpisodes: Int? = null, val onDownload: (RankedItem) -> Unit) : ReleaseListMode {
         /** What [item] needs on this device for the one episode or film: a season pack's share where its season is counted, else its size. */
-        fun need(item: RankedItem): Long = packShare(item) ?: item.item.sizeBytes
+        fun need(item: RankedItem): Long = need(item, seasonEpisodes)
 
         fun fits(item: RankedItem): Boolean = need(item) <= free
 
@@ -53,6 +53,13 @@ sealed interface ReleaseListMode {
         private fun packShare(item: RankedItem): Long? = episodeShare(item.item.sizeBytes, item.parsed, seasonEpisodes)
 
         companion object {
+            /**
+             * What [item] needs on this device for one episode of a season of [seasonEpisodes] (TMDB's count), or for a film
+             * (none): a season pack's share of the episode where the season is counted, as the ranker reckons its bitrate, else
+             * its size.
+             */
+            fun need(item: RankedItem, seasonEpisodes: Int?): Long = episodeShare(item.item.sizeBytes, item.parsed, seasonEpisodes) ?: item.item.sizeBytes
+
             const val RANKED_FOR_DOWNLOADING = "Ranked for downloading: smaller first"
             const val STARTS_ON_WIFI = "Starts on Wi-Fi: this phone is on mobile data."
         }

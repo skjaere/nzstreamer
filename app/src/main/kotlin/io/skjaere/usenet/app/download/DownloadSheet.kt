@@ -144,10 +144,10 @@ internal fun DownloadSheetContent(request: DownloadRequest, model: DownloadSheet
     }
 }
 
-/** While it searches: the chooser's words, what the sheet does and doesn't do, and Cancel. */
+/** While it searches: the chooser's [words], what the sheet does and doesn't do, and Cancel. A season's sheet's too. */
 @Composable
-private fun Finding(onCancel: () -> Unit) {
-    GroupCard { StepRow(DownloadSheetModel.FINDING, StepStatus.Running()) }
+internal fun Finding(onCancel: () -> Unit, words: String = DownloadSheetModel.FINDING) {
+    GroupCard { StepRow(words, StepStatus.Running()) }
     SheetNote(DownloadSheetModel.FINDING_NOTE)
     Buttons { SecondaryButton("Cancel", onCancel, Modifier.fillMaxWidth()) }
 }
@@ -204,14 +204,21 @@ private fun WontFit(s: DownloadSheetState.WontFit, onChoose: () -> Unit, onStora
 
 /** Nothing to download: what each search of the indexers did, as the play sheet's no-release says it, and Close. */
 @Composable
-private fun NoRelease(s: DownloadSheetState.NoRelease, onClose: () -> Unit) {
+private fun NoRelease(s: DownloadSheetState.NoRelease, onClose: () -> Unit) = NoRelease(DownloadSheetModel.NO_RELEASE, s.stages, s.note, onClose)
+
+/**
+ * Nothing to download, under its [heading]: what each search of the indexers did ([stages]), as the play sheet's
+ * no-release says it, its [note], and Close alone. A season's sheet's too.
+ */
+@Composable
+internal fun NoRelease(heading: String, stages: List<Pair<String, String>>, note: String?, onClose: () -> Unit) {
     Text(
-        DownloadSheetModel.NO_RELEASE, style = AppType.cardTitle, color = colors.text,
+        heading, style = AppType.cardTitle, color = colors.text,
         modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 10.dp).semantics { heading() },
     )
-    if (s.stages.isNotEmpty()) {
+    if (stages.isNotEmpty()) {
         GroupCard {
-            s.stages.forEachIndexed { i, (what, outcome) ->
+            stages.forEachIndexed { i, (what, outcome) ->
                 if (i > 0) InsetDivider()
                 Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(what, style = AppType.body, color = colors.text)
@@ -220,7 +227,7 @@ private fun NoRelease(s: DownloadSheetState.NoRelease, onClose: () -> Unit) {
             }
         }
     }
-    s.note?.let { SheetNote(it) }
+    note?.let { SheetNote(it) }
     Buttons { SecondaryButton("Close", onClose, Modifier.fillMaxWidth()) }
 }
 
@@ -246,11 +253,11 @@ private fun Release(item: RankedItem, need: Long, mode: ReleaseListMode.Download
 
 /**
  * When it starts, by its dot: now in the good colour; on Wi-Fi, once online, on the charger or resumed in the warning
- * colour; after the queue muted.
+ * colour; after the queue muted. In [said]'s words: one download's, or a season's.
  */
 @Composable
-private fun StartLine(start: DownloadStart) {
-    val (words, sub) = DownloadSheetModel.start(start)
+internal fun StartLine(start: DownloadStart, said: Pair<String, String?> = DownloadSheetModel.start(start)) {
+    val (words, sub) = said
     val (color, dot) = when (start) {
         DownloadStart.Now -> colors.good to colors.goodDot
         DownloadStart.OnWifi, is DownloadStart.Online, DownloadStart.Charging, DownloadStart.Held -> colors.warn to colors.warnStrong
@@ -261,7 +268,7 @@ private fun StartLine(start: DownloadStart) {
 
 /** A line in the sheet's card: [lead] (a dot, or ✕) before its [words], a small muted [sub] under both; read as one. */
 @Composable
-private fun Line(words: String, color: Color = colors.text, lead: (@Composable () -> Unit)? = null, sub: String? = null, strong: Boolean = false) {
+internal fun Line(words: String, color: Color = colors.text, lead: (@Composable () -> Unit)? = null, sub: String? = null, strong: Boolean = false) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 11.dp).semantics(mergeDescendants = true) {}, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             // By the words' first line: as tall as it, at any font size.
@@ -274,7 +281,7 @@ private fun Line(words: String, color: Color = colors.text, lead: (@Composable (
 
 /** What Android asks next, on the first Download on Android 13 and later (L358), by the bell. */
 @Composable
-private fun AskLine() {
+internal fun AskLine() {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 10.dp).semantics(mergeDescendants = true) {},
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -286,12 +293,13 @@ private fun AskLine() {
 
 /** A small muted note, at the sheet's inset. */
 @Composable
-private fun SheetNote(text: String) {
+internal fun SheetNote(text: String) {
     Text(text, style = AppType.small, color = colors.muted, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
 }
 
+/** The sheet's buttons, one under another, 10 dp apart, at the sheet's inset. */
 @Composable
-private fun Buttons(content: @Composable () -> Unit) {
+internal fun Buttons(content: @Composable () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { content() }
 }
 
@@ -309,7 +317,7 @@ private fun DownloadReleaseList(group: ResultGroup, title: String, mode: Release
 }
 
 /** Android's page for making room (ACTION_MANAGE_STORAGE), or its storage settings where a phone has no such page. */
-private fun openStorageSettings(context: Context) {
+internal fun openStorageSettings(context: Context) {
     val pages = listOf(Intent(StorageManager.ACTION_MANAGE_STORAGE), Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS))
     for (page in pages) {
         if (context !is Activity) page.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

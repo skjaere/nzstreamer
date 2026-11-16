@@ -32,6 +32,7 @@ import io.skjaere.usenet.app.collection.SHOW_FOOTNOTE_PHONE
 import io.skjaere.usenet.app.collection.SHOW_FOOTNOTE_TV
 import io.skjaere.usenet.app.collection.ShowScreen
 import io.skjaere.usenet.app.collection.shortDate
+import io.skjaere.usenet.app.download.DownloadSheetModel
 import io.skjaere.usenet.app.download.DownloadsPageSeeds
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.assertWhole
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.episode
@@ -397,11 +398,11 @@ class ShowScreenDeviceTest {
 
     private val markSeason = hasText("Mark season watched") and hasClickAction()
 
-    /** Harbor Lights' page, its downloads seeded as [seeds] keeps them, and the season's Download's taps in [asked]. */
-    private fun harborPage(asked: MutableList<Int> = mutableListOf(), fontScale: Float = 1f) {
+    /** Harbor Lights' page, its downloads seeded as [seeds] keeps them. */
+    private fun harborPage(fontScale: Float = 1f) {
         seeding = true
         seeds.before()
-        compose.showScaled(context, fontScale) { ShowScreen(HARBOR, onBack = {}, onDownloadSeason = { asked += it }) }
+        compose.showScaled(context, fontScale) { ShowScreen(HARBOR, onBack = {}) }
         compose.waitUntil(15_000) { exists(hasText("Play S01E01", substring = true)) }
     }
 
@@ -437,12 +438,11 @@ class ShowScreenDeviceTest {
      * The season's Download (W114) before Mark season on its line, a button read by its words, counting the aired
      * episodes not yet downloaded: "Download season 1" while none has a download, then what is left as downloads come,
      * a failed one counted as not downloaded and the episode not aired yet left out; gone once nothing is left, Mark
-     * season staying. Its tap asks for the season's sheet.
+     * season staying. Its tap opens the season's Download sheet, which Back closes.
      */
     @Test
     fun theSeasonsDownloadCountsWhatIsLeftAndGoesOnceNothingIs() {
-        val asked = mutableListOf<Int>()
-        harborPage(asked)
+        harborPage()
         val season = seasonDownload("Download season 1")
         shown(season, "Download season 1")
         val download = compose.onNode(season).fetchSemanticsNode()
@@ -453,8 +453,12 @@ class ShowScreenDeviceTest {
         )
         assertEquals(Role.Button, download.config.getOrNull(SemanticsProperties.Role))
         compose.onNode(season).performClick()
-        compose.waitForIdle()
-        assertEquals(listOf(1), asked)
+        // The sheet, whichever state its search of the test's indexer has come to: its title, and Cancel or Close.
+        val sheetTitle = hasText(DownloadSheetModel.TITLE)
+        compose.waitUntil(10_000) { exists(sheetTitle) }
+        compose.waitUntil(30_000) { exists((hasText("Cancel") or hasText("Close")) and hasClickAction()) }
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+        compose.waitUntil(10_000) { !exists(sheetTitle) }
 
         // S01E01 downloaded, S01E02 queued, S01E03 failed: S01E03 to E05 are left, S01E06 not aired yet.
         seed(1, DownloadState.Done)
@@ -469,7 +473,6 @@ class ShowScreenDeviceTest {
         seed(3, DownloadState.Done, createdAt = 2)
         compose.waitUntil(10_000) { !exists(anySeasonDownload) }
         assertTrue(scrolledTo(markSeason))
-        assertEquals(listOf(1), asked)
     }
 
     /** The Specials chip has Mark season and no season Download (L397); each special keeps its ⋮ › Download. */

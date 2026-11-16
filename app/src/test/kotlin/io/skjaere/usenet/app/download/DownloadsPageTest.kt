@@ -388,6 +388,7 @@ class DownloadsPageTest {
                 films += movie
                 flowOf(MovieFind(null, emptyList(), context))
             },
+            findSeason = { _, _ -> error("No season's search from Choose release") },
             context = { DOWNLOADING },
             space = {
                 spaceFor += row.id
@@ -402,6 +403,7 @@ class DownloadsPageTest {
                 replaced += row.id to candidates
                 row
             },
+            enqueueAll = { error("No season queued from Choose release") },
             beforeDownload = {},
             schedule = { calls += "schedule" },
             outlive = scope,

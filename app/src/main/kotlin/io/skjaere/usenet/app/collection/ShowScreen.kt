@@ -41,7 +41,9 @@ import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.download.DownloadEntry
 import io.skjaere.usenet.app.download.DownloadRequest
 import io.skjaere.usenet.app.download.DownloadRunner
+import io.skjaere.usenet.app.download.DownloadSeasonSheet
 import io.skjaere.usenet.app.download.DownloadSheet
+import io.skjaere.usenet.app.download.SeasonDownloadRequest
 import io.skjaere.usenet.app.download.DownloadUndoBar
 import io.skjaere.usenet.app.download.TitleDownload
 import io.skjaere.usenet.app.download.TitleDownloadActions
@@ -156,6 +158,16 @@ class ShowViewModel(private val container: AppContainer, private val tmdbId: Int
 
     /** Episode [e]'s Download sheet's request, once TMDB has answered for the show: its names and season, its poster. */
     fun downloadRequest(e: Episode): DownloadRequest? = details.value?.let { d -> DownloadRequest.Episode(episodePlay(d, e), d.posterPath) }
+
+    /**
+     * Season [number]'s Download sheet's request (L433), from the page's own answer once the season is the one loaded: no
+     * TMDB call of its own. Null before then, and where the season has nothing left to download.
+     */
+    fun seasonDownloadRequest(number: Int): SeasonDownloadRequest? {
+        val d = details.value ?: return null
+        val s = (season.value as? SeasonState.Loaded)?.season?.takeIf { it.number == number } ?: return null
+        return seasonDownloadRequest(d, s.episodes, today.value, downloads.value)
+    }
 
     init {
         // TMDB's language too: TmdbClient keeps each language's answers apart, so a page kept across a change asks in the new one.
@@ -272,10 +284,10 @@ class ShowViewModel(private val container: AppContainer, private val tmdbId: Int
  * Living room TV" and that episode's row "On Living room TV · 32:10": either opens the remote ([onRemote]). On a phone or
  * tablet each episode's row says its download and its ⋮ offers it (L356, L384): Download opens the Download sheet, and a
  * download removed shows the Undo bar at the page's foot (L379). There a season's aired episodes not yet downloaded have
- * a Download of their own before Mark season (W114), which asks for the season's [onDownloadSeason].
+ * a Download of their own before Mark season (W114), which opens the season's Download sheet.
  */
 @Composable
-fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDownloadSeason: (season: Int) -> Unit = {}) {
+fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}) {
     val container = LocalContext.current.container
     val vm: ShowViewModel = viewModel(key = "show-$tmdbId") { ShowViewModel(container, tmdbId) }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.shown() }
@@ -294,8 +306,9 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDow
     val usenet by vm.usenet.collectAsStateWithLifecycle()
     // Downloads on phones and tablets alone, in their layout (L369): a TV's rows, and a phone's layout on a TV, have none.
     val downloadsHere = downloadsShown()
-    // The episode whose Download sheet is up, by season and number.
+    // The episode whose Download sheet is up, by season and number; the season whose Download sheet is.
     var downloading by rememberSaveable { mutableStateOf<Pair<Int, Int>?>(null) }
+    var downloadingSeason by rememberSaveable { mutableStateOf<Int?>(null) }
     // What the Undo bar covers of the page's foot while it shows: the list ends above it.
     var undoRoom by remember { mutableStateOf(0.dp) }
     val onDownloadEntry = downloadEntryHandler(vm.downloadActions, onDownload = {}, onDownloads = null)
@@ -382,7 +395,7 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDow
                     val mark = seasonMark(s.episodes, { d.hasAired(it, today) }, { states[it.season to it.episode]?.watched == true })
                     // As the episodes' ⋮ offers Download: where downloads show and a Usenet provider is on (L369, L370).
                     val download = if (downloadsHere && usenet) seasonDownload(s.episodes, { d.hasAired(it, today) }, downloads) else null
-                    item { SeasonButtons(mark, download, onMark = { vm.mark(mark.episodes, mark.watched) }, onDownload = { onDownloadSeason(s.number) }) }
+                    item { SeasonButtons(mark, download, onMark = { vm.mark(mark.episodes, mark.watched) }, onDownload = { downloadingSeason = s.number }) }
                     item {
                         GroupCard {
                             s.episodes.forEachIndexed { i, e ->
@@ -416,6 +429,18 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDow
     downloading?.let { (seasonNumber, number) ->
         val e = (season as? SeasonState.Loaded)?.season?.episodes?.firstOrNull { it.season == seasonNumber && it.episode == number }
         e?.let(vm::downloadRequest)?.let { request -> DownloadSheet(request, onClose = { downloading = null }) }
+    }
+    // The season's Download sheet, over the page, once its season is there (again, after a rotation). Its request is
+    // built once as it opens: what it counts apart changes as it queues, and a new request would search again.
+    downloadingSeason?.let { number ->
+        val loaded = (season as? SeasonState.Loaded)?.season?.takeIf { it.number == number }
+        val request = remember(number, d != null, loaded) { vm.seasonDownloadRequest(number) }
+        if (request != null) {
+            DownloadSeasonSheet(request, onClose = { downloadingSeason = null })
+        } else if (d != null && loaded != null) {
+            // Nothing left to download in it since: no sheet.
+            LaunchedEffect(number) { downloadingSeason = null }
+        }
     }
 }
 
@@ -524,6 +549,27 @@ internal fun seasonDownload(episodes: List<Episode>, aired: (Episode) -> Boolean
         left.size == airedOnes.size -> SeasonDownload("Download season ${left.first().season}", left)
         else -> SeasonDownload("Download ${left.size} episode${if (left.size == 1) "" else "s"}", left)
     }
+}
+
+/**
+ * The season's Download sheet's request (L433), from the page's own answer: [show], one season's [episodes] and the
+ * page's [downloads]. It lists what the season's Download counts ([seasonDownload]), each as the page plays it, a failed
+ * one said so (L396); the others are counted apart by their download, downloaded or still to finish, else as not aired
+ * on [today]. Null where there is no button: nothing left, or the Specials chip (L397).
+ */
+internal fun seasonDownloadRequest(show: ShowDetails, episodes: List<Episode>, today: LocalDate, downloads: Map<Pair<Int, Int>, TitleDownload>): SeasonDownloadRequest? {
+    val listed = seasonDownload(episodes, { show.hasAired(it, today) }, downloads)?.episodes ?: return null
+    val state = { e: Episode -> downloads[e.season to e.episode]?.state }
+    val apart = episodes.filter { it !in listed }
+    return SeasonDownloadRequest(
+        title = show.name,
+        season = listed.first().season,
+        episodes = listed.map { SeasonDownloadRequest.Listed(EpisodePlay.of(show, it, today), failedBefore = state(it) == DownloadState.Failed) },
+        downloaded = apart.filter { state(it) == DownloadState.Done }.map { it.episode },
+        queued = apart.filter { state(it) in DownloadRunner.GOING_ON }.map { it.episode },
+        notAired = apart.filter { state(it) != DownloadState.Done && state(it) !in DownloadRunner.GOING_ON }.map { it.episode },
+        posterPath = show.posterPath,
+    )
 }
 
 /** Choose release's "Choose file" on [item]'s row: its Play for [ep], asking which of its videos is the episode. */

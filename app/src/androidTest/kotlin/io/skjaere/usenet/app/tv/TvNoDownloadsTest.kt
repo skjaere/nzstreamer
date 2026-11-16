@@ -38,10 +38,13 @@ import io.skjaere.usenet.app.download.DownloadJobService
 import io.skjaere.usenet.app.download.DownloadMarkLook
 import io.skjaere.usenet.app.download.DownloadNotice
 import io.skjaere.usenet.app.download.DownloadRequest
+import io.skjaere.usenet.app.download.DownloadSeasonSheet
+import io.skjaere.usenet.app.download.SeasonDownloadRequest
 import io.skjaere.usenet.app.download.ServicePlan
 import io.skjaere.usenet.app.download.TitleDownloadActions
 import io.skjaere.usenet.app.download.movieDownloadSlot
 import io.skjaere.usenet.app.home.HomeScreen
+import io.skjaere.usenet.app.play.EpisodePlay
 import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.search.MovieHeroCard
 import io.skjaere.usenet.app.search.TitleInfo
@@ -88,8 +91,9 @@ import java.time.LocalDate
 /**
  * Downloads never show on a TV (W108, L369), on a real one (tv36), with a finished download and a queued one in its table
  * as a test leaves them (nothing on a TV makes one): in the TV's layout and in a phone's layout on it,
- * - the episode ⋮ offers no download, and no row has a mark or a line; the season has no Download beside Mark season;
- *   the Movie page and Search's movie card have no Download; Home has no Downloads section; Settings has no Downloads row;
+ * - the episode ⋮ offers no download, and no row has a mark or a line; the season has no Download beside Mark season,
+ *   and its sheet, asked for all the same, ends at once; the Movie page and Search's movie card have no Download; Home
+ *   has no Downloads section; Settings has no Downloads row;
  * - and once the app is opened as a TV opens it, no permission is asked, no job waits in the downloads' namespace or as
  *   the service's watchdog, the boot receiver is off, and no download notification shows; the rows are as they were.
  *
@@ -174,6 +178,45 @@ class TvNoDownloadsTest {
                 node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { SEASON_DOWNLOAD.matches(it.text) }
             }
             assertFalse("a season's Download on the $form layout's Show page", exists(seasonDownload))
+        }
+    }
+
+    /**
+     * A season's Download sheet, which nothing on a TV opens, asked for all the same: it ends at once in either layout,
+     * showing nothing and queuing nothing (L441). The TV's indexers are off meanwhile, so a sheet that didn't end would
+     * search none, and on again after.
+     */
+    @Test
+    fun aSeasonsDownloadSheetEndsAtOnceInEitherLayout() = runBlocking<Unit> {
+        val request = SeasonDownloadRequest(
+            "Harbor Lights", 1, listOf(1, 3).map { n -> SeasonDownloadRequest.Listed(EpisodePlay.of(harborLights, season.episodes[n - 1], today)) },
+            downloaded = listOf(2), posterPath = null,
+        )
+        val enabled = container.settings.indexers.first().filter { it.enabled }.map { it.id }
+        try {
+            enabled.forEach { container.settings.setIndexerEnabled(it, false) }
+            var closes = 0
+            var open by mutableStateOf(false)
+            compose.setContent {
+                AppTheme(formFactor = layout) {
+                    if (open) {
+                        DownloadSeasonSheet(request, onClose = {
+                            closes++
+                            open = false
+                        })
+                    }
+                }
+            }
+            listOf(FormFactor.Tv, FormFactor.Phone).forEach { form ->
+                layout = form
+                open = true
+                compose.waitUntil(5_000) { !open }
+                noDownloads("where the $form layout's season sheet was asked for")
+            }
+            assertEquals(2, closes)
+            assertEquals("the show's rows as seeded", seeded.filter { it.showTmdbId == SHOW }.map { it.id }, container.data.downloads.all().first().filter { it.showTmdbId == SHOW }.map { it.id })
+        } finally {
+            enabled.forEach { container.settings.setIndexerEnabled(it, true) }
         }
     }
 

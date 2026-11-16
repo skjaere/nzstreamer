@@ -1,6 +1,8 @@
 package io.skjaere.usenet.app.collection
 
+import io.skjaere.usenet.app.download.SeasonDownloadRequest
 import io.skjaere.usenet.app.download.TitleDownload
+import io.skjaere.usenet.app.play.EpisodePlay
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.metadata.Episode
 import io.skjaere.usenet.metadata.EpisodeSummary
@@ -17,7 +19,8 @@ import kotlin.test.assertNull
  * The season's mark button goes by its aired episodes, but marking the season unwatched takes an
  * episode watched before TMDB's date too (releases often come early), so the season starts over.
  * The season's Download beside it goes by its aired episodes too: those with no download, or only a
- * failed one, are what it queues; none left, it isn't there; never on the Specials chip (L397).
+ * failed one, are what it queues; none left, it isn't there; never on the Specials chip (L397). Its sheet's request lists
+ * those, from the page's own answer, and counts the others apart (L433).
  */
 class SeasonMarkTest {
     private val today = LocalDate.of(2026, 10, 15)
@@ -122,6 +125,39 @@ class SeasonMarkTest {
         )
         assertNull(seasonDownload(specials, ::aired, emptyMap()))
         assertNull(seasonDownload(specials, ::aired, mapOf((0 to 1) to TitleDownload("dl-s", DownloadState.Done))))
+    }
+
+    /** Harbor Lights as the Show page's answer has it: season 2 of 8 episodes, its poster. */
+    private val harbor = show.copy(
+        tmdbId = 990417, name = "Harbor Lights", year = 2021, posterPath = "/poster.jpg", seasons = listOf(SeasonSummary(2, "Season 2", 8, null, null)),
+        lastEpisode = EpisodeSummary(2, 6, null, today.minusDays(28)), nextEpisode = EpisodeSummary(2, 7, null, today.plusDays(7)),
+    )
+
+    @Test
+    fun `the season's sheet lists what its Download queues, and counts the others apart by their downloads, else by their airing`() {
+        // S02E07 downloaded before TMDB's date says so; S02E08, not aired and not downloaded, hasn't aired.
+        val states = listOf(1 to DownloadState.Done, 2 to DownloadState.Running, 3 to DownloadState.Failed, 7 to DownloadState.Done)
+        val request = seasonDownloadRequest(harbor, season2, today, download(states))!!
+        assertEquals(seasonDownload(season2, ::aired, download(states))!!.episodes.numbers, request.episodes.map { it.play.episode }, "what the button counts")
+        assertEquals(listOf(3, 4, 5, 6), request.episodes.map { it.play.episode })
+        assertEquals(listOf(true, false, false, false), request.episodes.map { it.failedBefore })
+        assertEquals(listOf(1, 7), request.downloaded)
+        assertEquals(listOf(2), request.queued)
+        assertEquals(listOf(8), request.notAired)
+        assertEquals(
+            SeasonDownloadRequest(
+                "Harbor Lights", 2, (3..6).map { n -> SeasonDownloadRequest.Listed(EpisodePlay.of(harbor, season2[n - 1], today), failedBefore = n == 3) },
+                downloaded = listOf(1, 7), queued = listOf(2), notAired = listOf(8), posterPath = "/poster.jpg",
+            ),
+            request,
+            "each episode's play as the page's answer gives it, its season's count among it",
+        )
+        assertEquals(8, request.episodes.first().play.seasonEpisodes)
+
+        // Nothing left: no sheet, as no button; never for Specials.
+        assertNull(seasonDownloadRequest(harbor, season2, today, download(all(DownloadState.Done))))
+        val specials = listOf(Episode(0, 1, "A Harbor Christmas", null, today.minusDays(300), 44, null))
+        assertNull(seasonDownloadRequest(harbor, specials, today, emptyMap()))
     }
 
     @Test

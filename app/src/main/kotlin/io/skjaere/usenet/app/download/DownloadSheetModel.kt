@@ -30,6 +30,8 @@ import io.skjaere.usenet.search.FinderEvent
 import io.skjaere.usenet.search.GroupKind
 import io.skjaere.usenet.search.RankedItem
 import io.skjaere.usenet.search.ResultGroup
+import io.skjaere.usenet.search.SeasonFind
+import io.skjaere.usenet.search.SeasonRequest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -151,16 +153,18 @@ sealed interface DownloadSheetState {
 }
 
 /**
- * What the Download sheet reads and asks: the app's ([of]), or a test's fakes. [findEpisode] and [findMovie] are the
- * searches, by the ranking [context] given; [space], [rows], [prefs], [network] and [charging] what the sheet says of the
- * device;
- * [askDue] and [beforeDownload] Android's notification ask (L358); [enqueue] and [schedule] the download, counted at what
- * the sheet reckoned its pick needs until it is resolved, and its host. What Download starts runs in [outlive], on the
- * main thread, so the sheet's close never cuts it short.
+ * What a Download sheet reads and asks, one title's or a season's: the app's ([of]), or a test's fakes. [findEpisode],
+ * [findMovie] and [findSeason] are the searches, by the ranking [context] given; [space], [rows], [prefs], [network] and
+ * [charging] what the sheet says of the device; [askDue] and [beforeDownload] Android's notification ask (L358);
+ * [enqueue] (one title) or [enqueueAll] (a season's episodes) and [schedule] the download, counted at what the sheet
+ * reckoned its pick needs until it is resolved, and its host. What Download starts runs in [outlive], on the main
+ * thread, so the sheet's close never cuts it short.
  */
 data class DownloadSheetDeps(
     val findEpisode: (request: EpisodeRequest, context: RankingContext) -> Flow<FinderEvent>,
     val findMovie: (movie: MovieTarget, context: RankingContext) -> Flow<MovieFind>,
+    /** A season's one search for its episodes ([io.skjaere.usenet.search.EpisodeReleaseFinder.findSeason], L393). */
+    val findSeason: suspend (request: SeasonRequest, context: RankingContext) -> SeasonFind,
     /** What a download's releases are ranked by ([AppContainer.downloadRankingContext]). */
     val context: suspend () -> RankingContext,
     /** What downloads take of the primary volume and what a new one may take; null while it isn't there. */
@@ -174,6 +178,8 @@ data class DownloadSheetDeps(
     val charging: () -> Boolean = { true },
     val askDue: suspend () -> Boolean,
     val enqueue: suspend (target: DownloadTarget, candidates: List<DownloadCandidate>, need: Long) -> Download?,
+    /** A season's episodes queued at once, in episode order ([DownloadRunner.enqueueAll]): the rows queued, none on a TV. */
+    val enqueueAll: suspend (items: List<DownloadRunner.QueueItem>) -> List<Download>,
     val beforeDownload: suspend () -> Unit,
     val schedule: suspend () -> Unit,
     val outlive: CoroutineScope,
@@ -181,14 +187,15 @@ data class DownloadSheetDeps(
 ) {
     companion object {
         /**
-         * The app's: the episode finder and the film's search over the Usenet indexers alone (L370), ranked for downloading;
-         * the downloads' storage, rows and settings; the default network and the charger, as [context] reads it; the
-         * activity's notification [ask] (none outside MainActivity); the runner's queue, and its host scheduled from the
-         * visible app (L335).
+         * The app's: the episode finder, the film's search and the season's over the Usenet indexers alone (L370), ranked
+         * for downloading; the downloads' storage, rows and settings; the default network and the charger, as [context]
+         * reads it; the activity's notification [ask] (none outside MainActivity); the runner's queue, and its host
+         * scheduled from the visible app (L335).
          */
         fun of(container: AppContainer, ask: NotificationAsk?, context: Context) = DownloadSheetDeps(
             findEpisode = { request, context -> flow { emitAll(container.finder.find(request, usenetIndexers(container), context)) } },
             findMovie = { movie, context -> findMovieReleases(container, movie, indexers = { usenetIndexers(container) }, context = { context }) },
+            findSeason = { request, context -> container.finder.findSeason(request, usenetIndexers(container), context) },
             context = { container.downloadRankingContext() },
             space = { container.downloadStorage.space() },
             rows = { container.data.downloads.all().first() },
@@ -198,6 +205,7 @@ data class DownloadSheetDeps(
             askDue = { ask?.due() == true },
             // One per title: a sheet restored after its Download, or a second tap, has the download already queued.
             enqueue = { target, candidates, need -> container.downloads.enqueue(target, candidates, need, onePerTitle = true) },
+            enqueueAll = { items -> container.downloads.enqueueAll(items) },
             beforeDownload = { ask?.beforeDownload() },
             schedule = { container.downloadHosts.schedule(ScheduleCause.Download) },
             outlive = container.appScope + Dispatchers.Main.immediate,
@@ -356,24 +364,11 @@ class DownloadSheetModel(private val request: DownloadRequest, private val deps:
         val free = space?.free ?: 0
         val prefs = deps.prefs()
         val network = deps.network()
-        // Mobile data: a connection, metered, while downloads wait for Wi-Fi or Ethernet (W110); none at all isn't.
-        val startsOnWifi = prefs.unmeteredOnly && network.usable && !network.unmetered
         lateinit var mode: ReleaseListMode.Download
-        mode = ReleaseListMode.Download(free, startsOnWifi, request.seasonEpisodes) { item -> download(item, group, mode) }
+        mode = ReleaseListMode.Download(free, startsOnWifi(prefs, network), request.seasonEpisodes) { item -> download(item, group, mode) }
         val need = mode.need(best)
         if (!mode.fits(best)) return DownloadSheetState.WontFit(group, best, mode, need, free, space?.queued ?: 0, space?.queuedDownloads ?: 0, deps.askDue())
-        val rows = deps.rows()
-        val ahead = rows.count { it.state in AHEAD }
-        // What holds it first: a hold only Resume ends, then the network and the charger the host waits for, then the queue.
-        val start = when {
-            rows.any { it.state in HOLDS } -> DownloadStart.Held
-            !network.usable -> DownloadStart.Online(prefs.unmeteredOnly)
-            startsOnWifi -> DownloadStart.OnWifi
-            prefs.whileCharging && !deps.charging() -> DownloadStart.Charging
-            ahead > 0 -> DownloadStart.AfterQueue(ahead)
-            else -> DownloadStart.Now
-        }
-        return DownloadSheetState.Pick(group, best, mode, need, free, start, deps.askDue())
+        return DownloadSheetState.Pick(group, best, mode, need, free, startOf(deps.rows(), prefs, network, deps.charging), deps.askDue())
     }
 
     companion object {
@@ -410,7 +405,31 @@ class DownloadSheetModel(private val request: DownloadRequest, private val deps:
             (listOf(chosen) + group.playable.filter { it.key != chosen.key && mode.fits(it) })
                 .filter { it.item.infoHash == null }
                 .take(KEPT)
-                .map { DownloadCandidate(it.item.indexerId, it.item.guid, it.item.title, it.item.downloadTemplate, it.item.sizeBytes, it.item.passworded) }
+                .map(::candidate)
+
+        /** [item] as a download keeps it to try: its indexer and guid, its name, its link as the app keeps it, its size, passworded. */
+        internal fun candidate(item: RankedItem): DownloadCandidate =
+            DownloadCandidate(item.item.indexerId, item.item.guid, item.item.title, item.item.downloadTemplate, item.item.sizeBytes, item.item.passworded)
+
+        /**
+         * When a download queued now starts, as the host would start it: what holds it first, a hold only Resume ends (L380),
+         * then the network and the charger the host waits for (L335, L365), then the queue's [rows] still to go on ahead of
+         * it, one at a time (L337).
+         */
+        internal fun startOf(rows: List<Download>, prefs: DownloadPrefs, network: NetworkNow, charging: () -> Boolean): DownloadStart {
+            val ahead = rows.count { it.state in AHEAD }
+            return when {
+                rows.any { it.state in HOLDS } -> DownloadStart.Held
+                !network.usable -> DownloadStart.Online(prefs.unmeteredOnly)
+                startsOnWifi(prefs, network) -> DownloadStart.OnWifi
+                prefs.whileCharging && !charging() -> DownloadStart.Charging
+                ahead > 0 -> DownloadStart.AfterQueue(ahead)
+                else -> DownloadStart.Now
+            }
+        }
+
+        /** Mobile data: a connection, metered, while downloads wait for Wi-Fi or Ethernet (W110); none at all isn't. */
+        private fun startsOnWifi(prefs: DownloadPrefs, network: NetworkNow): Boolean = prefs.unmeteredOnly && network.usable && !network.unmetered
 
         /** "1080p · WEB-DL · HEVC · about 1.2 GB": the release's quality as its name says it, and what it needs here. */
         fun quality(item: RankedItem, need: Long): String = (qualityParts(item) + "about ${formatSize(need)}").joinToString(" · ")
