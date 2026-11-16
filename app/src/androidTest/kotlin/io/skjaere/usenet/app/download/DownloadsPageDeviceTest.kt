@@ -101,8 +101,9 @@ class DownloadsPageDeviceTest {
 
     @Test
     fun pauseHoldsTheQueueAndResumeLetsItGoOnFromItsHead() {
-        val running = seeds.seed(episode(2, 4, DownloadState.Running, size = 3_100_000_000, file = true, written = 1_302_000_000, position = 0))
-        val queued = seeds.seed(episode(2, 5, DownloadState.Queued, position = 1))
+        // The running one behind a queued one by position (one moved up past it meanwhile): Resume puts it back at the head.
+        val queued = seeds.seed(episode(2, 5, DownloadState.Queued, position = 0))
+        val running = seeds.seed(episode(2, 4, DownloadState.Running, size = 3_100_000_000, file = true, written = 1_302_000_000, position = 1))
         show(seeds.deps())
         compose.waitFor(hasContentDescription(DownloadsPage.PAUSE))
         compose.onNode(hasContentDescription(DownloadsPage.PAUSE)).performClick()
