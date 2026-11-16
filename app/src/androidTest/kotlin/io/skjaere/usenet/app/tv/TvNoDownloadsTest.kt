@@ -9,6 +9,8 @@ import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
@@ -86,8 +88,8 @@ import java.time.LocalDate
 /**
  * Downloads never show on a TV (W108, L369), on a real one (tv36), with a finished download and a queued one in its table
  * as a test leaves them (nothing on a TV makes one): in the TV's layout and in a phone's layout on it,
- * - the episode ⋮ offers no download, and no row has a mark or a line; the Movie page and Search's movie card have no
- *   Download; Home has no Downloads section; Settings has no Downloads row;
+ * - the episode ⋮ offers no download, and no row has a mark or a line; the season has no Download beside Mark season;
+ *   the Movie page and Search's movie card have no Download; Home has no Downloads section; Settings has no Downloads row;
  * - and once the app is opened as a TV opens it, no permission is asked, no job waits in the downloads' namespace or as
  *   the service's watchdog, the boot receiver is off, and no download notification shows; the rows are as they were.
  *
@@ -157,6 +159,22 @@ class TvNoDownloadsTest {
         }
         // A phone's layout on a TV says what its ⋮ does there: no download.
         assertFalse(exists(hasText(SHOW_FOOTNOTE_PHONE)))
+    }
+
+    /** Season 1 has two aired episodes not downloaded, which a phone's Show page offers as "Download 2 episodes" (L441). */
+    @Test
+    fun theShowPagesSeasonHasNoDownloadInEitherLayout() {
+        compose.setContent { AppTheme(formFactor = layout) { ShowScreen(SHOW, onBack = {}) } }
+        listOf(FormFactor.Tv, FormFactor.Phone).forEach { form ->
+            layout = form
+            val mark = hasText("Mark season watched")
+            compose.waitUntil(15_000) { exists(mark) }
+            runCatching { compose.onNode(hasScrollAction()).performScrollToNode(mark) }
+            val seasonDownload = SemanticsMatcher("a season's Download") { node ->
+                node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { SEASON_DOWNLOAD.matches(it.text) }
+            }
+            assertFalse("a season's Download on the $form layout's Show page", exists(seasonDownload))
+        }
     }
 
     @Test
@@ -300,6 +318,9 @@ class TvNoDownloadsTest {
 
         /** Long enough for the start's schedule, and anything that would follow it, to have run. */
         const val SETTLE_MILLIS = 3_000L
+
+        /** A season's Download's words on a phone's Show page, whatever it counts. */
+        val SEASON_DOWNLOAD = Regex("""Download (season \d+|\d+ episodes?)""")
 
         /** What a download says anywhere it shows: the entries, the button's and the rows' words, the section's. */
         val DOWNLOAD_WORDS = listOf(

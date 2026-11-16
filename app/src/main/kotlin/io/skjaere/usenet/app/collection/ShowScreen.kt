@@ -4,6 +4,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -38,6 +40,7 @@ import io.skjaere.usenet.app.TmdbLookup
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.download.DownloadEntry
 import io.skjaere.usenet.app.download.DownloadRequest
+import io.skjaere.usenet.app.download.DownloadRunner
 import io.skjaere.usenet.app.download.DownloadSheet
 import io.skjaere.usenet.app.download.DownloadUndoBar
 import io.skjaere.usenet.app.download.TitleDownload
@@ -79,6 +82,7 @@ import io.skjaere.usenet.app.ui.rememberReturnFocus
 import io.skjaere.usenet.app.ui.colors
 import io.skjaere.usenet.core.FilePicker
 import io.skjaere.usenet.data.CollectedShow
+import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.Removal
 import io.skjaere.usenet.data.EpisodeRef as DataEpisodeRef
 import io.skjaere.usenet.data.WatchKind
@@ -267,10 +271,11 @@ class ShowViewModel(private val container: AppContainer, private val tmdbId: Int
  * A show's page. While the TV plays one of its episodes for this phone (W14), its button reads "Playing S02E04 · 32:10 on
  * Living room TV" and that episode's row "On Living room TV · 32:10": either opens the remote ([onRemote]). On a phone or
  * tablet each episode's row says its download and its ⋮ offers it (L356, L384): Download opens the Download sheet, and a
- * download removed shows the Undo bar at the page's foot (L379).
+ * download removed shows the Undo bar at the page's foot (L379). There a season's aired episodes not yet downloaded have
+ * a Download of their own before Mark season (W114), which asks for the season's [onDownloadSeason].
  */
 @Composable
-fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}) {
+fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDownloadSeason: (season: Int) -> Unit = {}) {
     val container = LocalContext.current.container
     val vm: ShowViewModel = viewModel(key = "show-$tmdbId") { ShowViewModel(container, tmdbId) }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.shown() }
@@ -375,13 +380,9 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}) {
                     item { CircularProgressIndicator(Modifier.padding(24.dp), color = colors.accent) }
                 } else {
                     val mark = seasonMark(s.episodes, { d.hasAired(it, today) }, { states[it.season to it.episode]?.watched == true })
-                    item {
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.End) {
-                            TextButton(onClick = { vm.mark(mark.episodes, mark.watched) }, enabled = mark.enabled) {
-                                Text(mark.label, style = AppType.secondary, color = colors.accent)
-                            }
-                        }
-                    }
+                    // As the episodes' ⋮ offers Download: where downloads show and a Usenet provider is on (L369, L370).
+                    val download = if (downloadsHere && usenet) seasonDownload(s.episodes, { d.hasAired(it, today) }, downloads) else null
+                    item { SeasonButtons(mark, download, onMark = { vm.mark(mark.episodes, mark.watched) }, onDownload = { onDownloadSeason(s.number) }) }
                     item {
                         GroupCard {
                             s.episodes.forEachIndexed { i, e ->
@@ -415,6 +416,21 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}) {
     downloading?.let { (seasonNumber, number) ->
         val e = (season as? SeasonState.Loaded)?.season?.episodes?.firstOrNull { it.season == seasonNumber && it.episode == number }
         e?.let(vm::downloadRequest)?.let { request -> DownloadSheet(request, onClose = { downloading = null }) }
+    }
+}
+
+/**
+ * The season's buttons at the end of the line under its chips: its Download where there is one ([download]), then Mark
+ * season. Where the two don't fit on one line, as at twice the text size, they go on two, Download first.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SeasonButtons(mark: SeasonMark, download: SeasonDownload?, onMark: () -> Unit, onDownload: () -> Unit) {
+    FlowRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.End) {
+        download?.let { TextButton(onClick = onDownload) { Text(it.label, style = AppType.secondary, color = colors.accent) } }
+        TextButton(onClick = onMark, enabled = mark.enabled) {
+            Text(mark.label, style = AppType.secondary, color = colors.accent)
+        }
     }
 }
 
@@ -487,6 +503,27 @@ internal fun seasonMark(episodes: List<Episode>, aired: (Episode) -> Boolean, wa
     val allWatched = airedOnes.isNotEmpty() && airedOnes.all(watched)
     return if (allWatched) SeasonMark("Mark season unwatched", true, episodes.filter(watched), watched = false)
     else SeasonMark("Mark season watched", airedOnes.isNotEmpty(), airedOnes, watched = true)
+}
+
+/** The season's Download button, before its mark: its [label], and the aired [episodes] it is for, in order. */
+internal data class SeasonDownload(val label: String, val episodes: List<Episode>)
+
+/**
+ * The season's Download (W114): its aired episodes not yet downloaded, as Mark season goes by the aired ones. One with a
+ * download still to finish, or done, counts as downloaded; one whose download failed doesn't, as the season's Download
+ * puts that one back (L396). "Download season 2" while none of the aired ones has a download, then "Download 5 episodes"
+ * or "Download 1 episode"; with none left, no button. Never on the Specials chip, TMDB's season 0: indexers number
+ * specials their own way, and each keeps its own ⋮ › Download (L397).
+ */
+internal fun seasonDownload(episodes: List<Episode>, aired: (Episode) -> Boolean, downloads: Map<Pair<Int, Int>, TitleDownload>): SeasonDownload? {
+    if (episodes.any { it.season == 0 }) return null
+    val airedOnes = episodes.filter(aired)
+    val left = airedOnes.filterNot { e -> downloads[e.season to e.episode]?.state.let { it == DownloadState.Done || it in DownloadRunner.GOING_ON } }
+    return when {
+        left.isEmpty() -> null
+        left.size == airedOnes.size -> SeasonDownload("Download season ${left.first().season}", left)
+        else -> SeasonDownload("Download ${left.size} episode${if (left.size == 1) "" else "s"}", left)
+    }
 }
 
 /** Choose release's "Choose file" on [item]'s row: its Play for [ep], asking which of its videos is the episode. */

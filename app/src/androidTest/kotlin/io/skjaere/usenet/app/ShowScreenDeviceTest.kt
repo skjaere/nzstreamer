@@ -4,21 +4,27 @@ import android.os.SystemClock
 import android.view.KeyEvent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -26,6 +32,10 @@ import io.skjaere.usenet.app.collection.SHOW_FOOTNOTE_PHONE
 import io.skjaere.usenet.app.collection.SHOW_FOOTNOTE_TV
 import io.skjaere.usenet.app.collection.ShowScreen
 import io.skjaere.usenet.app.collection.shortDate
+import io.skjaere.usenet.app.download.DownloadsPageSeeds
+import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.assertWhole
+import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.episode
+import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.show as showScaled
 import io.skjaere.usenet.app.play.PlayState
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.ui.AppColors
@@ -34,6 +44,7 @@ import io.skjaere.usenet.app.ui.FormFactor
 import io.skjaere.usenet.core.FetchException
 import io.skjaere.usenet.core.NzbSource
 import io.skjaere.usenet.data.AppSettings
+import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.EpisodeRef
 import io.skjaere.usenet.data.WatchTitle
 import io.skjaere.usenet.metadata.Episode
@@ -67,6 +78,10 @@ import kotlin.math.abs
  * The app's indexers are swapped for the fake one (`mock-seed indexer`, 10.0.2.2:8089), which has
  * nothing for the show, so a play ends on the no-release sheet's state; no NZB is grabbed. The
  * settings are put back as they were, and episodes a test marks watched unwatched again.
+ *
+ * The season's Download is shown on an invented show of its own, Harbor Lights, whose downloads the
+ * cases seed through the app's storage, as the Downloads page's tests do, and delete after with their
+ * folders; the downloads' jobs are cancelled before and after.
  */
 @RunWith(AndroidJUnit4::class)
 class ShowScreenDeviceTest {
@@ -74,7 +89,10 @@ class ShowScreenDeviceTest {
     val compose = createComposeRule()
 
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
-    private val container = instrumentation.targetContext.container
+    private val context = instrumentation.targetContext
+    private val container = context.container
+    private val seeds = DownloadsPageSeeds(context, container)
+    private var seeding = false
     private var tmdb: FakeTmdb? = null
     private val realSource = PlaybackCoordinator.nzbSource
     private val grabs = AtomicInteger()
@@ -98,6 +116,30 @@ class ShowScreenDeviceTest {
         ),
     )
 
+    /**
+     * Harbor Lights: season 1's S01E01 to E05 aired, S01E06 airs next week; two specials aired. Its own id, so no other
+     * test's downloads are its.
+     */
+    private val harbor = ShowDetails(
+        HARBOR, "Harbor Lights", null, 2021, null, null, null, "Returning Series", true, 50,
+        listOf(SeasonSummary(0, "Specials", 2, today.minusDays(300), null), SeasonSummary(1, null, 6, today.minusDays(60), null)),
+        lastEpisode = EpisodeSummary(1, 5, "The Breakwater", today.minusDays(32)), nextEpisode = EpisodeSummary(1, 6, "Fog Signal", today.plusDays(7)),
+        ids = ExternalIds(),
+    )
+
+    private val harborSeasons = mapOf(
+        0 to Season(
+            HARBOR, 0, "Specials", null,
+            listOf(Episode(0, 1, "A Harbor Christmas", null, today.minusDays(300), 44, null), Episode(0, 2, "The Pilot's Logbook", null, today.minusDays(100), 12, null)),
+        ),
+        1 to Season(
+            HARBOR, 1, null, null,
+            listOf("First Light", "Pilot Boat", "The Sandbar", "Brine", "The Breakwater", "Fog Signal").mapIndexed { i, name ->
+                Episode(1, i + 1, name, null, if (i < 5) today.minusDays(60L - 7 * i) else today.plusDays(7), 50, null)
+            },
+        ),
+    )
+
     @Before
     fun setUp() {
         val reachable = runCatching { Socket().use { it.connect(InetSocketAddress("10.0.2.2", 8089), 2_000) } }.isSuccess
@@ -108,13 +150,23 @@ class ShowScreenDeviceTest {
             container.settings.indexers.first().filter { it.enabled }.forEach { container.settings.setIndexerEnabled(it.id, false) }
             container.settings.saveIndexer(FAKE_INDEXER, "Fake (show test)", "http://10.0.2.2:8089", "fake-indexer-key")
         }
-        tmdb = FakeTmdb(shows = mapOf(SHOW to show), seasons = { id, _ -> if (id == SHOW) season else null })
+        tmdb = FakeTmdb(
+            shows = mapOf(SHOW to show, HARBOR to harbor),
+            seasons = { id, n ->
+                when (id) {
+                    SHOW -> season
+                    HARBOR -> harborSeasons[n]
+                    else -> null
+                }
+            },
+        )
         PlaybackCoordinator.nzbSource = { _, _ -> NzbSource { grabs.incrementAndGet(); throw FetchException("Not to be fetched", stopsAll = true) } }
     }
 
     @After
     fun restore() {
         instrumentation.setInTouchMode(true)
+        if (seeding) seeds.after()
         tmdb?.close()
         PlaybackCoordinator.nzbSource = realSource
         container.playback.cancel()
@@ -335,6 +387,121 @@ class ShowScreenDeviceTest {
         assertFalse("a TV's words", exists(hasText(SHOW_FOOTNOTE_TV)))
     }
 
+    /** The season's Download, by its words: a button. */
+    private fun seasonDownload(words: String) = hasText(words) and hasClickAction()
+
+    /** Any season's Download, whatever it counts. */
+    private val anySeasonDownload = SemanticsMatcher("a season's Download") { node ->
+        node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { SEASON_DOWNLOAD.matches(it.text) }
+    } and hasClickAction()
+
+    private val markSeason = hasText("Mark season watched") and hasClickAction()
+
+    /** Harbor Lights' page, its downloads seeded as [seeds] keeps them, and the season's Download's taps in [asked]. */
+    private fun harborPage(asked: MutableList<Int> = mutableListOf(), fontScale: Float = 1f) {
+        seeding = true
+        seeds.before()
+        compose.showScaled(context, fontScale) { ShowScreen(HARBOR, onBack = {}, onDownloadSeason = { asked += it }) }
+        compose.waitUntil(15_000) { exists(hasText("Play S01E01", substring = true)) }
+    }
+
+    /** The page's own list, not the season chips' row, which scrolls too. */
+    private val pageList = hasScrollToNodeAction() and SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange)
+
+    /** Scrolls the page's list to [matcher] where it has it, and says whether it shows. */
+    private fun scrolledTo(matcher: SemanticsMatcher): Boolean {
+        compose.waitForIdle()
+        try {
+            compose.onNode(pageList).performScrollToNode(matcher)
+        } catch (e: AssertionError) {
+            // Not in the list, or not yet.
+        }
+        return exists(matcher)
+    }
+
+    /** Waits for [matcher] in the page's list, scrolled to it. */
+    private fun shown(matcher: SemanticsMatcher, what: String) {
+        try {
+            compose.waitUntil(10_000) { scrolledTo(matcher) }
+        } catch (e: ComposeTimeoutException) {
+            throw AssertionError("never shown: $what", e)
+        }
+    }
+
+    /** S01E[number]'s download of Harbor Lights, as the runner keeps one in [state]; the latest added where [createdAt] is. */
+    private fun seed(number: Int, state: DownloadState, createdAt: Long = 1) {
+        seeds.seed(episode(1, number, state, show = HARBOR, title = "Harbor Lights").copy(createdAt = createdAt))
+    }
+
+    /**
+     * The season's Download (W114) before Mark season on its line, a button read by its words, counting the aired
+     * episodes not yet downloaded: "Download season 1" while none has a download, then what is left as downloads come,
+     * a failed one counted as not downloaded and the episode not aired yet left out; gone once nothing is left, Mark
+     * season staying. Its tap asks for the season's sheet.
+     */
+    @Test
+    fun theSeasonsDownloadCountsWhatIsLeftAndGoesOnceNothingIs() {
+        val asked = mutableListOf<Int>()
+        harborPage(asked)
+        val season = seasonDownload("Download season 1")
+        shown(season, "Download season 1")
+        val download = compose.onNode(season).fetchSemanticsNode()
+        val mark = compose.onNode(markSeason).fetchSemanticsNode()
+        assertTrue(
+            "Download season 1 at ${download.boundsInRoot}, Mark season watched at ${mark.boundsInRoot}",
+            download.boundsInRoot.right <= mark.boundsInRoot.left + 1 && abs(download.boundsInRoot.center.y - mark.boundsInRoot.center.y) < 2f,
+        )
+        assertEquals(Role.Button, download.config.getOrNull(SemanticsProperties.Role))
+        compose.onNode(season).performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(1), asked)
+
+        // S01E01 downloaded, S01E02 queued, S01E03 failed: S01E03 to E05 are left, S01E06 not aired yet.
+        seed(1, DownloadState.Done)
+        seed(2, DownloadState.Queued)
+        seed(3, DownloadState.Failed)
+        shown(seasonDownload("Download 3 episodes"), "Download 3 episodes")
+        seed(4, DownloadState.Paused)
+        seed(5, DownloadState.Done)
+        shown(seasonDownload("Download 1 episode"), "Download 1 episode")
+        assertFalse(exists(seasonDownload("Download 3 episodes")))
+        // S01E03 downloaded since: nothing is left, and the button goes; Mark season stays.
+        seed(3, DownloadState.Done, createdAt = 2)
+        compose.waitUntil(10_000) { !exists(anySeasonDownload) }
+        assertTrue(scrolledTo(markSeason))
+        assertEquals(listOf(1), asked)
+    }
+
+    /** The Specials chip has Mark season and no season Download (L397); each special keeps its ⋮ › Download. */
+    @Test
+    fun theSpecialsChipHasNoSeasonDownload() {
+        harborPage()
+        shown(seasonDownload("Download season 1"), "Download season 1")
+        compose.onNode(hasText("Specials") and hasClickAction()).performClick()
+        shown(row("A Harbor Christmas"), "the specials")
+        assertTrue(scrolledTo(markSeason))
+        assertFalse("a season's Download on the Specials chip", exists(anySeasonDownload))
+        compose.onNode(hasContentDescription("More for episode 1")).performClick()
+        val inMenu = hasClickAction() and hasAnyAncestor(isPopup())
+        compose.waitUntil(5_000) { exists(hasText("Download") and inMenu) }
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+        compose.waitUntil(5_000) { !exists(hasText("Download") and inMenu) }
+    }
+
+    /** At twice the text size the season's two buttons go on two lines, Download first, each whole. */
+    @Test
+    fun atTwiceTheTextSizeTheSeasonsButtonsGoOnTwoLinesDownloadFirst() {
+        harborPage(fontScale = 2f)
+        val season = seasonDownload("Download season 1")
+        shown(season, "Download season 1")
+        val width = context.resources.displayMetrics.widthPixels
+        compose.assertWhole("Download season 1", width)
+        compose.assertWhole("Mark season watched", width)
+        val download = compose.onNode(season).fetchSemanticsNode().boundsInRoot
+        val mark = compose.onNode(markSeason).fetchSemanticsNode().boundsInRoot
+        assertTrue("Download season 1 at $download, Mark season watched at $mark", download.bottom <= mark.top + 1)
+    }
+
     private fun <T : Any> waitFor(what: String, timeoutMs: Long = 30_000, probe: () -> T?): T {
         val deadline = SystemClock.elapsedRealtime() + timeoutMs
         while (true) {
@@ -349,5 +516,11 @@ class ShowScreenDeviceTest {
         const val SHOW = 900041
         const val NAME = "Glasswater Bay"
         const val FAKE_INDEXER = "show-device-test"
+
+        /** An invented show for the season's Download, with downloads of its own; nothing real has the id. */
+        const val HARBOR = 990_761
+
+        /** A season's Download's words, whatever it counts. */
+        val SEASON_DOWNLOAD = Regex("""Download (season \d+|\d+ episodes?)""")
     }
 }
