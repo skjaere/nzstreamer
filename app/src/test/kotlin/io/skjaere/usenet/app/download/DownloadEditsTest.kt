@@ -40,6 +40,7 @@ import org.junit.jupiter.api.Test
 import java.time.LocalDate
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
@@ -155,6 +156,61 @@ class DownloadEditsTest {
         assertTrue(vm.gone.value)
         store.clear()
     }
+
+    @Test
+    fun `a notification's Play plays a finished download once, a page remade on the same state playing nothing more`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fakes = PageFakes()
+        fakes.rows["done"] = episode("done", 3, DownloadState.Done)
+        fakes.rows["run"] = episode("run", 4, DownloadState.Running)
+        val saved = SavedStateHandle()
+        fun page(choose: String? = null, play: String? = null, state: SavedStateHandle = saved) = ViewModelProvider(
+            ViewModelStore().also { stores += it },
+            viewModelFactory { initializer { DownloadsViewModel(fakes.deps(backgroundScope), state, choose, play) } },
+        )[DownloadsViewModel::class.java]
+        page(play = "done")
+        runCurrent()
+        assertEquals(listOf("play done"), fakes.calls)
+        // A rotation remakes the page over its saved state: it has played already.
+        page(play = "done")
+        runCurrent()
+        assertEquals(listOf("play done"), fakes.calls)
+        // One not finished, or gone, plays nothing.
+        page(play = "run", state = SavedStateHandle())
+        page(play = "gone", state = SavedStateHandle())
+        runCurrent()
+        assertEquals(listOf("play done"), fakes.calls)
+        stores.forEach { it.clear() }
+    }
+
+    @Test
+    fun `a notification's Choose release opens a download's list once, and none for a finished one`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fakes = PageFakes()
+        fakes.rows["failed"] = episode("failed", 4, DownloadState.Failed)
+        fakes.rows["done"] = episode("done", 3, DownloadState.Done)
+        val saved = SavedStateHandle()
+        fun page(choose: String?, state: SavedStateHandle = saved) = ViewModelProvider(
+            ViewModelStore().also { stores += it },
+            viewModelFactory { initializer { DownloadsViewModel(fakes.deps(backgroundScope), state, choose = choose) } },
+        )[DownloadsViewModel::class.java]
+        val first = page("failed")
+        runCurrent()
+        val choosing = assertIs<DownloadChoice.State.Choosing>(first.choice.state.value)
+        assertEquals("failed", choosing.row.id)
+        // Remade on the same state: not opened again.
+        val again = page("failed")
+        runCurrent()
+        assertEquals(DownloadChoice.State.None, again.choice.state.value)
+        // A finished one has no releases to choose.
+        val done = page("done", SavedStateHandle())
+        runCurrent()
+        assertEquals(DownloadChoice.State.None, done.choice.state.value)
+        stores.forEach { it.clear() }
+    }
+
+    /** The page's view models' stores, cleared at each case's end. */
+    private val stores = mutableListOf<ViewModelStore>()
 
     internal companion object {
         const val HL = 990_617
