@@ -653,6 +653,71 @@ class DownloadResolverTest {
         assertEquals(listOf(pack.guid, single.guid), grabbed)
     }
 
+    /**
+     * L340, L394: a row's attempt of its season's pack, taken from the copy, is counted as it starts, as any attempt is, and
+     * its NZB kept for it as a grab is. A process that dies mid-attempt leaves both on disk, and the next resolve tries the
+     * pack again first from what was kept, counted once and with no grab: never passed over for a release grabbed instead.
+     */
+    @Test
+    fun `a pack taken from its season's copy and cut off by a process death is tried again from what was kept, with no grab`() = runBlocking<Unit> {
+        episode(E1, 1, pack, single)
+        episode(E2, 2, pack, single)
+        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E1))
+        dao.setState(E1, DownloadState.Done, null, NOW)
+
+        // E2's attempt of the pack, from the copy; the process dies as its articles are checked: what is on disk then.
+        val dying = CompletableDeferred<Pair<Map<String, Download>, Map<String, DownloadStorage.Grab>>>()
+        onCheck = {
+            dying.complete(dao.rows.value to storage.grabs.toMap())
+            awaitCancellation()
+        }
+        val resolve = launch(Dispatchers.Default) { resolver().resolve(E2) }
+        val (rows, grabs) = withTimeout(10_000) { dying.await() }
+        resolve.cancelAndJoin()
+        onCheck = {}
+        assertEquals(listOf(key(pack)), rows.getValue(E2).tried)
+        dao.rows.value = rows
+        storage.grabs.clear()
+        storage.grabs += grabs
+        storage.packs = packs()
+
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E2))
+        assertEquals(pack.guid, ready.row.release?.guid)
+        assertEquals("Harbor.Lights.S02E02.1080p.WEB.h264-GRP.mkv", ready.file.name)
+        assertEquals(listOf(pack.guid), grabbed)
+        assertEquals(listOf(key(pack)), stored(E2).tried)
+        // Its answer had: what was kept for the attempt goes, the row's own copy of the NZB kept for a resume.
+        assertNull(storage.grabs[E2])
+        assertContentEquals(pack.nzb, storage.sources[E2]?.nzb)
+    }
+
+    /**
+     * The same for the volume away as a pack taken from the copy is picked (L340): the row waits for it, and once it is
+     * back the pack is taken up again from what was kept for its attempt, counted once and with no grab. The season's copy
+     * stays as it was written, its NZB the one kept.
+     */
+    @Test
+    fun `a pack taken from its season's copy that waited for the volume is taken up again from what was kept, with no grab`() = runBlocking<Unit> {
+        episode(E1, 1, pack, single)
+        episode(E2, 2, pack, single)
+        episode(E3, 3, pack, single)
+        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E1))
+        dao.setState(E1, DownloadState.Done, null, NOW)
+
+        storage.space = null
+        assertIs<DownloadResolver.Resolution.Waiting>(resolver().resolve(E2))
+        assertEquals(DownloadHostRules.STORAGE_UNAVAILABLE, stored(E2).reason)
+
+        storage.space = ROOM
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E2))
+        assertEquals(pack.guid, ready.row.release?.guid)
+        assertEquals(listOf(pack.guid), grabbed)
+        assertEquals(listOf(key(pack)), stored(E2).tried)
+        assertNull(storage.grabs[E2])
+        assertEquals(1, storage.packWrites, "the copy written once, by the first")
+        assertNotNull(storage.packs.find(key(pack)), "kept for the third")
+    }
+
     @Test
     fun `an exact size over the room on the device fails as Won't fit, with nothing copied`() = runBlocking<Unit> {
         row(single)
@@ -1106,6 +1171,7 @@ class DownloadResolverTest {
         storage.spaceAsked.clear()
         storage.space = ROOM
         storage.packs.sweep(emptyList())
+        storage.packWrites = 0
         indexerFails = null
         checkFails = null
         probeAnswer = { null }
@@ -1208,7 +1274,13 @@ class DownloadResolverTest {
 
         override suspend fun pack(key: String) = packs.find(key)
 
-        override suspend fun keepPack(meta: DownloadNzbs.Meta, nzb: ByteArray, password: String?) = packs.write(meta, nzb, password)
+        /** How many times a season pack's copy was written. */
+        var packWrites = 0
+
+        override suspend fun keepPack(meta: DownloadNzbs.Meta, nzb: ByteArray, password: String?) {
+            packWrites++
+            packs.write(meta, nzb, password)
+        }
 
         override fun heldPrepare() = packs.held()
 

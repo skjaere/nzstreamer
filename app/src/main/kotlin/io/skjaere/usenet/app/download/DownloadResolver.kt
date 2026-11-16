@@ -96,7 +96,8 @@ import kotlin.time.Duration.Companion.seconds
  *
  * A season pack is fetched once for its season (L394, L432): resolved for one episode while another row of the show's
  * season is still to finish, its NZB is kept once for the season ([Storage.keepPack]), and a later row's attempt of it takes
- * that copy rather than grab it again, after the NZB kept for an attempt with no answer and before the indexer. The pack
+ * that copy rather than grab it again, after the NZB kept for an attempt with no answer and before the indexer, and keeps
+ * it for its attempt as a grab is kept. The pack
  * as this process last prepared it is kept too ([Storage.holdPrepare]), and handed back for that NZB rather than prepared
  * again ([heldPreparer]); a new process prepares it again from the copy, with no grab.
  *
@@ -308,7 +309,8 @@ class DownloadResolver(
         // The releases whose NZB came from their season's copy (L394).
         val copied = HashSet<String>()
         // Each NZB grabbed kept until its attempt has its answer; the one kept before served from it, and a season pack's
-        // from its season's copy, with no grab. A copy needs no keeping for the attempt: it lasts while this row is to finish.
+        // from its season's copy, with no grab. One from the copy is kept for its attempt too, as a grab is: counted as it
+        // starts, an attempt with no answer (a process death, the volume away) is only taken up again from what was kept.
         val nzbs = object : NzbSource {
             override suspend fun fetch(candidate: PlayCandidate): ByteArray = fetchWithPassword(candidate).bytes
 
@@ -320,6 +322,7 @@ class DownloadResolver(
                 storage.pack(candidate.id)?.let { copy ->
                     log.info("{}: from its season's copy, no grab", named(candidate))
                     copied += candidate.id
+                    storage.keepGrab(id, candidate.id, copy.source.nzb, copy.source.password)
                     return FetchedNzb(copy.source.nzb, copy.source.password)
                 }
                 return grabs.fetchWithPassword(candidate).also { storage.keepGrab(id, candidate.id, it.bytes, it.password) }
@@ -465,7 +468,7 @@ class DownloadResolver(
             val password = target.prepared.metadata.orderedArchiveNzb.password ?: target.password
             storage.keepSource(id, target.nzbBytes, password)
             storage.dropGrab(id)
-            keepPack(kept, byKey.getValue(target.candidate.id), target, password, copied)
+            keepPack(kept, byKey.getValue(target.candidate.id), target.prepared, target.nzbBytes, password, copied)
             log.info("download {}: resolved, {} bytes, {}", id, size, if (kept.oneVideo) "its release's one video" else "one of its release's videos")
             return Resolution.Ready(kept, target.prepared, target.file)
         } finally {
@@ -478,23 +481,24 @@ class DownloadResolver(
     /**
      * [row]'s release, [item], kept once for its season when it is a season pack (L394, L432): its NZB [copied] from the
      * season's copy, or one whose name says it holds several episodes ([offersFileChoice]) while another row of the show's
-     * season is still to finish, for which the copy is written now; otherwise it would have no use. Either way its prepare
-     * is held for the season's next row. The copy leads when it isn't above Download size ([leads]). Nothing of this fails
-     * the resolve: a copy that can't be kept costs the next row a grab.
+     * season is still to finish, for which the copy is written now from [nzb]; otherwise it would have no use. A copy kept
+     * already of that same NZB (taken again from what its attempt kept of it) stays as it was written. Either way the pack
+     * as it was [prepared] is held for the season's next row. The copy leads when it isn't above Download size ([leads]).
+     * Nothing of this fails the resolve: a copy that can't be kept costs the next row a grab.
      */
-    private suspend fun keepPack(row: Download, item: RankedItem, target: UsenetTarget, password: String?, copied: Boolean) {
+    private suspend fun keepPack(row: Download, item: RankedItem, prepared: PreparedNzb, nzb: ByteArray, password: String?, copied: Boolean) {
         val show = row.showTmdbId ?: return
         val season = row.season ?: return
         if (row.kind != DownloadKind.Episode || !(copied || item.offersFileChoice)) return
         try {
-            if (!copied) {
+            if (!copied && storage.pack(item.key)?.source?.nzb?.contentEquals(nzb) != true) {
                 val others = downloads.queue().first().any { it.id != row.id && it.showTmdbId == show && it.season == season && it.state in DownloadRunner.GOING_ON }
                 val candidate = row.candidates.firstOrNull { ranked(it).key == item.key }
                 if (!others || candidate == null) return
-                storage.keepPack(DownloadNzbs.Meta(item.key, item.item.title, candidate, show, season, leads(row, item.key, candidate)), target.nzbBytes, password)
+                storage.keepPack(DownloadNzbs.Meta(item.key, item.item.title, candidate, show, season, leads(row, item.key, candidate)), nzb, password)
                 log.info("download {}: its season pack kept for the season's other downloads", row.id)
             }
-            storage.holdPrepare(item.key, target.prepared)
+            storage.holdPrepare(item.key, prepared)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
