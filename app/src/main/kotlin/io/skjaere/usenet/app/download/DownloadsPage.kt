@@ -97,6 +97,9 @@ data class DownloadsStrip(val used: Long, val free: Long) {
     val fraction: Float get() = if (used + free <= 0) 0f else used.toFloat() / (used + free)
 }
 
+/** The strip's words: what downloads [held] ("23.4 GB", after "Downloads"; null while nothing is held yet) and what is [free]. */
+data class StripWords(val held: String?, val free: String)
+
 /**
  * The Downloads page (L372, L379-L381): [downloading] (the row the queue is at first, then the rest in the queue's order),
  * [failed] under it, and [downloaded], one row per show and one per film, the latest finished first. Names come from the
@@ -292,6 +295,13 @@ data class DownloadsPage(
 
         /** The strip's numbers for [space]: downloads' own, and what is free, those removed counted gone at once (L379). */
         fun strip(space: DownloadSpace): DownloadsStrip = DownloadsStrip(space.used, space.free + space.deleting)
+
+        /**
+         * The strip's words for [strip]: "Downloads 23.4 GB · 41.0 GB free"; while no download has its file yet (queued,
+         * found, waiting or failed) the free alone, as the empty page says it, "41.0 GB free on this device", never "0 KB".
+         */
+        fun stripWords(strip: DownloadsStrip): StripWords =
+            if (strip.used > 0) StripWords(formatSize(strip.used), "${formatSize(strip.free)} free") else StripWords(null, DownloadSheetModel.free(strip.free))
 
         fun selected(count: Int): String = "$count selected"
 

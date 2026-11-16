@@ -155,6 +155,12 @@ class DownloadsPageTest {
         val after = DownloadsPage.strip(DownloadSpace.of(43_200_000_000, 43_200_000_000, removed))
         assertEquals(6_700_000_000, after.used)
         assertEquals(57_700_000_000, after.free)
+
+        // Its words: what downloads hold and what is free; with nothing held yet (queued or failed alone), the free alone.
+        assertEquals(StripWords("23.4 GB", "41.0 GB free"), DownloadsPage.stripWords(strip))
+        val queued = DownloadsPage.strip(DownloadSpace.of(43_200_000_000, 43_200_000_000, listOf(rows[1], episode("f", 3, DownloadState.Failed))))
+        assertEquals(0, queued.used)
+        assertEquals(StripWords(null, "41.0 GB free on this device"), DownloadsPage.stripWords(queued))
     }
 
     @Test

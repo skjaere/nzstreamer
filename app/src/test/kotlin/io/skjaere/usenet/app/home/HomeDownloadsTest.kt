@@ -121,6 +121,9 @@ class HomeDownloadsTest {
         val home = assertNotNull(HomeDownloads.of((listOf(crown, older, queued) + meridian + running).map(::item)))
         // 3.1 + 5.5 + 2.0 + 1.8 + 1.8: every row's file, the three shown or not.
         assertEquals("Downloads · 14.2 GB", home.header)
+        // Nothing with a file yet (queued, or failed): the section's name alone, never "0 KB".
+        val failed = episode("hl-6", HL, "Harbor Lights", 2, 6, DownloadState.Failed)
+        assertEquals("Downloads", assertNotNull(HomeDownloads.of(listOf(queued, failed).map(::item))).header)
     }
 
     private companion object {

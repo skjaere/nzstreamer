@@ -102,7 +102,6 @@ import io.skjaere.usenet.app.ui.LocalFormFactor
 import io.skjaere.usenet.app.ui.SectionHeader
 import io.skjaere.usenet.app.ui.TopBar
 import io.skjaere.usenet.app.ui.colors
-import io.skjaere.usenet.core.formatSize
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadState
 
@@ -456,11 +455,15 @@ private fun Strip(read: Boolean, space: DownloadSpace?, mobileData: Boolean, res
             space == null -> Text(DownloadHostRules.STORAGE_UNAVAILABLE, style = AppType.secondary, color = colors.warn)
             else -> {
                 val strip = DownloadsPage.strip(space)
+                val words = DownloadsPage.stripWords(strip)
                 Text(
                     buildAnnotatedString {
-                        append("${DownloadsPage.TITLE} ")
-                        withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = text)) { append(formatSize(strip.used)) }
-                        append(" · ${formatSize(strip.free)} free")
+                        words.held?.let { held ->
+                            append("${DownloadsPage.TITLE} ")
+                            withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = text)) { append(held) }
+                            append(" · ")
+                        }
+                        append(words.free)
                     },
                     style = AppType.secondary, color = colors.textSecondary,
                 )

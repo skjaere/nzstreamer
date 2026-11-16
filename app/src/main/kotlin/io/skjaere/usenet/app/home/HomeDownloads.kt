@@ -42,7 +42,8 @@ sealed interface HomeDownloadOpen {
  * Downloads page. Pure, so the JVM reads every case; Home only draws it.
  */
 data class HomeDownloads(val held: Long, val rows: List<HomeDownloadRow>) {
-    val header: String get() = "${DownloadsPage.TITLE} · ${formatSize(held)}"
+    /** "Downloads · 23.4 GB"; "Downloads" alone while no download has its file yet (queued, or failed), never "0 KB". */
+    val header: String get() = if (held > 0) "${DownloadsPage.TITLE} · ${formatSize(held)}" else DownloadsPage.TITLE
 
     companion object {
         /** A phone's few rows, as the collection's. */
