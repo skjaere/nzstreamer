@@ -39,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -204,7 +205,10 @@ private fun WontFit(s: DownloadSheetState.WontFit, onChoose: () -> Unit, onStora
 /** Nothing to download: what each search of the indexers did, as the play sheet's no-release says it, and Close. */
 @Composable
 private fun NoRelease(s: DownloadSheetState.NoRelease, onClose: () -> Unit) {
-    Text(DownloadSheetModel.NO_RELEASE, style = AppType.cardTitle, color = colors.text, modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 10.dp))
+    Text(
+        DownloadSheetModel.NO_RELEASE, style = AppType.cardTitle, color = colors.text,
+        modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 10.dp).semantics { heading() },
+    )
     if (s.stages.isNotEmpty()) {
         GroupCard {
             s.stages.forEachIndexed { i, (what, outcome) ->

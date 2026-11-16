@@ -6,6 +6,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -90,6 +91,8 @@ class DownloadsPageDeviceTest {
             "3 releases tried", DownloadsPage.TRY_AGAIN, "DOWNLOADED", "3 episodes · 5.1 GB", "Next: S01E01", "2022 · 1 h 52 min · 5.5 GB",
             "Downloaded · 2 parts missing",
         ).forEach { assertTrue("'$it' shown", compose.scrolledTo(hasText(it))) }
+        // Each section's header is a heading, for TalkBack's heading navigation.
+        listOf("DOWNLOADING", "FAILED", "DOWNLOADED").forEach { assertTrue("'$it' a heading", compose.scrolledTo(hasText(it) and isHeading())) }
         // The row the queue is at has Pause; the film, Play.
         assertTrue(compose.scrolledTo(hasContentDescription(DownloadsPage.PAUSE)))
         assertTrue(compose.scrolledTo(hasContentDescription("Play Copper Crown")))

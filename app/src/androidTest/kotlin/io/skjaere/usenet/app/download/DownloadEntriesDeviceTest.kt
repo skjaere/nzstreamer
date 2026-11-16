@@ -23,6 +23,7 @@ import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.Density
@@ -284,6 +285,7 @@ class DownloadEntriesDeviceTest {
         pick("Download")
         compose.waitFor(hasText("Harbor Lights · S02E01 · Brine"))
         compose.waitTill("the sheet to find nothing", 20_000) { compose.exists(hasText(DownloadSheetModel.NO_RELEASE)) }
+        assertTrue("its headline a heading", compose.exists(hasText(DownloadSheetModel.NO_RELEASE) and isHeading()))
         pick("Close")
         compose.waitTill("the sheet to close") { !compose.exists(hasText("Harbor Lights · S02E01 · Brine")) }
 

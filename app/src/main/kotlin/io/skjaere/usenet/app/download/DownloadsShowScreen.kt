@@ -37,6 +37,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
@@ -123,7 +124,10 @@ internal fun DownloadsShowScreen(deps: DownloadsDeps, showTmdbId: Int, onBack: (
                     }
                 }
                 DownloadsShow.seasons(rows).forEachIndexed { i, season ->
-                    item(key = "season-${season.number}") { SectionHeader(DownloadsShow.seasonTitle(season.number), top = if (i == 0) 14.dp else 18.dp) }
+                    item(key = "season-${season.number}") {
+                        // A heading, for TalkBack's heading navigation from season to season.
+                        SectionHeader(DownloadsShow.seasonTitle(season.number), Modifier.semantics(mergeDescendants = true) { heading() }, top = if (i == 0) 14.dp else 18.dp)
+                    }
                     itemsIndexed(season.episodes, key = { _, it -> it.id }) { at, row ->
                         EpisodeItem(
                             row, states[row.season!! to row.episode!!], first = at == 0, last = at == season.episodes.lastIndex,

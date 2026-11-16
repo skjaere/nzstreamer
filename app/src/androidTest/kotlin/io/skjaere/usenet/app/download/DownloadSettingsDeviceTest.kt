@@ -16,6 +16,7 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -239,6 +240,10 @@ class DownloadSettingsDeviceTest {
         compose.onNode(radio(DownloadSettings.SD_CARD)).assertIsNotSelected().assertIsNotEnabled()
         assertTrue(exists(hasText(DownloadSettings.LATER)))
         assertTrue(exists(hasText(DownloadSettings.STAYS)))
+        // Each section's header is a heading, for TalkBack's heading navigation.
+        listOf(DownloadSettings.SIZE, DownloadSettings.SAVE_TO, DownloadSettings.ON_THIS_PHONE).forEach {
+            assertTrue("'$it' a heading", exists(hasText(it, ignoreCase = true) and isHeading()))
+        }
         // Side by side, This phone first.
         assertEquals(top(phone), top(card), 1f)
         assertTrue(left(phone) < left(card))

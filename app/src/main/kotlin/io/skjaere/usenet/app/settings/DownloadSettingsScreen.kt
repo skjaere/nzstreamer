@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -373,7 +374,7 @@ internal fun DownloadSettingsScreen(onBack: () -> Unit, deps: DownloadSettingsDe
                 SwitchRow(DownloadSettings.CHARGING, p.whileCharging, model::setCharging, detail = DownloadSettings.CHARGING_DETAIL)
             }
             Footnote(DownloadSettings.ONE_AT_A_TIME)
-            SectionHeader(DownloadSettings.SIZE, top = 6.dp)
+            SectionHeader(DownloadSettings.SIZE, Heading, top = 6.dp)
             BitrateChoices(
                 cells = DownloadSettings.CELLS, unit = DownloadSettings.UNIT, chosen = p.sizeCapGbPerHour,
                 label = DownloadSettings::label, onPick = model::setSizeCap,
@@ -383,7 +384,7 @@ internal fun DownloadSettingsScreen(onBack: () -> Unit, deps: DownloadSettingsDe
 
         val measured = space
         val free = measured?.let { DownloadSettings.free(it.space) }
-        SectionHeader(DownloadSettings.SAVE_TO)
+        SectionHeader(DownloadSettings.SAVE_TO, Heading)
         Row(
             Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(IntrinsicSize.Min).selectableGroup(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -393,7 +394,7 @@ internal fun DownloadSettingsScreen(onBack: () -> Unit, deps: DownloadSettingsDe
         }
         Footnote(DownloadSettings.STAYS)
 
-        SectionHeader(DownloadSettings.ON_THIS_PHONE, top = 6.dp)
+        SectionHeader(DownloadSettings.ON_THIS_PHONE, Heading, top = 6.dp)
         val shown = rows
         val usage = if (shown != null && measured != null) DownloadSettings.usage(shown, measured.space) else null
         Row(
@@ -464,6 +465,9 @@ private fun RowScope.PlaceCell(top: String, under: String, chosen: Boolean, grey
         Text(under, style = AppType.small, textAlign = TextAlign.Center, color = if (greyed) colors.muted.copy(alpha = GREYED_UNDER) else colors.muted)
     }
 }
+
+/** A section's header, a heading for TalkBack's heading navigation, as This device's are. */
+private val Heading = Modifier.semantics(mergeDescendants = true) { heading() }
 
 /** A greyed cell's words: Material's disabled alpha, and its line a little stronger, as small as it is. */
 private const val GREYED_TEXT = 0.38f

@@ -3,6 +3,7 @@ package io.skjaere.usenet.app.download
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -91,6 +92,8 @@ class DownloadsShowDeviceTest {
             "SEASON 2", "Brine", "2.1 GB · 52 min", "32:00 left", "The Breakwater", "2.0 GB · 49 min", "Fog Signal", "2.0 GB · 51 min · 3 parts missing",
         ).forEach { assertTrue("'$it' shown", compose.scrolledTo(hasText(it))) }
         assertEquals("Season 1's three watched", 3, compose.onAllNodes(hasText("✓"), useUnmergedTree = true).fetchSemanticsNodes().size)
+        // Each season's header is a heading, for TalkBack's heading navigation.
+        listOf("SEASON 1", "SEASON 2").forEach { assertTrue("'$it' a heading", compose.scrolledTo(hasText(it) and isHeading())) }
         assertFalse("the one still downloading stays on the Downloads page", compose.scrolledTo(hasText("Low Water")))
     }
 

@@ -242,10 +242,10 @@ internal fun DownloadsScreen(
     }
 }
 
-/** A section of the page: its header and its rows in one card, row by row. */
+/** A section of the page: its header, a heading for TalkBack's heading navigation, and its rows in one card, row by row. */
 private fun <T : DownloadsRow> LazyListScope.section(title: String, rows: List<T>, top: Dp = 18.dp, row: @Composable (T, Boolean, Boolean) -> Unit) {
     if (rows.isEmpty()) return
-    item(key = "header-$title") { SectionHeader(title, top = top) }
+    item(key = "header-$title") { SectionHeader(title, Modifier.semantics(mergeDescendants = true) { heading() }, top = top) }
     itemsIndexed(rows, key = { _, it -> it.key }) { i, it -> row(it, i == 0, i == rows.lastIndex) }
 }
 
@@ -612,7 +612,10 @@ private fun ChoiceList(choice: DownloadChoice.State.Choosing, onBack: () -> Unit
         is DownloadSheetState.WontFit -> ReleaseList(s.group, choice.row.title, onBack = onBack, mode = s.mode)
         is DownloadSheetState.NoRelease -> Column(Modifier.fillMaxSize()) {
             TopBar(DownloadsPage.choosing(choice.row), onBack)
-            Text(DownloadSheetModel.NO_RELEASE, style = AppType.cardTitle, color = colors.text, modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 10.dp))
+            Text(
+                DownloadSheetModel.NO_RELEASE, style = AppType.cardTitle, color = colors.text,
+                modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 10.dp).semantics { heading() },
+            )
             if (s.stages.isNotEmpty()) {
                 GroupCard {
                     s.stages.forEachIndexed { i, (what, outcome) ->
