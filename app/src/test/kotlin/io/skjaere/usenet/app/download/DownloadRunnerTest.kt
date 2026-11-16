@@ -624,6 +624,28 @@ class DownloadRunnerTest {
     }
 
     @Test
+    fun `a title with a download still to finish is never queued twice, a finished or failed one's is queued anew`() = test {
+        val runner = runner()
+        val a = fake("hl-a")
+        val b = fake("hl-b")
+        val first = runner.add(4, a)
+        // A second Download of it (a sheet restored with its page, a second tap meanwhile): the one queued, no other row.
+        assertEquals(first, runner.add(4, b))
+        assertEquals(listOf(first), order())
+        assertEquals(listOf(a.candidate), stored(first).candidates, "its releases as they were")
+        // Held, waiting or under way, it is still the one.
+        listOf(DownloadState.Paused, DownloadState.Waiting, DownloadState.Running, DownloadState.Stopped).forEach { state ->
+            dao.setState(first, state, null, NOW)
+            assertEquals(first, runner.add(4, b), "$state")
+        }
+        // Failed: Download again is the row's own, but a new Download of the title queues one of its own.
+        dao.setState(first, DownloadState.Failed, null, NOW)
+        val again = runner.add(4, b)
+        assertTrue(again != first)
+        assertEquals(2, dao.rows.value.size)
+    }
+
+    @Test
     fun `a download counts what the sheet reckoned it needs until it is resolved, its releases keeping the indexer's sizes`() = test {
         val runner = runner()
         // A season pack: the sheet reckons this episode's share of it; the pack's own size is what Resolve ranks by.

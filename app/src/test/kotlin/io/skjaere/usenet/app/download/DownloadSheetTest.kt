@@ -341,6 +341,26 @@ class DownloadSheetTest {
     }
 
     @Test
+    fun `the sheet closes once the download is queued, while Android's ask still waits for its answer`() = runTest {
+        var asked = false
+        lateinit var ask: NotificationAsk
+        // Android's dialog up, not answered yet: a rotation now remakes the page, whose sheet must not come back.
+        ask = NotificationAsk(sdk = 34, shown = { true }, granted = { false }, asked = { asked }, markAsked = { asked = true }, launch = {})
+        val fakes = Fakes().apply {
+            this.ask = ask
+            finder = inOrder(nzb(KESTREL, 1_200_000_000))
+        }
+        val sheet = open(EPISODE, fakes)
+        sheet.download()
+        runCurrent()
+        assertTrue(sheet.closed.value, "closed as soon as the runner has it")
+        assertEquals(listOf("enqueue", "ask"), fakes.calls)
+        ask.answered()
+        runCurrent()
+        assertEquals(listOf("enqueue", "ask", "schedule"), fakes.calls, "the host asked for once Android has its answer")
+    }
+
+    @Test
     fun `Download queues the pick and the releases that fit after it, torrents left out, then asks, schedules and closes`() = runTest {
         val fakes = Fakes().apply {
             // 4.0 GB free: the 9.8 GB remux doesn't fit; the pack's share of the episode does.

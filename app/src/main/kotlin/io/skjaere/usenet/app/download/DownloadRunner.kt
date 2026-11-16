@@ -406,14 +406,21 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      * L338): the row Queued at the queue's end, made with its bookkeeping folder and marker (L346). Until Resolve has its
      * file's own size the row counts [need], what the sheet reckoned the first needs (a season pack's share of its
      * episode), so the space a queued download holds back is that, while its releases keep the indexer's sizes, which
-     * Resolve ranks by. Scheduling its host is the visible app's (L335). Null on a TV.
+     * Resolve ranks by. A title whose download is still to finish has that one: it is returned, and nothing more is queued
+     * (a sheet restored with its page after a Download, a second tap meanwhile). Scheduling its host is the visible app's
+     * (L335). Null on a TV.
      */
     suspend fun enqueue(target: DownloadTarget, candidates: List<DownloadCandidate>, need: Long = candidates.first().size): Download? {
         if (!runs) return null
         require(candidates.isNotEmpty()) { "A download needs a release to try" }
         return changes.withLock {
+            val rows = dao.all().first()
+            rows.firstOrNull { it.watchKey == target.watchKey && it.state in GOING_ON }?.let { queued ->
+                log.info("download {}: already queued", queued.id)
+                return@withLock queued
+            }
             val at = now()
-            val position = (dao.all().first().maxOfOrNull { it.position } ?: -1) + 1
+            val position = (rows.maxOfOrNull { it.position } ?: -1) + 1
             val row = Download(
                 id = Download.newId(), watchKey = target.watchKey, kind = target.kind, title = target.title, subtitle = target.subtitle,
                 showTmdbId = target.showTmdbId, season = target.season, episode = target.episode, seasonEpisodes = target.seasonEpisodes,
@@ -1102,6 +1109,11 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
         /** The states that hold the whole queue until Resume (L380). */
         private val HOLDS = setOf(DownloadState.Paused, DownloadState.Stopped)
+
+        /** A download still to finish: queued, under way, held or waiting; neither done, failed nor removed. */
+        private val GOING_ON = setOf(
+            DownloadState.Queued, DownloadState.Resolving, DownloadState.Running, DownloadState.Paused, DownloadState.Waiting, DownloadState.Stopped,
+        )
 
         /** The waits for the providers and the indexers, which a provider saved or Resume queues again (L388). */
         private val PROVIDER_WAITS = setOf(DownloadHostRules.CHECK_PROVIDER, DownloadHostRules.CANT_REACH_PROVIDER, DownloadHostRules.CANT_REACH_INDEXER)

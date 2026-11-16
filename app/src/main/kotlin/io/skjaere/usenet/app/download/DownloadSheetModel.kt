@@ -195,8 +195,8 @@ data class DownloadSheetDeps(
  * - [DownloadSheetState.NoRelease]: nothing to download, with the indexers' lines.
  *
  * Torrents are left out (L370). [download] (the sheet's Download, or a tap in the list) queues the download with up to 10
- * releases that fit, in download order, the one chosen first; then Android's notification ask where it is due, then the
- * host's schedule, then the sheet [closed]. The search runs in [scope], the sheet's, and goes with it.
+ * releases that fit, in download order, the one chosen first, and the sheet is [closed]; then Android's notification ask
+ * where it is due, then the host's schedule. The search runs in [scope], the sheet's, and goes with it.
  */
 class DownloadSheetModel(private val request: DownloadRequest, private val deps: DownloadSheetDeps, private val scope: CoroutineScope) {
     private val chooser = ReleaseChooser<DownloadRequest>(scope)
@@ -214,7 +214,10 @@ class DownloadSheetModel(private val request: DownloadRequest, private val deps:
 
     private val _closed = MutableStateFlow(false)
 
-    /** Whether the sheet is done: the download queued and its host asked for. */
+    /**
+     * Whether the sheet is done: the download queued. Its notification ask and its host's schedule go on after, so a page
+     * remade meanwhile (a rotation with Android's dialog up) never shows the sheet again, to queue the download twice.
+     */
     val closed: StateFlow<Boolean> = _closed.asStateFlow()
 
     private var started = false
@@ -236,9 +239,9 @@ class DownloadSheetModel(private val request: DownloadRequest, private val deps:
     }
 
     /**
-     * Queues [chosen] with [group]'s other releases that fit after it, in their order (L338), then asks Android about
-     * notifications where that is due and schedules the host: either answer starts the download (L358). Once. Where the
-     * runner queues nothing (a TV's), nothing is asked or scheduled.
+     * Queues [chosen] with [group]'s other releases that fit after it, in their order (L338), closes the sheet, then asks
+     * Android about notifications where that is due and schedules the host: either answer starts the download (L358).
+     * Once. Where the runner queues nothing (a TV's), nothing is asked or scheduled.
      */
     private fun download(chosen: RankedItem, group: ResultGroup, mode: ReleaseListMode.Download) {
         if (_downloading.value || _closed.value) return
@@ -248,6 +251,7 @@ class DownloadSheetModel(private val request: DownloadRequest, private val deps:
                 val candidates = candidates(chosen, group, mode)
                 // Counted at what it needs here, a season pack's share of its episode, not the pack's whole size.
                 deps.enqueue(request.target, candidates, mode.need(chosen)) ?: return@launch
+                _closed.value = true
                 deps.beforeDownload()
                 deps.schedule()
             } catch (e: CancellationException) {
