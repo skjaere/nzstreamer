@@ -1639,7 +1639,7 @@ class DownloadRunnerTest {
     /**
      * L394, C1: a season pack's copy is held while a row of its show and season is still to finish, read from the rows, and
      * goes at the season's last end, whichever end it is: Done; failed by Resolve itself, which fails no row through the
-     * runner's own failed(); cancelled; deleted after a Remove; Delete all.
+     * runner's own failed(); cancelled; deleted after a Remove; Delete all; failed by the runner as it is written.
      */
     @Test
     fun `a season pack's copy goes at its season's last end, whichever end that is`() = test {
@@ -1696,6 +1696,21 @@ class DownloadRunnerTest {
         advanceUntilIdle()
         runner.deleteAll()
         advanceUntilIdle()
+        assertNull(storage.packs.find(PACK.key))
+
+        // Failed by the runner itself as it is written, its record refused by a full device (Storage is full).
+        storage.packs.write(PACK, PACK_NZB, "s3cret")
+        val g = fake("hl-g").apply { hold = HOLD }
+        val full = runner.add(7, g)
+        host(runner)
+        runCurrent()
+        assertNotNull(storage.packs.find(PACK.key))
+        dao.full = setOf("progress")
+        g.gate.complete(Unit)
+        advanceUntilIdle()
+        dao.full = emptySet()
+        assertEquals(DownloadState.Failed, stored(full).state)
+        assertEquals(DownloadWriter.STORAGE_FULL, stored(full).reason)
         assertNull(storage.packs.find(PACK.key))
     }
 
