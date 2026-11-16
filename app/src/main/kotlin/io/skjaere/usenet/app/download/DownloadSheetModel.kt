@@ -118,7 +118,8 @@ sealed interface DownloadSheetState {
 
     /**
      * The first release doesn't fit: it [need]s more than is [free], which is after the [queued] bytes the [queuedDownloads]
-     * queued downloads still need and what is kept free for the phone (L348). No Download: Choose release shows what fits.
+     * queued downloads still need and what is kept free for the phone (L348). No Download: Choose release shows what fits,
+     * and a tap there downloads, so the sheet says that Android asks about notifications next where it does ([asks], L358).
      */
     data class WontFit(
         val group: ResultGroup,
@@ -128,6 +129,7 @@ sealed interface DownloadSheetState {
         val free: Long,
         val queued: Long,
         val queuedDownloads: Int,
+        val asks: Boolean = false,
     ) : DownloadSheetState
 
     /** No Usenet release to download: what each search of the indexers did ([stages]), as the play sheet says it, and its [note]. */
@@ -308,7 +310,7 @@ class DownloadSheetModel(private val request: DownloadRequest, private val deps:
         lateinit var mode: ReleaseListMode.Download
         mode = ReleaseListMode.Download(free, startsOnWifi, request.seasonEpisodes) { item -> download(item, group, mode) }
         val need = mode.need(best)
-        if (!mode.fits(best)) return DownloadSheetState.WontFit(group, best, mode, need, free, space?.queued ?: 0, space?.queuedDownloads ?: 0)
+        if (!mode.fits(best)) return DownloadSheetState.WontFit(group, best, mode, need, free, space?.queued ?: 0, space?.queuedDownloads ?: 0, deps.askDue())
         val ahead = deps.rows().count { it.state in AHEAD }
         val start = when {
             startsOnWifi -> DownloadStart.OnWifi

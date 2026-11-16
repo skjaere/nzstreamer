@@ -341,6 +341,25 @@ class DownloadSheetTest {
     }
 
     @Test
+    fun `a pick that won't fit says that Android asks next too, as a release that fits is chosen in its list`() = runTest {
+        var asked = false
+        fun fakes(sdk: Int) = Fakes().apply {
+            ask = NotificationAsk(sdk = sdk, shown = { true }, granted = { false }, asked = { asked }, markAsked = { asked = true }, launch = { ask?.answered() })
+            space = DownloadSpace(available = 4 * GB, used = 0, queued = 0)
+            films = { _, context -> flowOf(MovieFind(film(listOf(ranked(nzb(COPPER, 4_300_000_000), 2.0), ranked(nzb(COPPER_720, 2_200_000_000), 1.0))), STATUSES, context)) }
+        }
+        assertFalse(assertIs<DownloadSheetState.WontFit>(open(FILM, fakes(32)).state.value).asks, "Android 12 asks nothing")
+        val first = fakes(33)
+        val sheet = open(FILM, first)
+        val wontFit = assertIs<DownloadSheetState.WontFit>(sheet.state.value)
+        assertTrue(wontFit.asks, "the line before Android's dialog (L358), which a pick in Choose release's list brings up")
+        wontFit.mode.onDownload(wontFit.group.playable.single { it.item.title == COPPER_720 })
+        advanceUntilIdle()
+        assertEquals(listOf("enqueue", "ask", "schedule"), first.calls)
+        assertFalse(assertIs<DownloadSheetState.WontFit>(open(FILM, fakes(33)).state.value).asks, "once")
+    }
+
+    @Test
     fun `the sheet closes once the download is queued, while Android's ask still waits for its answer`() = runTest {
         var asked = false
         lateinit var ask: NotificationAsk

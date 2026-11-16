@@ -162,7 +162,10 @@ private fun Pick(s: DownloadSheetState.Pick, busy: Boolean, onDownload: () -> Un
     }
 }
 
-/** The pick doesn't fit: no Download; what it needs and why less is free; Choose release, Android's storage page, Cancel. */
+/**
+ * The pick doesn't fit: no Download; what it needs and why less is free; on the first Download on Android 13 and later what
+ * Android asks next, as a pick in Choose release's list downloads (L358); Choose release, Android's storage page, Cancel.
+ */
 @Composable
 private fun WontFit(s: DownloadSheetState.WontFit, onChoose: () -> Unit, onStorage: () -> Unit, onCancel: () -> Unit) {
     Release(s.best, s.need, s.mode)
@@ -172,6 +175,7 @@ private fun WontFit(s: DownloadSheetState.WontFit, onChoose: () -> Unit, onStora
         Line(DownloadSheetModel.needs(s.need, s.free), sub = DownloadSheetModel.after(s.queued, s.queuedDownloads))
     }
     SheetNote(DownloadSheetModel.WONT_FIT_NOTE)
+    if (s.asks) AskLine()
     Buttons {
         PrimaryButton(DownloadSheetModel.CHOOSE_RELEASE, onChoose, Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
