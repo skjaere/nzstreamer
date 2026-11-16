@@ -26,11 +26,15 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.app.collection.SHOW_FOOTNOTE_PHONE
 import io.skjaere.usenet.app.collection.SHOW_FOOTNOTE_TV
 import io.skjaere.usenet.app.collection.ShowScreen
+import io.skjaere.usenet.app.collection.ShowViewModel
 import io.skjaere.usenet.app.collection.shortDate
 import io.skjaere.usenet.app.download.DownloadSheetModel
 import io.skjaere.usenet.app.download.DownloadsPageSeeds
@@ -489,6 +493,48 @@ class ShowScreenDeviceTest {
         compose.waitUntil(5_000) { exists(hasText("Download") and inMenu) }
         instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
         compose.waitUntil(5_000) { !exists(hasText("Download") and inMenu) }
+    }
+
+    /**
+     * A sheet kept with the page (a rotation, the process's death) comes back only on its own season: where the page has
+     * another open, as one brought back after the process's death opens the next episode's season, the season's sheet and
+     * an episode's go for good, and a later tap on their season's chip shows its episodes with no sheet and no search.
+     */
+    @Test
+    fun aSheetKeptForASeasonThePageNoLongerHasOpenGoesAndNeverOpensByItself() {
+        var owner: ViewModelStoreOwner? = null
+        seeding = true
+        seeds.before()
+        compose.showScaled(context) {
+            owner = LocalViewModelStoreOwner.current
+            ShowScreen(HARBOR, onBack = {})
+        }
+        compose.waitUntil(15_000) { exists(hasText("Play S01E01", substring = true)) }
+        val vm = ViewModelProvider(checkNotNull(owner))["show-$HARBOR", ShowViewModel::class.java]
+        val sheetTitle = hasText(DownloadSheetModel.TITLE)
+
+        fun leftForAnotherSeason(what: String, open: () -> Unit) {
+            open()
+            compose.waitUntil(10_000) { exists(sheetTitle) }
+            // The page opens the specials, as one brought back would open another season: the sheet goes.
+            compose.runOnIdle { vm.selectSeason(0) }
+            compose.waitUntil(10_000) { !exists(sheetTitle) }
+            shown(row("A Harbor Christmas"), "the specials")
+            compose.onNode(hasText("S1") and hasClickAction()).performClick()
+            shown(row("First Light"), "season 1's episodes")
+            compose.waitForIdle()
+            assertFalse("$what opened by itself", exists(sheetTitle))
+        }
+        leftForAnotherSeason("the season's sheet") {
+            shown(seasonDownload("Download season 1"), "Download season 1")
+            compose.onNode(seasonDownload("Download season 1")).performClick()
+        }
+        leftForAnotherSeason("an episode's sheet") {
+            compose.onNode(hasContentDescription("More for episode 1")).performClick()
+            val inMenu = hasClickAction() and hasAnyAncestor(isPopup())
+            compose.waitUntil(5_000) { exists(hasText("Download") and inMenu) }
+            compose.onNode(hasText("Download") and inMenu).performClick()
+        }
     }
 
     /** At twice the text size the season's two buttons go on two lines, Download first, each whole. */

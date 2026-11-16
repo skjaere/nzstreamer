@@ -14,8 +14,10 @@ import io.skjaere.usenet.metadata.hasAired
 import org.junit.jupiter.api.Test
 import java.time.LocalDate
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * The season's mark button goes by its aired episodes, but marking the season unwatched takes an
@@ -176,6 +178,14 @@ class SeasonMarkTest {
         assertNotEquals(key, seasonSheetKey(2, null, SeasonState.Loaded(loaded)))
         assertNotEquals(key, seasonSheetKey(3, harbor, SeasonState.Loaded(loaded)))
         assertNotEquals(key, seasonSheetKey(2, harbor, SeasonState.Loaded(loaded.copy(number = 1))))
+    }
+
+    /** A sheet kept for a season goes once the page has another open, never before the page has opened one. */
+    @Test
+    fun `a sheet kept for a season the page no longer has open is left behind`() {
+        assertTrue(sheetLeft(1, selected = 3))
+        assertFalse(sheetLeft(1, selected = 1))
+        assertFalse(sheetLeft(1, selected = null), "the page brought back before it has opened a season")
     }
 
     @Test

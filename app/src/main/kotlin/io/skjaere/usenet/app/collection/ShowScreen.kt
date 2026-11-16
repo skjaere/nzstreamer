@@ -425,10 +425,11 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}) {
         if (downloadsHere) DownloadUndoBar(vm.downloadActions, Modifier.align(Alignment.BottomCenter), onRoom = { undoRoom = it })
     }
     // An episode's Download sheet, over the page, once its season is there (again, after a rotation); the sheet ends at
-    // once where downloads don't show.
+    // once where downloads don't show. Kept for a season the page no longer has open, it goes (sheetLeft).
     downloading?.let { (seasonNumber, number) ->
         val e = (season as? SeasonState.Loaded)?.season?.episodes?.firstOrNull { it.season == seasonNumber && it.episode == number }
         e?.let(vm::downloadRequest)?.let { request -> DownloadSheet(request, onClose = { downloading = null }) }
+        if (sheetLeft(seasonNumber, selected)) LaunchedEffect(seasonNumber) { downloading = null }
     }
     // The season's Download sheet, over the page, once its season is there (again, after a rotation). Its request is
     // built once as it opens (seasonSheetKey): what it counts apart changes as it queues, and a new request would search again.
@@ -437,8 +438,8 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}) {
         val request = remember(seasonSheetKey(number, d, season)) { vm.seasonDownloadRequest(number) }
         if (request != null) {
             DownloadSeasonSheet(request, onClose = { downloadingSeason = null })
-        } else if (d != null && loaded != null) {
-            // Nothing left to download in it since: no sheet.
+        } else if (d != null && loaded != null || sheetLeft(number, selected)) {
+            // Nothing left to download in it since, or the page has another season open: no sheet.
             LaunchedEffect(number) { downloadingSeason = null }
         }
     }
@@ -571,6 +572,13 @@ internal fun seasonDownloadRequest(show: ShowDetails, episodes: List<Episode>, t
         posterPath = show.posterPath,
     )
 }
+
+/**
+ * Whether a Download sheet kept for season [number] (with the page, through a rotation or the process's death) is left
+ * behind: the page has another season [selected], as one brought back after the process's death opens the next episode's
+ * season. It goes then, never to open by itself, and search, when its season's chip is tapped later.
+ */
+internal fun sheetLeft(number: Int, selected: Int?): Boolean = selected != null && selected != number
 
 /**
  * What the season [number]'s Download sheet's request is built once for (L433): the season, and whether the page's
