@@ -158,6 +158,9 @@ class DownloadSeasonEndToEndDeviceTest {
         }
         PlaybackCoordinator.fetchNzb = realFetch
         back { cancelJobs() }
+        // The walk ended before the rows, their files and the settings go back: a write or a turn's search still under way
+        // (a case failing mid-season) would otherwise reach the saved providers or indexers, or leave a file behind.
+        back { waitFor("no host under way", 30_000) { if (!container.downloads.walking.value && starts() == 0) Unit else null } }
         throttle.delete()
         val manager = context.getSystemService(NotificationManager::class.java)
         val rows = container.data.downloads.all().first().filter { row -> row.id in made || since?.let { row.showTmdbId == SHOW && row.createdAt >= it } == true }
@@ -285,6 +288,8 @@ class DownloadSeasonEndToEndDeviceTest {
         }
         return compose.exists(matcher)
     }
+
+    private fun starts(): Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) DownloadJobService.starts.value else 0
 
     private fun cancelJobs() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) DownloadJobService.scheduler(context).cancelAll()
