@@ -303,6 +303,37 @@ class DownloadFileChoiceTest {
         assertEquals(emptyList(), fakes.calls)
     }
 
+    /**
+     * L403, W110: a file chosen on Wi-Fi, and the phone on mobile data since. Back in front, the Chosen file's sheet reads
+     * the network again: it says it starts on Wi-Fi, its file still chosen, and its list greys Choose file "Needs Wi-Fi".
+     * Choose file reads the network as it is tapped, so a list drawn before opens nothing over mobile data either.
+     */
+    @Test
+    fun `a Chosen file's sheet back in front on mobile data says it starts on Wi-Fi, and Choose file opens nothing then`() = runTest {
+        val fakes = fakes()
+        val sheet = open(fakes)
+        val choice = chooseFile(sheet)
+        choice.pick(choice.named("Harbor.Lights.S02E04.mkv").index)
+        runCurrent()
+        val before = assertIs<DownloadSheetState.Chosen>(sheet.state.value)
+        assertEquals(DownloadStart.Now, before.start)
+
+        fakes.network = MOBILE
+        sheet.shown()
+        runCurrent()
+        val again = assertIs<DownloadSheetState.Chosen>(sheet.state.value)
+        assertEquals(before.file, again.file)
+        assertEquals(DownloadStart.OnWifi, again.start)
+        assertEquals(ReleaseListMode.Download.FileChoiceOffer.NeedsWifi, again.mode.fileChoice(before.item))
+
+        // The list as it was drawn before: its Choose file opens nothing, nothing grabbed.
+        fakes.calls.clear()
+        assertNotNull(before.mode.onChooseFile).invoke(before.item)
+        runCurrent()
+        assertNull(sheet.choice.value)
+        assertEquals(emptyList(), fakes.calls)
+    }
+
     @Test
     fun `from the Downloads page a file chosen replaces that download's release at once`() = runTest {
         val fakes = fakes()

@@ -324,19 +324,23 @@ class DownloadSheetModel(
     }
 
     /**
-     * Opens [item]'s files, a pack of [group] listed in [mode]: an episode's, where its card offers Choose file now (never
-     * greyed for Wi-Fi), and no Download under way. One open before is closed first.
+     * Opens [item]'s files, a pack of [group] listed in [mode]: an episode's, where its card offers Choose file (never
+     * greyed for Wi-Fi), and no Download under way. One open before is closed first. Whether it would start on Wi-Fi is
+     * read again as it is tapped (L403): a list drawn before the phone went on mobile data opens nothing.
      */
     private fun chooseFile(item: RankedItem, group: ResultGroup, mode: ReleaseListMode.Download) {
         val play = (request as? DownloadRequest.Episode)?.play ?: return
         if (mode.fileChoice(item) != ReleaseListMode.Download.FileChoiceOffer.Offered || _downloading.value || _closed.value) return
-        closeChoice()
-        val choice = DownloadFileChoice(
-            item, request.subtitle, FilePicker.Episode(play.season, play.episode), play.episodeName, deps, scope, replacing,
-            onFailed = { reason -> _failed.update { it + (item.key to reason) } },
-        ) { file, picked -> chosen(item, group, mode, file, picked) }
-        _choice.value = choice
-        choice.start()
+        scope.launch {
+            if (startsOnWifi(deps.prefs(), deps.network())) return@launch
+            closeChoice()
+            val choice = DownloadFileChoice(
+                item, request.subtitle, FilePicker.Episode(play.season, play.episode), play.episodeName, deps, scope, replacing,
+                onFailed = { reason -> _failed.update { it + (item.key to reason) } },
+            ) { file, picked -> chosen(item, group, mode, file, picked) }
+            _choice.value = choice
+            choice.start()
+        }
     }
 
     /**
@@ -405,8 +409,15 @@ class DownloadSheetModel(
      */
     fun shown() {
         val group = found ?: return
-        // A file chosen in a pack stays chosen: its room was read as it was chosen, and Download reads it again at Resolve.
-        if (_downloading.value || _closed.value || _state.value is DownloadSheetState.Chosen) return
+        if (_downloading.value || _closed.value) return
+        // A file chosen in a pack stays chosen; the space, the network and when it starts are read again, and its list's.
+        (_state.value as? DownloadSheetState.Chosen)?.let { chosen ->
+            scope.launch {
+                val now = again(chosen)
+                if (_state.value === chosen && !_downloading.value) _state.value = now
+            }
+            return
+        }
         scope.launch {
             val now = decide(group)
             // A search that found more meanwhile has said its own.
@@ -493,13 +504,30 @@ class DownloadSheetModel(
         val free = space?.free ?: 0
         val prefs = deps.prefs()
         val network = deps.network()
+        val mode = modeOf(group, free, prefs, network)
+        val need = mode.need(best)
+        if (!mode.fits(best)) return DownloadSheetState.WontFit(group, best, mode, need, free, space?.queued ?: 0, space?.queuedDownloads ?: 0, deps.askDue())
+        return DownloadSheetState.Pick(group, best, mode, need, free, startOf(deps.rows(), prefs, network, deps.charging), deps.askDue())
+    }
+
+    /**
+     * [group]'s list in download mode with [free] room, greyed for Wi-Fi as [prefs] and [network] say: a tap downloads the
+     * release, and an episode's Choose file opens a pack's files (L403).
+     */
+    private fun modeOf(group: ResultGroup, free: Long, prefs: DownloadPrefs, network: NetworkNow): ReleaseListMode.Download {
         lateinit var mode: ReleaseListMode.Download
         // Choose file is an episode's: which of a pack's videos is it (L403).
         val chooseFile = { item: RankedItem -> chooseFile(item, group, mode) }.takeIf { request is DownloadRequest.Episode }
         mode = ReleaseListMode.Download(free, startsOnWifi(prefs, network), request.seasonEpisodes, chooseFile) { item -> download(item, group, mode) }
-        val need = mode.need(best)
-        if (!mode.fits(best)) return DownloadSheetState.WontFit(group, best, mode, need, free, space?.queued ?: 0, space?.queuedDownloads ?: 0, deps.askDue())
-        return DownloadSheetState.Pick(group, best, mode, need, free, startOf(deps.rows(), prefs, network, deps.charging), deps.askDue())
+        return mode
+    }
+
+    /** [chosen] with its file kept, read again as the sheet is in front again: the space free, when it starts, its list. */
+    private suspend fun again(chosen: DownloadSheetState.Chosen): DownloadSheetState.Chosen {
+        val free = deps.space()?.free ?: 0
+        val prefs = deps.prefs()
+        val network = deps.network()
+        return chosen.copy(mode = modeOf(chosen.group, free, prefs, network), free = free, start = startOf(deps.rows(), prefs, network, deps.charging), asks = deps.askDue())
     }
 
     companion object {
