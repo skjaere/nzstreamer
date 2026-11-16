@@ -44,6 +44,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.play.SheetTitle
@@ -95,6 +97,8 @@ internal fun DownloadSheet(request: DownloadRequest, onClose: () -> Unit, deps: 
     val scope = rememberCoroutineScope()
     val model = remember(request, deps) { DownloadSheetModel(request, deps, scope) }
     LaunchedEffect(model) { model.start() }
+    // Back from Android's storage page: the room made there read again.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { model.shown() }
     val state by model.state.collectAsStateWithLifecycle()
     val downloading by model.downloading.collectAsStateWithLifecycle()
     val closed by model.closed.collectAsStateWithLifecycle()

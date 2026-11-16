@@ -224,13 +224,35 @@ class DownloadSheetModel(private val request: DownloadRequest, private val deps:
 
     private var started = false
 
+    /** What the search found last, which [shown] weighs again. */
+    private var found: ResultGroup? = null
+
     /** Searches, once. */
     fun start() {
         if (started) return
         started = true
         chooser.chooseAsFound(request) { search() }
         scope.launch {
-            chooser.state.collectLatest { chosen -> if (chosen is ChooseState.Ready) _state.value = decide(chosen.group) }
+            chooser.state.collectLatest { chosen ->
+                if (chosen is ChooseState.Ready) {
+                    found = chosen.group
+                    _state.value = decide(chosen.group)
+                }
+            }
+        }
+    }
+
+    /**
+     * The sheet is in front again, maybe from Android's storage page (Won't fit's Storage settings): what was found is
+     * weighed again against the space as it is now, with no new search, so room made there offers Download.
+     */
+    fun shown() {
+        val group = found ?: return
+        if (_downloading.value || _closed.value) return
+        scope.launch {
+            val now = decide(group)
+            // A search that found more meanwhile has said its own.
+            if (found === group && !_downloading.value) _state.value = now
         }
     }
 

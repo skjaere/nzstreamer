@@ -276,6 +276,25 @@ class DownloadSheetTest {
     }
 
     @Test
+    fun `back from Android's storage page the space is read again, and a pick that fits now offers Download`() = runTest {
+        val fakes = Fakes().apply {
+            space = DownloadSpace(available = 4 * GB, used = 0, queued = 0)
+            films = { _, context -> flowOf(MovieFind(film(listOf(ranked(nzb(COPPER, 4_300_000_000), 2.0), ranked(nzb(COPPER_720, 2_200_000_000), 1.0))), STATUSES, context)) }
+        }
+        val sheet = open(FILM, fakes)
+        assertIs<DownloadSheetState.WontFit>(sheet.state.value)
+        // Storage settings: room made there, and the sheet in front again, with no new search.
+        fakes.space = DownloadSpace(available = 15 * GB, used = 0, queued = 0)
+        sheet.shown()
+        runCurrent()
+        val pick = assertIs<DownloadSheetState.Pick>(sheet.state.value)
+        assertEquals(COPPER, pick.best.item.title)
+        assertEquals(14 * GB, pick.free)
+        assertTrue(pick.mode.fits(pick.best), "the list reads the room made too")
+        assertEquals(1, fakes.contexts.size, "searched once")
+    }
+
+    @Test
     fun `no release to download says what each search of the indexers did, as the play sheet says it`() = runTest {
         val indexer = IndexerConfig("idx-a", "Indexer A", "https://indexer.invalid/api", "")
         val stages = listOf(
