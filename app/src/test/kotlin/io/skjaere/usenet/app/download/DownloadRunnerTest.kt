@@ -58,6 +58,7 @@ import java.nio.channels.FileChannel
 import kotlin.random.Random
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -821,6 +822,206 @@ class DownloadRunnerTest {
         )
     }
 
+    /** Harbor Lights' search facts for episode [episode] of season 2, as the season's sheet keeps them (L392). */
+    private fun facts(episode: Int, searched: Boolean = false) = SeasonSearch(
+        "Harbor Lights", 2021, tvdb = 700_002, tmdb = SHOW, airDate = "2023-03-%02d".format(episode), runtimeMinutes = 44, seasonEpisodes = 8,
+        searched = searched,
+    )
+
+    /** Episode [episode] of a season queued at once, from [releases], with its search facts. */
+    private fun item(episode: Int, vararg releases: Fake) = DownloadRunner.QueueItem(target(episode), releases.map { it.candidate }, search = facts(episode))
+
+    /**
+     * L392: a season's episodes queued at once take consecutive places at the queue's end, in episode order whatever order
+     * they come in, each with its releases, what the first needs and its search facts, none of them searched yet.
+     */
+    @Test
+    fun `a season is queued at the queue's end in episode order, at consecutive places, each with its search facts`() = test {
+        val runner = runner()
+        row(QUEUED, 8, 1, fake("hl-q"))
+        row(A, 7, 4, fake("hl-a")) { it.copy(state = DownloadState.Done, completedAt = NOW) }
+        val (x, y, z) = listOf(fake("hl-x"), fake("hl-y"), fake("hl-z"))
+        val queued = runner.enqueueAll(
+            listOf(
+                item(3, z),
+                DownloadRunner.QueueItem(target(1), listOf(x.candidate, y.candidate), need = 1_400, search = facts(1, searched = true)),
+                item(2),
+            ),
+        )
+        assertEquals(listOf(1, 2, 3), queued.map { it.episode })
+        assertEquals(queued, queued.map { stored(it.id) })
+        assertEquals(listOf(5L, 6L, 7L), queued.map { it.position })
+        assertEquals(listOf(QUEUED) + queued.map { it.id }, order())
+        assertEquals(listOf(listOf(x.candidate, y.candidate), emptyList(), listOf(z.candidate)), queued.map { it.candidates })
+        assertEquals(listOf(1_400L, 0L, z.size), queued.map { it.indexerSize })
+        assertEquals((1..3).map { facts(it) }, queued.map { DownloadColumns.search(it) })
+        queued.forEach { row ->
+            assertEquals(DownloadState.Queued, row.state)
+            assertTrue(File(storage.bookkeeping(row.id), DownloadStorage.MARKER).isFile, "its marker")
+        }
+    }
+
+    @Test
+    fun `a download with no release to try yet is queued only with its search facts`() = test {
+        val runner = runner()
+        // One of a season without them: none of the season is queued.
+        assertFailsWith<IllegalArgumentException> { runner.enqueueAll(listOf(item(1, fake("hl-a")), DownloadRunner.QueueItem(target(2), emptyList()))) }
+        assertFailsWith<IllegalArgumentException> { runner.enqueue(target(3), emptyList()) }
+        assertEquals(emptyMap(), dao.rows.value)
+        assertEquals(emptySet(), storage.folders())
+
+        // With them, its turn searches (L392).
+        val one = assertNotNull(runner.enqueue(target(3), emptyList(), search = facts(3, searched = true)))
+        assertEquals(emptyList(), stored(one.id).candidates)
+        assertEquals(0L, stored(one.id).indexerSize)
+        assertEquals(facts(3), DownloadColumns.search(stored(one.id)))
+        assertEquals(listOf(emptyList<DownloadCandidate>()), runner.enqueueAll(listOf(item(4))).map { stored(it.id).candidates })
+    }
+
+    /**
+     * L396: a season queued again leaves an episode still to finish or downloaded as it is, and puts back the row of one
+     * that failed, never a second: queued in the season's order from its new releases, its tries, reason, pick and limit's
+     * wait gone, its search facts the new ones, not yet searched.
+     */
+    @Test
+    fun `an episode still to finish or downloaded keeps its row, and a failed one's row is put back in the season's order`() = test {
+        val runner = runner()
+        val old = fake("hl-old")
+        row(QUEUED, 1, 0, old) { it.copy(state = DownloadState.Waiting, reason = DownloadHostRules.CANT_REACH_PROVIDER) }
+        row(A, 3, 1, old) { it.copy(state = DownloadState.Done, completedAt = NOW) }
+        row(FAILED, 2, 2, old) {
+            it.copy(
+                state = DownloadState.Failed, reason = DownloadResolver.NO_OTHER_RELEASE, tried = listOf(old.key), search = DownloadColumns.text(facts(2, searched = true)),
+                pick = DownloadColumns.text(DownloadPick(1, old.fileName, old.size, old.prepared.id)),
+                limitWait = DownloadColumns.text(LimitWait(INDEXER, LimitWait.Kind.Download, NOW)),
+            )
+        }
+        val still = stored(QUEUED)
+        val done = stored(A)
+        val (n1, n2, n3, n4) = listOf(fake("hl-n1"), fake("hl-n2"), fake("hl-n3"), fake("hl-n4"))
+
+        val queued = runner.enqueueAll(listOf(item(1, n1), item(2, n2), item(3, n3), item(4, n4)))
+        assertEquals(listOf(2, 4), queued.map { it.episode })
+        assertEquals(FAILED, queued.first().id)
+        assertEquals(still, stored(QUEUED))
+        assertEquals(done, stored(A))
+        assertEquals(4, dao.rows.value.size, "one row an episode")
+        val back = stored(FAILED)
+        assertEquals(DownloadState.Queued, back.state)
+        assertNull(back.reason)
+        assertEquals(emptyList(), back.tried)
+        assertEquals(listOf(n2.candidate), back.candidates)
+        assertEquals(n2.size, back.indexerSize)
+        assertEquals(facts(2), DownloadColumns.search(back))
+        assertNull(back.pick)
+        assertNull(back.limitWait)
+        assertEquals(listOf(3L, 4L), queued.map { stored(it.id).position })
+        assertEquals(listOf(QUEUED, FAILED, queued[1].id), order())
+    }
+
+    @Test
+    fun `a season is queued all or none, an insert that fails leaving no row, no folder and no row put back`() = test {
+        val runner = runner()
+        val old = fake("hl-old")
+        row(FAILED, 2, 0, old) { it.copy(state = DownloadState.Failed, reason = DownloadResolver.NO_OTHER_RELEASE, tried = listOf(old.key)) }
+        val failed = stored(FAILED)
+        val season = listOf(item(1, fake("hl-a")), item(2, fake("hl-b")), item(3, fake("hl-c")))
+        dao.full = setOf("insertAll")
+        assertFailsWith<android.database.sqlite.SQLiteFullException> { runner.enqueueAll(season) }
+        assertEquals(mapOf(FAILED to failed), dao.rows.value)
+        assertEquals(setOf(FAILED), storage.folders())
+
+        dao.full = emptySet()
+        assertEquals(listOf(1, 2, 3), runner.enqueueAll(season).map { it.episode })
+        assertEquals(3, dao.rows.value.size)
+    }
+
+    /** L396, L398: Try again searches a season row's episode afresh; one without search facts, or with a file chosen by hand, keeps its releases. */
+    @Test
+    fun `retry of a season row clears its releases to search again, one with a pick or no search facts keeps them`() = test {
+        val runner = runner()
+        val a = fake("hl-a")
+        val failed = { row: Download -> row.copy(state = DownloadState.Failed, reason = DownloadResolver.NO_OTHER_RELEASE, tried = listOf(a.key)) }
+        row(FAILED, 2, 0, a) { failed(it).copy(search = DownloadColumns.text(facts(2, searched = true))) }
+        runner.retry(FAILED)
+        val again = stored(FAILED)
+        assertEquals(DownloadState.Queued, again.state)
+        assertEquals(emptyList(), again.tried)
+        assertEquals(emptyList(), again.candidates)
+        assertEquals(facts(2), DownloadColumns.search(again))
+
+        row(OTHER, 3, 1, a) { failed(it) }
+        runner.retry(OTHER)
+        assertEquals(listOf(a.candidate), stored(OTHER).candidates)
+        assertNull(stored(OTHER).search)
+
+        val chosen = DownloadPick(1, a.fileName, a.size, a.prepared.id)
+        row(SAME, 4, 2, a) { failed(it).copy(search = DownloadColumns.text(facts(4, searched = true)), pick = DownloadColumns.text(chosen)) }
+        runner.retry(SAME)
+        assertEquals(DownloadState.Queued, stored(SAME).state)
+        assertEquals(listOf(a.candidate), stored(SAME).candidates)
+        assertEquals(chosen, DownloadColumns.pick(stored(SAME)))
+    }
+
+    /** L403: a file chosen by hand is queued with its pick, its NZB and password kept beside the marker before the row is there. */
+    @Test
+    fun `a file chosen by hand is queued with its pick, its NZB there before its row`() = test {
+        val runner = runner()
+        val pack = fake("hl-pack", oneVideo = false)
+        val chosen = DownloadPick(3, "Harbor.Lights.S02E04.1080p.WEB.h264-PACK.mkv", 1_412_345, pack.prepared.id)
+        val grab = DownloadStorage.Grab(pack.key, DownloadStorage.Source(pack.nzb, "s3cret"))
+        val seen = mutableListOf<String?>()
+        dao.onInsert = { row -> seen += storage.grab(row.id)?.key }
+        val id = assertNotNull(runner.enqueue(target(4), listOf(pack.candidate, fake("hl-b").candidate), need = chosen.size, pick = chosen, grab = grab)).id
+        assertEquals(listOf<String?>(pack.key), seen)
+        assertEquals(chosen, DownloadColumns.pick(stored(id)))
+        assertEquals(chosen.size, stored(id).indexerSize)
+        val kept = assertNotNull(storage.grab(id))
+        assertContentEquals(pack.nzb, kept.source.nzb)
+        assertEquals("s3cret", kept.source.password)
+        // An NZB of a release the row doesn't list would never be tried: the caller's mistake.
+        assertFailsWith<IllegalArgumentException> { runner.enqueue(target(5), listOf(fake("hl-c").candidate), grab = grab) }
+    }
+
+    /** L403, L435: Choose file from the Downloads page replaces a row's release with its pick at once; a release chosen by hand is tried as chosen, with no search. */
+    @Test
+    fun `a replace takes a file chosen by hand with its NZB, and clears the search facts and a pick before`() = test {
+        val runner = runner()
+        val pack = fake("hl-pack", oneVideo = false)
+        val id = runner.enqueueAll(listOf(item(4, fake("hl-a")))).single().id
+        dao.update(stored(id).copy(limitWait = DownloadColumns.text(LimitWait(INDEXER, LimitWait.Kind.Download, NOW))))
+        val chosen = DownloadPick(3, "Harbor.Lights.S02E04.1080p.WEB.h264-PACK.mkv", 1_412_345, pack.prepared.id)
+        runner.replace(id, listOf(pack.candidate), need = chosen.size, pick = chosen, grab = DownloadStorage.Grab(pack.key, DownloadStorage.Source(pack.nzb, null)))
+        val picked = stored(id)
+        assertNull(picked.search)
+        assertNull(picked.limitWait)
+        assertEquals(chosen, DownloadColumns.pick(picked))
+        assertEquals(chosen.size, picked.indexerSize)
+        assertEquals(pack.key, storage.grab(id)?.key)
+
+        runner.replace(id, listOf(fake("hl-x").candidate))
+        assertNull(stored(id).pick)
+        assertNull(storage.grab(id))
+    }
+
+    /** L442: TMDB's facts go from a row as it is done, and its limit's wait with them; the file chosen for it stays. */
+    @Test
+    fun `at Done a row's search facts and limit's wait go, and its pick stays`() = test {
+        val runner = runner()
+        val a = fake("hl-a")
+        val chosen = DownloadPick(0, a.fileName, a.size, a.prepared.id)
+        val id = assertNotNull(runner.enqueue(target(4), listOf(a.candidate), search = facts(4), pick = chosen)).id
+        dao.update(stored(id).copy(limitWait = DownloadColumns.text(LimitWait(INDEXER, LimitWait.Kind.Search, NOW, NOW + 60_000))))
+        assertEquals(facts(4), DownloadColumns.search(stored(id)))
+        host(runner)
+        advanceUntilIdle()
+        val done = stored(id)
+        assertEquals(DownloadState.Done, done.state)
+        assertNull(done.search)
+        assertNull(done.limitWait)
+        assertEquals(chosen, DownloadColumns.pick(done))
+    }
+
     @Test
     fun `a release given up as it is written moves to the next, at most 3, each one's file and NZB gone first`() = test {
         val four = (1..4).map { i -> fake("hl-gap-$i").apply { missing = listOf(SIZE / 2L until SIZE) } }
@@ -1405,6 +1606,7 @@ class DownloadRunnerTest {
         val tv = runner(television = true)
         val a = fake("hl-a")
         assertNull(tv.enqueue(target(1), listOf(a.candidate)))
+        assertEquals(emptyList(), tv.enqueueAll(listOf(item(2, a))))
         assertEquals(emptyMap(), dao.rows.value)
         // A test's row: nothing starts it there.
         row(QUEUED, 1, 0, a)
@@ -1580,7 +1782,21 @@ class DownloadRunnerTest {
         override suspend fun doneFor(watchKey: String) = rows.value.values.filter { it.state == DownloadState.Done && it.watchKey == watchKey }.maxByOrNull { it.completedAt ?: 0 }
         override fun forShow(showTmdbId: Int) = sorted { it.showTmdbId == showTmdbId && it.state != DownloadState.Deleting }
         override fun forMovie(movieTmdbId: Int) = rows.map { all -> all.values.firstOrNull { it.movieTmdbId == movieTmdbId && it.state != DownloadState.Deleting } }
-        override suspend fun insert(download: Download) = rows.update { it + (download.id to download) }
+        /** Called as each row goes in, before it is there: what the places hold of it then. */
+        var onInsert: (Download) -> Unit = {}
+
+        override suspend fun insert(download: Download) {
+            onInsert(download)
+            rows.update { it + (download.id to download) }
+        }
+
+        /** As Room's transaction: every row, or none where it fails. */
+        override suspend fun insertAll(downloads: List<Download>, putBack: List<Download>) {
+            write("insertAll")
+            downloads.forEach(onInsert)
+            rows.update { all -> all + putBack.filter { it.id in all }.associateBy { it.id } + downloads.associateBy { it.id } }
+        }
+
         override suspend fun update(download: Download) {
             write("update")
             rows.update { if (download.id in it) it + (download.id to download) else it }
@@ -1622,10 +1838,44 @@ class DownloadRunnerTest {
         fun video(id: String) = File(videoFolder(id), "v.mkv")
         fun part(id: String) = File(videoFolder(id), "v.mkv.part")
 
-        override suspend fun add(row: Download) {
-            bookkeeping(row.id).mkdirs()
-            File(bookkeeping(row.id), DownloadStorage.MARKER).createNewFile()
+        /** The bookkeeping folders there are, by id: the season packs' copies left out. */
+        fun folders(): Set<String> = files.listFiles().orEmpty().filter { it.isDirectory && it.name != ".packs" }.mapTo(HashSet()) { it.name }
+
+        private fun mark(id: String) {
+            bookkeeping(id).mkdirs()
+            File(bookkeeping(id), DownloadStorage.MARKER).createNewFile()
+        }
+
+        override suspend fun add(row: Download, grab: DownloadStorage.Grab?) {
+            mark(row.id)
+            grab?.let { keepGrab(row.id, it) }
             dao.insert(row)
+        }
+
+        /** As DownloadStorage's: the folders and markers first, then the rows in one go; a failure takes the new folders back. */
+        override suspend fun addAll(rows: List<Download>, putBack: List<Download>) {
+            rows.forEach { mark(it.id) }
+            try {
+                dao.insertAll(rows, putBack)
+            } catch (e: Exception) {
+                rows.filter { dao.get(it.id) == null }.forEach { bookkeeping(it.id).deleteRecursively() }
+                throw e
+            }
+        }
+
+        override suspend fun keepGrab(id: String, grab: DownloadStorage.Grab) {
+            events += "keep grab $id"
+            File(bookkeeping(id), DownloadStorage.GRAB).writeBytes(grab.source.nzb)
+            val password = File(bookkeeping(id), DownloadStorage.GRAB_PASSWORD)
+            grab.source.password?.let(password::writeText) ?: password.delete()
+            File(bookkeeping(id), DownloadStorage.GRAB_KEY).writeText(grab.key)
+        }
+
+        /** The NZB kept for [id]'s attempt, as DownloadStorage reads it back. */
+        fun grab(id: String): DownloadStorage.Grab? {
+            val key = File(bookkeeping(id), DownloadStorage.GRAB_KEY).takeIf { it.isFile }?.readText() ?: return null
+            val nzb = File(bookkeeping(id), DownloadStorage.GRAB).readBytes()
+            return DownloadStorage.Grab(key, DownloadStorage.Source(nzb, File(bookkeeping(id), DownloadStorage.GRAB_PASSWORD).takeIf { it.isFile }?.readText()))
         }
 
         override suspend fun open(id: String, fileName: String, size: Long): FileChannel {
@@ -1674,8 +1924,7 @@ class DownloadRunnerTest {
         override suspend fun dropSource(id: String) {
             beforeDropSource()
             events += "drop source $id"
-            File(bookkeeping(id), "nzb").delete()
-            File(bookkeeping(id), "password").delete()
+            listOf("nzb", "password", DownloadStorage.GRAB, DownloadStorage.GRAB_PASSWORD, DownloadStorage.GRAB_KEY).forEach { File(bookkeeping(id), it).delete() }
         }
 
         override suspend fun delete(id: String) {

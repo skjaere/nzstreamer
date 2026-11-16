@@ -281,6 +281,64 @@ class DownloadStorageDeviceTest {
         assertFalse(File(files, "downloads/refused").exists())
     }
 
+    /** A file chosen by hand comes with its pack's NZB (L403): kept beside the marker, with its key and password, before the row is there. */
+    @Test
+    fun aFileChosenByHandHasItsNzbBesideItsMarkerBeforeItsRowIsThere() = runBlocking<Unit> {
+        val seen = mutableListOf<String?>()
+        lateinit var storage: DownloadStorage
+        val watching = object : DownloadDao by downloads {
+            override suspend fun insert(download: Download) {
+                seen += storage.grab(download.id)?.key
+                downloads.insert(download)
+            }
+        }
+        storage = DownloadStorage(files, { volume }, watching, storageManager)
+        storage.add(row("picked"), DownloadStorage.Grab("indexer/harbor-pack", DownloadStorage.Source(NZB, "harbor-pw")))
+        assertEquals(listOf<String?>("indexer/harbor-pack"), seen)
+        val grab = checkNotNull(storage.grab("picked"))
+        assertArrayEquals(NZB, grab.source.nzb)
+        assertEquals("harbor-pw", grab.source.password)
+        assertNotNull(downloads.get("picked"))
+
+        // Its insert refused: its folder goes, the NZB with it.
+        val refusing = object : DownloadDao by downloads {
+            override suspend fun insert(download: Download) = throw SQLiteException("disk I/O error")
+        }
+        val refused = DownloadStorage(files, { volume }, refusing, storageManager)
+        assertThrows(SQLiteException::class.java) {
+            runBlocking { refused.add(row("refused"), DownloadStorage.Grab("indexer/harbor-pack", DownloadStorage.Source(NZB, "harbor-pw"))) }
+        }
+        assertFalse(File(files, "downloads/refused").exists())
+    }
+
+    /**
+     * A season queued at once (L392, L396): every new row's folder and marker first, then every row written in one
+     * transaction, a failed one put back among them; one that can't be written leaves none of it, and no folder of its.
+     */
+    @Test
+    fun aSeasonWrittenAtOnceLeavesNoFolderAndNoRowWhereOneFails() = runBlocking<Unit> {
+        val storage = storage()
+        storage.add(row("taken"))
+        storage.add(row("back").copy(state = DownloadState.Failed, reason = "No playable release found"))
+        val back = row("back").copy(position = 5)
+
+        // The second's id is taken: nothing goes in, and the first's folder goes again.
+        assertThrows(SQLiteConstraintException::class.java) {
+            runBlocking { storage.addAll(listOf(row("s1"), row("taken")), putBack = listOf(back)) }
+        }
+        assertNull(downloads.get("s1"))
+        assertFalse(File(files, "downloads/s1").exists())
+        assertTrue("the marker of the row there before", File(files, "downloads/taken/.row").isFile)
+        assertEquals(DownloadState.Failed, downloads.get("back")?.state)
+
+        storage.addAll(listOf(row("s1"), row("s2")), putBack = listOf(back))
+        assertEquals(back, downloads.get("back"))
+        listOf("s1", "s2").forEach { id ->
+            assertNotNull(downloads.get(id))
+            assertTrue(File(files, "downloads/$id/.row").isFile)
+        }
+    }
+
     @Test
     fun reconcileDeletesFoldersWithNoRowDropsRowsWithoutTheirMarkerAndKeepsQueuedAndDoneRows() = runBlocking<Unit> {
         val storage = storage()

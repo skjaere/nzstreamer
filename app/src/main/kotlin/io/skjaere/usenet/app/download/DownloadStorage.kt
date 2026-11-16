@@ -26,9 +26,9 @@ import java.nio.channels.FileChannel
  * - The video, in the app's own folder on the primary volume ([volumeDir], removed with the app, W109):
  *   `downloads/<id>/v.<ext>`, `.part` until it is renamed when done, never named after the release, beside a `.nomedia`
  *   in `downloads/`. Its whole size is allocated before its first byte ([open]), so it can't run out of room part way.
- * - Each download's bookkeeping, in [filesDir]'s `downloads/<id>/`: the marker `.row`, made with the row ([add]) and
- *   lasting as long as it; the NZB and its password, kept at Resolve and dropped once the file is complete, failed or
- *   cancelled. Neither place goes in a backup or a transfer, so a row whose marker is missing came from another device
+ * - Each download's bookkeeping, in [filesDir]'s `downloads/<id>/`: the marker `.row`, made with the row ([add], a
+ *   season's at once with [addAll]) and lasting as long as it; the NZB and its password, kept at Resolve (or with the
+ *   row, for a file chosen by hand) and dropped once the file is complete, failed or cancelled. Neither place goes in a backup or a transfer, so a row whose marker is missing came from another device
  *   ([reconcile]).
  * - A season pack's NZB and password, kept once for the season's downloads in filesDir's `downloads/.packs/` ([packs],
  *   L394) while one of them is still to finish.
@@ -96,31 +96,68 @@ class DownloadStorage(
     /** [row]'s finished file; null before it has one, or while the volume isn't there. */
     fun file(row: Download): File? = row.relativePath?.let { path -> volumeDir()?.let { File(it, path) } }
 
-    /** Makes [row]'s bookkeeping folder with its marker, then the row: never a row without its marker (L346, L350). */
-    suspend fun add(row: Download): Unit = changes.withLock {
+    /**
+     * Makes [row]'s bookkeeping folder with its marker, and [grab] beside them where it has one (the NZB of a file chosen by
+     * hand, L403, as [keepGrab] keeps it), then the row: never a row without its marker (L346, L350), nor a picked row
+     * that a walk could take up before its NZB is there.
+     */
+    suspend fun add(row: Download, grab: Grab? = null): Unit = changes.withLock {
         withContext(io) {
             val folder = bookkeeping(row.id)
-            folder.mkdirs()
-            File(folder, MARKER).createNewFile()
-            if (!File(folder, MARKER).isFile) throw IOException("Couldn't make download ${row.id}'s folder")
+            mark(folder)
             try {
+                grab?.let { writeGrab(folder, it.key, it.source.nzb, it.source.password) }
                 downloads.insert(row)
             } catch (e: Throwable) {
-                // No row: its folder goes too, as reconcile would delete it. A row may be there all the same: an insert
-                // whose caller was cancelled as it committed, or one whose id was taken, the folder then that row's. Asked
-                // whatever the cancellation; a failed ask keeps the folder, for the next reconcile to judge.
-                withContext(NonCancellable) {
-                    val rowThere = try {
-                        downloads.get(row.id) != null
-                    } catch (lookup: Exception) {
-                        e.addSuppressed(lookup)
-                        true
-                    }
-                    if (!rowThere) folder.deleteRecursively()
-                }
+                dropUnlessRow(row.id, folder, e)
                 throw e
             }
         }
+    }
+
+    /**
+     * A season queued at once (L392, L396): every one of [rows]' bookkeeping folders and markers made first, then every row
+     * inserted and the rows [putBack] written whole in one transaction ([DownloadDao.insertAll]). One that fails leaves none
+     * of them, and their new folders go too; a process that dies between the two leaves folders with no row, which the next
+     * start's reconcile deletes.
+     */
+    suspend fun addAll(rows: List<Download>, putBack: List<Download> = emptyList()): Unit = changes.withLock {
+        withContext(io) {
+            val folders = rows.map { bookkeeping(it.id) }
+            var made = 0
+            try {
+                folders.forEach { folder ->
+                    made++
+                    mark(folder)
+                }
+                downloads.insertAll(rows, putBack)
+            } catch (e: Throwable) {
+                rows.zip(folders).take(made).forEach { (row, folder) -> dropUnlessRow(row.id, folder, e) }
+                throw e
+            }
+        }
+    }
+
+    /** Makes [folder] with its marker. */
+    private fun mark(folder: File) {
+        folder.mkdirs()
+        File(folder, MARKER).createNewFile()
+        if (!File(folder, MARKER).isFile) throw IOException("Couldn't make download ${folder.name}'s folder")
+    }
+
+    /**
+     * [folder], made for row [id] whose insert failed with [failure]: it goes too, as reconcile would delete it. A row may be
+     * there all the same: an insert whose caller was cancelled as it committed, or one whose id was taken, the folder then
+     * that row's. Asked whatever the cancellation; a failed ask keeps the folder, for the next reconcile to judge.
+     */
+    private suspend fun dropUnlessRow(id: String, folder: File, failure: Throwable) = withContext(NonCancellable) {
+        val rowThere = try {
+            downloads.get(id) != null
+        } catch (lookup: Exception) {
+            failure.addSuppressed(lookup)
+            true
+        }
+        if (!rowThere) folder.deleteRecursively()
     }
 
     /**
@@ -208,7 +245,11 @@ class DownloadStorage(
      * so a process dying part way leaves no key over another release's NZB.
      */
     suspend fun keepGrab(id: String, key: String, nzb: ByteArray, password: String?): Unit = withContext(io) {
-        val folder = bookkeeping(id)
+        writeGrab(bookkeeping(id), key, nzb, password)
+    }
+
+    /** [keepGrab]'s files in [folder], each written whole, the key last. */
+    private fun writeGrab(folder: File, key: String, nzb: ByteArray, password: String?) {
         File(folder, GRAB_KEY).delete()
         writeWhole(File(folder, GRAB), nzb)
         val passwordFile = File(folder, GRAB_PASSWORD)

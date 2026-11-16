@@ -7,6 +7,7 @@ import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
@@ -148,6 +149,16 @@ interface DownloadDao {
 
     @Insert
     suspend fun insert(download: Download)
+
+    /**
+     * Writes [putBack] whole and inserts [downloads], in one transaction (a season queued at once, L392, L396): all of
+     * them, or none where one fails.
+     */
+    @Transaction
+    suspend fun insertAll(downloads: List<Download>, putBack: List<Download> = emptyList()) {
+        putBack.forEach { update(it) }
+        downloads.forEach { insert(it) }
+    }
 
     @Update
     suspend fun update(download: Download)

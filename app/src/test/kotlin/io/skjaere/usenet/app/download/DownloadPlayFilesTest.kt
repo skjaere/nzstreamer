@@ -98,6 +98,7 @@ class DownloadPlayFilesTest {
         override fun forShow(showTmdbId: Int): Flow<List<Download>> = emptyFlow()
         override fun forMovie(movieTmdbId: Int): Flow<Download?> = emptyFlow()
         override suspend fun insert(download: Download) = error("not asked")
+        override suspend fun insertAll(downloads: List<Download>, putBack: List<Download>) = error("not asked")
         override suspend fun update(download: Download) = error("not asked")
         override suspend fun progress(id: String, safeOffset: Long, gaps: List<DownloadGap>, updatedAt: Long) = error("not asked")
         override suspend fun setState(id: String, state: DownloadState, reason: String?, updatedAt: Long) = error("not asked")

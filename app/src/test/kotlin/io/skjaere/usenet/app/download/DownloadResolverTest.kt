@@ -1134,6 +1134,9 @@ class DownloadResolverTest {
 
         override suspend fun insert(download: Download) = rows.update { it + (download.id to download) }
 
+        override suspend fun insertAll(downloads: List<Download>, putBack: List<Download>) =
+            rows.update { all -> all + putBack.filter { it.id in all }.associateBy { it.id } + downloads.associateBy { it.id } }
+
         override suspend fun update(download: Download) {
             onUpdate(download)
             rows.update { if (download.id in it) it + (download.id to download) else it }

@@ -23,6 +23,7 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.releases.ReleaseKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -255,6 +256,8 @@ class DownloadRunnerDeps(
  * - The NZB and its password go once the file is complete, the item fails or is cancelled (L346); a season pack's copy
  *   goes at the end of the last download of its season still to finish, whichever end it is (L394, [Storage.sweepPacks]).
  * - Remove hides a download at once and deletes it once its Undo has gone (L379); Cancel deletes it at once.
+ * - A season is queued at once, all or none, a failed episode's row put back rather than queued twice ([enqueueAll],
+ *   L392, L396).
  *
  * Nothing runs on a TV (L369): every call but [reconcile] returns at once there. Its log lines name a download by its id,
  * with sizes and a cause's kind: never its title, release or a host.
@@ -262,8 +265,20 @@ class DownloadRunnerDeps(
 class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: CoroutineScope) {
     /** What the runner keeps in and asks of the downloads' places on the device: [DownloadStorage]'s ([of]). */
     interface Storage {
-        /** Makes [row]'s bookkeeping folder and its marker, then the row (L346). */
-        suspend fun add(row: Download)
+        /**
+         * Makes [row]'s bookkeeping folder and its marker, with [grab] beside them where it has one (the NZB of a file chosen
+         * by hand, L403), then the row (L346).
+         */
+        suspend fun add(row: Download, grab: DownloadStorage.Grab? = null)
+
+        /**
+         * Makes each of [rows]' folders and markers, then inserts them and writes [putBack] whole in one transaction: all of
+         * them, or none (a season queued at once, L392).
+         */
+        suspend fun addAll(rows: List<Download>, putBack: List<Download>)
+
+        /** Keeps [grab] for [id]'s attempt of its release, as Resolve keeps one it grabbed ([DownloadStorage.keepGrab]). */
+        suspend fun keepGrab(id: String, grab: DownloadStorage.Grab)
 
         /** Opens [id]'s file to write, allocated whole; throws [DownloadStorage.Unavailable] while its volume isn't there. */
         suspend fun open(id: String, fileName: String, size: Long): FileChannel
@@ -294,7 +309,12 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
         companion object {
             fun of(storage: DownloadStorage): Storage = object : Storage {
-                override suspend fun add(row: Download) = storage.add(row)
+                override suspend fun add(row: Download, grab: DownloadStorage.Grab?) = storage.add(row, grab)
+                override suspend fun addAll(rows: List<Download>, putBack: List<Download>) = storage.addAll(rows, putBack)
+
+                override suspend fun keepGrab(id: String, grab: DownloadStorage.Grab) =
+                    storage.keepGrab(id, grab.key, grab.source.nzb, grab.source.password)
+
                 override suspend fun open(id: String, fileName: String, size: Long) = storage.open(id, fileName, size)
 
                 override suspend fun finish(id: String, fileName: String) {
@@ -318,6 +338,19 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      * any other).
      */
     data class Item(val row: Download, val written: Long, val bytesPerSecond: Long?)
+
+    /**
+     * One episode of a season queued at once ([enqueueAll]): what it is of ([target]); the releases the season's sheet
+     * ranked for it, in download order ([candidates]: none where nothing was found yet, which only a row with [search]
+     * can be); what the first needs until Resolve has its file's own size ([need], as [enqueue] counts it); and its search
+     * facts ([search], L392), with which its turn searches.
+     */
+    data class QueueItem(
+        val target: DownloadTarget,
+        val candidates: List<DownloadCandidate>,
+        val need: Long = candidates.firstOrNull()?.size ?: 0,
+        val search: SeasonSearch? = null,
+    )
 
     private val dao = deps.downloads
     private val writer = deps.writer
@@ -416,15 +449,23 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      * meanwhile). One removed with its Undo still pending isn't still to finish: a Download meanwhile queues another, and
      * an Undo then brings the removed one back beside it. Without, it is queued beside that one, as the pairs' seeding
      * queues two rows of its one fixture episode (L367). Scheduling its host is the visible app's (L335). Null on a TV.
+     *
+     * With [search], its search facts (L392), it may come with no release to try yet: its turn searches. A file chosen by
+     * hand in a pack (Choose file, L403) comes as [pick], with the pack's NZB and password as [grab], kept beside the marker
+     * before the row is there, so its attempt grabs nothing and no walk takes it up without them.
      */
     suspend fun enqueue(
         target: DownloadTarget,
         candidates: List<DownloadCandidate>,
-        need: Long = candidates.first().size,
+        need: Long = candidates.firstOrNull()?.size ?: 0,
         onePerTitle: Boolean = true,
+        search: SeasonSearch? = null,
+        pick: DownloadPick? = null,
+        grab: DownloadStorage.Grab? = null,
     ): Download? {
         if (!runs) return null
-        require(candidates.isNotEmpty()) { "A download needs a release to try" }
+        requireReleases(candidates, search)
+        require(grab == null || candidates.any { key(it) == grab.key }) { "An NZB kept for a release the download doesn't list" }
         return changes.withLock {
             val rows = dao.all().first()
             if (onePerTitle) {
@@ -433,20 +474,75 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                     return@withLock queued
                 }
             }
-            val at = now()
             val position = (rows.maxOfOrNull { it.position } ?: -1) + 1
-            val row = Download(
-                id = Download.newId(), watchKey = target.watchKey, kind = target.kind, title = target.title, subtitle = target.subtitle,
-                showTmdbId = target.showTmdbId, season = target.season, episode = target.episode, seasonEpisodes = target.seasonEpisodes,
-                episodeName = target.episodeName, movieTmdbId = target.movieTmdbId, year = target.year, runtimeMinutes = target.runtimeMinutes,
-                posterPath = target.posterPath, stillPath = target.stillPath, position = position, candidates = candidates.take(MAX_CANDIDATES),
-                indexerSize = need, createdAt = at, updatedAt = at,
-            )
-            deps.storage.add(row)
+            val row = newRow(target, candidates, need, search, position, now()).copy(pick = pick?.let(DownloadColumns::text))
+            deps.storage.add(row, grab)
             log.info("download {}: queued at {}, {} release{} to try", row.id, position, row.candidates.size, if (row.candidates.size == 1) "" else "s")
             row
         }
     }
+
+    /**
+     * Queues a season's episodes at once (W114, L392): one row each, at consecutive places at the queue's end in episode
+     * order, under one lock and one read of the rows, each with its releases, what the first needs and its search facts,
+     * not yet searched. An episode with a download still to finish, or downloaded, keeps that one and is passed over. One
+     * whose download failed has that row put back (L396), never a second: queued in the season's order from the new
+     * releases, its tries, reason, pick and limit's wait gone, its search facts the new ones. Its file and release stay, as
+     * Try again keeps them: Resolve goes on from them for the same release, and starts again for another.
+     *
+     * All or none: every new row's folder and marker first, then every row written in one transaction ([Storage.addAll]);
+     * a failure leaves none of it, and a process that dies between the two leaves folders for reconcile to delete. Returns
+     * the rows queued and put back, in their order; none on a TV. Scheduling the host is the visible app's (L335).
+     */
+    suspend fun enqueueAll(items: List<QueueItem>): List<Download> {
+        if (!runs) return emptyList()
+        items.forEach { requireReleases(it.candidates, it.search) }
+        return changes.withLock {
+            val rows = dao.all().first()
+            val byTitle = rows.groupBy { it.watchKey }
+            var position = (rows.maxOfOrNull { it.position } ?: -1) + 1
+            val at = now()
+            val added = mutableListOf<Download>()
+            val putBack = mutableListOf<Download>()
+            val queued = items.sortedWith(compareBy({ it.target.season }, { it.target.episode })).distinctBy { it.target.watchKey }.mapNotNull { item ->
+                val own = byTitle[item.target.watchKey].orEmpty()
+                own.firstOrNull { it.state in GOING_ON || it.state == DownloadState.Done }?.let { kept ->
+                    log.info("download {}: already {}", kept.id, if (kept.state == DownloadState.Done) "downloaded" else "queued")
+                    return@mapNotNull null
+                }
+                val failed = own.filter { it.state == DownloadState.Failed }.maxByOrNull { it.createdAt }
+                val row = if (failed == null) {
+                    newRow(item.target, item.candidates, item.need, item.search, position, at).also { added += it }
+                } else {
+                    failed.copy(
+                        state = DownloadState.Queued, reason = null, position = position, candidates = item.candidates.take(MAX_CANDIDATES),
+                        tried = emptyList(), indexerSize = item.need, search = item.search?.let(::searchText), pick = null, limitWait = null,
+                        updatedAt = at,
+                    ).also { putBack += it }
+                }
+                position++
+                row
+            }
+            if (queued.isEmpty()) return@withLock queued
+            deps.storage.addAll(added, putBack)
+            val back = putBack.mapTo(HashSet()) { it.id }
+            queued.forEach { row ->
+                val count = row.candidates.size
+                val how = if (row.id in back) "put back" else "queued"
+                log.info("download {}: {} at {}, {} release{} to try", row.id, how, row.position, count, if (count == 1) "" else "s")
+            }
+            queued
+        }
+    }
+
+    /** A new row of [target] at [position], as [enqueue] and [enqueueAll] make one. */
+    private fun newRow(target: DownloadTarget, candidates: List<DownloadCandidate>, need: Long, search: SeasonSearch?, position: Long, at: Long) = Download(
+        id = Download.newId(), watchKey = target.watchKey, kind = target.kind, title = target.title, subtitle = target.subtitle,
+        showTmdbId = target.showTmdbId, season = target.season, episode = target.episode, seasonEpisodes = target.seasonEpisodes,
+        episodeName = target.episodeName, movieTmdbId = target.movieTmdbId, year = target.year, runtimeMinutes = target.runtimeMinutes,
+        posterPath = target.posterPath, stillPath = target.stillPath, position = position, candidates = candidates.take(MAX_CANDIDATES),
+        indexerSize = need, search = search?.let(::searchText), createdAt = at, updatedAt = at,
+    )
 
     /**
      * Holds the queue (L380): the running item stops at its safe offset, keeping its file and the room it holds, and is
@@ -623,10 +719,21 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      * what it wrote deleted and its room given back, its NZB gone, its tries, gaps and safe offset reset, and queued in its
      * place, to resolve from the new ones; one that holds the queue (Paused, Stopped) holds it still, until Resume. Until
      * resolved it counts [need], as [enqueue] has it.
+     *
+     * A release chosen by hand is tried as chosen: its search facts go, so its turn neither searches nor takes its season's
+     * pack first (L392), and so does a limit's wait. A file chosen in a pack (Choose file, L435) comes as [pick], with the
+     * pack's NZB as [grab], kept before the row names it; any other release clears the pick before (L403).
      */
-    suspend fun replace(id: String, candidates: List<DownloadCandidate>, need: Long = candidates.first().size) {
+    suspend fun replace(
+        id: String,
+        candidates: List<DownloadCandidate>,
+        need: Long = candidates.first().size,
+        pick: DownloadPick? = null,
+        grab: DownloadStorage.Grab? = null,
+    ) {
         if (!runs) return
         require(candidates.isNotEmpty()) { "A download needs a release to try" }
+        require(grab == null || candidates.any { key(it) == grab.key }) { "An NZB kept for a release the download doesn't list" }
         changes.withLock {
             stop(id)
             val row = dao.get(id)?.takeIf { it.state != DownloadState.Deleting && it.state != DownloadState.Done } ?: return@withLock
@@ -634,6 +741,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             // meanwhile: a row left naming a deleted file at its offset would open its release again into a file of zeros.
             withContext(NonCancellable) {
                 deps.storage.dropSource(id)
+                // The chosen file's NZB before the row names its pick: no walk takes it up without it.
+                grab?.let { deps.storage.keepGrab(id, it) }
                 // One that holds the queue still holds it (L380); any other is queued in its place.
                 val held = row.state in HOLDS
                 dao.update(
@@ -641,7 +750,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                         state = if (held) row.state else DownloadState.Queued, reason = if (held) row.reason else null,
                         candidates = candidates.take(MAX_CANDIDATES), tried = emptyList(), oneVideo = false,
                         release = null, fileName = null, size = null, indexerSize = need, safeOffset = 0, gaps = emptyList(),
-                        relativePath = null, video = null, tracks = null, completedAt = null, updatedAt = now(),
+                        relativePath = null, video = null, tracks = null, completedAt = null, search = null, pick = pick?.let(DownloadColumns::text),
+                        limitWait = null, updatedAt = now(),
                     ),
                 )
                 try {
@@ -658,15 +768,23 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /**
      * Tries the failed download [id] again (Try again, Download again): its tries reset and queued, to resolve again from
      * its releases. The one its file came from, picked again at its size, goes on from the safe offset (as after "Storage
-     * is full"); another starts from its first byte (Resolve's rule).
+     * is full"); another starts from its first byte (Resolve's rule). A season row (one with search facts, L392) has its
+     * releases cleared instead, so its turn searches its episode afresh (L396, L398); one with a file chosen by hand keeps
+     * its releases, as its turn never searches.
      */
     suspend fun retry(id: String) {
         if (!runs) return
         changes.withLock {
             val row = dao.get(id)?.takeIf { it.state == DownloadState.Failed } ?: return@withLock
+            val search = DownloadColumns.search(row)?.takeIf { DownloadColumns.pick(row) == null }
             deps.storage.dropSource(id)
-            dao.update(row.copy(state = DownloadState.Queued, reason = null, tried = emptyList(), updatedAt = now()))
-            log.info("download {}: tried again", id)
+            dao.update(
+                row.copy(
+                    state = DownloadState.Queued, reason = null, tried = emptyList(), candidates = if (search == null) row.candidates else emptyList(),
+                    search = search?.let(::searchText) ?: row.search, limitWait = null, updatedAt = now(),
+                ),
+            )
+            log.info("download {}: tried again{}", id, if (search == null) "" else ", searched afresh")
         }
     }
 
@@ -1018,7 +1136,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
     /**
      * Download [id]'s file complete: renamed, its row Done with the [gaps] still missing, its NZB and password gone (L346),
-     * all of it once renamed whatever stops the walk meanwhile: nothing would drop them from a Done row later.
+     * all of it once renamed whatever stops the walk meanwhile: nothing would drop them from a Done row later. Its search
+     * facts go with them, taken from TMDB and kept no longer than the row needs them, and any limit's wait (L442).
      */
     private suspend fun finished(id: String, fileName: String, size: Long, gaps: List<LongRange>) {
         deps.storage.finish(id, fileName)
@@ -1028,7 +1147,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             dao.update(
                 row.copy(
                     state = DownloadState.Done, reason = null, safeOffset = size, gaps = gaps.map { DownloadGap(it.first, it.last) }, completedAt = at,
-                    updatedAt = at,
+                    search = null, limitWait = null, updatedAt = at,
                 ),
             )
             deps.storage.dropSource(id)
@@ -1158,6 +1277,16 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
         /** The waits that end the host, which Resume queues again (L388). */
         private val ENDING_WAITS = PROVIDER_WAITS + DownloadHostRules.STORAGE_UNAVAILABLE
+
+        /** Every download has a release to try, but one whose turn searches for its releases ([search], L392). */
+        private fun requireReleases(candidates: List<DownloadCandidate>, search: SeasonSearch?) =
+            require(candidates.isNotEmpty() || search != null) { "A download needs a release to try, or the facts to search for one" }
+
+        /** [candidate]'s release key, as Resolve and the NZB kept for an attempt know it. */
+        private fun key(candidate: DownloadCandidate): String = ReleaseKey.of(candidate.indexerId, candidate.guid)
+
+        /** [search] as a row keeps it: not yet searched, as a queued or put-back row's turn is still to come. */
+        private fun searchText(search: SeasonSearch): String = DownloadColumns.text(search.copy(searched = false))
 
         /** A failed download's words, its last release given up [why] as it was written and none left to try. */
         fun gaveUpWords(why: DownloadWriter.GiveUp): String = when (why) {

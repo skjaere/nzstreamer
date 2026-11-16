@@ -1,5 +1,6 @@
 package io.skjaere.usenet.data
 
+import android.database.sqlite.SQLiteConstraintException
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.flow.first
@@ -7,13 +8,14 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
  * This device's downloads as the library stores them (L351): the queue in its order and a move in it, the finished ones
  * by watch key, a show's and a film's, the progress record written whole, a row read back as it was written (version 15's
- * search facts, file chosen by hand and limit's wait among it), and a delete.
+ * search facts, file chosen by hand and limit's wait among it), a season's rows written in one transaction, and a delete.
  */
 @RunWith(AndroidJUnit4::class)
 class DownloadDaoTest {
@@ -168,6 +170,30 @@ class DownloadDaoTest {
         downloads.update(waiting)
         downloads.setState("a", DownloadState.Queued, null, 40)
         assertEquals(waiting.copy(state = DownloadState.Queued, reason = null, updatedAt = 40), downloads.get("a"))
+    }
+
+    /**
+     * A season queued at once (L392, L396): its new rows inserted and its failed ones put back in one transaction, so one
+     * insert that fails leaves none of it, the rows put back as they were; whole, it writes them all.
+     */
+    @Test
+    fun insertAllWritesASeasonsRowsInOneTransactionOrNone() = runBlocking<Unit> {
+        val failed = episode("failed", 2, position = 0, state = DownloadState.Failed).copy(reason = "No playable release found", tried = listOf("fake/hl-a"))
+        downloads.insert(failed)
+        downloads.insert(episode("taken", 9, position = 1))
+        val back = failed.copy(state = DownloadState.Queued, reason = null, tried = emptyList(), position = 2, updatedAt = 20)
+
+        // The last one's id is taken: its insert fails after the put-back's write and the first insert.
+        assertThrows(SQLiteConstraintException::class.java) {
+            runBlocking { downloads.insertAll(listOf(episode("e3", 3, position = 3), episode("taken", 4, position = 4)), putBack = listOf(back)) }
+        }
+        assertNull(downloads.get("e3"))
+        assertEquals(failed, downloads.get("failed"))
+        assertEquals(listOf("failed", "taken"), downloads.queue().first().map { it.id })
+
+        downloads.insertAll(listOf(episode("e3", 3, position = 3), episode("e4", 4, position = 4)), putBack = listOf(back))
+        assertEquals(back, downloads.get("failed"))
+        assertEquals(listOf("taken", "failed", "e3", "e4"), downloads.queue().first().map { it.id })
     }
 
     @Test
