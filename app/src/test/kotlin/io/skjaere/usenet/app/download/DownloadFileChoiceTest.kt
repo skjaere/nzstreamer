@@ -227,6 +227,12 @@ class DownloadFileChoiceTest {
                 leftOut = true
                 opens = { _, _, _ -> PrepareOutcome.MissingArticles("article gone") }
             },
+            // A volume of the archive missing, as nzb-streamer's prepare fails on it: the same words as a play's.
+            case("Incomplete on your providers") { opens = { _, _, _ -> PrepareOutcome.Failed(UsenetError.MissingArticle("volume gone")) } },
+            case("Incomplete on the providers in use") {
+                leftOut = true
+                opens = { _, _, _ -> PrepareOutcome.Failed(UsenetError.MissingArticle("volume gone")) }
+            },
             case("Passworded") { opens = { _, _, _ -> PrepareOutcome.NeedsPassword(EncryptionInfo("a.rar", 0, 0, 15, null, true), passwordWasTried = true) } },
             case("Provider problem: login refused") { opens = { _, _, _ -> PrepareOutcome.Failed(UsenetError.AuthFailed("login refused")) } },
             case("No video file") {

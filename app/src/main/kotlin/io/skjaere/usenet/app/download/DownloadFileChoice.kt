@@ -172,6 +172,16 @@ class DownloadFileChoice internal constructor(
         _state.value = State.Files(fileChoices(videos, episode).map { Option(it, wontFit(it.sizeBytes, free)) }, free)
     }
 
+    /**
+     * As a play's attempt says a prepare that failed: the providers failing, a gap (on the providers in use, where one is
+     * left out of the engine, as a play's words say), else the error's own words.
+     */
+    private fun failure(error: UsenetError): AttemptFailure = when (error) {
+        is UsenetError.AuthFailed, is UsenetError.ConnectionFailed, UsenetError.NotConfigured -> AttemptFailure.Provider(error)
+        is UsenetError.MissingArticle -> AttemptFailure.MissingArticles(error.detail.orEmpty(), providersLeftOut = deps.providersLeftOut())
+        else -> AttemptFailure.Failed(error)
+    }
+
     private fun failed(step: String, failure: AttemptFailure) {
         log.info("{}Choose file: the pack couldn't be {}: {}", named, step, failure::class.simpleName)
         _state.value = State.Failed(failure.text)
@@ -199,13 +209,6 @@ class DownloadFileChoice internal constructor(
             NzbParser.parse(nzb).password
         } catch (e: Exception) {
             null
-        }
-
-        /** As a play's attempt says a prepare that failed: the providers failing, a gap, else the error's own words. */
-        private fun failure(error: UsenetError): AttemptFailure = when (error) {
-            is UsenetError.AuthFailed, is UsenetError.ConnectionFailed, UsenetError.NotConfigured -> AttemptFailure.Provider(error)
-            is UsenetError.MissingArticle -> AttemptFailure.MissingArticles(error.detail.orEmpty())
-            else -> AttemptFailure.Failed(error)
         }
 
         private val log = LoggerFactory.getLogger(DownloadFileChoice::class.java)
