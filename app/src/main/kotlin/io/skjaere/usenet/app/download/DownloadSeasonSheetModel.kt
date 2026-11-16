@@ -330,10 +330,14 @@ class DownloadSeasonSheetModel(private val request: SeasonDownloadRequest, priva
         /** "Won't all fit: 5.1 GB free on this device". */
         fun wontAllFit(free: Long): String = "Won't all fit: ${free(free)}"
 
-        /** "The first 3 fit: about 4.1 GB.", "The first fits: about 1.4 GB.". */
+        /**
+         * "The first 3 fit: about 4.1 GB.", "The first fits: about 1.4 GB.", by the sizes known; a run with nothing found yet
+         * for any of it, which fits as it counts no size (L400), with none: "The first fits: nothing found for it yet.".
+         */
         fun firstFit(state: SeasonSheetState.WontFit): String {
-            val size = formatSize(total(state.episodes.take(state.fit)))
-            return if (state.fit == 1) "The first fits: about $size." else "The first ${state.fit} fit: about $size."
+            val run = state.episodes.take(state.fit)
+            val what = if (run.all { it.need == null }) "nothing found for ${if (state.fit == 1) "it" else "them"} yet" else "about ${formatSize(total(run))}"
+            return if (state.fit == 1) "The first fits: $what." else "The first ${state.fit} fit: $what."
         }
 
         /** Over the episodes after the cut: "No room for these 3"; for one, "No room for this one". */

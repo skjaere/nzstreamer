@@ -317,6 +317,29 @@ class DownloadSeasonSheetTest {
         assertEquals("No room for this one", DownloadSeasonSheetModel.noRoom(last))
     }
 
+    /**
+     * L400: episodes with nothing found yet count no size, so a run of them at the head fits whatever is free; what fits is
+     * then said with no size, as none is known, never "about 0 KB". Where some of the run have a size, it is theirs.
+     */
+    @Test
+    fun `a run that fits with nothing found yet for it says so, with no size`() = runTest {
+        // 900 MB free: S02E03 has nothing found, and S02E04's 1.2 GB doesn't fit.
+        val tight = DownloadSpace(available = 1_900_000_000, used = 0, queued = 0)
+        val one = wontFit(open(request(listOf(3, 4, 5)), SheetFakes().apply { space = tight; finds(singles(listOf(4, 5))) }))
+        assertEquals(1, one.fit)
+        assertEquals("The first fits: nothing found for it yet.", DownloadSeasonSheetModel.firstFit(one))
+        assertEquals("Download the first episode", DownloadSeasonSheetModel.download(one))
+
+        val two = wontFit(open(request(listOf(3, 4, 5)), SheetFakes().apply { space = tight; finds(singles(listOf(5))) }))
+        assertEquals(2, two.fit)
+        assertEquals("The first 2 fit: nothing found for them yet.", DownloadSeasonSheetModel.firstFit(two))
+
+        // One of the run with a size: its size, as the season's line counts it.
+        val known = wontFit(open(request(listOf(3, 4, 5)), SheetFakes().apply { space = DownloadSpace(available = 2_300_000_000, used = 0, queued = 0); finds(singles(listOf(4, 5))) }))
+        assertEquals(2, known.fit)
+        assertEquals("The first 2 fit: about 1.2 GB.", DownloadSeasonSheetModel.firstFit(known))
+    }
+
     @Test
     fun `nothing found for the whole season says what the season's search did, with Close alone`() = runTest {
         val a = IndexerConfig("idx-a", "Indexer A", "https://indexer-a.invalid/api", "")
