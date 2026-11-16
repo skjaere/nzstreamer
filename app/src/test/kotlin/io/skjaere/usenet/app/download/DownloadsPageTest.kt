@@ -276,6 +276,53 @@ class DownloadsPageTest {
         assertNull(own.downloading.single().let { DownloadsPage.active(it.item, it.current, it.pack) }.note)
     }
 
+    /**
+     * L434: a download waiting on its indexer's limit says the fixed words in the warning colour, then a line naming the
+     * indexer by its id as it is set up now and which limit, what makes it go on, and its end where the indexer said one
+     * (the device's clock, here UTC); an indexer no longer set up is "Your indexer's". Resume at its end, no Pause. Only the
+     * page names the indexer; a limit wait that can't be read says the words alone.
+     */
+    @Test
+    fun `a download waiting on its indexer's limit says which indexer's limit and what makes it go on, with Resume`() {
+        val until = java.time.Instant.parse("2026-11-17T01:00:00Z").toEpochMilli()
+        fun said(wait: LimitWait?, indexers: Map<String, String> = mapOf("idx-a" to "Indexer A")): ActiveWords {
+            val row = episode("q6", 6, DownloadState.Waiting, reason = DownloadHostRules.LIMIT_REACHED).copy(limitWait = wait?.let(DownloadColumns::text))
+            val page = DownloadsPage.of(listOf(item(row), item(episode("q7", 7, DownloadState.Queued, position = 1))), indexers = indexers, zone = java.time.ZoneOffset.UTC)
+            return page.downloading.first().let { DownloadsPage.active(it.item, it.current, it.pack, it.limit) }
+        }
+        val download = said(LimitWait("idx-a", LimitWait.Kind.Download, until - 3_600_000, null))
+        assertEquals(
+            listOf(
+                PageLine("Your indexer's limit is reached", Tone.Warn),
+                PageLine("Indexer A's download limit. It goes on when NZStreamer next opens, or on Resume.", Tone.Muted),
+            ),
+            download.lines,
+        )
+        assertEquals(RowButton.Resume, download.button)
+        assertNull(download.bar)
+        assertEquals(
+            "Indexer A's search limit, until 01:00. Then it goes on when NZStreamer opens, or on Resume.",
+            said(LimitWait("idx-a", LimitWait.Kind.Search, until - 3_600_000, until)).lines[1].text,
+        )
+        assertEquals(
+            "Indexer A's search limit. It goes on when NZStreamer next opens, or on Resume.",
+            said(LimitWait("idx-a", LimitWait.Kind.Search, until, null)).lines[1].text,
+        )
+        // Its indexer no longer set up.
+        assertEquals(
+            "Your indexer's download limit. It goes on when NZStreamer next opens, or on Resume.",
+            said(LimitWait("idx-a", LimitWait.Kind.Download, until, null), indexers = emptyMap()).lines[1].text,
+        )
+        // No limit's facts to read: the words alone.
+        assertEquals(listOf(PageLine(DownloadHostRules.LIMIT_REACHED, Tone.Warn)), said(null).lines)
+        // Another wait names no indexer, whatever facts its row keeps.
+        val provider = episode("q6", 6, DownloadState.Waiting, reason = DownloadHostRules.CHECK_PROVIDER)
+            .copy(limitWait = DownloadColumns.text(LimitWait("idx-a", LimitWait.Kind.Download, until, null)))
+        val other = DownloadsPage.of(listOf(item(provider)), indexers = mapOf("idx-a" to "Indexer A")).downloading.single()
+        assertNull(other.limit)
+        assertEquals(listOf(PageLine(DownloadHostRules.CHECK_PROVIDER, Tone.Warn)), DownloadsPage.active(other.item, other.current, other.pack, other.limit).lines)
+    }
+
     @Test
     fun `Delete gives back what the selected rows hold, a queued one only what it set aside`() {
         val show = SIZES.mapIndexed { i, size -> episode("hl${i + 1}", i + 1, DownloadState.Done, season = 1, size = size) }

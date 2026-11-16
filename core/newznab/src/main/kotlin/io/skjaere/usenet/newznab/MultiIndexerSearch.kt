@@ -156,8 +156,6 @@ class MultiIndexerSearch(
         IndexerOutcome.Failed(indexer, NewznabError.BadResponse(NewznabClient.safeMessage(e, indexer)))
     }
 
-    /** An indexer is one by its address and key too: another account's limit isn't this one's. */
-    private fun limitKey(indexer: IndexerConfig) = "${indexer.id}|${indexer.baseUrl}|${indexer.apiKey.hashCode()}"
 
     /** How long [indexer] is still kept out; null once it may be asked. */
     private fun stillLimited(indexer: IndexerConfig): Duration? = synchronized(lock) {
@@ -211,6 +209,14 @@ class MultiIndexerSearch(
         }
         request.start()
         return request.await()
+    }
+
+    companion object {
+        /**
+         * How an indexer's limit is kept: an indexer is one by its address and key too, so another account's limit isn't this
+         * one's. A download's walk keeps its own memory of limits by the same key.
+         */
+        fun limitKey(indexer: IndexerConfig): String = "${indexer.id}|${indexer.baseUrl}|${indexer.apiKey.hashCode()}"
     }
 }
 

@@ -57,7 +57,8 @@ import org.slf4j.LoggerFactory
  * ([search]: the Download sheet's), and a finished download's play and watched mark. [work]: the app's scope, where the
  * runner's calls and the marks run, so one asked as the page goes (Back as a download stops at its safe offset) is still
  * made, as the title pages' are. [undoMillis]: the Undo bar's time before TalkBack's own (L379). [packs]: the season packs'
- * copies kept, which the page's queued season rows and the row written from one say (L406).
+ * copies kept, which the page's queued season rows and the row written from one say (L406). [indexers]: the names of the
+ * indexers set up now, by id, by which a download waiting on an indexer's limit names it (L434).
  */
 data class DownloadsDeps(
     val items: Flow<List<DownloadRunner.Item>>,
@@ -85,6 +86,7 @@ data class DownloadsDeps(
     val work: CoroutineScope,
     val undoMillis: Long = UNDO_MS,
     val packs: Flow<DownloadRunner.Packs> = flowOf(DownloadRunner.Packs()),
+    val indexers: Flow<Map<String, String>> = flowOf(emptyMap()),
 ) {
     /**
      * The Download sheet's deps for a choice that replaces [row]'s releases: its search, the room free with [row]'s own
@@ -138,6 +140,7 @@ data class DownloadsDeps(
             mark = { row, watched -> mark(container, row, watched) },
             work = container.appScope,
             packs = container.downloads.packs,
+            indexers = container.settings.indexers.map { records -> records.associate { it.id to it.name } }.distinctUntilChanged(),
         )
 
         /**
@@ -277,8 +280,8 @@ class DownloadsViewModel(
         .flatMapLatest { shows -> if (shows.isEmpty()) flowOf(emptyMap()) else combine(shows.map { id -> deps.episodeStates(id).map { id to it } }) { it.toMap() } }
 
     /** The rows, once the runner has said: null before. */
-    val page: StateFlow<DownloadsPage?> = combine(items, episodeStates, deps.movieWatches, deps.packs) { items, episodes, films, packs ->
-        DownloadsPage.of(items, episodes, films.associateBy { it.movieTmdbId }, packs)
+    val page: StateFlow<DownloadsPage?> = combine(items, episodeStates, deps.movieWatches, deps.packs, deps.indexers) { items, episodes, films, packs, indexers ->
+        DownloadsPage.of(items, episodes, films.associateBy { it.movieTmdbId }, packs, indexers)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /** What downloads hold and what is free, read again as the rows change; null until first read. */

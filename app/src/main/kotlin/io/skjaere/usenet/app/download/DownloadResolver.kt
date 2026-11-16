@@ -103,6 +103,11 @@ import kotlin.time.Duration.Companion.seconds
  * releases. One whose release or file was chosen by hand is tried as chosen. A search that finds nothing fails it
  * (L398); an indexer's limit makes it wait, its limit's facts kept (L443); the indexers out of reach are backed off from.
  *
+ * A grab refused for the indexer's download limit (L399) is no answer about the release and counts no try, as an outage
+ * isn't: the indexer refuses its other releases alike, so the other indexers' releases are tried, within the tries. Where
+ * the limit leaves releases untried and a try is left for them, the download waits as the limit, its facts kept for the
+ * page ([LimitWait], L434), which ends the walk; Resume or the app's start after its end asks again.
+ *
  * A download resolved before whose process died isn't grabbed again: its NZB is prepared again from its own copy and its
  * file found by name. One whose size no longer matches starts again from its first byte.
  *
@@ -249,27 +254,32 @@ class DownloadResolver(
      * release, the turn's search finds its releases where it hasn't searched yet ([search]); then its candidates.
      */
     private suspend fun turn(row: Download): Resolution {
-        if (DownloadColumns.pick(row) != null || DownloadColumns.search(row) == null) return fromCandidates(row)
+        // The indexers whose download limit refused this turn's grabs (L399), by id, the latest last.
+        val limited = LinkedHashMap<String, LimitWait>()
+        if (DownloadColumns.pick(row) != null || DownloadColumns.search(row) == null) return fromCandidates(row, limited)
         var now = row
         // The pack's failure in this turn, in its words: what the row fails with where the search then finds nothing else.
         var packFailed: String? = null
         packFirst(now)?.let { copy ->
             log.info("download {}: its season's pack first, from its copy", row.id)
-            val reason = when (val pass = attempt(now, listOf(ranked(copy.meta.candidate))) { "download ${row.id}, its season's pack" }) {
+            val reason = when (val pass = attempt(now, listOf(ranked(copy.meta.candidate)), { "download ${row.id}, its season's pack" }, limited)) {
                 is Pass.Ended -> return pass.resolution
                 is Pass.Failed -> pass.reason
                 Pass.PassedOver -> WONT_FIT
+                // Its copy gone meanwhile and its grab refused for the indexer's limit: nothing known of it, nothing counted.
+                Pass.Limited -> null
             }
             packFailed = reason
-            log.info("download {}: its season's pack failed for the release: its turn searches", row.id)
+            log.info("download {}: its season's pack {}: its turn searches", row.id, if (reason == null) "wasn't tried" else "failed for the release")
             now = downloads.get(row.id) ?: return Resolution.Gone
             // Its tries used up by the pack: nothing more is searched for or grabbed.
-            if (tries() - now.tried.size <= 0) return failed(row.id, reason)
+            if (reason != null && tries() - now.tried.size <= 0) return failed(row.id, reason)
         }
         if (search.due(now)) {
             now = when (val found = search.search(now)) {
                 is DownloadSearch.Searched.Found -> found.row
-                DownloadSearch.Searched.NoneFound -> return failed(row.id, packFailed ?: DownloadSheetModel.NO_RELEASE)
+                DownloadSearch.Searched.NoneFound -> return limited.values.lastOrNull()?.let { limitReached(row.id, it) }
+                    ?: failed(row.id, packFailed ?: DownloadSheetModel.NO_RELEASE)
                 DownloadSearch.Searched.WontFit -> return failed(row.id, WONT_FIT)
                 is DownloadSearch.Searched.Limited -> return limitReached(row.id, found.wait)
                 DownloadSearch.Searched.Out -> return unreachable(row.id, UsenetError.Network(null), DownloadHostRules.CANT_REACH_INDEXER)
@@ -277,7 +287,7 @@ class DownloadResolver(
                 DownloadSearch.Searched.Gone -> return Resolution.Gone
             }
         }
-        return fromCandidates(now)
+        return fromCandidates(now, limited)
     }
 
     /**
@@ -354,18 +364,26 @@ class DownloadResolver(
 
     /**
      * [row]'s candidates not tried yet, as the class says, run through the play's pipeline again past a release whose exact
-     * size won't fit (L401): it fails "Won't fit" only once none is left that fits.
+     * size won't fit (L401): it fails "Won't fit" only once none is left that fits. Again past a grab refused for its
+     * indexer's download limit (L399), the indexers [limited] so left out: their releases are untried, so where the others'
+     * fail with a try left, the download waits as the limit.
      */
-    private suspend fun fromCandidates(row: Download): Resolution {
+    private suspend fun fromCandidates(row: Download, limited: MutableMap<String, LimitWait>): Resolution {
         var now = row
         // A release passed over for want of room: with none left after it, the download won't fit.
         var passedOver = false
         while (true) {
             val naming = naming(now)
-            when (val pass = attempt(now, now.candidates.map(::ranked), naming)) {
+            // A limited indexer refuses its other releases alike: those are left for after its limit.
+            when (val pass = attempt(now, now.candidates.map(::ranked).filter { it.item.indexerId !in limited }, naming, limited)) {
                 is Pass.Ended -> return pass.resolution
-                is Pass.Failed -> return failed(now.id, if (pass.none && passedOver) WONT_FIT else pass.reason)
+                is Pass.Failed -> {
+                    val left = tries() - (downloads.get(row.id) ?: return Resolution.Gone).tried.size
+                    val wait = limited.values.lastOrNull()
+                    return if (wait != null && left > 0) limitReached(row.id, wait) else failed(now.id, if (pass.none && passedOver) WONT_FIT else pass.reason)
+                }
                 Pass.PassedOver -> passedOver = true
+                Pass.Limited -> Unit
             }
             now = downloads.get(row.id) ?: return Resolution.Gone
         }
@@ -381,15 +399,21 @@ class DownloadResolver(
 
         /** Its release passed every step, and its exact size won't fit the room now (L401): counted, nothing of it kept. */
         data object PassedOver : Pass
+
+        /**
+         * A grab refused for its indexer's download limit (L399), uncounted, left releases untried, and none it tried played:
+         * the others' releases are tried next, the limited indexers' kept for after their limits.
+         */
+        data object Limited : Pass
     }
 
     /**
      * [candidates] not tried yet by [row], through the play's pipeline, as the class says, each named in its lines by
      * [named] (by key). One whose attempt had no answer (the providers out of reach, the attempt cut short, the volume away
      * as it was picked) is tried again first, from the NZB kept for it ([Storage.keepGrab]) and counted once: its grab is
-     * spent already.
+     * spent already. A grab refused for its indexer's download limit is counted out, and that limit kept in [limited].
      */
-    private suspend fun attempt(row: Download, candidates: List<RankedItem>, named: (String) -> String): Pass {
+    private suspend fun attempt(row: Download, candidates: List<RankedItem>, named: (String) -> String, limited: MutableMap<String, LimitWait>): Pass {
         val id = row.id
         val kept = storage.grab(id)?.takeIf { grab -> candidates.any { it.key == grab.key } }
         val counted = row.tried.filter { it != kept?.key }
@@ -413,12 +437,20 @@ class DownloadResolver(
         // Whether this attempt's last grab failed for an outage on the indexer's side (out of reach, a 5xx): no NZB came,
         // nothing spent. An attempt whose grab never reached an indexer (none set up for it) had no outage.
         var indexerOut = false
+        // The indexer that refused this attempt's last grab for its download limit (L399): no NZB came, nothing spent.
+        var limitedBy: IndexerConfig? = null
         val grabs = indexerGrab(newznab, configs) { indexer, item ->
             try {
-                fetchNzb(indexer, item).also { indexerOut = false }
+                fetchNzb(indexer, item).also {
+                    indexerOut = false
+                    limitedBy = null
+                }
             } catch (e: NewznabException) {
                 indexerOut = e.error.isOutage()
-                throw e
+                val limit = e.error is NewznabError.DownloadLimitReached
+                limitedBy = indexer.takeIf { limit }
+                // The limit's kind alone in the pipeline's lines, never what the indexer said of it (L405).
+                throw if (limit) NewznabException(NewznabError.DownloadLimitReached(DOWNLOAD_LIMIT)) else e
             }
         }
         // Its lines, and the memory of tried releases', name each release by its place among the row's, never by its name.
@@ -477,6 +509,8 @@ class DownloadResolver(
         var lost: UsenetError? = null
         // Grabs that failed for an outage on the indexer's side, uncounted.
         var indexerOutages = 0
+        // Grabs refused for their indexer's download limit, uncounted.
+        var refusals = 0
         val skipped = mutableListOf<String>()
         var ended: PipelineEvent? = null
         log.info("download {}: resolving: up to {} of the {} release{} not tried yet", id, minOf(left, items.size), items.size, if (items.size == 1) "" else "s")
@@ -491,6 +525,7 @@ class DownloadResolver(
                         current = event.candidate.id
                         answered = false
                         indexerOut = false
+                        limitedBy = null
                         // Before its grab: a process that dies mid-attempt never grabs it a fourth time (L340).
                         counting = counting + event.candidate.id
                         count(id, counting)
@@ -501,13 +536,25 @@ class DownloadResolver(
                             // The providers failing is no answer about the release, nor a connection lost.
                             is AttemptFailure.Provider -> Unit
                             is AttemptFailure.Failed -> if (event.step in READS_PROVIDERS && failure.error.isLostConnection()) lost = failure.error else answer()
-                            is AttemptFailure.FetchFailed -> if (indexerOut) {
-                                // No NZB came: the release isn't counted, and the next may be another indexer's.
-                                current?.let { counting = counting - it }
-                                count(id, counting)
-                                indexerOutages++
-                            } else {
-                                answer()
+                            is AttemptFailure.FetchFailed -> {
+                                val limit = limitedBy
+                                when {
+                                    indexerOut -> {
+                                        // No NZB came: the release isn't counted, and the next may be another indexer's.
+                                        current?.let { counting = counting - it }
+                                        count(id, counting)
+                                        indexerOutages++
+                                    }
+                                    limit != null -> {
+                                        // Its indexer's download limit (L399): no answer about the release, and no try spent.
+                                        current?.let { counting = counting - it }
+                                        count(id, counting)
+                                        refusals++
+                                        limited[limit.id] = LimitWait(limit.id, LimitWait.Kind.Download, clock.now())
+                                        log.info("{}: its indexer's download limit reached, not counted", named(event.candidate.id))
+                                    }
+                                    else -> answer()
+                                }
                             }
                             else -> answer()
                         }
@@ -535,7 +582,7 @@ class DownloadResolver(
         }
         return when (val end = ended) {
             is PipelineEvent.Succeeded -> resolved(id, end, byKey, end.target.candidate.id in copied, named)
-            is PipelineEvent.Exhausted -> exhausted(id, end, counting, skipped, indexerOutages > 0)
+            is PipelineEvent.Exhausted -> exhausted(id, end, counting, skipped, indexerOutages > 0, refusals > 0)
             else -> Pass.Failed(NO_OTHER_RELEASE)
         }
     }
@@ -659,10 +706,12 @@ class DownloadResolver(
 
     /**
      * The releases ran out (L340). The providers failing, not the release (the last failure stops their route): it isn't
-     * counted, and the download waits for them. Else it fails, in the last failure's words, or, every release left passed
-     * over as found missing before, in the play sheet's words for those.
+     * counted, and the download waits for them. Releases left untried behind an indexer's download limit ([limited], L399):
+     * the others' are tried next, never the outage's backoff, which would ask the limited indexer again every few seconds.
+     * Else it fails, in the last failure's words, or, every release left passed over as found missing before, in the play
+     * sheet's words for those.
      */
-    private suspend fun exhausted(id: String, ended: PipelineEvent.Exhausted, counted: List<String>, skipped: List<String>, indexerOut: Boolean): Pass {
+    private suspend fun exhausted(id: String, ended: PipelineEvent.Exhausted, counted: List<String>, skipped: List<String>, indexerOut: Boolean, limited: Boolean): Pass {
         val last = ended.failedAttempts.lastOrNull()
             ?: return Pass.Failed(skipped.takeIf { it.isNotEmpty() }?.let(::skippedNotice) ?: NO_OTHER_RELEASE)
         val (candidate, failure) = last
@@ -670,6 +719,7 @@ class DownloadResolver(
             count(id, counted - candidate.id)
             providers(id, failure.error)?.let { return Pass.Ended(it) }
         }
+        if (limited) return Pass.Limited
         // Releases left untried for want of their NZBs: the indexers are asked again once the wait is over (L382).
         if (indexerOut) return Pass.Ended(unreachable(id, UsenetError.Network(null), DownloadHostRules.CANT_REACH_INDEXER))
         log.info("download {}: {} release{} tried, the last failing as {}", id, counted.size, if (counted.size == 1) "" else "s", failure::class.simpleName)
@@ -740,9 +790,9 @@ class DownloadResolver(
     }
 
     /**
-     * An indexer's limit met by the turn's search with nothing found elsewhere (L399, L443): the row waits, the limit's facts
-     * kept as its [wait] (L434), which its words name the indexer from at draw time; its reason, and so its notification and
-     * this line, name none.
+     * An indexer's limit met with nothing found or left elsewhere (L399, L443): its search limit by the turn's search, or its
+     * download limit by a grab. The row waits, the limit's facts kept as its [wait] (L434), which its words name the indexer
+     * from at draw time; its reason, and so its notification and this line, name none.
      */
     private suspend fun limitReached(id: String, wait: LimitWait): Resolution {
         downloads.get(id)?.let { downloads.update(it.copy(limitWait = DownloadColumns.text(wait), updatedAt = clock.now())) }
@@ -782,6 +832,9 @@ class DownloadResolver(
 
         /** Nothing left to try: every candidate tried, or its tries used up. */
         const val NO_OTHER_RELEASE = "No other release to try"
+
+        /** A grab refused for its indexer's download limit, as a download's lines say it, whatever the indexer said (L405). */
+        private const val DOWNLOAD_LIMIT = "Download limit reached"
 
         /** A release that lacks articles: the play sheet's words for it, and the runner's for one given up as it was written. */
         const val INCOMPLETE = "Release incomplete"
@@ -867,7 +920,8 @@ class DownloadResolver(
          * track probe, the indexers the search asks, the coordinator's grab (its test seam), the memory of releases found
          * missing as a play that wasn't chosen reads it, and Settings' "Releases to try"; a season pack's prepare held for its
          * season handed back over the engine's prepare ([PlayingPack.preparer]), the download ranking's context, the turn's
-         * search over the Usenet indexers ([DownloadSearch.of]) and the library's release that played a title last. A test
+         * search over the Usenet indexers ([DownloadSearch.of]), the indexers' limits kept in the walk's memory ([limits]: the
+         * runner's, L443), and the library's release that played a title last. A test
          * gives its own [indexers] and [attempts], a [probe] that reads nothing where its releases are no film, a
          * [prepareBackend] that counts the prepares, and a [search] of its own finder.
          */
@@ -879,7 +933,8 @@ class DownloadResolver(
             attempts: suspend () -> Int = { container.settings.playback.first().attempts },
             probe: TrackProbe = TrackProbe { target -> container.trackProbe.probe(target) },
             prepareBackend: PrepareBackend? = null,
-            search: DownloadSearch = DownloadSearch.of(container, storage),
+            limits: DownloadSearch.Limits = DownloadSearch.Limits.None,
+            search: DownloadSearch = DownloadSearch.of(container, storage, limits),
         ) = DownloadResolver(
             downloads = container.data.downloads,
             storage = Storage.of(storage),

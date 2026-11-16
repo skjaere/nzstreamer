@@ -147,9 +147,10 @@ object DownloadHostRules {
     /**
      * The rows that can run, in [rows]' order (L388): Queued; Waiting for a network or for charging, which the job's
      * constraints and the service's callbacks wait for; and Running or Resolving, as a kill left them. None while a row
-     * is Paused or Stopped, which hold the whole queue (L380). The waits for the provider and for storage end the host:
-     * Save or Resume makes them Queued again, and a storage wait can run again at the app's start once its folder is there
-     * ([storageBack]).
+     * is Paused or Stopped, which hold the whole queue (L380). The waits for the provider, for storage and for an indexer's
+     * limit end the host: Save or Resume makes them Queued again, a storage wait can run again at the app's start once its
+     * folder is there ([storageBack]), and the runner queues a limit's wait again at the app's start once the limit has
+     * ended (L434).
      */
     fun runnable(rows: List<Download>, storageBack: Boolean = false): List<Download> {
         if (rows.any { it.state in HOLDS }) return emptyList()

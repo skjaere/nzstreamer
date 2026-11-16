@@ -28,6 +28,7 @@ import io.skjaere.usenet.data.ReleaseChecks
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.logging.LogBuffer
+import io.skjaere.usenet.newznab.IndexerConfig
 import io.skjaere.usenet.releases.ReleaseKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -205,6 +206,9 @@ class DownloadRunnerTest {
      * The runner of these fakes, in the test's work, on its virtual time: its writer over the fake opener, made by the deps as
      * the app's are; the releases found missing [recorded], unless the deps are given how to remember them ([missing]).
      */
+    /** The walk's memory of the indexers' limits (L443), which the runner's Resume forgets. */
+    private val limits = DownloadLimits()
+
     private fun TestScope.runner(
         television: Boolean = false,
         exit: DownloadExit? = null,
@@ -217,7 +221,7 @@ class DownloadRunnerTest {
                 missing = missing,
                 inUse = { providers }, lastExit = { exit }, television = television, host = { host }, network = network,
                 receiverSwitch = { switches += it }, debug = DownloadDebug.On(File(dir, "debug"), clock), longGapBytes = LONG_GAP, clock = clock,
-                timeSource = testScheduler.timeSource, io = StandardTestDispatcher(testScheduler), undoMillis = DownloadRunner.UNDO_MILLIS,
+                timeSource = testScheduler.timeSource, io = StandardTestDispatcher(testScheduler), undoMillis = DownloadRunner.UNDO_MILLIS, limits = limits,
             ),
             work,
         )
@@ -1356,6 +1360,83 @@ class DownloadRunnerTest {
         assertNull(stored(first).reason)
     }
 
+    /**
+     * L399, L434: a download waiting on its indexer's limit ends the walk, and its host, the rest of the queue left queued.
+     * Resume queues it again at once, and forgets the walk's memory of the indexers' limits (L443), so its turn asks them
+     * again; a provider saved doesn't. The app's start queues it again once its limit's end is past, or, with no end said,
+     * 30 minutes after it began; not before. Nothing of it on a TV.
+     */
+    @Test
+    fun `an indexer's limit ends the walk, Resume queues it again at once, and the app's start once its end is past`() = test {
+        val runner = runner()
+        val first = runner.add(1, fake("hl-limit"))
+        val second = runner.add(2, fake("hl-after-limit"))
+        dao.update(stored(first).copy(limitWait = DownloadColumns.text(LimitWait(INDEXER, LimitWait.Kind.Download, NOW, null))))
+        resolver.answers[first] = Resolution.Waiting(DownloadHostRules.LIMIT_REACHED)
+        val walk = host(runner)
+        advanceUntilIdle()
+        assertTrue(walk.isCompleted, "the walk ends, and its host")
+        assertEquals(listOf(first), resolver.calls)
+        assertEquals(DownloadState.Waiting, stored(first).state)
+        assertEquals(DownloadHostRules.LIMIT_REACHED, stored(first).reason)
+        assertEquals(DownloadState.Queued, stored(second).state)
+        assertEquals(listOf(second), runner.runnable().map { it.id }, "the limit's wait can't run")
+
+        // A provider saved isn't the limit's end.
+        runner.retryNow()
+        assertEquals(DownloadState.Waiting, stored(first).state)
+
+        // Resume: queued again at once, the walk's memory of limits forgotten, and at the head of what runs.
+        val indexer = IndexerConfig(INDEXER, "Indexer A", "https://a.indexer.invalid/api", "key-a")
+        limits.answered(indexer, null, NOW)
+        runner.resume()
+        assertEquals(DownloadState.Queued, stored(first).state)
+        assertNull(stored(first).reason)
+        assertEquals(emptyMap(), limits.keptOut(listOf(indexer), NOW))
+        assertEquals(listOf(first, second), runner.runnable().map { it.id })
+        host(runner)
+        advanceUntilIdle()
+        assertEquals(listOf(first, first), resolver.calls)
+        assertEquals(DownloadState.Waiting, stored(first).state)
+
+        // The app's start: not before 30 minutes after the limit began, none said when it ends.
+        resolver.answers.remove(first)
+        dao.update(stored(first).copy(limitWait = DownloadColumns.text(LimitWait(INDEXER, LimitWait.Kind.Download, NOW + testScheduler.currentTime, null))))
+        runner.limitsEnded()
+        assertEquals(DownloadState.Waiting, stored(first).state)
+        advanceTimeBy(30 * MINUTE - 1)
+        runner.limitsEnded()
+        assertEquals(DownloadState.Waiting, stored(first).state)
+        advanceTimeBy(1)
+        runner.limitsEnded()
+        assertEquals(DownloadState.Queued, stored(first).state)
+        assertNull(stored(first).reason)
+
+        // One whose indexer said when it ends: once that is past, not 30 minutes after it began.
+        val at = NOW + testScheduler.currentTime
+        dao.update(
+            stored(first).copy(
+                state = DownloadState.Waiting, reason = DownloadHostRules.LIMIT_REACHED,
+                limitWait = DownloadColumns.text(LimitWait(INDEXER, LimitWait.Kind.Search, at, at + 2 * HOUR)),
+            ),
+        )
+        advanceTimeBy(31 * MINUTE)
+        runner.limitsEnded()
+        assertEquals(DownloadState.Waiting, stored(first).state)
+        advanceTimeBy(2 * HOUR - 31 * MINUTE)
+        runner.limitsEnded()
+        assertEquals(DownloadState.Queued, stored(first).state)
+        // Another wait isn't the limit's: the app's start leaves it as it is.
+        dao.setState(second, DownloadState.Waiting, DownloadHostRules.CHECK_PROVIDER, NOW)
+        runner.limitsEnded()
+        assertEquals(DownloadState.Waiting, stored(second).state)
+
+        // Nothing on a TV.
+        dao.setState(first, DownloadState.Waiting, DownloadHostRules.LIMIT_REACHED, NOW)
+        runner(television = true).limitsEnded()
+        assertEquals(DownloadState.Waiting, stored(first).state)
+    }
+
     @Test
     fun `the state says the running one's bytes and rate, and the rows say why they wait`() = test {
         val a = fake("hl-a").apply { hold = HOLD }
@@ -2129,6 +2210,8 @@ class DownloadRunnerTest {
         )
         val PACK_NZB = "<nzb><!-- hl-s02-pack --></nzb>".encodeToByteArray()
         const val NOW = 1_800_000_000_000L
+        const val MINUTE = 60_000L
+        const val HOUR = 60 * MINUTE
         const val AT = NOW - 60_000
 
         /** A release's file: 256 KiB, sent in 16 KiB pieces. */

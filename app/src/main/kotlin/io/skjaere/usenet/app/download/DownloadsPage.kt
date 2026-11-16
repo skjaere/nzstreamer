@@ -7,6 +7,9 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.MovieWatch
 import io.skjaere.usenet.data.WatchState
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /** How a line of the Downloads page is coloured, by the app's colours' names. */
@@ -57,9 +60,17 @@ sealed interface DownloadsRow {
 
     /**
      * A download still to finish: under way, held, waiting or queued; [current]: the one the queue is at. [up] and [down]:
-     * whether a queued one can move. [pack]: its season's pack serves it ([DownloadsPage.fromPack]).
+     * whether a queued one can move. [pack]: its season's pack serves it ([DownloadsPage.fromPack]). [limit]: waiting on
+     * its indexer's limit, the line that names the indexer and what makes it go on ([DownloadsPage.limitLine]).
      */
-    data class Active(val item: DownloadRunner.Item, val current: Boolean, val up: Boolean = false, val down: Boolean = false, val pack: Boolean = false) : DownloadsRow {
+    data class Active(
+        val item: DownloadRunner.Item,
+        val current: Boolean,
+        val up: Boolean = false,
+        val down: Boolean = false,
+        val pack: Boolean = false,
+        val limit: String? = null,
+    ) : DownloadsRow {
         val row: Download get() = item.row
         override val key: String get() = row.id
         override val downloads: List<Download> get() = listOf(row)
@@ -161,13 +172,16 @@ data class DownloadsPage(
          * The page for [items] (the runner's, in the queue's order), what each show's episodes' watch states are
          * ([episodeStates], by show) and the films' ([films], by film): for each show what it plays next, for each film
          * whether it is watched; and for each download still to finish, whether its season's pack serves it, by the copies
-         * kept ([packs], L406).
+         * kept ([packs], L406), and, waiting on its indexer's limit, which indexer's, by the names of those set up now
+         * ([indexers], by id) and the device's clock ([zone], L434).
          */
         fun of(
             items: List<DownloadRunner.Item>,
             episodeStates: Map<Int, Map<Pair<Int, Int>, WatchState>> = emptyMap(),
             films: Map<Int, MovieWatch> = emptyMap(),
             packs: DownloadRunner.Packs = DownloadRunner.Packs(),
+            indexers: Map<String, String> = emptyMap(),
+            zone: ZoneId = ZoneId.systemDefault(),
         ): DownloadsPage {
             val shown = items.filter { it.row.state != DownloadState.Deleting }
             val active = shown.filter { it.row.state in ACTIVE }
@@ -177,7 +191,10 @@ data class DownloadsPage(
             val queued = active.filter { it.row.state == DownloadState.Queued }
             val downloading = (listOfNotNull(current) + active.filter { it !== current }).map { item ->
                 val at = queued.indexOf(item)
-                DownloadsRow.Active(item, current = item === current, up = at > 0, down = at >= 0 && at < queued.lastIndex, pack = fromPack(item.row, packs))
+                DownloadsRow.Active(
+                    item, current = item === current, up = at > 0, down = at >= 0 && at < queued.lastIndex, pack = fromPack(item.row, packs),
+                    limit = limitLine(item.row, indexers, zone),
+                )
             }
             val failed = shown.filter { it.row.state == DownloadState.Failed }.map { DownloadsRow.Failed(it.row) }
             val done = shown.map { it.row }.filter { it.state == DownloadState.Done }
@@ -202,6 +219,25 @@ data class DownloadsPage(
             DownloadColumns.search(row) != null && DownloadColumns.pick(row) == null && leading.any { it !in row.tried }
         } else {
             row.release?.let { Replay.key(it) in packs.keys } == true
+        }
+
+        /**
+         * The line under "Your indexer's limit is reached" of [row] waiting on it (L434): the indexer by its id as it is set
+         * up now ([indexers], its name by id; one no longer set up is "Your indexer's"), which limit, its end where the
+         * indexer said one, on the device's clock ([zone]), and what makes it go on. Null for any other row, and for one
+         * whose limit's facts can't be read. Only the page names the indexer: its notification and its log lines say the
+         * fixed words.
+         */
+        fun limitLine(row: Download, indexers: Map<String, String>, zone: ZoneId): String? {
+            if (row.state != DownloadState.Waiting || row.reason != DownloadHostRules.LIMIT_REACHED) return null
+            val wait = DownloadColumns.limitWait(row) ?: return null
+            val whose = indexers[wait.indexerId]?.takeIf { it.isNotBlank() }?.let { "$it's" } ?: "Your indexer's"
+            val which = when (wait.kind) {
+                LimitWait.Kind.Download -> "download limit"
+                LimitWait.Kind.Search -> "search limit"
+            }
+            val until = wait.until ?: return "$whose $which. $GOES_ON"
+            return "$whose $which, until ${CLOCK.format(Instant.ofEpochMilli(until).atZone(zone))}. $THEN_GOES_ON"
         }
 
         /** What deleting [row] gives back: its file's whole size once it is made (allocated whole, C8); nothing before. */
@@ -229,8 +265,9 @@ data class DownloadsPage(
          * the row the queue is at ([current]): Pause while it runs or waits for its network or the charger, Resume while
          * it is held, or waits for what only a Resume or a saved provider ends. Where its season's pack serves it ([pack],
          * [fromPack], L406): queued, "Queued · from the season pack"; its file made, "From the season pack" under its bytes.
+         * Waiting on its indexer's limit, the [limit] line ([limitLine], L434) under the wait's words.
          */
-        fun active(item: DownloadRunner.Item, current: Boolean, pack: Boolean = false): ActiveWords {
+        fun active(item: DownloadRunner.Item, current: Boolean, pack: Boolean = false, limit: String? = null): ActiveWords {
             val row = item.row
             val total = row.size ?: row.indexerSize
             val made = row.relativePath != null && total > 0
@@ -267,8 +304,9 @@ data class DownloadsPage(
                     if (DownloadHostRules.waitsForNeed(reason)) {
                         ActiveWords(listOf(PageLine("$reason$far", Tone.Secondary)), held, bytes, RowButton.Pause)
                     } else {
-                        // The provider, the indexers or storage (L388): nothing goes on until Resume or a provider saved.
-                        ActiveWords(listOf(PageLine(reason ?: WAITING, Tone.Warn)), held, bytes, RowButton.Resume)
+                        // The provider, the indexers or storage (L388), an indexer's limit (L434): nothing goes on until Resume,
+                        // a provider saved or, for the limit, the app's start after it has ended.
+                        ActiveWords(listOfNotNull(PageLine(reason ?: WAITING, Tone.Warn), limit?.let { PageLine(it, Tone.Muted) }), held, bytes, RowButton.Resume)
                     }
                 }
                 DownloadState.Stopped -> ActiveWords(listOf(PageLine("${DownloadHostRules.STOPPED_BY_ANDROID}$far", Tone.WarnStrong)), held, bytes, RowButton.Resume)
@@ -370,5 +408,12 @@ data class DownloadsPage(
 
         private const val TRYING = "Trying release"
         private const val WAITING = "Waiting"
+
+        /** What makes a limit's wait go on, as drawn (L434): the app's next start, or Resume. */
+        private const val GOES_ON = "It goes on when NZStreamer next opens, or on Resume."
+        private const val THEN_GOES_ON = "Then it goes on when NZStreamer opens, or on Resume."
+
+        /** A limit's end, "01:00", on the device's clock. */
+        private val CLOCK = DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT)
     }
 }

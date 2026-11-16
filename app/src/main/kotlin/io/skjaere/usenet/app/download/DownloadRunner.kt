@@ -181,6 +181,8 @@ class DownloadRunnerDeps(
     val io: CoroutineDispatcher = Dispatchers.IO,
     /** How long a removed download can be brought back (L379): the Undo bar's time. */
     val undoMillis: Long = DownloadRunner.UNDO_MILLIS,
+    /** The walk's memory of the indexers' limits (L443), which Resolve's turns read and the runner's Resume forgets. */
+    val limits: DownloadLimits = DownloadLimits(),
 ) {
     /** The writer (item 6), over [opener], following [network] as the runner does. */
     val writer = DownloadWriter(
@@ -193,15 +195,17 @@ class DownloadRunnerDeps(
          * opener (the debug build's throttle asked as each stream opens, item 8; a long gap asked for again while a provider
          * is left out of the engine), both following the device's validated network, the container's one flow of it (L381);
          * the memory of releases found missing, the process's last exit, and the host by the API level and the debug
-         * override, and the boot and update receiver switched as it says (L375). A test gives its own [resolve] and
-         * [debug], and the writer's [longGapBytes] given small.
+         * override, and the boot and update receiver switched as it says (L375); the walk's memory of the indexers' limits,
+         * which Resolve's turns keep ([limits], L443). A test gives its own [resolve] and [debug], and the writer's
+         * [longGapBytes] given small.
          */
         fun of(
             container: AppContainer,
             context: Context,
             storage: DownloadStorage = container.downloadStorage,
             debug: DownloadDebug = container.downloadDebug,
-            resolve: suspend (String) -> Resolution = DownloadResolver.of(container, storage)::resolve,
+            limits: DownloadLimits = DownloadLimits(),
+            resolve: suspend (String) -> Resolution = DownloadResolver.of(container, storage, limits = limits)::resolve,
             longGapBytes: Long = DownloadWriter.LONG_GAP_BYTES,
         ) = DownloadRunnerDeps(
             downloads = container.data.downloads,
@@ -218,6 +222,7 @@ class DownloadRunnerDeps(
             debug = debug,
             longGapBytes = longGapBytes,
             providersLeftOut = { container.engine.leftOut.value.isNotEmpty() },
+            limits = limits,
         )
 
         /**
@@ -253,6 +258,8 @@ class DownloadRunnerDeps(
  * - Pause holds the whole queue: the running item stops at its safe offset, keeping its file and room; nothing else
  *   starts until Resume (L380). "Stopped by Android" holds it the same way (L359).
  * - The waits for the providers and for storage end the walk, so the host ends (L388); the other rows wait their turn.
+ *   An indexer's limit with nothing else to try does too (L399): Resume queues it again at once, and the app's start once
+ *   the limit has ended ([limitsEnded], L434).
  * - The NZB and its password go once the file is complete, the item fails or is cancelled (L346); a season pack's copy
  *   goes at the end of the last download of its season still to finish, whichever end it is, one removed counting as
  *   still to finish while its Undo can bring it back (L394, [Storage.sweepPacks]).
@@ -608,11 +615,13 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     }
 
     /**
-     * Lets the queue go on (L380): a Paused or Stopped download back at its head, and those waiting for the providers or
-     * for storage queued again; then the visible app schedules the host. A wait before a reopen ends now (L381).
+     * Lets the queue go on (L380): a Paused or Stopped download back at its head, and those waiting for the providers, for
+     * storage or for an indexer's limit queued again; then the visible app schedules the host. A wait before a reopen ends
+     * now (L381), and the walk's memory of the indexers' limits is forgotten, so a turn asks them again at once (L434).
      */
     suspend fun resume() {
         if (!runs) return
+        deps.limits.forget()
         changes.withLock {
             val rows = dao.queue().first()
             val held = rows.filter { it.state in HOLDS }
@@ -626,6 +635,23 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             if (held.size + waits.size > 0) log.info("Downloads: resumed, {} held and {} waiting queued again", held.size, waits.size)
         }
         wake()
+    }
+
+    /**
+     * At the app's start, before its schedule (L434): each download waiting on an indexer's limit is queued again once that
+     * limit has ended, where the indexer said, else 30 minutes after it began ([LimitWait.end]); one whose limit's facts
+     * can't be read, at once. Before then it waits on, so a switch away from the app and back doesn't ask the indexer again.
+     */
+    suspend fun limitsEnded() {
+        if (!runs) return
+        changes.withLock {
+            val at = now()
+            val ended = dao.queue().first().filter { row ->
+                row.state == DownloadState.Waiting && row.reason == DownloadHostRules.LIMIT_REACHED && (DownloadColumns.limitWait(row)?.end() ?: at) <= at
+            }
+            ended.forEach { dao.setState(it.id, DownloadState.Queued, null, at) }
+            if (ended.isNotEmpty()) log.info("Downloads: {} waiting on an indexer's limit queued again, the limit ended", ended.size)
+        }
     }
 
     /**
@@ -1326,8 +1352,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         /** The waits for the providers and the indexers, which a provider saved or Resume queues again (L388). */
         private val PROVIDER_WAITS = setOf(DownloadHostRules.CHECK_PROVIDER, DownloadHostRules.CANT_REACH_PROVIDER, DownloadHostRules.CANT_REACH_INDEXER)
 
-        /** The waits that end the host, which Resume queues again (L388). */
-        private val ENDING_WAITS = PROVIDER_WAITS + DownloadHostRules.STORAGE_UNAVAILABLE
+        /** The waits that end the host, which Resume queues again (L388, L399). */
+        private val ENDING_WAITS = PROVIDER_WAITS + DownloadHostRules.STORAGE_UNAVAILABLE + DownloadHostRules.LIMIT_REACHED
 
         /** Every download has a release to try, but one whose turn searches for its releases ([search], L392). */
         private fun requireReleases(candidates: List<DownloadCandidate>, search: SeasonSearch?) =

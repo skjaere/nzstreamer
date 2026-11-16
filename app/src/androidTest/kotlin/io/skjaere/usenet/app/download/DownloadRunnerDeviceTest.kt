@@ -133,7 +133,7 @@ class DownloadRunnerDeviceTest {
             space = { id -> storage.space(id) },
         )
         val resolver = DownloadResolver.of(container, storage, indexers = { listOf(INDEXER) }, attempts = { 3 }, probe = TrackProbe.None, search = search)
-        return DownloadRunner(DownloadRunnerDeps.of(container, context, storage, debug, resolver::resolve, longGapBytes = longGap), scope)
+        return DownloadRunner(DownloadRunnerDeps.of(container, context, storage, debug, resolve = resolver::resolve, longGapBytes = longGap), scope)
     }
 
     /** [candidate] as the finder gives it, of its indexer. */

@@ -43,6 +43,8 @@ class DownloadHosts(private val deps: DownloadHostsDeps) {
         if (!DownloadHostRules.runs(deps.television)) return false
         val result = asking.withLock {
             try {
+                // What an indexer's limit held, queued again once the limit has ended (L434), so it runs now.
+                if (cause == ScheduleCause.AppStart) deps.limitsEnded()
                 val rows = deps.runnable()
                 val override = deps.debug.serviceHost
                 val visible = deps.visible()
@@ -134,7 +136,8 @@ class DownloadHosts(private val deps: DownloadHostsDeps) {
  * run, or runs ahead of its walk ([DownloadJobService.pending]), and [scheduleJob] schedules it for the rows that can run,
  * whether Android took it (both Android 14's). [need] is what holds the job back now, its network or the charger as the
  * settings ask for them ([ServicePlan.need]), and [waits] has the download it would run next say so
- * ([DownloadRunner.hostWaits]).
+ * ([DownloadRunner.hostWaits]). [limitsEnded] queues again, at the app's start, what an indexer's limit held once the
+ * limit has ended ([DownloadRunner.limitsEnded]).
  */
 class DownloadHostsDeps(
     /** Whether this is a TV, where nothing of downloads runs (W108, L369). */
@@ -155,6 +158,7 @@ class DownloadHostsDeps(
     val scheduleJob: suspend (cause: ScheduleCause, rows: List<Download>) -> Boolean,
     val need: suspend () -> ServicePlan.Need = { ServicePlan.Need.Met },
     val waits: suspend (words: String) -> Unit = {},
+    val limitsEnded: suspend () -> Unit = {},
 ) {
     companion object {
         /** The app's: the container's runner and settings, the service, and the job on Android 14 and later. */
@@ -177,6 +181,7 @@ class DownloadHostsDeps(
                 ServicePlan.need(needs, ServicePlan.networkMet(container.defaultNetwork.now.value, needs.unmetered), !needs.charging || pluggedIn(context))
             },
             waits = { words -> container.downloads.hostWaits(words) },
+            limitsEnded = { container.downloads.limitsEnded() },
         )
 
         /** Whether the job waits to run ([DownloadJobService.pending]). */

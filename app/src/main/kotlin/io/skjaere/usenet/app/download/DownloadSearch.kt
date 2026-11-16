@@ -8,6 +8,7 @@ import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadDao
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.newznab.IndexerConfig
+import io.skjaere.usenet.newznab.MultiIndexerSearch
 import io.skjaere.usenet.newznab.NewznabError
 import io.skjaere.usenet.releases.RankingContext
 import io.skjaere.usenet.search.EpisodeRequest
@@ -155,15 +156,46 @@ class DownloadSearch(
     }
 
     companion object {
-        /** The app's: the episode finder over the Usenet indexers, ranked for downloading, in the room the downloads' storage gives. */
-        fun of(container: AppContainer, storage: DownloadStorage): DownloadSearch = DownloadSearch(
+        /**
+         * The app's: the episode finder over the Usenet indexers, ranked for downloading, in the room the downloads' storage
+         * gives, the indexers' limits kept in the walk's memory ([limits]: the runner's).
+         */
+        fun of(container: AppContainer, storage: DownloadStorage, limits: Limits = Limits.None): DownloadSearch = DownloadSearch(
             downloads = container.data.downloads,
             find = { request, indexers, context -> container.finder.find(request, indexers, context) },
             indexers = { DownloadSheetDeps.usenetOnly(container.indexerConfigs()) },
             context = container::downloadRankingContext,
             space = { id -> storage.space(id) },
+            limits = limits,
         )
     }
+}
+
+/**
+ * The walk's memory of the indexers' limits (L443), the runner's, one a process: each indexer that answered a turn's search
+ * with its limit is kept out of the later turns' searches until the limit's end, where it said one (its Retry-After), else
+ * for 30 minutes from its answer ([LimitWait.end]). Keyed as [MultiIndexerSearch] keys a limit, by the indexer's address and
+ * key too, so another account at the same indexer is another limit. A play's search keeps none of it, and Resume forgets
+ * it all ([forget]), so a user's Resume asks again at once. Safe from any thread.
+ */
+class DownloadLimits : DownloadSearch.Limits {
+    private val lock = Any()
+
+    /** The limits kept, by [MultiIndexerSearch.limitKey]. */
+    private val kept = HashMap<String, LimitWait>()
+
+    override fun keptOut(indexers: List<IndexerConfig>, at: Long): Map<String, LimitWait> = synchronized(lock) {
+        kept.values.removeAll { it.end() <= at }
+        indexers.mapNotNull { indexer -> kept[MultiIndexerSearch.limitKey(indexer)]?.let { indexer.id to it } }.toMap()
+    }
+
+    override fun answered(indexer: IndexerConfig, retryAfter: Duration?, at: Long) = synchronized(lock) {
+        // Each answer afresh, its start included: one met again waits its time again (L443).
+        kept[MultiIndexerSearch.limitKey(indexer)] = LimitWait(indexer.id, LimitWait.Kind.Search, at, retryAfter?.let { at + it.toMillis() })
+    }
+
+    /** Forgets every limit kept: Resume asks the indexers again (L434). */
+    fun forget() = synchronized(lock) { kept.clear() }
 }
 
 private val log = LoggerFactory.getLogger(DownloadSearch::class.java)

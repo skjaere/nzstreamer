@@ -83,7 +83,10 @@ class DownloadSearchTest {
         }
     }
 
-    private fun search(indexers: List<IndexerConfig> = listOf(A, B)) = DownloadSearch(
+    /** The search's clock: epoch milliseconds, moved on by a case. */
+    private var now = NOW
+
+    private fun search(indexers: List<IndexerConfig> = listOf(A, B), limits: DownloadSearch.Limits = this.limits) = DownloadSearch(
         downloads = dao,
         find = find,
         indexers = { indexers },
@@ -93,7 +96,7 @@ class DownloadSearchTest {
             space
         },
         limits = limits,
-        clock = { NOW },
+        clock = { now },
     )
 
     /** Harbor Lights S02E04's season row, its facts not yet searched, with the sheet's [candidates]. */
@@ -217,6 +220,59 @@ class DownloadSearchTest {
         assertEquals(emptyList<Triple<EpisodeRequest, List<String>, RankingContext>>(), asked)
     }
 
+    /**
+     * L443, as the walk's memory keeps it (DownloadLimits): an indexer that answered a turn's search with its limit, with no
+     * Retry-After (Newznab's 429 and 500), is left out of the walk's later searches for 30 minutes from its answer, so the
+     * season's next row asks it nothing, and with nothing found elsewhere (an indexer failing beside it included) waits for
+     * it, never backing off; then it is asked again, and its limit met again is a wait from that answer. One that said when
+     * its limit ends is kept out until then. Another account at the same indexer is another limit, and Resume forgets them.
+     */
+    @Test
+    fun `the walk keeps an indexer limited without Retry-After out of its later searches for 30 minutes, then asks it again`() = runBlocking<Unit> {
+        val memory = DownloadLimits()
+        reports = listOf(IndexerReport(A, null, error = NewznabError.ApiLimitReached("Request limit reached")), IndexerReport(B, "name"))
+        val first = assertIs<DownloadSearch.Searched.Limited>(search(limits = memory).search(row()))
+        assertEquals(LimitWait(A.id, LimitWait.Kind.Search, NOW, null), first.wait)
+        assertEquals(listOf(A.id, B.id), asked.single().second)
+
+        // The walk's second row a minute later: no query to A, and B failing beside it is still the limit's wait.
+        reset()
+        now = NOW + MINUTE
+        reports = listOf(IndexerReport(B, null, error = NewznabError.Server("HTTP 503")))
+        val second = assertIs<DownloadSearch.Searched.Limited>(search(limits = memory).search(row()))
+        assertEquals(listOf(B.id), asked.single().second)
+        assertEquals(LimitWait(A.id, LimitWait.Kind.Search, NOW, null), second.wait, "the wait A's answer began")
+
+        // Found at B meanwhile: found, A still not asked.
+        reset()
+        now = NOW + 29 * MINUTE
+        playable = listOf(found("Harbor.Lights.S02E04.1080p.WEB.h264-GRP", GB))
+        reports = listOf(IndexerReport(B, "name", found = 1, accepted = 1))
+        assertIs<DownloadSearch.Searched.Found>(search(limits = memory).search(row()))
+        assertEquals(listOf(B.id), asked.single().second)
+
+        // 30 minutes after its answer: asked again. Its limit met again is a wait from this answer, its start afresh.
+        reset()
+        now = NOW + 30 * MINUTE
+        reports = listOf(IndexerReport(A, null, error = NewznabError.ApiLimitReached("Request limit reached")), IndexerReport(B, "name"))
+        val again = assertIs<DownloadSearch.Searched.Limited>(search(limits = memory).search(row()))
+        assertEquals(listOf(A.id, B.id), asked.single().second)
+        assertEquals(LimitWait(A.id, LimitWait.Kind.Search, NOW + 30 * MINUTE, null), again.wait)
+
+        // One that said when its limit ends is kept out until then, past the 30 minutes.
+        val saidWhen = DownloadLimits()
+        saidWhen.answered(A, Duration.ofHours(2), NOW)
+        assertEquals(mapOf(A.id to LimitWait(A.id, LimitWait.Kind.Search, NOW, NOW + 2 * HOUR)), saidWhen.keptOut(listOf(A, B), NOW + 31 * MINUTE))
+        assertEquals(emptyMap(), saidWhen.keptOut(listOf(A, B), NOW + 2 * HOUR))
+
+        // Another account at the same indexer, its key changed, is another limit; Resume forgets them all.
+        saidWhen.answered(A, null, NOW)
+        assertEquals(emptyMap(), saidWhen.keptOut(listOf(A.copy(apiKey = "key-a2")), NOW))
+        assertEquals(setOf(A.id), saidWhen.keptOut(listOf(A), NOW).keys)
+        saidWhen.forget()
+        assertEquals(emptyMap(), saidWhen.keptOut(listOf(A), NOW))
+    }
+
     @Test
     fun `a release tried before is left out of what the search finds`() = runBlocking<Unit> {
         val pack = found("Harbor.Lights.S02.1080p.WEB.h264-PACK", 8 * GB)
@@ -265,6 +321,7 @@ class DownloadSearchTest {
     }
 
     private suspend fun reset() {
+        now = NOW
         dao.rows.value = emptyMap()
         playable = emptyList()
         reports = emptyList()
@@ -309,6 +366,7 @@ class DownloadSearchTest {
         const val SHOW = 990_617
         const val NOW = 1_800_000_000_000L
         const val HOUR = 3_600_000L
+        const val MINUTE = 60_000L
         const val GB = 1_000_000_000L
         val A = IndexerConfig("idx-a", "Indexer A", "https://a.indexer.invalid/api", "key-a")
         val B = IndexerConfig("idx-b", "Indexer B", "https://b.indexer.invalid/api", "key-b")

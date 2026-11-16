@@ -265,7 +265,7 @@ private fun ActiveRow(
     onChoose: () -> Unit,
     onCancel: () -> Unit,
 ) {
-    val words = DownloadsPage.active(row.item, row.current, row.pack)
+    val words = DownloadsPage.active(row.item, row.current, row.pack, row.limit)
     val queued = row.row.state == DownloadState.Queued
     val choose = MenuEntry(if (row.current) DownloadsPage.CHOOSE_ANOTHER else DownloadsPage.CHOOSE_RELEASE, choosable, onChoose)
     val menu = if (queued) {

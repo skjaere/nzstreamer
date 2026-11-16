@@ -79,6 +79,24 @@ class TitleDownloadsTest {
         assertEquals(DownloadState.Done, byEpisode.getValue(2 to 5).state)
     }
 
+    /**
+     * L434: on the Show page an episode waiting on its indexer's limit says the limit's words in the warning colour, under
+     * the queued arrow, and its ⋮ offers Resume download and Remove download, no Pause, as for any wait that needs the user;
+     * the Movie page's button says it under "Queued for download". Neither names the indexer.
+     */
+    @Test
+    fun `an episode waiting on its indexer's limit says so in the warning colour, with Resume download and Remove download`() {
+        val waiting = TitleDownload.of(DownloadRunner.Item(row("l", 6, DownloadState.Waiting).copy(reason = DownloadHostRules.LIMIT_REACHED), 0, null))
+        assertEquals(listOf(PageLine("Your indexer's limit is reached", Tone.Warn)), TitleDownloads.line(waiting))
+        assertEquals(DownloadMark.Queued, TitleDownloads.mark(waiting))
+        assertEquals(listOf(DownloadEntry.Resume, DownloadEntry.Remove), TitleDownloads.entries(waiting, usenet = true))
+        assertEquals(DownloadHostRules.LIMIT_REACHED, TitleDownloads.spoken(waiting))
+        val button = TitleDownloads.button(waiting)
+        assertEquals(TitleDownloads.QUEUED, button.text)
+        assertEquals(PageLine(DownloadHostRules.LIMIT_REACHED, Tone.Warn), button.second)
+        assertEquals(listOf(DownloadEntry.Resume, DownloadEntry.Remove, DownloadEntry.OpenDownloads), TitleDownloads.menu(waiting))
+    }
+
     /** The runner's calls and the host's schedule, as the actions make them, in order. */
     private val calls = mutableListOf<String>()
 

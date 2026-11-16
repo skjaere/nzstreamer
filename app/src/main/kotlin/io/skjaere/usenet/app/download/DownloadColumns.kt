@@ -74,6 +74,17 @@ data class DownloadPick(val index: Int, val name: String, val size: Long, val nz
 @Serializable
 data class LimitWait(val indexerId: String, val kind: Kind, val since: Long, val until: Long? = null) {
     enum class Kind { Download, Search }
+
+    /**
+     * When it is taken to have ended (L434, L443): where the indexer said, else [GUESS_MILLIS] after it was met, so a switch
+     * away from the app and back doesn't ask the indexer again at once.
+     */
+    fun end(): Long = until ?: (since + GUESS_MILLIS)
+
+    companion object {
+        /** How long a limit that came with no end is taken to last: a guess, 30 minutes. */
+        const val GUESS_MILLIS = 30 * 60_000L
+    }
 }
 
 /**

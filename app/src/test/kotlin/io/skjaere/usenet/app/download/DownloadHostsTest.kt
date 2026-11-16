@@ -39,8 +39,14 @@ class DownloadHostsTest {
     private var jobTaken = true
     private var serviceRefused = false
 
-    /** What was asked of Android, in turn: the service's start and the job's schedule, each with its cause. */
+    /**
+     * What was asked, in turn: of Android, the service's start and the job's schedule, each with its cause ([android]); of
+     * the runner, the rows whose indexer's limit has ended queued again, and what can run.
+     */
     private val asked = mutableListOf<String>()
+
+    /** What was asked of Android alone. */
+    private val android: List<String> get() = asked.filter { it == "service" || it.startsWith("job ") }
 
     /** What holds the job from running now, as its constraints judge the device; and what the next download was said to wait for. */
     private var need: ServicePlan.Need = ServicePlan.Need.Met
@@ -57,11 +63,15 @@ class DownloadHostsTest {
         sdk: Int = 34,
         television: Boolean = false,
         debug: DownloadDebug = this.debug,
-        runnable: suspend () -> List<Download> = { rows },
+        runnable: suspend () -> List<Download> = {
+            asked += "runnable"
+            rows
+        },
         scheduleJob: suspend (ScheduleCause) -> Boolean = { jobTaken },
     ) = DownloadHosts(
         DownloadHostsDeps(
             television = television, sdk = sdk, debug = debug, runnable = runnable, walking = { walking.also { read() } }, visible = { visible },
+            limitsEnded = { asked += "limits ended" },
             standing = { standing },
             startService = {
                 asked += "service"
@@ -83,7 +93,7 @@ class DownloadHostsTest {
     fun `the job scheduled from the visible app is traced as scheduled, by its cause's name`() = runBlocking<Unit> {
         assertTrue(hosts().schedule(ScheduleCause.AppStart))
         assertTrue(hosts().schedule(ScheduleCause.Download))
-        assertEquals(listOf("job AppStart", "job Download"), asked)
+        assertEquals(listOf("job AppStart", "job Download"), android)
         assertEquals(listOf("$NOW schedule cause=AppStart result=scheduled", "$NOW schedule cause=Download result=scheduled"), traced())
     }
 
@@ -104,7 +114,7 @@ class DownloadHostsTest {
         walking = false
         pending = true
         assertFalse(hosts.schedule(ScheduleCause.AppStart))
-        assertEquals(emptyList(), asked)
+        assertEquals(emptyList(), android)
         assertEquals(
             listOf("ProviderSaved", "AppStart", "Resume", "AppStart").map { "$NOW schedule cause=$it result=skipped" },
             traced(),
@@ -128,7 +138,7 @@ class DownloadHostsTest {
             pending = false
         }
         assertFalse(hosts().schedule(ScheduleCause.AppStart))
-        assertEquals(emptyList(), asked)
+        assertEquals(emptyList(), android)
         assertEquals(listOf("$NOW schedule cause=AppStart result=skipped"), traced())
     }
 
@@ -153,7 +163,7 @@ class DownloadHostsTest {
         taken.complete(Unit)
         assertTrue(first.await())
         assertFalse(second.await())
-        assertEquals(listOf("job Resume"), asked)
+        assertEquals(listOf("job Resume"), android)
         assertEquals(listOf("$NOW schedule cause=Resume result=scheduled", "$NOW schedule cause=AppStart result=skipped"), traced())
     }
 
@@ -161,7 +171,7 @@ class DownloadHostsTest {
     fun `a job Android doesn't take is traced as refused`() = runBlocking<Unit> {
         jobTaken = false
         assertFalse(hosts().schedule(ScheduleCause.Resume))
-        assertEquals(listOf("job Resume"), asked)
+        assertEquals(listOf("job Resume"), android)
         assertEquals(listOf("$NOW schedule cause=Resume result=refused"), traced())
     }
 
@@ -172,7 +182,7 @@ class DownloadHostsTest {
         File(filesDir, "downloads").mkdirs()
         File(filesDir, "downloads/${DownloadDebug.HOST}").writeText("service")
         assertTrue(hosts(sdk = 34).schedule(ScheduleCause.Download))
-        assertEquals(listOf("service", "service"), asked)
+        assertEquals(listOf("service", "service"), android)
         assertEquals(listOf("$NOW schedule cause=AppStart result=service", "$NOW schedule cause=Download result=service"), traced())
     }
 
@@ -181,19 +191,19 @@ class DownloadHostsTest {
         // One that stands ready, started and not yet walking, will take it up.
         standing = true
         assertFalse(hosts(sdk = 30).schedule(ScheduleCause.AppStart))
-        assertEquals(emptyList(), asked)
+        assertEquals(emptyList(), android)
         standing = false
         // Android 12 on refuses a foreground service to an app that has just left the front.
         serviceRefused = true
         assertFalse(hosts(sdk = 31).schedule(ScheduleCause.Resume))
-        assertEquals(listOf("service"), asked)
+        assertEquals(listOf("service"), android)
         assertEquals(listOf("$NOW schedule cause=AppStart result=skipped", "$NOW schedule cause=Resume result=refused"), traced())
     }
 
     @Test
     fun `an ask that fails is traced as refused`() = runBlocking<Unit> {
         assertFalse(hosts(runnable = { throw IOException("disk I/O error") }).schedule(ScheduleCause.AppStart))
-        assertEquals(emptyList(), asked)
+        assertEquals(emptyList(), android)
         assertEquals(listOf("$NOW schedule cause=AppStart result=refused"), traced())
     }
 
@@ -201,7 +211,7 @@ class DownloadHostsTest {
     fun `a TV schedules nothing and traces nothing, and a release build traces nothing`() = runBlocking<Unit> {
         assertFalse(hosts(television = true).schedule(ScheduleCause.AppStart))
         assertTrue(hosts(debug = DownloadDebug.Off).schedule(ScheduleCause.AppStart))
-        assertEquals(listOf("job AppStart"), asked)
+        assertEquals(listOf("job AppStart"), android)
         assertEquals(emptyList(), traced())
     }
 
@@ -240,6 +250,23 @@ class DownloadHostsTest {
         // The service waits in place and says it itself (item 10).
         hosts(sdk = 33).schedule(ScheduleCause.Resume)
         assertEquals(listOf(DownloadHostRules.WAITING_FOR_WIFI, DownloadHostRules.WAITING_TO_CHARGE), said)
+    }
+
+    /**
+     * L434: the app's start first has the runner queue again what an indexer's limit held once that limit's end is past,
+     * then reads what can run, so a download its limit let go is scheduled for at once. No other cause asks it.
+     */
+    @Test
+    fun `the app's start queues again what an indexer's limit held, once its end is past, before reading what can run`() = runBlocking<Unit> {
+        assertTrue(hosts().schedule(ScheduleCause.AppStart))
+        assertEquals(listOf("limits ended", "runnable", "job AppStart"), asked)
+        asked.clear()
+        listOf(ScheduleCause.Download, ScheduleCause.Resume, ScheduleCause.ProviderSaved, ScheduleCause.SwitchChanged).forEach { hosts().schedule(it) }
+        assertFalse("limits ended" in asked, asked.toString())
+        // Nothing on a TV.
+        asked.clear()
+        hosts(television = true).schedule(ScheduleCause.AppStart)
+        assertEquals(emptyList(), asked)
     }
 
     /** A download that can run: Harbor Lights' episode, queued. */

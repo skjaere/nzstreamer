@@ -156,8 +156,19 @@ class DownloadResolverTest {
     /** The indexer's answer to a grab instead of the NZB, while set: a 503, a dropped connection. */
     private var indexerFails: NewznabError? = null
 
-    private suspend fun grab(item: NewznabItem): NzbDownload {
+    /** A second indexer's, set up beside the first: its releases are its own (L399's "another indexer's releases"). */
+    private val other = IndexerConfig(OTHER_INDEXER, "Other indexer", "http://other-indexer.invalid/api", "key-2")
+
+    /** Each indexer's own answer to its grabs instead of the NZB, by its id, while set: a download limit. */
+    private val refusing = mutableMapOf<String, NewznabError>()
+
+    /** Each grab asked of an indexer, by guid, in order: those it refused too. */
+    private val asks: MutableList<String> = Collections.synchronizedList(mutableListOf())
+
+    private suspend fun grab(item: NewznabItem, from: IndexerConfig = indexer): NzbDownload {
         onGrab(item)
+        asks += item.guid
+        refusing[from.id]?.let { throw NewznabException(it) }
         indexerFails?.let { throw NewznabException(it) }
         grabbed += item.guid
         val fake = fakes.getValue(item.guid)
@@ -265,8 +276,8 @@ class DownloadResolverTest {
         preparer = NzbPreparer(prepareBackend, Dispatchers.Unconfined),
         store = store,
         probe = probe,
-        indexers = { listOf(indexer) },
-        fetchNzb = { _, item -> grab(item) },
+        indexers = { listOf(indexer, other) },
+        fetchNzb = { from, item -> grab(item, from) },
         tried = remembered?.let(DownloadResolver::remembered) ?: { _, _, _ -> tried },
         attempts = { attempts },
         providersChecked = { providers },
@@ -1116,11 +1127,91 @@ class DownloadResolverTest {
         assertEquals(five[0].guid, ready.row.release?.guid)
         assertEquals(listOf(key(five[0])), stored().tried)
 
-        // Its refusal to serve more today is the indexer's answer: counted as before.
+        // Its refusal to serve more today is no answer about the release either (L399): a wait for its limit, nothing counted.
         reset()
         row(*five.toTypedArray())
         indexerFails = NewznabError.DownloadLimitReached("Download limit reached")
-        assertIs<DownloadResolver.Resolution.Failed>(resolver().resolve(ID))
+        assertEquals(DownloadHostRules.LIMIT_REACHED, assertIs<DownloadResolver.Resolution.Waiting>(resolver().resolve(ID)).reason)
+        assertEquals(emptyList(), stored().tried)
+    }
+
+    /**
+     * L399, L434: a grab refused for the indexer's download limit (its 501) counts no try, as an outage doesn't; with the
+     * indexer's other releases left untried behind it and nothing else to try, the download waits as the limit, which ends
+     * the walk and its host, the limit's facts kept for the page (which indexer, its download limit, since when, no end).
+     * The indexer refuses its other releases alike, so they aren't asked. Asked again (Resume, the app's start), the same
+     * while it lasts, nothing counted; once it has gone, its first release, as it ranked. Its lines name the download and
+     * the limit's kind, never the indexer or what it said.
+     */
+    @Test
+    fun `a grab refused for a download limit counts no try and waits as the limit, the same while it lasts`() = runBlocking<Unit> {
+        val five = (1..5).map { Fake("hl-limit-$it", "Harbor.Lights.S02E04.720p.WEB.h264-GRP$it", listOf("l$it.mkv" to 800_000_000L)) }
+        row(*five.toTypedArray())
+        indexerFails = NewznabError.DownloadLimitReached("Download limit reached for plover.indexer.invalid")
+        val from = LogBuffer.snapshot().lastOrNull()?.seq ?: 0L
+        val limited = assertIs<DownloadResolver.Resolution.Waiting>(resolver().resolve(ID))
+        assertEquals(DownloadHostRules.LIMIT_REACHED, limited.reason)
+        assertEquals(DownloadState.Waiting, stored().state)
+        assertEquals(DownloadHostRules.LIMIT_REACHED, stored().reason)
+        assertEquals(emptyList(), stored().tried)
+        assertEquals(LimitWait(INDEXER, LimitWait.Kind.Download, NOW, null), DownloadColumns.limitWait(stored()))
+        assertEquals(listOf(five[0].guid), asks, "the indexer's other releases aren't asked")
+        assertEquals(emptyList(), grabbed)
+        assertNull(storage.grabs[ID])
+        val lines = LogBuffer.snapshot().filter { it.seq > from }.map { it.message }
+        assertTrue(lines.any { "download $ID" in it && "download limit" in it }, lines.toString())
+        val secret = listOf("plover.indexer", indexer.name, "Harbor.Lights")
+        assertEquals(emptyList(), lines.filter { line -> secret.any { it in line } })
+
+        // Asked again while it lasts: the same, nothing counted.
+        asks.clear()
+        assertEquals(DownloadHostRules.LIMIT_REACHED, assertIs<DownloadResolver.Resolution.Waiting>(resolver().resolve(ID)).reason)
+        assertEquals(emptyList(), stored().tried)
+        assertEquals(listOf(five[0].guid), asks)
+
+        // Gone: its first release, as it ranked, counted once.
+        indexerFails = null
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(five[0].guid, ready.row.release?.guid)
+        assertEquals(listOf(key(five[0])), stored().tried)
+    }
+
+    /**
+     * L399: one indexer's download limit leaves the other indexers' releases to try, within the download's tries, however
+     * few the tries left are. One of theirs that plays is the download's. Where theirs fail for their own sake, counted,
+     * the download waits for the limited indexer's, untried; with no try left for them, it fails in the last failure's words.
+     */
+    @Test
+    fun `one indexer's download limit leaves another indexer's releases to try, and waits for its own untried`() = runBlocking<Unit> {
+        val elsewhere = Fake("hl-s02e04-other", "Harbor.Lights.S02E04.1080p.WEB.h264-WREN", listOf("o1.mkv" to 1_100_000_000L))
+        fun otherIndexer(vararg fakes: Fake): (Download) -> Download = { row ->
+            row.copy(candidates = row.candidates.map { c -> if (fakes.any { it.guid == c.guid }) c.copy(indexerId = OTHER_INDEXER) else c })
+        }
+        refusing[INDEXER] = NewznabError.DownloadLimitReached("Download limit reached")
+        row(single, elsewhere, edit = otherIndexer(elsewhere))
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(elsewhere.guid, ready.row.release?.guid)
+        assertEquals(listOf(single.guid, elsewhere.guid), asks)
+        assertEquals(listOf(ReleaseKey.of(OTHER_INDEXER, elsewhere.guid)), stored().tried)
+
+        // The other's fails for its own sake, counted: a wait for the limited one's, untried.
+        reset()
+        val brokenElsewhere = Fake("hl-s02e04-other-gone", "Harbor.Lights.S02E04.2160p.WEB.h265-WREN", listOf("o2.mkv" to 3_000_000_000L), gone = true)
+        refusing[INDEXER] = NewznabError.DownloadLimitReached("Download limit reached")
+        row(single, brokenElsewhere, edit = otherIndexer(brokenElsewhere))
+        assertEquals(DownloadHostRules.LIMIT_REACHED, assertIs<DownloadResolver.Resolution.Waiting>(resolver().resolve(ID)).reason)
+        assertEquals(listOf(ReleaseKey.of(OTHER_INDEXER, brokenElsewhere.guid)), stored().tried)
+        assertEquals(LimitWait(INDEXER, LimitWait.Kind.Download, NOW, null), DownloadColumns.limitWait(stored()))
+
+        // One try in all: the refused grab spends none of it, so the other's release is still tried; failing, nothing is
+        // left to try the limited one's with, and the download fails as it did.
+        reset()
+        refusing[INDEXER] = NewznabError.DownloadLimitReached("Download limit reached")
+        row(single, brokenElsewhere, edit = otherIndexer(brokenElsewhere))
+        val failed = assertIs<DownloadResolver.Resolution.Failed>(resolver(attempts = 1).resolve(ID))
+        assertEquals(DownloadResolver.INCOMPLETE, failed.reason)
+        assertEquals(listOf(single.guid, brokenElsewhere.guid), asks)
+        assertEquals(listOf(ReleaseKey.of(OTHER_INDEXER, brokenElsewhere.guid)), stored().tried)
     }
 
     /**
@@ -1649,6 +1740,8 @@ class DownloadResolverTest {
         storage.packs.sweep(emptyList())
         storage.packWrites = 0
         indexerFails = null
+        refusing.clear()
+        asks.clear()
         checkFails = null
         probeAnswer = { null }
         finds = emptyList()
@@ -1783,6 +1876,9 @@ class DownloadResolverTest {
         const val OTHER_SEASON = "0b6c1d2e-s3e1"
         const val OTHER_SHOW = "0b6c1d2e-other"
         const val INDEXER = "fake-indexer"
+
+        /** The second indexer set up ([other]). */
+        const val OTHER_INDEXER = "other-indexer"
 
         /** An indexer a candidate came from that is no longer set up. */
         const val GONE_INDEXER = "removed-indexer"

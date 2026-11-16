@@ -165,6 +165,26 @@ class DownloadNotificationTextTest {
         assertEquals("Couldn't download it. Storage is full.", DownloadNotices.failed(episode(DownloadState.Failed, reason = "Storage is full", tried = 1)).text)
     }
 
+    /**
+     * L399, L434: a download waiting on its indexer's limit says the limit's fixed words alone, the ongoing one and the
+     * status one a host's end leaves, with no bar and no action (only Resume in the app goes on with it); never the
+     * indexer, which only the Downloads page names from the row's limit wait.
+     */
+    @Test
+    fun `waiting on its indexer's limit, it says the limit's words alone and never the indexer`() {
+        val row = episode(DownloadState.Waiting, reason = DownloadHostRules.LIMIT_REACHED)
+            .copy(limitWait = DownloadColumns.text(LimitWait("idx-plover", LimitWait.Kind.Search, 1, 2)))
+        listOf(ongoing(item(row)), assertNotNull(DownloadNotices.status(listOf(item(row))))).forEach { notice ->
+            assertEquals("Harbor Lights · S02E04", notice.title)
+            assertEquals("Your indexer's limit is reached", notice.text)
+            assertNull(notice.progress)
+            assertEquals(emptyList(), notice.actions)
+            listOf(notice.title, notice.text, notice.subText.orEmpty()).forEach { line ->
+                listOf("plover", "idx-", "search limit", "download limit").forEach { assertFalse(it in line, "\"$line\" holds \"$it\"") }
+            }
+        }
+    }
+
     @Test
     fun `nothing of any shows on a secure lock screen`() {
         val notices = listOf(

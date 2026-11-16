@@ -127,6 +127,22 @@ class DownloadHostRulesTest {
         ))
     }
 
+    /**
+     * L399: an indexer's limit with nothing else found is a wait that ends the host and isn't a need's: not runnable, the
+     * job's constraints and the service's callbacks never wait for it, only Resume or the app's start after its end queue
+     * it again; its notification says its words alone, with no bar.
+     */
+    @Test
+    fun `an indexer's limit ends the host, a wait that isn't a need's`() {
+        val limited = listOf(row("a", DownloadState.Waiting, reason = DownloadHostRules.LIMIT_REACHED))
+        assertEquals(emptyList(), DownloadHostRules.runnable(limited))
+        assertEquals(emptyList(), DownloadHostRules.runnable(limited, storageBack = true))
+        assertEquals(listOf("b"), DownloadHostRules.runnable(limited + row("b", DownloadState.Queued)).map { it.id })
+        assertFalse(DownloadHostRules.waitsForNeed(DownloadHostRules.LIMIT_REACHED))
+        assertEquals("Your indexer's limit is reached", DownloadHostRules.LIMIT_REACHED)
+        assertEquals("Your indexer's limit is reached", text(episode(DownloadState.Waiting, reason = DownloadHostRules.LIMIT_REACHED)))
+    }
+
     @Test
     fun `a paused or stopped row holds the whole queue`() {
         val queue = listOf(row("a", DownloadState.Queued), row("b", DownloadState.Waiting, reason = "Waiting for Wi-Fi"))
