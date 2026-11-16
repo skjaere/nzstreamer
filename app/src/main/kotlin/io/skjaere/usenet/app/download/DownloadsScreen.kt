@@ -51,6 +51,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -397,11 +398,14 @@ private fun RowFrame(
     lines: @Composable ColumnScope.() -> Unit,
 ) {
     val divider = colors.divider
+    // The page draws a download's row again as it is written, each time with a new [onSelect]: the press goes on through
+    // that, keyed on nothing, and a long one selects with the latest.
+    val select by rememberUpdatedState(onSelect)
     val body = when {
         selected != null -> Modifier.toggleable(value = selected, role = Role.Checkbox, onValueChange = { onSelect() })
             .semantics { stateDescription = if (selected) "Selected" else "Not selected" }
         onClick != null -> Modifier.combinedClickable(onClick = onClick, onLongClick = onSelect)
-        else -> Modifier.pointerInput(onSelect) { detectTapGestures(onLongPress = { onSelect() }) }
+        else -> Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = { select() }) }
             .semantics(mergeDescendants = true) { customActions = listOf(CustomAccessibilityAction(DownloadsPage.SELECT) { onSelect(); true }) }
     }
     Row(

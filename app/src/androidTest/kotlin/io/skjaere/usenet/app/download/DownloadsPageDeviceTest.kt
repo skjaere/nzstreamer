@@ -1,12 +1,15 @@
 package io.skjaere.usenet.app.download
 
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.app.container
@@ -25,6 +28,8 @@ import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.show
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.waitFor
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.waitTill
 import io.skjaere.usenet.data.DownloadState
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -111,6 +116,39 @@ class DownloadsPageDeviceTest {
         compose.waitTill("its host asked for") { seeds.scheduled == listOf(ScheduleCause.Resume) }
         val rows = seeds.mine()
         assertEquals("at the queue's head", listOf(running.id, queued.id), DownloadHostRules.runnable(rows).sortedBy { it.position }.map { it.id })
+    }
+
+    /**
+     * A long press on a download being written selects it, though the page draws its row again as it is written (four times
+     * a second at most), each time a new row: the press is the same press throughout.
+     */
+    @Test
+    fun aLongPressSelectsARowWhileItsDownloadIsWritten() {
+        seeds.seed(episode(2, 4, DownloadState.Running, size = 3_100_000_000, file = true, written = 1_302_000_000))
+        val more = MutableStateFlow(0L)
+        val base = seeds.deps()
+        show(base.copy(items = combine(base.items, more) { items, bytes -> items.map { it.copy(written = it.written + bytes) } }))
+        compose.waitFor(hasText("1.3 of 3.1 GB"))
+        val row = hasText("Harbor Lights") and SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions)
+        // On the page's root, as the row is another once it is selected: the finger goes up where it went down.
+        val at = compose.onNode(row).fetchSemanticsNode().boundsInRoot.center
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onRoot().performTouchInput { down(at) }
+            // Written on as the finger is down: the page draws the row again before the press is long.
+            more.value = 200_000_000
+            var frames = 0
+            while (!compose.exists(hasText("1.5 of 3.1 GB"))) {
+                check(++frames < 15) { "the page didn't draw the row again within ${frames * 16} ms of the press" }
+                Thread.sleep(50)
+                compose.mainClock.advanceTimeByFrame()
+            }
+            compose.mainClock.advanceTimeBy(1_000)
+            compose.onRoot().performTouchInput { up() }
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+        compose.waitFor(hasText(DownloadsPage.selected(1)))
     }
 
     @Test
