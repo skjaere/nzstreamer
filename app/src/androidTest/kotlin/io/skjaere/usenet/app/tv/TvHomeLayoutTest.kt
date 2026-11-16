@@ -121,7 +121,8 @@ class TvHomeLayoutTest {
 
     @Before
     fun setUp() {
-        instrumentation.setInTouchMode(false)
+        // Out of touch mode before Home is composed, or its first focus can be refused and the rail's Home take it.
+        leaveTouchMode(compose.activity)
         tmdb = FakeTmdb(movies = mapOf(MOVIE to crown))
     }
 

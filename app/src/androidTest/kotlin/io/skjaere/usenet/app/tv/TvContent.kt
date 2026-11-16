@@ -1,6 +1,8 @@
 package io.skjaere.usenet.app.tv
 
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.Activity
+import android.os.SystemClock
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -50,6 +52,26 @@ fun ComposeContentTestRule.setTvContent(fontScale: () -> Float = { 1f }, content
         Box(Modifier.fillMaxSize().testTag(TV_ROOT)) {
             AppTheme(FormFactor.Tv) { content() }
         }
+    }
+}
+
+/**
+ * A remote's mode on a phone emulator, as a TV is always in: out of touch mode, and waited for until [activity]'s window
+ * is. The instrumentation's switch reaches the window a moment later, at times a few hundred ms on a busy emulator. A
+ * screen composed before then asks for its first focus while its clickable elements still refuse the focus (touch mode),
+ * and the default focus Android gives the window as touch mode ends goes to the element at the top left: the rail's Home,
+ * not the screen's first focus (#247).
+ */
+fun leaveTouchMode(activity: Activity, timeoutMs: Long = 5_000) {
+    val instrumentation = InstrumentationRegistry.getInstrumentation()
+    instrumentation.setInTouchMode(false)
+    val until = SystemClock.uptimeMillis() + timeoutMs
+    while (true) {
+        var touch = true
+        instrumentation.runOnMainSync { touch = activity.window.decorView.isInTouchMode }
+        if (!touch) return
+        check(SystemClock.uptimeMillis() < until) { "the window was still in touch mode ${timeoutMs / 1000} s after the switch" }
+        Thread.sleep(10)
     }
 }
 
