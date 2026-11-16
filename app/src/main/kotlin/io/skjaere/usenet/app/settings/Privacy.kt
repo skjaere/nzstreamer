@@ -28,12 +28,12 @@ private val DEBRID_PART = Regex(Regex.escape(DEBRID_START) + "(.*?)" + Regex.esc
 
 /**
  * Above the policy in a build that came set up with someone's accounts (SEED_DEV_SETTINGS: a private build with preset
- * settings and debug builds; L138 as the lead reworded it, naming no one). Kept out of [PRIVACY_ASSET], so the site's page
- * stays equal to it.
+ * settings and debug builds; L138 as the lead reworded it, naming no one), downloads among what goes through them, as the
+ * policy says of the providers (L374). Kept out of [PRIVACY_ASSET], so the site's page stays equal to it.
  */
 const val PRIVACY_SEEDED =
     "This build came set up with the Usenet provider, indexers and TMDB key of the person who gave it to you, so your " +
-        "searches and what you play go to them under that person’s accounts."
+        "searches and what you play or download go to them under that person’s accounts."
 
 /** A part of the policy as the page shows it: its [heading] (none for the opening) over its [paragraphs]. */
 data class PrivacySection(val heading: String?, val paragraphs: List<String>)

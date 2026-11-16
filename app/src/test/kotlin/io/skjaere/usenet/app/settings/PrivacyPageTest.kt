@@ -45,9 +45,10 @@ class PrivacyPageTest {
         val page = privacyPage(policy, seeded = true)
         assertEquals(PrivacySection(null, listOf(PRIVACY_SEEDED)), page.first())
         assertEquals(privacySections(policy), page.drop(1))
+        // What is downloaded too (L374): a phone's downloads go through the same accounts as its plays.
         assertEquals(
             "This build came set up with the Usenet provider, indexers and TMDB key of the person who gave it to you, so your " +
-                "searches and what you play go to them under that person’s accounts.",
+                "searches and what you play or download go to them under that person’s accounts.",
             PRIVACY_SEEDED,
         )
     }
