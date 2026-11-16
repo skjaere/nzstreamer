@@ -261,7 +261,9 @@ class DownloadResolver(
     private suspend fun turn(row: Download): Resolution {
         // The indexers whose download limit refused this turn's grabs (L399), by id, the latest last.
         val limited = LinkedHashMap<String, LimitWait>()
-        if (DownloadColumns.pick(row) != null || DownloadColumns.search(row) == null) return fromCandidates(row, limited)
+        // Those the walk keeps out of grabs for a limit an earlier row's turn met (L443), by id: their releases wait for it.
+        val keptOut = limits.grabsKeptOut(indexers(), clock.now())
+        if (DownloadColumns.pick(row) != null || DownloadColumns.search(row) == null) return fromCandidates(row, limited, keptOut)
         var now = row
         // The pack's failure in this turn, in its words: what the row fails with where the search then finds nothing else.
         var packFailed: String? = null
@@ -293,7 +295,7 @@ class DownloadResolver(
                 DownloadSearch.Searched.Gone -> return Resolution.Gone
             }
         }
-        return fromCandidates(now, limited)
+        return fromCandidates(now, limited, keptOut)
     }
 
     /**
@@ -376,26 +378,34 @@ class DownloadResolver(
      * indexer's download limit (L399), the indexers [limited] so left out: their releases are untried, so where the others'
      * fail with a try left, the download waits as the limit. So too where the others' indexers are out of reach then: the
      * limit wins over the outage across the passes, as within one, never the outage's backoff, whose every retry would ask
-     * the limited indexer again (L443).
+     * the limited indexer again (L443). The indexers the walk keeps out of grabs ([keptOut]) are left out alike, with no
+     * request, their releases left for after their limits.
      */
-    private suspend fun fromCandidates(row: Download, limited: MutableMap<String, LimitWait>): Resolution {
+    private suspend fun fromCandidates(row: Download, limited: MutableMap<String, LimitWait>, keptOut: Map<String, LimitWait>): Resolution {
         var now = row
         // A release passed over for want of room: with none left after it, the download won't fit.
         var passedOver = false
+        val held = now.candidates.count { it.indexerId in keptOut }
+        if (held > 0) log.info("download {}: {} release{} left for after an indexer's limit", row.id, held, if (held == 1) "" else "s")
         while (true) {
             val naming = naming(now)
             // A limited indexer refuses its other releases alike: those are left for after its limit.
-            when (val pass = attempt(now, now.candidates.map(::ranked).filter { it.item.indexerId !in limited }, naming, limited)) {
+            val candidates = now.candidates.map(::ranked).filter { it.item.indexerId !in limited && it.item.indexerId !in keptOut }
+            when (val pass = attempt(now, candidates, naming, limited)) {
                 is Pass.Ended -> return pass.resolution
                 is Pass.Failed -> {
-                    val left = tries() - (downloads.get(row.id) ?: return Resolution.Gone).tried.size
-                    val wait = limited.values.lastOrNull()
-                    return if (wait != null && left > 0) limitReached(row.id, wait) else failed(now.id, if (pass.none && passedOver) WONT_FIT else pass.reason)
+                    val after = downloads.get(row.id) ?: return Resolution.Gone
+                    val wait = limitBehind(after, limited, keptOut)
+                    return if (wait != null && tries() - after.tried.size > 0) {
+                        limitReached(row.id, wait)
+                    } else {
+                        failed(now.id, if (pass.none && passedOver) WONT_FIT else pass.reason)
+                    }
                 }
                 Pass.Out -> {
-                    val left = tries() - (downloads.get(row.id) ?: return Resolution.Gone).tried.size
-                    val wait = limited.values.lastOrNull()
-                    return if (wait != null && left > 0) limitReached(row.id, wait) else indexersOut(row.id)
+                    val after = downloads.get(row.id) ?: return Resolution.Gone
+                    val wait = limitBehind(after, limited, keptOut)
+                    return if (wait != null && tries() - after.tried.size > 0) limitReached(row.id, wait) else indexersOut(row.id)
                 }
                 Pass.PassedOver -> passedOver = true
                 Pass.Limited -> Unit
@@ -403,6 +413,14 @@ class DownloadResolver(
             now = downloads.get(row.id) ?: return Resolution.Gone
         }
     }
+
+    /**
+     * The limit [row]'s releases wait behind, where one does: the latest met in this turn ([limited]), whose indexer's
+     * releases are left untried; else one the walk keeps an indexer out of grabs for ([keptOut]) whose releases [row] has
+     * still to try.
+     */
+    private fun limitBehind(row: Download, limited: Map<String, LimitWait>, keptOut: Map<String, LimitWait>): LimitWait? =
+        limited.values.lastOrNull() ?: row.candidates.firstNotNullOfOrNull { c -> keptOut[c.indexerId]?.takeIf { ranked(c).key !in row.tried } }
 
     /** How one run of the pipeline over some of a row's releases ended ([attempt]). */
     private sealed interface Pass {
@@ -715,11 +733,12 @@ class DownloadResolver(
     /**
      * The limit [indexer] refused a grab with ([error]), as its row keeps it (L434): its download limit (a 501), with no end;
      * its API limit (Newznab's 429 or 500, an HTTP 429), which its searches meet too, so it is the search limit, ending where
-     * it said, and the walk keeps the indexer out of its later searches until then (L443). Null for any other refusal.
+     * it said, and the walk keeps the indexer out of its later searches until then (L443). Either way the walk keeps it out
+     * of the later turns' grabs until the limit's end. Null for any other refusal.
      */
     private fun limitOf(indexer: IndexerConfig, error: NewznabError): LimitWait? {
         val at = clock.now()
-        return when (error) {
+        val wait = when (error) {
             is NewznabError.DownloadLimitReached -> LimitWait(indexer.id, LimitWait.Kind.Download, at)
             is NewznabError.ApiLimitReached -> {
                 limits.answered(indexer, error.retryAfter, at)
@@ -727,6 +746,9 @@ class DownloadResolver(
             }
             else -> null
         }
+        // The walk keeps it out of the later turns' grabs until then too, so the season's next rows ask it nothing (L443).
+        wait?.let { limits.refused(indexer, it) }
+        return wait
     }
 
     /** The preparer of this resolve: a season pack's prepare held from an earlier row handed back for its NZB (L394). */

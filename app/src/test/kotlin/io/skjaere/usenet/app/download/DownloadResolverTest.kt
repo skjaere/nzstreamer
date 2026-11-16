@@ -1291,6 +1291,42 @@ class DownloadResolverTest {
     }
 
     /**
+     * L443, for grabs: the walk keeps an indexer that refused a grab for its limit out of the later turns' grabs until the
+     * limit's end (30 minutes for a download limit, which says none), so the season's next row asks it nothing: it takes
+     * another indexer's release, or, with only the limited indexer's left to try, waits as that limit with no request.
+     * Past its end the indexer is asked again, and Resume forgets it ([DownloadLimits.forget]).
+     */
+    @Test
+    fun `the walk keeps an indexer that refused a grab for its limit out of the later rows' grabs until the limit's end`() = runBlocking<Unit> {
+        val memory = DownloadLimits()
+        val elsewhere = Fake("hl-s02e04-other", "Harbor.Lights.S02E04.1080p.WEB.h264-WREN", listOf("o1.mkv" to 1_100_000_000L))
+        refusing[INDEXER] = NewznabError.DownloadLimitReached("Download limit reached")
+        row(single, elsewhere, edit = otherIndexer(elsewhere))
+        assertEquals(elsewhere.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver(limits = memory).resolve(ID)).row.release?.guid)
+        assertEquals(listOf(single.guid, elsewhere.guid), asks)
+
+        // The walk's next row: the limited indexer isn't asked.
+        reset()
+        refusing[INDEXER] = NewznabError.DownloadLimitReached("Download limit reached")
+        row(single, elsewhere, edit = otherIndexer(elsewhere))
+        assertEquals(elsewhere.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver(limits = memory).resolve(ID)).row.release?.guid)
+        assertEquals(listOf(elsewhere.guid), asks)
+
+        // Only the limited indexer's left to try: a wait for its limit, the one its refusal began, with no request.
+        reset()
+        row(single)
+        assertEquals(DownloadHostRules.LIMIT_REACHED, assertIs<DownloadResolver.Resolution.Waiting>(resolver(limits = memory).resolve(ID)).reason)
+        assertEquals(emptyList(), asks)
+        assertEquals(emptyList(), stored().tried)
+        assertEquals(LimitWait(INDEXER, LimitWait.Kind.Download, NOW, null), DownloadColumns.limitWait(stored()))
+
+        // Resume forgets it at once; past its end it is asked again.
+        assertEquals(setOf(INDEXER), memory.grabsKeptOut(listOf(indexer, other), NOW).keys)
+        assertEquals(emptyMap(), DownloadLimits().apply { refused(indexer, LimitWait(INDEXER, LimitWait.Kind.Download, NOW)); forget() }.grabsKeptOut(listOf(indexer), NOW))
+        assertEquals(emptyMap(), memory.grabsKeptOut(listOf(indexer, other), NOW + LimitWait.GUESS_MILLIS))
+    }
+
+    /**
      * A grab that never reached an indexer (one no longer set up) is no outage of it, whatever the grab before it met: its
      * release is counted, as a play counts it, while the one whose indexer was out isn't.
      */

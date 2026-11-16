@@ -52,7 +52,8 @@ class DownloadSearch(
 ) {
     /**
      * What the walk keeps of the indexers' limits (L443): those kept out of a turn's search until their limit's end, and each
-     * limit a turn's search was answered with, kept by the runner's memory, as a play's search keeps none of it.
+     * limit a turn's search was answered with, kept by the runner's memory, as a play's search keeps none of it; and those
+     * kept out of a turn's grabs, each refused a grab for its limit by an earlier row's turn.
      */
     interface Limits {
         /** Of [indexers], those kept out at [at] (epoch milliseconds), by id, each with the wait it is kept out for. */
@@ -60,6 +61,12 @@ class DownloadSearch(
 
         /** [indexer] answered a turn's search with its limit at [at], ending [retryAfter] later where it said when. */
         fun answered(indexer: IndexerConfig, retryAfter: Duration?, at: Long)
+
+        /** Of [indexers], those kept out of grabs at [at] (epoch milliseconds), by id, each with the wait it is kept out for. */
+        fun grabsKeptOut(indexers: List<IndexerConfig>, at: Long): Map<String, LimitWait> = emptyMap()
+
+        /** [indexer] refused a turn's grab for its limit, as [wait] says. */
+        fun refused(indexer: IndexerConfig, wait: LimitWait) = Unit
 
         companion object {
             /** None kept out, nothing kept. */
@@ -176,28 +183,44 @@ class DownloadSearch(
 /**
  * The walk's memory of the indexers' limits (L443), the runner's, one a process: each indexer that answered a turn's search
  * with its limit is kept out of the later turns' searches until the limit's end, where it said one (its Retry-After), else
- * for 30 minutes from its answer ([LimitWait.end]). Keyed as [MultiIndexerSearch] keys a limit, by the indexer's address and
- * key too, so another account at the same indexer is another limit. A play's search keeps none of it, and Resume forgets
- * it all ([forget]), so a user's Resume asks again at once. Safe from any thread.
+ * for 30 minutes from its answer ([LimitWait.end]); and each that refused a turn's grab for its limit out of the later
+ * turns' grabs, likewise, so the season's next rows ask it nothing either. Keyed as [MultiIndexerSearch] keys a limit, by
+ * the indexer's address and key too, so another account at the same indexer is another limit. A play's search keeps none
+ * of it, and Resume forgets it all ([forget]), so a user's Resume asks again at once. Safe from any thread.
  */
 class DownloadLimits : DownloadSearch.Limits {
     private val lock = Any()
 
-    /** The limits kept, by [MultiIndexerSearch.limitKey]. */
+    /** The search limits kept, by [MultiIndexerSearch.limitKey]. */
     private val kept = HashMap<String, LimitWait>()
 
-    override fun keptOut(indexers: List<IndexerConfig>, at: Long): Map<String, LimitWait> = synchronized(lock) {
-        kept.values.removeAll { it.end() <= at }
-        indexers.mapNotNull { indexer -> kept[MultiIndexerSearch.limitKey(indexer)]?.let { indexer.id to it } }.toMap()
-    }
+    /** The limits that refused grabs, kept likewise. */
+    private val grabs = HashMap<String, LimitWait>()
+
+    override fun keptOut(indexers: List<IndexerConfig>, at: Long): Map<String, LimitWait> = synchronized(lock) { of(kept, indexers, at) }
 
     override fun answered(indexer: IndexerConfig, retryAfter: Duration?, at: Long) = synchronized(lock) {
         // Each answer afresh, its start included: one met again waits its time again (L443).
         kept[MultiIndexerSearch.limitKey(indexer)] = LimitWait(indexer.id, LimitWait.Kind.Search, at, retryAfter?.let { at + it.toMillis() })
     }
 
+    override fun grabsKeptOut(indexers: List<IndexerConfig>, at: Long): Map<String, LimitWait> = synchronized(lock) { of(grabs, indexers, at) }
+
+    override fun refused(indexer: IndexerConfig, wait: LimitWait) = synchronized(lock) {
+        grabs[MultiIndexerSearch.limitKey(indexer)] = wait
+    }
+
     /** Forgets every limit kept: Resume asks the indexers again (L434). */
-    fun forget() = synchronized(lock) { kept.clear() }
+    fun forget() = synchronized(lock) {
+        kept.clear()
+        grabs.clear()
+    }
+
+    /** Of [indexers], those [limits] keeps out at [at], by id, the limits past their end let go. */
+    private fun of(limits: HashMap<String, LimitWait>, indexers: List<IndexerConfig>, at: Long): Map<String, LimitWait> {
+        limits.values.removeAll { it.end() <= at }
+        return indexers.mapNotNull { indexer -> limits[MultiIndexerSearch.limitKey(indexer)]?.let { indexer.id to it } }.toMap()
+    }
 }
 
 private val log = LoggerFactory.getLogger(DownloadSearch::class.java)
