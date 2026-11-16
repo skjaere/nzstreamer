@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.download
 
+import io.skjaere.usenet.app.play.Replay
 import io.skjaere.usenet.core.formatSize
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadKind
@@ -26,10 +27,11 @@ enum class RowButton { Pause, Resume }
 
 /**
  * What a download still to finish says on the page: its state's [lines] (Resolve's step on a line of its own after
- * "Trying release 2 of 3"), its [bar], how far it is ([bytes]: "1.3 of 3.1 GB · 8.4 MB/s · about 4 min left"), and on the
- * row the queue is at, its [button].
+ * "Trying release 2 of 3"), its [bar], how far it is ([bytes]: "1.3 of 3.1 GB · 8.4 MB/s · about 4 min left"), on the row
+ * the queue is at its [button], and under the bytes a [note]: "From the season pack" for one written from its season's
+ * pack (L406).
  */
-data class ActiveWords(val lines: List<PageLine>, val bar: PageBar?, val bytes: String?, val button: RowButton?)
+data class ActiveWords(val lines: List<PageLine>, val bar: PageBar?, val bytes: String?, val button: RowButton?, val note: String? = null)
 
 /** What a show's downloads play next ([DownloadsShow.next]): an episode begun, [Resume]d at [positionMs], or the next to [Play]. */
 sealed interface ShowNext {
@@ -53,8 +55,11 @@ sealed interface DownloadsRow {
     /** What deleting it gives back: what its files hold, each allocated whole; a queued one's, nothing yet. */
     val held: Long get() = downloads.sumOf(DownloadsPage::held)
 
-    /** A download still to finish: under way, held, waiting or queued; [current]: the one the queue is at. [up] and [down]: whether a queued one can move. */
-    data class Active(val item: DownloadRunner.Item, val current: Boolean, val up: Boolean = false, val down: Boolean = false) : DownloadsRow {
+    /**
+     * A download still to finish: under way, held, waiting or queued; [current]: the one the queue is at. [up] and [down]:
+     * whether a queued one can move. [pack]: its season's pack serves it ([DownloadsPage.fromPack]).
+     */
+    data class Active(val item: DownloadRunner.Item, val current: Boolean, val up: Boolean = false, val down: Boolean = false, val pack: Boolean = false) : DownloadsRow {
         val row: Download get() = item.row
         override val key: String get() = row.id
         override val downloads: List<Download> get() = listOf(row)
@@ -123,6 +128,8 @@ data class DownloadsPage(
         const val FAILED = "Failed"
         const val DOWNLOADED = "Downloaded"
         const val QUEUED = "Queued · searched when its turn comes"
+        const val QUEUED_FROM_PACK = "Queued · from the season pack"
+        const val FROM_PACK = "From the season pack"
         const val PAUSED = "Paused"
         const val PAUSE = "Pause downloads"
         const val RESUME = "Resume"
@@ -153,12 +160,14 @@ data class DownloadsPage(
         /**
          * The page for [items] (the runner's, in the queue's order), what each show's episodes' watch states are
          * ([episodeStates], by show) and the films' ([films], by film): for each show what it plays next, for each film
-         * whether it is watched.
+         * whether it is watched; and for each download still to finish, whether its season's pack serves it, by the copies
+         * kept ([packs], L406).
          */
         fun of(
             items: List<DownloadRunner.Item>,
             episodeStates: Map<Int, Map<Pair<Int, Int>, WatchState>> = emptyMap(),
             films: Map<Int, MovieWatch> = emptyMap(),
+            packs: DownloadRunner.Packs = DownloadRunner.Packs(),
         ): DownloadsPage {
             val shown = items.filter { it.row.state != DownloadState.Deleting }
             val active = shown.filter { it.row.state in ACTIVE }
@@ -168,7 +177,7 @@ data class DownloadsPage(
             val queued = active.filter { it.row.state == DownloadState.Queued }
             val downloading = (listOfNotNull(current) + active.filter { it !== current }).map { item ->
                 val at = queued.indexOf(item)
-                DownloadsRow.Active(item, current = item === current, up = at > 0, down = at >= 0 && at < queued.lastIndex)
+                DownloadsRow.Active(item, current = item === current, up = at > 0, down = at >= 0 && at < queued.lastIndex, pack = fromPack(item.row, packs))
             }
             val failed = shown.filter { it.row.state == DownloadState.Failed }.map { DownloadsRow.Failed(it.row) }
             val done = shown.map { it.row }.filter { it.state == DownloadState.Done }
@@ -181,6 +190,18 @@ data class DownloadsPage(
             val movies = done.filter { it.kind == DownloadKind.Movie }.map { row -> DownloadsRow.Film(row, row.movieTmdbId?.let { films[it] }?.watched == true) }
             val downloaded = (shows + movies).sortedByDescending { row -> row.downloads.maxOf { it.completedAt ?: it.createdAt } }
             return DownloadsPage(downloading, failed, downloaded)
+        }
+
+        /**
+         * Whether [row] is its season's pack's (L406), by the copies kept ([packs]): a season row (its search facts kept, no
+         * file chosen by hand) queued while a copy of its season leads that it hasn't tried, which its turn takes first
+         * (L431); or one whose release is a copy's, written from it.
+         */
+        fun fromPack(row: Download, packs: DownloadRunner.Packs): Boolean = if (row.state == DownloadState.Queued) {
+            val leading = row.showTmdbId?.let { show -> row.season?.let { packs.leading[show to it] } }.orEmpty()
+            DownloadColumns.search(row) != null && DownloadColumns.pick(row) == null && leading.any { it !in row.tried }
+        } else {
+            row.release?.let { Replay.key(it) in packs.keys } == true
         }
 
         /** What deleting [row] gives back: its file's whole size once it is made (allocated whole, C8); nothing before. */
@@ -206,9 +227,10 @@ data class DownloadsPage(
          * What [item], a download still to finish, says (L380, L382, L388): its state in the page's words, with how far it
          * is once its file is made; the bar; the bytes, with the rate and time left while it is written; and the button of
          * the row the queue is at ([current]): Pause while it runs or waits for its network or the charger, Resume while
-         * it is held, or waits for what only a Resume or a saved provider ends.
+         * it is held, or waits for what only a Resume or a saved provider ends. Where its season's pack serves it ([pack],
+         * [fromPack], L406): queued, "Queued · from the season pack"; its file made, "From the season pack" under its bytes.
          */
-        fun active(item: DownloadRunner.Item, current: Boolean): ActiveWords {
+        fun active(item: DownloadRunner.Item, current: Boolean, pack: Boolean = false): ActiveWords {
             val row = item.row
             val total = row.size ?: row.indexerSize
             val made = row.relativePath != null && total > 0
@@ -218,7 +240,7 @@ data class DownloadsPage(
             val share = (written.toDouble() / total).toFloat()
             val held = if (made) PageBar.Part(share, Tone.Muted) else null
             val words = when (row.state) {
-                DownloadState.Queued -> ActiveWords(listOf(PageLine(QUEUED, Tone.Muted)), null, null, null)
+                DownloadState.Queued -> ActiveWords(listOf(PageLine(if (pack) QUEUED_FROM_PACK else QUEUED, Tone.Muted)), null, null, null)
                 DownloadState.Resolving -> {
                     // "Trying release 2 of 3 · Checking availability": which release, then its step on a line of its own.
                     val step = row.reason ?: DownloadHostRules.FINDING_RELEASES
@@ -252,7 +274,8 @@ data class DownloadsPage(
                 DownloadState.Stopped -> ActiveWords(listOf(PageLine("${DownloadHostRules.STOPPED_BY_ANDROID}$far", Tone.WarnStrong)), held, bytes, RowButton.Resume)
                 DownloadState.Failed, DownloadState.Done, DownloadState.Deleting -> error("Not a download still to finish: ${row.state}")
             }
-            return if (current) words else words.copy(button = null)
+            val note = FROM_PACK.takeIf { pack && row.state != DownloadState.Queued && words.bytes != null }
+            return (if (current) words else words.copy(button = null)).copy(note = note)
         }
 
         /**

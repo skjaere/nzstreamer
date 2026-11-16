@@ -258,7 +258,8 @@ class DownloadRunnerDeps(
  *   still to finish while its Undo can bring it back (L394, [Storage.sweepPacks]).
  * - Remove hides a download at once and deletes it once its Undo has gone (L379); Cancel deletes it at once.
  * - A season is queued at once, all or none, a failed episode's row put back rather than queued twice ([enqueueAll],
- *   L392, L396).
+ *   L392, L396). Its rows' turns search for their releases and take a copy of their season's pack first (Resolve's);
+ *   [packs] says which copies are kept, for the Downloads page's words (L406).
  *
  * Nothing runs on a TV (L369): every call but [reconcile] returns at once there. Its log lines name a download by its id,
  * with sizes and a cause's kind: never its title, release or a host.
@@ -311,6 +312,9 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
          */
         suspend fun sweepPacks(removed: Set<String>)
 
+        /** The season packs' copies kept now ([DownloadNzbs.copies]). */
+        val copies: StateFlow<List<DownloadNzbs.Meta>>
+
         companion object {
             fun of(storage: DownloadStorage): Storage = object : Storage {
                 override suspend fun add(row: Download, grab: DownloadStorage.Grab?) = storage.add(row, grab)
@@ -332,6 +336,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 override suspend fun reconcile() = storage.reconcile()
                 override fun volumeThere() = storage.volumeThere()
                 override suspend fun sweepPacks(removed: Set<String>) = storage.sweepPacks(removed)
+                override val copies = storage.packs.copies
             }
         }
     }
@@ -355,6 +360,20 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         val need: Long = candidates.firstOrNull()?.size ?: 0,
         val search: SeasonSearch? = null,
     )
+
+    /**
+     * The season packs' copies kept now, as the Downloads page says them (L406): the keys of those that lead ([leading], by
+     * show and season), which a queued season row of theirs takes first (L431), and every copy's release key ([keys]), by
+     * which a row written from one is told.
+     */
+    data class Packs(val leading: Map<Pair<Int, Int>, Set<String>> = emptyMap(), val keys: Set<String> = emptySet()) {
+        companion object {
+            fun of(copies: List<DownloadNzbs.Meta>) = Packs(
+                copies.filter { it.leads }.groupBy({ it.show to it.season }, { it.key }).mapValues { (_, keys) -> keys.toSet() },
+                copies.mapTo(HashSet()) { it.key },
+            )
+        }
+    }
 
     private val dao = deps.downloads
     private val writer = deps.writer
@@ -428,6 +447,13 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /** [row] with what the writer says of it while it is the one written ([live]), else its safe offset. */
     private fun item(row: Download, live: DownloadWriter.Live?): Item =
         if (live != null && live.id == row.id) Item(row, live.written, writer.bytesPerSecond()) else Item(row, row.safeOffset, null)
+
+    /** The season packs' copies kept now (L406), as the copies' last write or sweep left them: none on a TV. */
+    val packs: StateFlow<Packs> = if (!runs) {
+        MutableStateFlow(Packs())
+    } else {
+        deps.storage.copies.map(Packs::of).stateIn(scope, SharingStarted.Eagerly, Packs())
+    }
 
     /** The finished downloads by watch key, the latest finished for each: what a play hook and the player ask (items 14, 15). */
     val done: StateFlow<Map<String, Download>> = if (!runs) {

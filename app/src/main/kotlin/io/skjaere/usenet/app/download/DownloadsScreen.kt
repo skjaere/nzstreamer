@@ -249,7 +249,7 @@ private fun <T : DownloadsRow> LazyListScope.section(title: String, rows: List<T
     itemsIndexed(rows, key = { _, it -> it.key }) { i, it -> row(it, i == 0, i == rows.lastIndex) }
 }
 
-/** The row the queue is at, or one in the queue: its state, its bar and bytes, Pause or Resume, and its ⋮. */
+/** The row the queue is at, or one in the queue: its state, its bar and bytes, whether its season's pack serves it, Pause or Resume, and its ⋮. */
 @Composable
 private fun ActiveRow(
     row: DownloadsRow.Active,
@@ -265,7 +265,7 @@ private fun ActiveRow(
     onChoose: () -> Unit,
     onCancel: () -> Unit,
 ) {
-    val words = DownloadsPage.active(row.item, row.current)
+    val words = DownloadsPage.active(row.item, row.current, row.pack)
     val queued = row.row.state == DownloadState.Queued
     val choose = MenuEntry(if (row.current) DownloadsPage.CHOOSE_ANOTHER else DownloadsPage.CHOOSE_RELEASE, choosable, onChoose)
     val menu = if (queued) {
@@ -290,6 +290,7 @@ private fun ActiveRow(
         words.lines.forEach { Text(it.text, style = AppType.small, color = it.tone.color()) }
         words.bar?.let { Bar(it) }
         words.bytes?.let { Text(it, style = AppType.small, color = colors.muted) }
+        words.note?.let { Text(it, style = AppType.small, color = colors.muted) }
     }
 }
 

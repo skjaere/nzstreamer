@@ -58,6 +58,12 @@ object DownloadHostRules {
      */
     const val CANT_REACH_INDEXER = "Can't reach your indexer"
 
+    /**
+     * An indexer's limit reached with nothing found elsewhere (L399, L443): a wait that ends the host. The row's limit wait
+     * keeps which indexer and when it ends, for the page to say; these words, a notification's, name none.
+     */
+    const val LIMIT_REACHED = "Your indexer's limit is reached"
+
     /** The provider refused the login, or none is saved (L382). */
     const val CHECK_PROVIDER = "Check your Usenet provider"
 

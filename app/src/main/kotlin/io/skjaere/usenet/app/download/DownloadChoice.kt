@@ -21,8 +21,9 @@ import org.slf4j.LoggerFactory
  * Choose another release and Choose release on the Downloads page (item 19): the release list in download mode for a
  * download already queued, running or failed, whose pick replaces its releases ([DownloadSheetModel] over the deps
  * [sheet] gives for it, whose enqueue is the runner's replace). An episode's search needs the show's ids, aliases,
- * original language, air date and the season's count of episodes, which its row doesn't keep: it is looked up on TMDB
- * first ([lookUp]), as a play of an episode known by its numbers is. A film's is built from its row.
+ * original language, air date and the season's count of episodes: a season row keeps them (its search facts, L433) and is
+ * searched by them with no TMDB call; any other episode's row doesn't, and it is looked up on TMDB first ([lookUp]), as a
+ * play of an episode known by its numbers is. A film's is built from its row.
  *
  * Offline ([online] false) it opens nothing, and the page greys its items "Needs a connection"; so it does for a download
  * whose lookup failed ([needsConnection]), for [LOOKUP_RETRY_MILLIS] or until the network comes back, whichever is first:
@@ -102,13 +103,14 @@ class DownloadChoice(
         _state.value = State.None
     }
 
-    /** [row]'s request: an episode as TMDB lists it now, a film as its row names it. */
+    /** [row]'s request: a season row's episode by its search facts, any other as TMDB lists it now, a film as its row names it. */
     private suspend fun request(row: Download): DownloadRequest = when (row.kind) {
         DownloadKind.Episode -> {
             val show = requireNotNull(row.showTmdbId) { "An episode's show" }
             val season = requireNotNull(row.season) { "An episode's season" }
             val episode = requireNotNull(row.episode) { "An episode's number" }
-            DownloadRequest.Episode(lookUp(show, season, episode), row.posterPath)
+            val play = DownloadColumns.search(row)?.let { facts -> played(facts, row, show, season, episode) } ?: lookUp(show, season, episode)
+            DownloadRequest.Episode(play, row.posterPath)
         }
         DownloadKind.Movie -> DownloadRequest.Movie(
             MovieTarget(requireNotNull(row.movieTmdbId) { "A film's id" }, row.title, row.year, imdb = null, runtimeMinutes = row.runtimeMinutes),
@@ -117,6 +119,19 @@ class DownloadChoice(
     }
 
     companion object {
+        /**
+         * Episode [episode] of [show]'s [season] as [facts], kept from the season's sheet, give it (L433): what its search
+         * asks is what that sheet's own search of it asked; its names and pictures the row's.
+         */
+        private fun played(facts: SeasonSearch, row: Download, show: Int, season: Int, episode: Int): EpisodePlay {
+            val request = facts.request(season, episode)
+            return EpisodePlay(
+                showTmdbId = show, showName = facts.name, showYear = facts.year, aliases = facts.aliases, ids = request.show.ids, season = season,
+                episode = episode, episodeName = row.episodeName, airDate = request.airDate, runtimeMinutes = facts.runtimeMinutes, stillPath = row.stillPath,
+                originalLanguage = facts.originalLanguage, seasonEpisodes = facts.seasonEpisodes,
+            )
+        }
+
         /** How long a download whose lookup failed stays greyed while online: then TMDB can be asked again. */
         const val LOOKUP_RETRY_MILLIS = 30_000L
 

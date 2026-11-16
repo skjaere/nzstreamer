@@ -11,12 +11,14 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadPrefs
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.MovieWatch
+import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.data.WatchState
 import io.skjaere.usenet.newznab.NewznabItem
 import io.skjaere.usenet.newznab.TvIds
 import io.skjaere.usenet.releases.RankedRelease
+import io.skjaere.usenet.releases.ReleaseKey
 import io.skjaere.usenet.releases.RankingContext
 import io.skjaere.usenet.releases.ReleaseFacts
 import io.skjaere.usenet.releases.ReleaseParser
@@ -225,6 +227,55 @@ class DownloadsPageTest {
         assertEquals(listOf(PageLine("✕ Won't fit", Tone.Warn)), DownloadsPage.failure(failed.copy(reason = DownloadResolver.WONT_FIT, tried = emptyList())))
     }
 
+    /**
+     * L406: a season row queued while a copy of its season's pack leads says it comes from the pack, which its turn takes
+     * first (L431); the row written from a copy says so under its bytes. A row queued from its own ⋮, one with a file
+     * chosen by hand, one that has tried the pack, and another season's say what any queued row says.
+     */
+    @Test
+    fun `a queued season row comes from its season's pack while a copy of it leads, and the row written from a copy says so`() {
+        val pack = ReleaseKey.of("idx-a", "hl-s02-pack")
+        val packs = DownloadRunner.Packs(leading = mapOf((HL to 2) to setOf(pack)), keys = setOf(pack, ReleaseKey.of("idx-a", "hl-s03-pack")))
+        val facts = DownloadColumns.text(SeasonSearch("Harbor Lights", 2021, tmdb = HL, seasonEpisodes = 8))
+        val running = episode("run", 3, DownloadState.Running, size = 1_400_000_000, file = true, written = 600_000_000).copy(
+            search = facts, release = RememberedRelease("idx-a", "hl-s02-pack", "Harbor.Lights.S02.1080p.WEB.h264-PACK", null, 2, "nzb-pack", "e3.mkv", 1_400_000_000),
+        )
+        val rows = listOf(
+            running,
+            episode("q5", 5, DownloadState.Queued, position = 1).copy(search = facts),
+            episode("q6", 6, DownloadState.Queued, position = 2),
+            episode("q7", 7, DownloadState.Queued, position = 3).copy(search = facts, pick = DownloadColumns.text(DownloadPick(1, "e7.mkv", GB, "nzb-pack"))),
+            episode("q8", 8, DownloadState.Queued, position = 4).copy(search = facts, tried = listOf(pack)),
+            episode("s3", 1, DownloadState.Queued, season = 3, position = 5).copy(search = facts),
+        )
+        val page = DownloadsPage.of(rows.map { DownloadRunner.Item(it, it.safeOffset, null) }, packs = packs)
+        val words = page.downloading.associate { it.key to DownloadsPage.active(it.item, it.current, it.pack) }
+        assertEquals(listOf(PageLine("Queued · from the season pack", Tone.Muted)), words.getValue("q5").lines)
+        listOf("q6", "q7", "q8", "s3").forEach { key ->
+            assertEquals(listOf(PageLine(DownloadsPage.QUEUED, Tone.Muted)), words.getValue(key).lines, key)
+            assertNull(words.getValue(key).note, key)
+        }
+        // Under the bytes of the one written from the copy.
+        val written = words.getValue("run")
+        assertEquals("0.6 of 1.4 GB", written.bytes)
+        assertEquals("From the season pack", written.note)
+        assertEquals(listOf(PageLine("Downloading · 42%", Tone.Accent)), written.lines)
+        // Paused, it still is.
+        val paused = page.downloading.single { it.key == "run" }.let { DownloadsPage.active(it.item.copy(row = running.copy(state = DownloadState.Paused)), true, it.pack) }
+        assertEquals("From the season pack", paused.note)
+
+        // No copy kept: every row as before.
+        val none = DownloadsPage.of(rows.map { DownloadRunner.Item(it, it.safeOffset, null) })
+        none.downloading.forEach { row ->
+            val said = DownloadsPage.active(row.item, row.current, row.pack)
+            assertNull(said.note, row.key)
+            if (row.row.state == DownloadState.Queued) assertEquals(listOf(PageLine(DownloadsPage.QUEUED, Tone.Muted)), said.lines, row.key)
+        }
+        // Its own release, not a copy's: no line.
+        val own = DownloadsPage.of(listOf(running.copy(release = running.release?.copy(guid = "hl-s02e03-grp"))).map { DownloadRunner.Item(it, it.safeOffset, null) }, packs = packs)
+        assertNull(own.downloading.single().let { DownloadsPage.active(it.item, it.current, it.pack) }.note)
+    }
+
     @Test
     fun `Delete gives back what the selected rows hold, a queued one only what it set aside`() {
         val show = SIZES.mapIndexed { i, size -> episode("hl${i + 1}", i + 1, DownloadState.Done, season = 1, size = size) }
@@ -289,6 +340,36 @@ class DownloadsPageTest {
         assertEquals("run" to listOf(ATMOS, KESTREL), fakes.replaced.single().let { (id, candidates) -> id to candidates.map { it.title } })
         assertEquals(listOf("lookUp $HL 2 4", "find", "replace", "schedule"), fakes.calls)
         assertEquals(DownloadChoice.State.None, choice.state.value, "the list closes once it is replaced")
+    }
+
+    /**
+     * L433: Choose release for a season row searches its episode by the facts its row keeps, with no lookup on TMDB; a row
+     * without them (an episode queued from its own ⋮, one Done, L442) is looked up first, as the case above.
+     */
+    @Test
+    fun `Choose release for a season row searches by the facts its row keeps, with no lookup on TMDB`() = runTest {
+        val fakes = Fakes()
+        // Any lookup fails, and would show among the calls.
+        fakes.tmdbFails = true
+        val choice = fakes.choice(this)
+        val facts = SeasonSearch(
+            "Harbor Lights", 2021, listOf("Harbour Lights"), tvdb = 7_001, tmdb = HL, imdb = "tt9000003", tvmaze = 9_004, originalLanguage = "en",
+            airDate = "2025-03-25", runtimeMinutes = 52, seasonEpisodes = 8,
+        )
+        val row = episode("q5", 5, DownloadState.Failed).copy(search = DownloadColumns.text(facts))
+        choice.open(row)
+        runCurrent()
+        assertEquals(listOf("find"), fakes.calls, "no lookup on TMDB")
+        assertEquals(facts.request(2, 5), fakes.requests.single())
+        val choosing = assertIs<DownloadChoice.State.Choosing>(choice.state.value)
+        assertIs<DownloadSheetState.Pick>(choosing.model.state.value)
+        choice.close()
+
+        // Its facts gone: TMDB first.
+        fakes.tmdbFails = false
+        choice.open(row.copy(search = null))
+        runCurrent()
+        assertEquals(listOf("find", "lookUp $HL 2 5", "find"), fakes.calls)
     }
 
     @Test

@@ -18,13 +18,24 @@ import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.TriedRelease
 import io.skjaere.usenet.newznab.IndexerConfig
+import io.skjaere.usenet.newznab.NewznabItem
 import io.skjaere.usenet.newznab.NzbDownload
+import io.skjaere.usenet.releases.RankedRelease
+import io.skjaere.usenet.releases.ReleaseFacts
 import io.skjaere.usenet.releases.ReleaseKey
+import io.skjaere.usenet.releases.ReleaseParser
+import io.skjaere.usenet.search.FindResult
+import io.skjaere.usenet.search.FinderEvent
+import io.skjaere.usenet.search.FoundRelease
+import io.skjaere.usenet.search.IndexerReport
+import io.skjaere.usenet.search.SearchStage
+import io.skjaere.usenet.search.StageReport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -97,10 +108,43 @@ class DownloadRunnerDeviceTest {
         fixtures.close()
     }
 
-    /** The runner of the app's pieces, the app's own writer among them, its long gap [longGap]. */
+    /** What the turn's search finds for each episode of the season, by its number: the test's finder (L392). */
+    private val finds = ConcurrentHashMap<Int, List<FoundRelease>>()
+
+    /** The episodes the turn's search asked for, in order. */
+    private val searched = CopyOnWriteArrayList<Int>()
+
+    /**
+     * The runner of the app's pieces, the app's own writer among them, its long gap [longGap]; the turn's search over the
+     * test's finder ([finds]), the indexer answering, so no indexer is asked.
+     */
     private fun runner(longGap: Long = DownloadWriter.LONG_GAP_BYTES): DownloadRunner {
-        val resolver = DownloadResolver.of(container, storage, indexers = { listOf(INDEXER) }, attempts = { 3 }, probe = TrackProbe.None)
+        val search = DownloadSearch(
+            downloads = container.data.downloads,
+            find = { request, _, _ ->
+                flow {
+                    searched += request.episode
+                    val report = IndexerReport(INDEXER, "TVDB id", found = finds[request.episode].orEmpty().size)
+                    emit(FinderEvent.Finished(FindResult(request, finds[request.episode].orEmpty(), emptyList(), listOf(StageReport(SearchStage.Episode, listOf(report))))))
+                }
+            },
+            indexers = { listOf(INDEXER) },
+            context = container::downloadRankingContext,
+            space = { id -> storage.space(id) },
+        )
+        val resolver = DownloadResolver.of(container, storage, indexers = { listOf(INDEXER) }, attempts = { 3 }, probe = TrackProbe.None, search = search)
         return DownloadRunner(DownloadRunnerDeps.of(container, context, storage, debug, resolver::resolve, longGapBytes = longGap), scope)
+    }
+
+    /** [candidate] as the finder gives it, of its indexer. */
+    private fun found(candidate: DownloadCandidate): FoundRelease {
+        val item = NewznabItem(
+            indexerId = candidate.indexerId, guid = candidate.guid, title = candidate.title, sizeBytes = candidate.size, publishedAt = null, postedAt = null,
+            categories = emptyList(), grabs = null, passworded = false, files = null, tvdbId = null, tmdbId = null, imdbId = null, tvmazeId = null,
+            season = null, episode = null, coverUrl = null, mediaInfo = null, downloadTemplate = null, attributes = emptyMap(),
+        )
+        val ranked = RankedRelease(ReleaseFacts(item.key, item.title, item.sizeBytes), ReleaseParser.parse(item.title), playable = true, score = 1.0, reasons = emptyList(), estimatedBitrate = null)
+        return FoundRelease(item, ranked, SearchStage.Episode)
     }
 
     /** Download [id] while it is written, at [bytes] or more: its live write's, as the page reads it. */
@@ -241,10 +285,50 @@ class DownloadRunnerDeviceTest {
         lost.forEach { assertTrue("$it asked for ${local.bodies[it]?.get()} times", (local.bodies[it]?.get() ?: 0) >= 2) }
     }
 
+    /**
+     * L392, L398: a season's three rows, queued at once, go in their order, each searched at its turn by its facts; the
+     * middle one, whose search finds nothing, fails "No playable release found" with nothing grabbed, and the third runs
+     * after it.
+     */
+    @Test
+    fun aSeasonsRowsGoInOrderAndOneWhoseTurnFindsNothingFailsWhileTheNextRuns() = runBlocking<Unit> {
+        val (one, first) = release(FIRST, "Harbor.Lights.S03E05.1080p.WEB-DL.H.264-KESTREL", 16 * DownloadFixtures.MB)
+        val (three, third) = release(THIRD, "Harbor.Lights.S03E07.1080p.WEB-DL.H.264-KESTREL", 16 * DownloadFixtures.MB)
+        finds[5] = listOf(found(first))
+        finds[7] = listOf(found(third))
+        local.throttle = THROTTLE
+        val runner = runner()
+        val facts = SeasonSearch("Harbor Lights", 2021, tvdb = 900_734, tmdb = SHOW, seasonEpisodes = 8)
+        fun item(episode: Int, vararg candidates: DownloadCandidate) =
+            DownloadRunner.QueueItem(DownloadTarget.episode(SHOW, "Harbor Lights", 3, episode, seasonEpisodes = 8), candidates.toList(), search = facts)
+        val queued = runner.enqueueAll(listOf(item(5, first), item(6), item(7, third)))
+        made += queued.map { it.id }
+        val (a, b, c) = queued.map { it.id }
+        runner.walk()
+
+        runner.done(a)
+        runner.done(c)
+        val nothing = container.data.downloads.get(b).must("the middle row")
+        assertEquals(DownloadState.Failed, nothing.state)
+        assertEquals("No playable release found", nothing.reason)
+        assertEquals(emptyList<String>(), nothing.tried)
+        // Each searched once, in the queue's order; the middle one before the third ran.
+        assertEquals(listOf(5, 6, 7), searched)
+        assertEquals(listOf(FIRST, THIRD), grabbed)
+        val failedAt = nothing.updatedAt
+        val third0 = traced().firstOrNull { it.contains("reopen id=$c ") }.must("the third's first stream")
+        assertTrue("the third opened at ${third0.substringBefore(' ')}, the middle failed at $failedAt", third0.substringBefore(' ').toLong() >= failedAt)
+        listOf(a to one, c to three).forEach { (id, release) ->
+            val row = container.data.downloads.get(id).must("row $id")
+            assertEquals(release.sha256, DownloadFixtures.sha256(storage.file(row).must("its file")))
+        }
+    }
+
     private companion object {
         const val SHOW = 900_733
         const val FIRST = "hl-runner-kestrel"
         const val SECOND = "hl-runner-grp"
+        const val THIRD = "hl-runner-wren"
 
         /** Never asked: the grabs come through the coordinator's seam. */
         val INDEXER = IndexerConfig("dl-runner-test", "Test indexer", "http://indexer.invalid/api", "test-key")

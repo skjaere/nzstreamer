@@ -1807,6 +1807,56 @@ class DownloadRunnerTest {
         assertNull(storage.packs.find(PACK.key))
     }
 
+    /**
+     * L398: a season row whose turn found nothing fails "No playable release found" (Resolve's answer), and the walk goes
+     * on to the next: nothing searches it again by itself.
+     */
+    @Test
+    fun `an episode whose turn found nothing fails, and the next starts`() = test {
+        val (a, c) = listOf(fake("hl-a"), fake("hl-c"))
+        val runner = runner()
+        val queued = runner.enqueueAll(listOf(item(1, a), DownloadRunner.QueueItem(target(2), emptyList(), search = facts(2)), item(3, c)))
+        val (first, nothing, third) = queued.map { it.id }
+        resolver.answers[nothing] = Resolution.Failed(DownloadSheetModel.NO_RELEASE)
+        val walk = host(runner)
+        advanceUntilIdle()
+        assertTrue(walk.isCompleted)
+        assertEquals(listOf(first, nothing, third), resolver.calls)
+        assertEquals(DownloadState.Done, stored(first).state)
+        assertEquals(DownloadState.Failed, stored(nothing).state)
+        assertEquals("No playable release found", stored(nothing).reason)
+        assertEquals(DownloadState.Done, stored(third).state)
+        assertContentEquals(c.data, storage.video(third).readBytes())
+        // Once: nothing resolves it again until Try again.
+        host(runner).join()
+        assertEquals(listOf(first, nothing, third), resolver.calls)
+    }
+
+    /**
+     * L406: the runner says which seasons a kept copy of their pack leads, and every copy's release key, for the Downloads
+     * page's words: as the copies are written and as they are swept. None on a TV.
+     */
+    @Test
+    fun `the runner's packs say which seasons' copies lead and every copy's key, as they are written and swept`() = test {
+        val runner = runner()
+        runCurrent()
+        assertEquals(DownloadRunner.Packs(), runner.packs.value)
+        val other = PACK.copy(key = ReleaseKey.of(INDEXER, "hl-s03-pack"), season = 3, leads = false)
+        storage.packs.write(PACK, PACK_NZB, null)
+        storage.packs.write(other, PACK_NZB, null)
+        runCurrent()
+        assertEquals(DownloadRunner.Packs(mapOf((SHOW to 2) to setOf(PACK.key)), setOf(PACK.key, other.key)), runner.packs.value)
+        // Season 2's still to finish; season 3's none: its copy goes at the sweep.
+        runner.add(4, fake("hl-a"))
+        storage.packs.sweep(dao.all().first())
+        runCurrent()
+        assertEquals(DownloadRunner.Packs(mapOf((SHOW to 2) to setOf(PACK.key)), setOf(PACK.key)), runner.packs.value)
+
+        val tv = runner(television = true)
+        runCurrent()
+        assertEquals(DownloadRunner.Packs(), tv.packs.value)
+    }
+
     /** Resolve's fake, answering as DownloadResolver does, as the class says. */
     private inner class FakeResolver {
         val calls = mutableListOf<String>()
@@ -1815,6 +1865,9 @@ class DownloadRunnerTest {
 
         /** What the next resolves answer before any release is tried, in turn. */
         val scripted = ArrayDeque<Resolution>()
+
+        /** What a download's resolves answer, by its id, before any release is tried: a turn whose search found nothing. */
+        val answers = mutableMapOf<String, Resolution>()
 
         /** When each resolve was asked for, from the test's start. */
         val times = mutableListOf<Long>()
@@ -1827,7 +1880,7 @@ class DownloadRunnerTest {
             times += clock.now() - NOW
             during(calls.size)
             val row = dao.get(id) ?: return Resolution.Gone
-            scripted.removeFirstOrNull()?.let { said ->
+            (answers[id] ?: scripted.removeFirstOrNull())?.let { said ->
                 when (said) {
                     is Resolution.Unreachable -> dao.setState(id, DownloadState.Resolving, DownloadHostRules.CANT_REACH_PROVIDER, clock.now())
                     is Resolution.Waiting -> dao.setState(id, DownloadState.Waiting, said.reason, clock.now())
@@ -2059,6 +2112,8 @@ class DownloadRunnerTest {
             events += "sweep packs"
             packs.sweep(dao.all().first(), removed)
         }
+
+        override val copies get() = packs.copies
 
         override fun volumeThere() = there
     }

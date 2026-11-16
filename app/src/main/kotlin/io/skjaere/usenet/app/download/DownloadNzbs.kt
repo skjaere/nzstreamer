@@ -5,6 +5,10 @@ import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -55,6 +59,14 @@ class DownloadNzbs(private val dir: File, private val io: CoroutineDispatcher = 
     @Volatile
     private var held: Held? = null
 
+    private val _copies = MutableStateFlow<List<Meta>>(emptyList())
+
+    /**
+     * What the copies kept are, as the last write and the last sweep left them: none before the first sweep, which a
+     * process's reconcile makes at its start. What the Downloads page says of a season's pack is read from it (L406).
+     */
+    val copies: StateFlow<List<Meta>> = _copies.asStateFlow()
+
     /** Copy [key]'s folder: the key's SHA-256, in hex. */
     fun folder(key: String): File = File(dir, digest(key))
 
@@ -64,11 +76,13 @@ class DownloadNzbs(private val dir: File, private val io: CoroutineDispatcher = 
             val folder = folder(meta.key)
             if (!folder.isDirectory && !folder.mkdirs()) throw IOException("Couldn't make season pack ${short(folder.name)}'s folder")
             // Kept again: no copy until its meta is back over what is written now.
+            _copies.update { kept -> kept.filter { it.key != meta.key } }
             File(folder, META).delete()
             writeWhole(File(folder, NZB), nzb)
             val passwordFile = File(folder, PASSWORD)
             if (password != null) writeWhole(passwordFile, password.toByteArray()) else passwordFile.delete()
             writeWhole(File(folder, META), json.encodeToString(Meta.serializer(), meta).toByteArray())
+            _copies.update { kept -> kept + meta }
             log.info("Season pack {}: kept for its season, {} bytes", short(folder.name), nzb.size)
         }
     }
@@ -84,6 +98,19 @@ class DownloadNzbs(private val dir: File, private val io: CoroutineDispatcher = 
     }
 
     /**
+     * The copies kept for [show]'s [season] (L431), in their keys' order: a season row's turn tries one that leads first.
+     */
+    suspend fun forSeason(show: Int, season: Int): List<Copy> = turns.withLock {
+        withContext(io) {
+            dir.listFiles().orEmpty().filter { it.isDirectory }.mapNotNull { folder ->
+                val meta = meta(folder)?.takeIf { it.show == show && it.season == season && folder.name == digest(it.key) } ?: return@mapNotNull null
+                val nzb = File(folder, NZB).takeIf { it.isFile }?.readBytes() ?: return@mapNotNull null
+                Copy(meta, DownloadStorage.Source(nzb, File(folder, PASSWORD).takeIf { it.isFile }?.readText()))
+            }.sortedBy { it.meta.key }
+        }
+    }
+
+    /**
      * Deletes every copy no row of [rows] holds (one of its show and season still to finish, [DownloadRunner.GOING_ON], or
      * one of [removed], the ids of rows removed whose Undo can still bring them back), and whatever else is in the folder
      * that is no copy, its `.tmp` files with it. The prepare held goes with its copy.
@@ -92,16 +119,21 @@ class DownloadNzbs(private val dir: File, private val io: CoroutineDispatcher = 
         withContext(io) {
             val holding = rows.filter { it.state in DownloadRunner.GOING_ON || it.id in removed }
                 .mapNotNullTo(HashSet()) { row -> row.showTmdbId?.let { show -> row.season?.let { show to it } } }
+            val kept = mutableListOf<Meta>()
             dir.listFiles().orEmpty().forEach { entry ->
                 val meta = if (entry.isDirectory) meta(entry) else null
-                if (meta != null && (meta.show to meta.season) in holding) return@forEach
+                if (meta != null && (meta.show to meta.season) in holding) {
+                    kept += meta
+                    return@forEach
+                }
                 if (entry.deleteRecursively() || !entry.exists()) {
                     log.info("Season pack {}: dropped, {}", short(entry.name), if (meta == null) "no copy" else "no download of its season to finish")
                 } else {
                     log.warn("Season pack {}: couldn't be dropped", short(entry.name))
                 }
             }
-            held?.let { kept -> if (meta(folder(kept.key)) == null && held === kept) held = null }
+            _copies.value = kept.sortedBy { it.key }
+            held?.let { last -> if (meta(folder(last.key)) == null && held === last) held = null }
         }
     }
 

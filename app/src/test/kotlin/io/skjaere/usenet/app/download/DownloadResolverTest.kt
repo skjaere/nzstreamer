@@ -48,14 +48,25 @@ import io.skjaere.usenet.newznab.NewznabError
 import io.skjaere.usenet.newznab.NewznabException
 import io.skjaere.usenet.newznab.NewznabItem
 import io.skjaere.usenet.newznab.NzbDownload
+import io.skjaere.usenet.releases.RankedRelease
+import io.skjaere.usenet.releases.ReleaseFacts
 import io.skjaere.usenet.releases.ReleaseKey
+import io.skjaere.usenet.releases.ReleaseParser
 import io.skjaere.usenet.releases.StaticDeviceCapabilities
+import io.skjaere.usenet.search.EpisodeRequest
+import io.skjaere.usenet.search.FindResult
+import io.skjaere.usenet.search.FinderEvent
+import io.skjaere.usenet.search.FoundRelease
+import io.skjaere.usenet.search.IndexerReport
+import io.skjaere.usenet.search.SearchStage
+import io.skjaere.usenet.search.StageReport
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -221,10 +232,31 @@ class DownloadResolverTest {
     private val storage by lazy { FakeStorage(packs()) }
     private val store by lazy { PreparedNzbStore(nzbDir) }
 
+    /** What the turn's search finds, in its order (L392): each as the indexer lists it. */
+    private var finds: List<Fake> = emptyList()
+
+    /** The sizes the indexer lists for some of [finds], by guid, where they aren't their files' (a pack's share is an average). */
+    private val listed = mutableMapOf<String, Long>()
+
+    /** What each indexer said to the turn's search: by default, the one indexer answering. */
+    private var findReports: List<IndexerReport> = listOf(IndexerReport(indexer, "TVDB id"))
+
+    /** The episodes the turn's search asked for, in order. */
+    private val searched: MutableList<EpisodeRequest> = Collections.synchronizedList(mutableListOf())
+
+    /** The release that played each episode last, by its watch key, as the library remembers it (L402). */
+    private val lastPlayed = mutableMapOf<String, RememberedRelease>()
+
+    /** The watch keys whose release that played last was asked for. */
+    private val lastAsked = mutableListOf<String>()
+
+    private fun context(cap: Int?) = DownloadRanking.context(StaticDeviceCapabilities(displayHeight = 1080), PlaybackPrefs(), DownloadPrefs(sizeCapGbPerHour = cap), "en")
+
     /**
      * Resolve over these fakes, what is known of releases tried [tried], or, where [remembered] is given, the app's memory of
      * them as the app's Resolve reads it. Download size is [cap] GB an hour, none when null; a prepare held for a season's
-     * copy is handed back as the app's Resolve hands it back ([PlayingPack.preparer]), over the same fake prepare.
+     * copy is handed back as the app's Resolve hands it back ([PlayingPack.preparer]), over the same fake prepare. The turn's
+     * search finds [finds], each indexer saying [findReports], in the room the storage gives.
      */
     private fun resolver(attempts: Int = 10, tried: TriedReleases = TriedReleases.None, providers: Boolean? = true, remembered: MissingReleases? = null, cap: Int? = null) = DownloadResolver(
         downloads = dao,
@@ -240,8 +272,48 @@ class DownloadResolverTest {
         providersChecked = { providers },
         clock = { NOW },
         heldPreparer = { held -> PlayingPack.preparer(held, prepareBackend, Dispatchers.Unconfined) },
-        downloadContext = { DownloadRanking.context(StaticDeviceCapabilities(displayHeight = 1080), PlaybackPrefs(), DownloadPrefs(sizeCapGbPerHour = cap), "en") },
+        downloadContext = { context(cap) },
+        search = DownloadSearch(
+            downloads = dao,
+            find = { request, _, _ ->
+                flow {
+                    searched += request
+                    finds.forEach { fakes[it.guid] = it }
+                    emit(FinderEvent.Finished(FindResult(request, finds.map(::foundOf), emptyList(), listOf(StageReport(SearchStage.Episode, findReports)))))
+                }
+            },
+            indexers = { listOf(indexer) },
+            context = { context(cap) },
+            space = { id -> storage.space(id) },
+            clock = { NOW },
+        ),
+        lastRelease = { key ->
+            lastAsked += key
+            lastPlayed[key]
+        },
     )
+
+    /** [fake] as the finder gives it: as its indexer lists it, ranked first-come. */
+    private fun foundOf(fake: Fake): FoundRelease {
+        val size = listed[fake.guid] ?: fake.size
+        val item = NewznabItem(
+            indexerId = INDEXER, guid = fake.guid, title = fake.title, sizeBytes = size, publishedAt = null, postedAt = null, categories = emptyList(),
+            grabs = null, passworded = false, files = null, tvdbId = null, tmdbId = null, imdbId = null, tvmazeId = null, season = null, episode = null,
+            coverUrl = null, mediaInfo = null, downloadTemplate = "http://indexer.invalid/api?t=get&id=${fake.guid}&apikey={apikey}", attributes = emptyMap(),
+        )
+        val ranked = RankedRelease(ReleaseFacts(item.key, fake.title, size), ReleaseParser.parse(fake.title), playable = true, score = 1.0, reasons = emptyList(), estimatedBitrate = null)
+        return FoundRelease(item, ranked, SearchStage.Episode)
+    }
+
+    /** [this] a season row (L392): the season sheet's search facts for its episode, its turn not yet searched. */
+    private fun Download.withFacts(searched: Boolean = false) = copy(search = DownloadColumns.text(FACTS.copy(searched = searched)))
+
+    /** [fake]'s copy kept for season 2 of the show (L394), leading or not, as an earlier row of the season kept it. */
+    private suspend fun keptForSeason(fake: Fake, leads: Boolean = true) {
+        fakes[fake.guid] = fake
+        val candidate = DownloadCandidate(INDEXER, fake.guid, fake.title, "http://indexer.invalid/api?t=get&id=${fake.guid}&apikey={apikey}", fake.size)
+        storage.packs.write(DownloadNzbs.Meta(key(fake), fake.title, candidate, SHOW, 2, leads), fake.nzb, fake.password)
+    }
 
     /** The season packs' copies in [packsDir], as a process finds them: none of their prepares held. */
     private fun packs() = DownloadNzbs(File(packsDir, DownloadNzbs.PATH), Dispatchers.Unconfined)
@@ -255,7 +327,7 @@ class DownloadResolverTest {
             id = ID, watchKey = WatchKey.episode(SHOW, 2, 4), kind = DownloadKind.Episode, title = "Harbor Lights", showTmdbId = SHOW,
             season = 2, episode = 4, seasonEpisodes = 6, episodeName = "Low Water", position = 0,
             candidates = candidates.map { DownloadCandidate(INDEXER, it.guid, it.title, "http://indexer.invalid/api?t=get&id=${it.guid}&apikey={apikey}", it.size) },
-            tried = tried.map(::key), indexerSize = candidates.first().size, createdAt = 0, updatedAt = 0,
+            tried = tried.map(::key), indexerSize = candidates.firstOrNull()?.size ?: 0, createdAt = 0, updatedAt = 0,
         ).let(edit)
         dao.insert(row)
         return row
@@ -788,8 +860,10 @@ class DownloadResolverTest {
         assertEquals(DownloadResolver.WONT_FIT, failed.reason)
         assertEquals("Won't fit", stored().reason)
         assertEquals(DownloadState.Failed, stored().state)
-        // The size it needs is the row's, for the page to say.
-        assertEquals(1_200_000_000L, stored().size)
+        // Passed over before anything of it was written into the row (L401): no release, file or size of its own yet.
+        assertNull(stored().release)
+        assertNull(stored().size)
+        assertEquals(listOf(key(single)), stored().tried)
         assertNull(storage.sources[ID])
         assertEquals(listOf(ID), storage.spaceAsked)
         // Its store entry went all the same.
@@ -1185,6 +1259,7 @@ class DownloadResolverTest {
                 dao, storage, availability, NzbPreparer(prepareBackend, Dispatchers.Unconfined), store, probe, { listOf(indexer) }, { _, item -> grab(item) },
                 { _, _, _ -> TriedReleases.None }, { 10 }, providersChecked = { ++checks == 1 }, clock = { NOW },
                 heldPreparer = { NzbPreparer(prepareBackend, Dispatchers.Unconfined) }, downloadContext = { DownloadRanking.context(StaticDeviceCapabilities(), PlaybackPrefs(), DownloadPrefs(), "en") },
+                search = DownloadSearch(dao, { _, _, _ -> error("No search for a row without search facts") }, { listOf(indexer) }, { context(null) }, { storage.space(it) }),
             ).resolve(ID),
         )
         assertNull(storage.sources[ID])
@@ -1207,6 +1282,345 @@ class DownloadResolverTest {
         assertEquals(0, other.row.safeOffset)
         assertNull(other.row.relativePath)
         assertEquals(listOf(ID), storage.deletedVideos)
+    }
+
+    /**
+     * L392: a season row's turn searches its episode by the facts its row keeps, and what it finds replaces the sheet's list,
+     * written into the row with what the first needs and the facts as searched before anything is grabbed.
+     */
+    @Test
+    fun `a season row's turn searches its episode and writes what it found before any grab`() = runBlocking<Unit> {
+        finds = listOf(broken, single)
+        row(unnamedPack) { it.withFacts() }
+        var atGrab: Download? = null
+        onGrab = { if (atGrab == null) atGrab = stored() }
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(listOf(FACTS.request(2, 4)), searched)
+        val first = assertNotNull(atGrab, "nothing was grabbed")
+        assertEquals(listOf(broken.guid, single.guid), first.candidates.map { it.guid })
+        assertEquals(broken.size, first.indexerSize)
+        assertEquals(true, DownloadColumns.search(first)?.searched)
+        assertEquals(listOf(broken.guid, single.guid), grabbed)
+        assertEquals(single.guid, ready.row.release?.guid)
+        // Said meanwhile, as Resolve's first step is.
+        assertEquals(DownloadHostRules.FINDING_RELEASES, dao.reasons.first())
+    }
+
+    /** L392: the search's list is in the row before any grab, so a process that dies after it resolves from it, unsearched. */
+    @Test
+    fun `a process that dies after the turn's search resolves from what it found, with no second search`() = runBlocking<Unit> {
+        finds = listOf(single)
+        row { it.withFacts() }
+        val grabbing = CompletableDeferred<Unit>()
+        onGrab = {
+            grabbing.complete(Unit)
+            awaitCancellation()
+        }
+        val resolve = launch(Dispatchers.Default) { resolver().resolve(ID) }
+        withTimeout(10_000) { grabbing.await() }
+        resolve.cancelAndJoin()
+        onGrab = {}
+        // A new process.
+        storage.packs = packs()
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(single.guid, ready.row.release?.guid)
+        assertEquals(1, searched.size, "searched once")
+        assertEquals(listOf(single.guid), grabbed)
+    }
+
+    /**
+     * Resolve's order (L392, L431): the row's own NZB; a file chosen by hand, which neither searches nor takes the season's
+     * pack first; the season's pack that leads, from its copy; the turn's search where it hasn't searched yet; its releases.
+     */
+    @Test
+    fun `a season row's turn opens its own NZB, else a pick's releases, else its season's pack, else searches, then its releases`() = runBlocking<Unit> {
+        finds = listOf(broken)
+        keptForSeason(pack)
+        // Its own NZB, a resolve before having found its release.
+        row(single) { it.withFacts().resolvedAs(passworded, "c90a4f.mkv", 1_300_000_000L) }
+        storage.sources[ID] = DownloadStorage.Source(passworded.nzb, "s3cret-from-indexer")
+        fakes[passworded.guid] = passworded
+        assertEquals(passworded.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(emptyList(), grabbed)
+        assertEquals(emptyList(), searched)
+
+        // A file chosen by hand: its releases as chosen, with no search and the season's pack left alone.
+        reset()
+        keptForSeason(pack)
+        row(single) { it.withFacts().copy(pick = DownloadColumns.text(DownloadPick(0, "a8f3c1.mkv", 1_200_000_000L, PreparedNzb.idFor(single.nzb)))) }
+        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(listOf(single.guid), grabbed)
+        assertEquals(emptyList(), searched)
+
+        // The season's pack, from its copy: no grab and no search.
+        reset()
+        keptForSeason(pack)
+        row(single) { it.withFacts() }
+        val packed = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(pack.guid, packed.row.release?.guid)
+        assertEquals("Harbor.Lights.S02E04.1080p.WEB.h264-GRP.mkv", packed.file.name)
+        assertEquals(emptyList(), grabbed)
+        assertEquals(emptyList(), searched)
+        assertEquals(listOf(key(pack)), stored().tried)
+
+        // No copy: the search, whose list replaces the sheet's.
+        reset()
+        finds = listOf(passworded)
+        row(single) { it.withFacts() }
+        assertEquals(passworded.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(listOf(passworded.guid), grabbed)
+        assertEquals(1, searched.size)
+
+        // Searched already: its releases.
+        reset()
+        finds = listOf(passworded)
+        row(single) { it.withFacts(searched = true) }
+        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(emptyList(), searched)
+
+        // An episode queued from its own ⋮ keeps its releases' order: no pack first, no search.
+        reset()
+        keptForSeason(pack)
+        row(single)
+        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(listOf(single.guid), grabbed)
+        assertEquals(emptyList(), searched)
+    }
+
+    /**
+     * L431: the season's pack goes first only where its share of the episode fits the room now and, ranked alone for
+     * downloading with the episode's runtime, it isn't above Download size; else the turn searches as it would without it.
+     */
+    @Test
+    fun `the season's pack isn't first above Download size, where its share doesn't fit, or where it doesn't lead`() = runBlocking<Unit> {
+        val small = Fake("hl-s02e04-small", "Harbor.Lights.S02E04.480p.WEB.h264-WREN", listOf("s.mkv" to 500_000_000L))
+        // About 1.4 GB an hour for a 44-minute episode, its share of the pack: above 1 GB an hour.
+        finds = listOf(small)
+        keptForSeason(pack)
+        row(single) { it.withFacts().copy(runtimeMinutes = 44) }
+        assertEquals(small.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver(cap = 1).resolve(ID)).row.release?.guid)
+        assertEquals(listOf(small.guid), grabbed)
+        assertEquals(1, searched.size)
+        // Under 2 GB an hour it leads.
+        reset()
+        keptForSeason(pack)
+        row(single) { it.withFacts().copy(runtimeMinutes = 44) }
+        assertEquals(pack.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver(cap = 2).resolve(ID)).row.release?.guid)
+
+        // Its share, about 1 GB, more than the 0.9 GB free.
+        reset()
+        finds = listOf(small)
+        keptForSeason(pack)
+        row(single) { it.withFacts() }
+        storage.space = DownloadSpace(available = 900_000_000L + DownloadSpace.KEPT_FREE, used = 0, queued = 0)
+        assertEquals(small.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(listOf(small.guid), grabbed)
+
+        // A copy kept as not leading.
+        reset()
+        finds = listOf(small)
+        keptForSeason(pack, leads = false)
+        row(single) { it.withFacts() }
+        assertEquals(small.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+    }
+
+    /**
+     * L431: a season's pack that fails for its own sake (its articles gone) is one of the row's three tries, and the turn's
+     * search runs then, the pack left out of what it finds; one that finds nothing else fails in the pack's words.
+     */
+    @Test
+    fun `a season's pack that fails for its own sake moves on to the search, counted once and left out of what it finds`() = runBlocking<Unit> {
+        val gonePack = Fake(
+            "hl-s02-pack-gone", "Harbor.Lights.S02.1080p.WEB.h264-GRP", (1..6).map { "Harbor.Lights.S02E%02d.1080p.WEB.h264-GRP.mkv".format(it) to 1_000_000_000L + it },
+            gone = true,
+        )
+        keptForSeason(gonePack)
+        finds = listOf(gonePack, single)
+        row { it.withFacts() }
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(single.guid, ready.row.release?.guid)
+        // The pack from its copy, no grab; the single grabbed.
+        assertEquals(listOf(single.guid), grabbed)
+        assertEquals(1, searched.size)
+        assertEquals(listOf(key(gonePack), key(single)), stored().tried)
+        assertEquals(listOf(single.guid), stored().candidates.map { it.guid })
+        assertTrue(dao.reasons.contains("Trying release 2 of 2 · Fetching NZB"), dao.reasons.toString())
+
+        // Nothing else found: it fails in the pack's words.
+        reset()
+        keptForSeason(gonePack)
+        finds = listOf(gonePack)
+        row { it.withFacts() }
+        val failed = assertIs<DownloadResolver.Resolution.Failed>(resolver().resolve(ID))
+        assertEquals(DownloadResolver.INCOMPLETE, failed.reason)
+        assertEquals(listOf(key(gonePack)), stored().tried)
+        assertEquals(emptyList(), grabbed)
+    }
+
+    /**
+     * L340, L431: the season's pack tried first and cut off by a process death is counted as its attempt started, its NZB
+     * kept for it. The next process's turn takes it up again first from what was kept, counted once, with no grab and no
+     * search, as any attempt with no answer is taken up again.
+     */
+    @Test
+    fun `a season's pack tried first and cut off by a process death is taken up again first, with no grab and no search`() = runBlocking<Unit> {
+        keptForSeason(pack)
+        finds = listOf(single)
+        row(single) { it.withFacts() }
+        val dying = CompletableDeferred<Pair<Map<String, Download>, Map<String, DownloadStorage.Grab>>>()
+        onCheck = {
+            dying.complete(dao.rows.value to storage.grabs.toMap())
+            awaitCancellation()
+        }
+        val resolve = launch(Dispatchers.Default) { resolver().resolve(ID) }
+        val (rows, grabs) = withTimeout(10_000) { dying.await() }
+        resolve.cancelAndJoin()
+        onCheck = {}
+        // What a death mid-check leaves on disk: the pack counted, its NZB kept for its attempt.
+        assertEquals(listOf(key(pack)), rows.getValue(ID).tried)
+        dao.rows.value = rows
+        storage.grabs.clear()
+        storage.grabs += grabs
+        storage.packs = packs()
+
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(pack.guid, ready.row.release?.guid)
+        assertEquals("Harbor.Lights.S02E04.1080p.WEB.h264-GRP.mkv", ready.file.name)
+        assertEquals(emptyList(), grabbed)
+        assertEquals(emptyList(), searched)
+        assertEquals(listOf(key(pack)), stored().tried)
+    }
+
+    /**
+     * L398, L443: a turn whose search finds nothing fails "No playable release found"; one whose indexer answered its limit,
+     * with nothing found elsewhere, waits as the limit, its wait kept; the indexers out of reach are backed off from, nothing
+     * counted and the search still to come; found and none fits, it won't fit; the volume away, it waits for storage.
+     */
+    @Test
+    fun `a turn's search that finds nothing fails, one at an indexer's limit waits, and indexers out of reach are backed off from`() = runBlocking<Unit> {
+        row(single) { it.withFacts() }
+        val none = assertIs<DownloadResolver.Resolution.Failed>(resolver().resolve(ID))
+        assertEquals(DownloadSheetModel.NO_RELEASE, none.reason)
+        assertEquals(DownloadState.Failed, stored().state)
+        assertEquals("No playable release found", stored().reason)
+        assertEquals(emptyList(), grabbed)
+
+        reset()
+        findReports = listOf(IndexerReport(indexer, null, error = NewznabError.ApiLimitReached("Request limit reached", java.time.Duration.ofMinutes(90))))
+        row(single) { it.withFacts() }
+        val limited = assertIs<DownloadResolver.Resolution.Waiting>(resolver().resolve(ID))
+        assertEquals(DownloadHostRules.LIMIT_REACHED, limited.reason)
+        assertEquals(DownloadState.Waiting, stored().state)
+        assertEquals(DownloadHostRules.LIMIT_REACHED, stored().reason)
+        assertEquals(LimitWait(INDEXER, LimitWait.Kind.Search, NOW, NOW + 90 * 60_000L), DownloadColumns.limitWait(stored()))
+        assertEquals(emptyList(), stored().tried)
+
+        reset()
+        findReports = listOf(IndexerReport(indexer, null, error = NewznabError.Server("HTTP 503")))
+        row(single) { it.withFacts() }
+        val out = assertIs<DownloadResolver.Resolution.Unreachable>(resolver().resolve(ID))
+        assertEquals(DownloadHostRules.CANT_REACH_INDEXER, out.words)
+        assertEquals(DownloadState.Resolving, stored().state)
+        assertEquals(DownloadHostRules.CANT_REACH_INDEXER, stored().reason)
+        assertEquals(emptyList(), stored().tried)
+        assertEquals(false, DownloadColumns.search(stored())?.searched, "searched again once the wait is over")
+
+        reset()
+        finds = listOf(broken)
+        storage.space = DownloadSpace(available = 1_000_000_000L + DownloadSpace.KEPT_FREE, used = 0, queued = 0)
+        row(single) { it.withFacts() }
+        assertEquals(DownloadResolver.WONT_FIT, assertIs<DownloadResolver.Resolution.Failed>(resolver().resolve(ID)).reason)
+        assertEquals(emptyList(), grabbed)
+
+        reset()
+        finds = listOf(single)
+        storage.space = null
+        row(single) { it.withFacts() }
+        assertEquals(DownloadHostRules.STORAGE_UNAVAILABLE, assertIs<DownloadResolver.Resolution.Waiting>(resolver().resolve(ID)).reason)
+        assertEquals(emptyList(), grabbed)
+    }
+
+    /**
+     * L401: a release that passed every step whose exact size won't fit is passed over, counted, its grab dropped and nothing
+     * of it written into the row, and the next is tried within the three tries; the row fails "Won't fit" only once none
+     * that fits is left. A row resolved before keeps its release, its file and what it wrote.
+     */
+    @Test
+    fun `a release that won't fit is passed over, the row as it was, and the next tried, Won't fit once none that fits is left`() = runBlocking<Unit> {
+        val smaller = Fake("hl-s02e04-smaller", "Harbor.Lights.S02E04.720p.WEB.h264-WREN", listOf("e9.mkv" to 900_000_000L))
+        row(single, smaller)
+        storage.space = DownloadSpace(available = 1_000_000_000L + DownloadSpace.KEPT_FREE, used = 0, queued = 0)
+        val written = mutableListOf<String?>()
+        dao.onUpdate = { written += it.release?.guid }
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(smaller.guid, ready.row.release?.guid)
+        assertEquals(listOf(single.guid, smaller.guid), grabbed)
+        assertEquals(listOf(key(single), key(smaller)), stored().tried)
+        assertFalse(single.guid in written, "the release passed over was written into the row")
+        assertNull(storage.grabs[ID])
+        // Its probe's entry went as for any release.
+        assertEquals(0, store.storedFiles().count)
+
+        // A row resolved before (Try again after "Storage is full"): every release too big; its own kept as it was.
+        reset()
+        val big = (1..4).map { Fake("hl-s02e04-big-$it", "Harbor.Lights.S02E04.2160p.WEB.h265-GRP$it", listOf("b$it.mkv" to 2_000_000_000L + it)) }
+        row(*big.toTypedArray()) { it.resolvedAs(passworded, "c90a4f.mkv", 1_300_000_000L).copy(safeOffset = 700_000_000L, relativePath = "downloads/$ID/v.mkv") }
+        storage.space = DownloadSpace(available = 1_500_000_000L + DownloadSpace.KEPT_FREE, used = 0, queued = 0)
+        val failed = assertIs<DownloadResolver.Resolution.Failed>(resolver().resolve(ID))
+        assertEquals(DownloadResolver.WONT_FIT, failed.reason)
+        assertEquals(big.take(3).map { it.guid }, grabbed)
+        val kept = stored()
+        assertEquals(passworded.guid, kept.release?.guid)
+        assertEquals("c90a4f.mkv", kept.fileName)
+        assertEquals(1_300_000_000L, kept.size)
+        assertEquals(700_000_000L, kept.safeOffset)
+        assertEquals("downloads/$ID/v.mkv", kept.relativePath)
+        assertEquals(emptyList(), storage.deletedVideos)
+    }
+
+    /**
+     * L402: a pack whose files name no episode, from which the user chose the episode's file while streaming it, has that
+     * file picked again with no question, as a play's replay picks it (Replay.picker).
+     */
+    @Test
+    fun `a file chosen while streaming the same pack is picked from it with no question`() = runBlocking<Unit> {
+        row(unnamedPack)
+        lastPlayed[WatchKey.episode(SHOW, 2, 4)] = RememberedRelease(
+            INDEXER, unnamedPack.guid, unnamedPack.title, null, fileIndex = 3, nzbId = PreparedNzb.idFor(unnamedPack.nzb), fileName = "Harbor.Lights.4_6.mp4",
+            fileSize = 900_000_004L,
+        )
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals("Harbor.Lights.4_6.mp4", ready.file.name)
+        assertEquals(listOf(unnamedPack.guid), grabbed)
+        assertEquals(listOf(key(unnamedPack)), probed)
+        assertEquals(listOf(WatchKey.episode(SHOW, 2, 4)), lastAsked)
+        // Only that file's volume was checked, after the pack was opened.
+        assertEquals(listOf("${unnamedPack.guid}/Harbor.Lights.4_6.mp4@fake"), checked)
+    }
+
+    /** The turn's lines, the pack's attempt and a release passed over among them, name the row by its id: no release, key or title. */
+    @Test
+    fun `a turn's lines name the row by its id, never a release, a key or the show`() = runBlocking<Unit> {
+        val gonePack = Fake(
+            "hl-s02-pack-plover", "Harbor.Lights.S02.1080p.WEB.h264-PLOVER", (1..6).map { "Harbor.Lights.S02E%02d.1080p.WEB.h264-PLOVER.mkv".format(it) to 1_000_000_000L + it },
+            gone = true,
+        )
+        val tooBig = Fake("hl-s02e04-tern", "Harbor.Lights.S02E04.2160p.WEB.h265-TERN", listOf("t.mkv" to 1_200_000_000L))
+        val fits = Fake("hl-s02e04-heron", "Harbor.Lights.S02E04.720p.WEB.h264-HERON", listOf("h.mkv" to 400_000_000L))
+        keptForSeason(gonePack)
+        finds = listOf(tooBig, fits)
+        // Listed smaller than its file: found to fit, and too big once its file's own size is known.
+        listed[tooBig.guid] = 900_000_000L
+        storage.space = DownloadSpace(available = 1_100_000_000L + DownloadSpace.KEPT_FREE, used = 0, queued = 0)
+        row { it.withFacts() }
+        val from = LogBuffer.snapshot().lastOrNull()?.seq ?: 0L
+        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(listOf(key(gonePack), key(tooBig), key(fits)), stored().tried)
+        val lines = LogBuffer.snapshot().filter { it.seq > from && (it.tag == "DownloadResolver" || it.tag == "DownloadSearch") }.map { it.message }
+        assertTrue(lines.any { "download $ID" in it && "pack" in it }, lines.toString())
+        assertTrue(lines.any { "download $ID" in it && "passed over" in it }, lines.toString())
+        val secret = listOf(gonePack, tooBig, fits).flatMap { listOf(it.title, it.guid, key(it)) } + listOf("Harbor Lights", "PLOVER", "TERN", "HERON")
+        assertEquals(emptyList(), lines.filter { line -> secret.any { it in line } })
     }
 
     @Test
@@ -1237,6 +1651,13 @@ class DownloadResolverTest {
         indexerFails = null
         checkFails = null
         probeAnswer = { null }
+        finds = emptyList()
+        listed.clear()
+        findReports = listOf(IndexerReport(indexer, "TVDB id"))
+        searched.clear()
+        lastPlayed.clear()
+        lastAsked.clear()
+        dao.onUpdate = {}
         grabbed.clear()
         checked.clear()
         opened.clear()
@@ -1347,6 +1768,8 @@ class DownloadResolverTest {
         override fun heldPrepare() = packs.held()
 
         override fun holdPrepare(key: String, prepared: PreparedNzb) = packs.hold(key, prepared)
+
+        override suspend fun packs(show: Int, season: Int) = packs.forSeason(show, season)
     }
 
     private companion object {
@@ -1374,5 +1797,8 @@ class DownloadResolverTest {
 
         /** Room for any of the fakes: 100 GB. */
         val ROOM = DownloadSpace(available = 100_000_000_000L, used = 0, queued = 0)
+
+        /** What the season's sheet kept for a row of season 2 to search at its turn (L392): the show's names and ids, the season's count. */
+        val FACTS = SeasonSearch("Harbor Lights", 2021, tvdb = 900001, tmdb = SHOW, airDate = "2025-03-25", runtimeMinutes = 44, seasonEpisodes = 6)
     }
 }
