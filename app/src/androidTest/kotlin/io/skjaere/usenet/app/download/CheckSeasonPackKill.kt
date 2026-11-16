@@ -22,8 +22,11 @@ import org.junit.runner.RunWith
  * user-initiated job came back by itself (a host start by the job after the kill, the app not opened again) and the first
  * episode reopened at the safe offset recorded before the kill, then done. The second's turn came after it and took the
  * pack from the same copy: its one try the pack's, with no grab, as no indexer is set up and the pack's never was. Both
- * Done, each file whole and its own episode's, their search facts gone with Done (L442); the copy gone after, with the
- * season's last download.
+ * Done, each file whole and its own episode's, their search facts gone with Done (L442); the copy gone after the pair.
+ *
+ * Gone after the pair only: this process's start reconciles, which sweeps a copy no row still to finish holds, before the
+ * check runs, so it can't tell the host's own sweep at the second's end from that one. DownloadRunnerTest and
+ * DownloadSeasonEndToEndDeviceTest show the host's sweep, in one process.
  */
 @RunWith(AndroidJUnit4::class)
 @SdkSuppress(minSdkVersion = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
@@ -72,8 +75,9 @@ class CheckSeasonPackKill {
         check.assertWhole(listOf(second.id), PairFixture.PACK_E08)
         assertEquals("their search facts gone with Done (L442)", listOf(null, null), listOf(first.search, second.search))
 
+        // After the pair: whoever swept it, the host at the second's end or this process's reconcile at its start.
         val packs = container.downloadStorage.packs
-        assertNull("the pack's copy gone with the season's last download", packs.find(SeasonPackSeed.key))
-        assertFalse("the copy's folder", packs.folder(SeasonPackSeed.key).exists())
+        assertNull("the pack's copy gone after the pair", packs.find(SeasonPackSeed.key))
+        assertFalse("the copy's folder gone after the pair", packs.folder(SeasonPackSeed.key).exists())
     }
 }
