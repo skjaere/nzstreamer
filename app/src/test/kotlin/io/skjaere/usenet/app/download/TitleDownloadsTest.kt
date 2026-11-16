@@ -1,11 +1,16 @@
 package io.skjaere.usenet.app.download
 
 import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
+import io.skjaere.usenet.app.settings.TestCipher
+import io.skjaere.usenet.app.settings.memorySettings
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.data.ProviderRecord
 import io.skjaere.usenet.data.WatchKey
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -15,7 +20,9 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.util.Locale
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * A title's download as the Show page's rows, the Movie page's button and Search's card read it (L384): only what they say,
@@ -123,6 +130,26 @@ class TitleDownloadsTest {
         actions.shown(12_000)
         advanceTimeBy(12_001)
         assertNull(actions.offer.value)
+    }
+
+    @Test
+    fun `Download is offered only while a Usenet provider is saved and on, with its password readable`() = runBlocking<Unit> {
+        // The settings as the app keeps them, in memory, its secrets sealed by a stand-in that can lose one.
+        val cipher = TestCipher()
+        val settings = memorySettings(cipher = cipher)
+        val usenet = usenetUsable(settings)
+        assertFalse(usenet.first(), "none saved (L370): a debrid service alone downloads nothing in DN1")
+        val id = settings.saveProvider(ProviderRecord("", "Provider A", "news.provider-a.invalid", 563, "user-a"), "secret-a")
+        assertTrue(usenet.first())
+        settings.setProviderEnabled(id, false)
+        assertFalse(usenet.first(), "switched off")
+        settings.setProviderEnabled(id, true)
+        assertTrue(usenet.first())
+        cipher.unreadable += "secret-a"
+        assertFalse(usenet.first(), "its password can't be read, as after a device move")
+        cipher.unreadable.clear()
+        settings.deleteProvider(id)
+        assertFalse(usenet.first(), "deleted")
     }
 
     private companion object {
