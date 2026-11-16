@@ -108,6 +108,20 @@ class DownloadEditsTest {
     }
 
     @Test
+    fun `a choice weighs the room free with the download's own counted free, as its replace gives that back`() = runTest {
+        val fakes = PageFakes()
+        val row = episode("run", 4, DownloadState.Running)
+        val sheet = fakes.deps(backgroundScope).replacing(row)
+        sheet.space()
+        assertEquals(listOf<String?>("run"), fakes.spaceFor)
+        // Nothing asked of Android: the download asked when it was queued.
+        assertFalse(sheet.askDue())
+        // The page's own room, outside a choice, counts every download.
+        fakes.deps(backgroundScope).space(null)
+        assertEquals(listOf("run", null), fakes.spaceFor)
+    }
+
+    @Test
     fun `Undo of a show's last download keeps its page, which closes once a removal's bar has gone`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val fakes = PageFakes()
@@ -158,6 +172,9 @@ internal class PageFakes {
     val rows = mutableMapOf<String, Download>()
     val online = MutableStateFlow(true)
 
+    /** Which download's own room each read of the space counted free ([DownloadsDeps.space]'s except). */
+    val spaceFor = mutableListOf<String?>()
+
     /** The runner's queue as the page reads it. */
     val items = MutableStateFlow<List<DownloadRunner.Item>>(emptyList())
 
@@ -167,7 +184,10 @@ internal class PageFakes {
 
     fun deps(outlive: CoroutineScope) = DownloadsDeps(
         items = items,
-        space = { DownloadSpace(available = 20_000_000_000, used = 0, queued = 0) },
+        space = { except ->
+            spaceFor += except
+            DownloadSpace(available = 20_000_000_000, used = 0, queued = 0)
+        },
         prefs = flowOf(DownloadPrefs()),
         network = MutableStateFlow(NetworkNow(usable = true, unmetered = true, wifi = true)),
         online = online,
