@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.SpanStyle
@@ -139,8 +140,9 @@ private fun androidx.compose.foundation.layout.RowScope.PhoneRowContent(
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(e.name ?: "Episode ${e.episode}", style = AppType.body, color = if (aired) colors.text else colors.textSecondary, maxLines = 1)
             if (text.meta.isNotEmpty()) Text(text.meta, style = AppType.small, color = colors.muted)
-            // The download's line under the date (DlPhoneEpisodeRow), wrapping at large sizes rather than cut.
-            text.download?.let { DownloadLine(it) }
+            // The download's line under the date (DlPhoneEpisodeRow), wrapping at large sizes rather than cut. TalkBack hears
+            // it once, as the row's state ("Downloading, 42 percent"): the line drawn says nothing of its own.
+            text.download?.let { Box(Modifier.clearAndSetSemantics {}) { DownloadLine(it) } }
             if (onTv != null) {
                 Text(onTv.line, style = AppType.small, color = colors.accent)
                 LinearProgressIndicator(

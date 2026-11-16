@@ -217,8 +217,10 @@ class DownloadEntriesDeviceTest {
             7 to "Download paused, 18 percent", 8 to "Download failed",
         )
         lines.forEach { (n, line) ->
-            compose.waitTill("episode $n's line '$line'") { rowNode(n).let { node -> node.texts().any { it == line } } }
+            compose.waitTill("episode $n's line '$line'") { scrolledTo(row(n)) && drawn(line) }
             assertEquals("episode $n's state", spoken.getValue(n), rowNode(n).config.getOrNull(SemanticsProperties.StateDescription))
+            // TalkBack hears it once, as the row's state: the line drawn says nothing of its own in the row's words.
+            assertTrue("episode $n's words repeat its state: ${rowNode(n).texts()}", rowNode(n).texts().none { it == line })
         }
         // Episode 1 has none: its row is as it was.
         assertEquals(null, rowNode(1).config.getOrNull(SemanticsProperties.StateDescription))
@@ -286,17 +288,17 @@ class DownloadEntriesDeviceTest {
         // Pause: the running one is held where it is (L380).
         menuOf(5)
         pick("Pause download")
-        compose.waitTill("episode 5 paused") { rowNode(5).texts().contains("Paused · 42%") }
+        compose.waitTill("episode 5 paused") { drawn("Paused · 42%") && state(5) == "Download paused, 42 percent" }
         assertEquals(DownloadState.Paused, seeds.row(rows.getValue(5).id)?.state)
 
         // Remove: hidden at once, with the Undo bar; Undo brings it back as it was (L379).
         menuOf(2)
         pick("Remove download")
         compose.waitFor(hasText("Deleted Harbor Lights S02E02 · 1.3 GB"))
-        compose.waitTill("episode 2's download hidden") { rowNode(2).texts().none { it.startsWith("Downloaded") } }
+        compose.waitTill("episode 2's download hidden") { !drawn("Downloaded · 1.3 GB") && state(2) == null }
         assertEquals(DownloadState.Deleting, seeds.row(rows.getValue(2).id)?.state)
         pick("Undo")
-        compose.waitTill("episode 2's download back") { rowNode(2).texts().contains("Downloaded · 1.3 GB") }
+        compose.waitTill("episode 2's download back") { drawn("Downloaded · 1.3 GB") && state(2) == "Downloaded" }
         assertEquals(DownloadState.Done, seeds.row(rows.getValue(2).id)?.state)
     }
 
@@ -464,6 +466,12 @@ class DownloadEntriesDeviceTest {
 
     /** A node's words, merged: its texts, as TalkBack would read them in order. */
     private fun SemanticsNode.texts(): List<String> = config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text }
+
+    /** Whether [line] is drawn: a row's download line, silent itself, so found among the words as laid out, not as heard. */
+    private fun drawn(line: String): Boolean = compose.onAllNodes(hasText(line), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+
+    /** What TalkBack hears as episode [number]'s state. */
+    private fun state(number: Int): String? = rowNode(number).config.getOrNull(SemanticsProperties.StateDescription)
 
     private companion object {
         const val SEEDING_MILLIS = 60_000L
