@@ -3,6 +3,7 @@ package io.skjaere.usenet.app.download
 import android.app.Activity
 import android.app.Instrumentation
 import android.content.Intent
+import android.os.SystemClock
 import android.provider.Settings
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -54,15 +55,16 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.util.Collections
+import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.abs
 
 /**
- * Settings › Downloads on a phone (item 20; W110, L365, L371), over the app's settings, runner and storage, with seams for
- * what isn't the page's (the space free, the host's schedule, and where a case says so Android's answers):
+ * Settings › Downloads on a phone (item 20; W110, L365, L371), over the app's settings, runner, storage and host, with seams
+ * for what isn't the page's (the space free, and where a case says so Android's answers):
  * - the Settings hub's Downloads row comes right after Cache, says what downloads hold and when they run, and opens it;
- * - each switch is saved, and asks for the host with its new needs, whether it waits or runs (L335's exception);
+ * - each switch is saved, and the host is asked for once with its new needs, whether it waits or runs (L335's exception),
+ *   as the debug build's trace records the app's schedules (L391);
  * - Download size's cells are a true grid, two full rows of four, at twice the font size too, and the one picked is saved;
  * - Save downloads to is this phone, the SD card greyed "Later" only while one is in;
  * - Delete all asks first, as Cache's clears do, then deletes every download, file and all, and the page reads empty;
@@ -84,8 +86,6 @@ class DownloadSettingsDeviceTest {
     private val seeds = DownloadsPageSeeds(context, container)
     private lateinit var saved: AppSettings
 
-    /** The host's schedules the page asked for, each with the switches as saved when it asked. */
-    private val scheduled: MutableList<String> = Collections.synchronizedList(mutableListOf())
 
     /** Stands in for Android's settings: each page asked for kept, none started. */
     private val androidSettings = object : Instrumentation.ActivityMonitor() {
@@ -119,22 +119,32 @@ class DownloadSettingsDeviceTest {
         assertEquals(saved, settings.settings.first())
     }
 
-    /** The page's deps: the app's, with the test's own rows alone, a fixed [space], the schedule recorded, and [overrides]. */
+    /**
+     * The page's deps: the app's, with the test's own rows alone, a fixed [space], and [overrides]. The host's schedules are
+     * the app's own, which the debug build's trace records (L391): with no download of the test's to run, each is skipped.
+     */
     private fun deps(
         space: DownloadSpace? = DownloadSpace(available = 51 * GB, used = 0, queued = 0),
         overrides: (DownloadSettingsDeps) -> DownloadSettingsDeps = { it },
     ): DownloadSettingsDeps {
         val app = DownloadSettingsDeps.of(container, context)
-        return overrides(
-            app.copy(
-                rows = app.rows.map { rows -> rows.filter { seeds.isMine(it.id) } },
-                space = { space },
-                schedule = { cause ->
-                    val now = settings.downloads.first()
-                    scheduled += "$cause unmetered=${now.unmeteredOnly} charging=${now.whileCharging}"
-                },
-            ),
-        )
+        return overrides(app.copy(rows = app.rows.map { rows -> rows.filter { seeds.isMine(it.id) } }, space = { space }))
+    }
+
+    /** The debug build's trace (L391), its lines in turn. */
+    private fun traced(): List<String> = File(context.filesDir, "${DownloadStorage.DIR}/${DownloadDebug.TRACE}").takeIf { it.isFile }?.readLines().orEmpty()
+
+    /** The app's schedules of the host for a changed switch in the trace's lines after the first [from]. */
+    private fun switchSchedules(from: Int): Int = traced().drop(from).count { "schedule cause=${ScheduleCause.SwitchChanged} " in it }
+
+    /**
+     * Waits for the host to be asked for once for the switch just changed ([what]), the trace's lines counted from [from]:
+     * then a moment more, for a second ask, whoever made it, to show.
+     */
+    private fun askedOnce(what: String, from: Int) {
+        compose.waitTill("the host asked for $what") { switchSchedules(from) >= 1 }
+        SystemClock.sleep(ANOTHER_ASK_MILLIS)
+        assertEquals("the host asked for $what once", 1, switchSchedules(from))
     }
 
     private fun page(deps: DownloadSettingsDeps, fontScale: Float = 1f) {
@@ -177,25 +187,31 @@ class DownloadSettingsDeviceTest {
         compose.onNode(charging).assertIsOff()
         assertFalse(exists(hasText("After watching", ignoreCase = true)))
 
+        // Each change saved, and the host asked for once under its new needs (L335's exception): two asks would stop a
+        // running download twice.
+        var from = traced().size
         compose.onNode(wifi).performClick()
         saved("any network") { !it.unmeteredOnly }
-        compose.waitTill("the host asked for under any network") { scheduled.toList() == listOf("${ScheduleCause.SwitchChanged} unmetered=false charging=false") }
+        askedOnce("under any network", from)
         compose.onNode(wifi).assertIsOff()
 
+        from = traced().size
         compose.onNode(charging).performClick()
         saved("only while charging") { it.whileCharging }
-        compose.waitTill("the host asked for while charging") { scheduled.size == 2 && scheduled[1] == "${ScheduleCause.SwitchChanged} unmetered=false charging=true" }
+        askedOnce("while charging", from)
         compose.onNode(charging).assertIsOn()
 
+        from = traced().size
         compose.onNode(wifi).performClick()
         saved("Wi-Fi or Ethernet only") { it.unmeteredOnly }
-        compose.waitTill("the host asked for again") { scheduled.size == 3 && scheduled[2] == "${ScheduleCause.SwitchChanged} unmetered=true charging=true" }
+        askedOnce("on Wi-Fi or Ethernet again", from)
         assertNull("Download size untouched", settings.downloads.first().sizeCapGbPerHour)
     }
 
     @Test
     fun downloadSizeIsATrueGridOfTwoFullRowsAndSavesThePick() = runBlocking<Unit> {
         page(deps())
+        val from = traced().size
         assertGrid()
         val notSet = hasContentDescription(DownloadSettings.label(null))
         val two = hasContentDescription(DownloadSettings.label(2))
@@ -210,7 +226,7 @@ class DownloadSettingsDeviceTest {
         saved("12 GB an hour") { it.sizeCapGbPerHour == 12 }
         compose.onNode(notSet).performScrollTo().performClick()
         saved("Not set") { it.sizeCapGbPerHour == null }
-        assertTrue("a size schedules nothing", scheduled.isEmpty())
+        assertEquals("a size schedules nothing", 0, switchSchedules(from))
     }
 
     @Test
@@ -355,6 +371,9 @@ class DownloadSettingsDeviceTest {
     private companion object {
         const val GB = 1_000_000_000L
         const val SEEDING_MILLIS = 60_000L
+
+        /** How long a second ask of the host would take to follow the first: both come within milliseconds of the save. */
+        const val ANOTHER_ASK_MILLIS = 1_500L
 
         /** A seeded file's bytes: small, its row says its size. */
         const val FILE_BYTES = 64 * 1024

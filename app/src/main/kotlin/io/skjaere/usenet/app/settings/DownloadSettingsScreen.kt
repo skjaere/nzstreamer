@@ -59,7 +59,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import io.skjaere.usenet.app.AppContainer
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.download.DownloadHostRules
-import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
 import io.skjaere.usenet.app.download.DownloadNotice
 import io.skjaere.usenet.app.download.DownloadSpace
 import io.skjaere.usenet.app.download.DownloadsPage
@@ -230,8 +229,8 @@ object DownloadSettings {
 /**
  * What Settings › Downloads reads and asks: the app's ([of]), or a test's seams. [rows]: the runner's downloads, those
  * removed left out; [space]: what downloads hold and may take (null while the primary volume isn't there); the settings'
- * setters; the host's schedule from the visible app (L335); the runner's Delete all; and Android's answers, read as the
- * page comes to the front: whether the downloads' notifications show, and whether a removable volume is mounted.
+ * setters; the runner's Delete all; and Android's answers, read as the page comes to the front: whether the downloads'
+ * notifications show, and whether a removable volume is mounted.
  */
 data class DownloadSettingsDeps(
     val rows: Flow<List<Download>>,
@@ -240,7 +239,6 @@ data class DownloadSettingsDeps(
     val setUnmetered: suspend (Boolean) -> Unit,
     val setCharging: suspend (Boolean) -> Unit,
     val setSizeCap: suspend (Int?) -> Unit,
-    val schedule: suspend (ScheduleCause) -> Unit,
     val deleteAll: suspend () -> Unit,
     val notificationsOn: () -> Boolean,
     val sdCard: () -> Boolean,
@@ -256,7 +254,6 @@ data class DownloadSettingsDeps(
             setUnmetered = container.settings::setDownloadsUnmeteredOnly,
             setCharging = container.settings::setDownloadsWhileCharging,
             setSizeCap = container.settings::setDownloadSizeCap,
-            schedule = { cause -> container.downloadHosts.schedule(cause) },
             deleteAll = container.downloads::deleteAll,
             notificationsOn = { notificationsOn(context) },
             sdCard = { DownloadSettings.sdCardShown(volumes(context)) },
@@ -282,9 +279,8 @@ data class DownloadSettingsDeps(
 /**
  * Settings › Downloads' state and actions: the settings, the rows, the space read again as the rows change (a Delete all
  * among them), and Android's answers read again as the page comes to the front ([shown]). A changed switch is saved,
- * then the host is scheduled with the new needs, whether it waits or runs (L335's exception): a waiting job takes them,
- * and a running download stops at its safe offset and goes on under them; the service reads them itself. Download size
- * is the ranking's alone, and schedules nothing.
+ * and nothing more: the app's own listener asks for the host as the needs change, from the app in front (L335's
+ * exception), once; a second ask would stop a running download a second time. Download size is the ranking's alone.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class DownloadSettingsModel(private val deps: DownloadSettingsDeps, private val scope: CoroutineScope) {
@@ -325,13 +321,8 @@ class DownloadSettingsModel(private val deps: DownloadSettingsDeps, private val 
      */
     fun deleteAll(): Job = deps.work.launch { logged("delete all downloads") { deps.deleteAll() } }
 
-    /** Saves a switch, then schedules the host with its new needs, read as it is scheduled. */
-    private fun switched(what: String, save: suspend () -> Unit): Job = scope.launch {
-        logged(what) {
-            save()
-            deps.schedule(ScheduleCause.SwitchChanged)
-        }
-    }
+    /** Saves a switch: the app's listener asks for the host under the new needs (UsenetApplication's). */
+    private fun switched(what: String, save: suspend () -> Unit): Job = scope.launch { logged(what, save) }
 }
 
 class DownloadSettingsViewModel(deps: DownloadSettingsDeps) : ViewModel() {

@@ -1,7 +1,6 @@
 package io.skjaere.usenet.app.settings
 
 import io.skjaere.usenet.app.download.DownloadHostRules
-import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
 import io.skjaere.usenet.app.download.DownloadRanking
 import io.skjaere.usenet.app.download.DownloadSpace
 import io.skjaere.usenet.data.Download
@@ -37,8 +36,8 @@ import kotlin.test.assertTrue
  * page's words; Download size's cells, read out in full, and GB an hour as the ranker reads it (bits a second, through
  * core:releases' DownloadSize), its explanation's example worked out; the SD card's cell, shown only while a removable
  * volume is mounted; On this phone's lines and Delete all's confirm; Notifications' line. Then the page's model: a changed
- * switch is saved, then the host is scheduled under the new needs (L335's exception); Download size schedules nothing;
- * Delete all goes through the runner; Android's answers are read again as the page comes to the front. Invented titles.
+ * switch is saved, the app's own listener asking for the host (L335's exception), the page never; Delete all goes through
+ * the runner, from the app's scope; Android's answers are read again as the page comes to the front. Invented titles.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class DownloadSettingsTest {
@@ -213,7 +212,7 @@ class DownloadSettingsTest {
         assertEquals("Off: allow them in Android’s settings", DownloadSettings.notificationsLine(on = false))
     }
 
-    /** The page's model over seams: the settings in a flow, the schedules and Delete all recorded, Android's answers set. */
+    /** The page's model over seams: the settings in a flow, the saves and Delete all recorded, Android's answers set. */
     private inner class Seams(work: CoroutineScope) {
         val prefs = MutableStateFlow(DownloadPrefs())
         val rows = MutableStateFlow(listOf(done("a", 7_400_000_000)))
@@ -244,8 +243,6 @@ class DownloadSettingsTest {
                 events += "size $gb"
                 prefs.value = prefs.value.copy(sizeCapGbPerHour = gb)
             },
-            // The host reads the needs as it is scheduled (JobPlan.of): what it would have read is recorded.
-            schedule = { cause -> events += "schedule $cause unmetered=${prefs.value.unmeteredOnly} charging=${prefs.value.whileCharging}" },
             deleteAll = {
                 deleting()
                 events += "delete all"
@@ -271,8 +268,12 @@ class DownloadSettingsTest {
         }
     }
 
+    /**
+     * The app's own listener asks for the host as a switch's needs change, from the app in front (L335's exception): the
+     * page only saves, as a second ask would stop a running download a second time.
+     */
     @Test
-    fun `a changed switch is saved, then the host is scheduled under the new needs, and Download size schedules nothing`() = test { seams, work ->
+    fun `a changed switch is saved and the page asks for no host itself, and Download size is saved alone`() = test { seams, work ->
         val model = DownloadSettingsModel(seams.deps, work)
         model.setUnmetered(false)
         advanceUntilIdle()
@@ -282,14 +283,7 @@ class DownloadSettingsTest {
         advanceUntilIdle()
         model.setSizeCap(null)
         advanceUntilIdle()
-        assertEquals(
-            listOf(
-                "unmetered false", "schedule ${ScheduleCause.SwitchChanged} unmetered=false charging=false",
-                "charging true", "schedule ${ScheduleCause.SwitchChanged} unmetered=false charging=true",
-                "size 4", "size null",
-            ),
-            seams.events,
-        )
+        assertEquals(listOf("unmetered false", "charging true", "size 4", "size null"), seams.events)
         assertEquals(DownloadPrefs(unmeteredOnly = false, whileCharging = true), model.prefs.first { it != null })
     }
 
