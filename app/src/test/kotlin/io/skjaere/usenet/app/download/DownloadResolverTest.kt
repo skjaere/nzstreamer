@@ -1327,6 +1327,48 @@ class DownloadResolverTest {
     }
 
     /**
+     * L403, L431, L443: a limit never holds back a release whose NZB needs no request. A file chosen by hand in a pack, the
+     * pack's NZB kept with its row, whose indexer the walk keeps out of grabs is picked from that NZB with no grab, and the
+     * release listed after it isn't grabbed. A season pack with a copy, one that doesn't lead among them, is taken from it
+     * likewise, whether the walk keeps its indexer out or the indexer refused this turn's grab of another release.
+     */
+    @Test
+    fun `a release whose NZB needs no request is tried from it whatever limit its indexer is under`() = runBlocking<Unit> {
+        val memory = DownloadLimits().apply { refused(indexer, LimitWait(INDEXER, LimitWait.Kind.Download, NOW)) }
+        val elsewhere = Fake("hl-s02e04-other", "Harbor.Lights.S02E04.1080p.WEB.h264-WREN", listOf("o1.mkv" to 1_100_000_000L))
+        val pick = DownloadPick(3, "Harbor.Lights.4_6.mp4", 900_000_004L, PreparedNzb.idFor(unnamedPack.nzb))
+        row(unnamedPack, elsewhere) { otherIndexer(elsewhere)(it).copy(pick = DownloadColumns.text(pick)) }
+        storage.keepGrab(ID, key(unnamedPack), unnamedPack.nzb, null)
+        val chosen = assertIs<DownloadResolver.Resolution.Ready>(resolver(limits = memory).resolve(ID))
+        assertEquals(unnamedPack.guid, chosen.row.release?.guid)
+        assertEquals("Harbor.Lights.4_6.mp4", chosen.file.name)
+        assertEquals(emptyList(), asks)
+        assertEquals(listOf(unnamedPack.guid), opened.map { it.first })
+        assertContentEquals(unnamedPack.nzb, storage.sources[ID]?.nzb, "the kept NZB is the one kept as the download's")
+        assertEquals(listOf(key(unnamedPack)), stored().tried)
+
+        // A season row's pack with a copy that doesn't lead, its indexer kept out by the walk: from the copy, nothing asked.
+        reset()
+        keptForSeason(pack, leads = false)
+        row(pack, single) { it.withFacts(searched = true) }
+        val copied = assertIs<DownloadResolver.Resolution.Ready>(resolver(limits = memory).resolve(ID))
+        assertEquals(pack.guid, copied.row.release?.guid)
+        assertEquals(emptyList(), asks)
+        assertEquals(listOf(key(pack)), stored().tried)
+
+        // Its indexer refusing this turn's grab of the release before it: the pack from its copy all the same, the limit
+        // costing nothing more.
+        reset()
+        keptForSeason(pack, leads = false)
+        refusing[INDEXER] = NewznabError.DownloadLimitReached("Download limit reached")
+        row(single, pack) { it.withFacts(searched = true) }
+        val after = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals(pack.guid, after.row.release?.guid)
+        assertEquals(listOf(single.guid), asks)
+        assertEquals(listOf(key(pack)), stored().tried)
+    }
+
+    /**
      * A grab that never reached an indexer (one no longer set up) is no outage of it, whatever the grab before it met: its
      * release is counted, as a play counts it, while the one whose indexer was out isn't.
      */

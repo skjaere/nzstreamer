@@ -109,7 +109,8 @@ import kotlin.time.Duration.Companion.seconds
  * answer about the release and counts no try, as an outage isn't: the indexer refuses its other releases alike, so the
  * other indexers' releases are tried, within the tries. Where the limit leaves releases untried and a try is left for
  * them, the download waits as the limit, its facts kept for the page ([LimitWait], L434), which ends the walk; Resume or
- * the app's start after its end asks again.
+ * the app's start after its end asks again. A release whose NZB needs no request (the one kept for it, its season's copy)
+ * is tried whatever limit its indexer is under.
  *
  * A download resolved before whose process died isn't grabbed again: its NZB is prepared again from its own copy and its
  * file found by name. One whose size no longer matches starts again from its first byte.
@@ -379,18 +380,21 @@ class DownloadResolver(
      * fail with a try left, the download waits as the limit. So too where the others' indexers are out of reach then: the
      * limit wins over the outage across the passes, as within one, never the outage's backoff, whose every retry would ask
      * the limited indexer again (L443). The indexers the walk keeps out of grabs ([keptOut]) are left out alike, with no
-     * request, their releases left for after their limits.
+     * request, their releases left for after their limits. A release whose NZB needs no request is never left out
+     * ([heldBack]).
      */
     private suspend fun fromCandidates(row: Download, limited: MutableMap<String, LimitWait>, keptOut: Map<String, LimitWait>): Resolution {
         var now = row
         // A release passed over for want of room: with none left after it, the download won't fit.
         var passedOver = false
-        val held = now.candidates.count { it.indexerId in keptOut }
+        val held = (heldBack(now, emptyMap(), keptOut) - now.tried.toSet()).size
         if (held > 0) log.info("download {}: {} release{} left for after an indexer's limit", row.id, held, if (held == 1) "" else "s")
         while (true) {
             val naming = naming(now)
-            // A limited indexer refuses its other releases alike: those are left for after its limit.
-            val candidates = now.candidates.map(::ranked).filter { it.item.indexerId !in limited && it.item.indexerId !in keptOut }
+            // A limited indexer refuses its other releases alike: those are left for after its limit. Asked again at each
+            // pass, as an NZB kept or a copy can go meanwhile, and a release whose copy went needs its grab.
+            val behind = heldBack(now, limited, keptOut)
+            val candidates = now.candidates.map(::ranked).filter { it.key !in behind }
             when (val pass = attempt(now, candidates, naming, limited)) {
                 is Pass.Ended -> return pass.resolution
                 is Pass.Failed -> {
@@ -415,12 +419,29 @@ class DownloadResolver(
     }
 
     /**
-     * The limit [row]'s releases wait behind, where one does: the latest met in this turn ([limited]), whose indexer's
-     * releases are left untried; else one the walk keeps an indexer out of grabs for ([keptOut]) whose releases [row] has
-     * still to try.
+     * The keys of [row]'s releases a limit holds back: those of the indexers limited in this turn ([limited], L399) or kept
+     * out of grabs by the walk ([keptOut], L443), but for those whose NZB needs no request, which no limit stops: the one
+     * kept for an attempt with no answer (a file chosen by hand's pack among them, L403) and any with its season's copy,
+     * leading or not (L431).
      */
-    private fun limitBehind(row: Download, limited: Map<String, LimitWait>, keptOut: Map<String, LimitWait>): LimitWait? =
-        limited.values.lastOrNull() ?: row.candidates.firstNotNullOfOrNull { c -> keptOut[c.indexerId]?.takeIf { ranked(c).key !in row.tried } }
+    private suspend fun heldBack(row: Download, limited: Map<String, LimitWait>, keptOut: Map<String, LimitWait>): Set<String> {
+        val kept = storage.grab(row.id)?.key
+        return row.candidates.filter { it.indexerId in limited || it.indexerId in keptOut }
+            .map { ranked(it).key }
+            .filter { it != kept && storage.pack(it) == null }
+            .toSet()
+    }
+
+    /**
+     * The limit [row]'s releases wait behind, where one does: of the indexers whose releases a limit holds back ([heldBack])
+     * and [row] has still to try, the latest met in this turn ([limited]), else one the walk keeps out of grabs ([keptOut]).
+     */
+    private suspend fun limitBehind(row: Download, limited: Map<String, LimitWait>, keptOut: Map<String, LimitWait>): LimitWait? {
+        val behind = heldBack(row, limited, keptOut) - row.tried.toSet()
+        val waiting = row.candidates.filter { ranked(it).key in behind }
+        val indexers = waiting.map { it.indexerId }.toSet()
+        return limited.values.lastOrNull { it.indexerId in indexers } ?: waiting.firstNotNullOfOrNull { keptOut[it.indexerId] }
+    }
 
     /** How one run of the pipeline over some of a row's releases ended ([attempt]). */
     private sealed interface Pass {
