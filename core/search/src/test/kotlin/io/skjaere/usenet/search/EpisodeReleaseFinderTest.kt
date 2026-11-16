@@ -483,15 +483,26 @@ class EpisodeReleaseFinderTest {
         infoHash = hash,
     )
 
-    /** Indexers that each list [episodes] to the episode's search, [after] ms after it starts, and nothing to the season's. */
-    private class ListingSearch(private val caps: IndexerCaps, private val episodes: Map<String, List<NewznabItem>>, private val after: Map<String, Long> = emptyMap()) : ReleaseSearch {
+    /**
+     * Indexers that each list [episodes] to the episode's search, [after] ms after it starts, and [seasons] to the season's
+     * (none by default). [asked] is each search's query, in the order they were asked.
+     */
+    private class ListingSearch(
+        private val caps: IndexerCaps,
+        private val episodes: Map<String, List<NewznabItem>>,
+        private val after: Map<String, Long> = emptyMap(),
+        private val seasons: Map<String, List<NewznabItem>> = emptyMap(),
+    ) : ReleaseSearch {
+        val asked = ConcurrentLinkedQueue<SearchQuery>()
+
         override fun search(indexers: List<IndexerConfig>, fresh: Boolean, plan: (IndexerCaps) -> SearchQuery?): Flow<IndexerOutcome> = channelFlow {
             val query = plan(caps)!!
+            asked += query
             val listing = (query as SearchQuery.Tv).episode != null
             indexers.forEach { indexer ->
                 launch {
                     delay(after[indexer.id] ?: 0)
-                    val items = if (listing) episodes[indexer.id].orEmpty() else emptyList()
+                    val items = if (listing) episodes[indexer.id].orEmpty() else seasons[indexer.id].orEmpty()
                     send(IndexerOutcome.Results(indexer, SearchPage(items, 0, null, null), query))
                 }
             }
@@ -554,6 +565,149 @@ class EpisodeReleaseFinderTest {
         assertEquals(Availability.NotChecked, torrent.item.availability)
         // Ranked as a torrent no service said it has: hidden, never tried (W71).
         assertEquals(listOf("indexer-a"), result.playable.map { it.item.indexerId })
+    }
+
+    // One search for a season (L393): the pack stage's query, its answer given to each episode it is of.
+
+    private val e01 = e02.copy(title = "Harbor.Lights.S01E01.1080p.WEB-DL.H.264-GRP", episode = 1)
+    private val season = SeasonRequest(show, season = 1, episodes = listOf(SeasonEpisode(1, runtimeMinutes = 45), SeasonEpisode(2, runtimeMinutes = 45)))
+
+    private fun findSeason(vararg indexers: FakeIndexer, req: SeasonRequest = season): SeasonFind = runBlocking {
+        val (finder, configs) = finder(*indexers)
+        finder.findSeason(req, configs, context)
+    }
+
+    private fun SeasonFind.titles(episode: Int) = byEpisode.getValue(episode).titles()
+
+    /** The searches the indexers were asked, by host: caps aren't one. */
+    private fun searches() = requests.filter { it.url.parameters["t"] != "caps" }.groupBy({ it.url.host }, { it.url.parameters })
+
+    @Test
+    fun `a season is one query per indexer, the pack stage's own, one page with no limit asked`() {
+        val result = findSeason(
+            FakeIndexer("a.example", "q,tvdbid,season,ep", listOf(e01, e02, pack)),
+            FakeIndexer("name.example", "q,season,ep", listOf(e01.copy(tvdb = null))),
+        )
+        val asked = searches()
+        assertEquals(setOf("a.example", "name.example"), asked.keys)
+        val byId = asked.getValue("a.example").single()
+        assertEquals(listOf("tvsearch", "900001", "1", null, null, "0"), listOf(byId["t"], byId["tvdbid"], byId["season"], byId["ep"], byId["limit"], byId["offset"]))
+        val byName = asked.getValue("name.example").single()
+        assertEquals(listOf("tvsearch", "Harbor Lights", "1", null, null), listOf(byName["t"], byName["q"], byName["season"], byName["ep"], byName["limit"]))
+        assertEquals(listOf(SearchStage.SeasonPack), result.stages.map { it.stage })
+        assertEquals(mapOf("a.example" to "TVDB id", "name.example" to "name"), result.stages.single().indexers.associate { it.indexer.id to it.by })
+    }
+
+    @Test
+    fun `the season is asked as a play's pack stage asks it`() = runTest {
+        val search = ListingSearch(tvCaps, mapOf("indexer-a" to listOf(listed(usenetA, e02.title))), seasons = mapOf("indexer-a" to listOf(listed(usenetA, e01.title))))
+        val finder = EpisodeReleaseFinder(search, defaultDispatcher = StandardTestDispatcher(testScheduler))
+        finder.find(request, listOf(usenetA), context).last()
+        val played = search.asked.toList()
+        search.asked.clear()
+        val found = finder.findSeason(season, listOf(usenetA), context)
+        assertEquals(listOf(SearchQuery.Tv(ids = TvIds(tvdb = 900001), season = 1)), search.asked.toList())
+        assertTrue(search.asked.single() in played, "the play's pack stage asked $played")
+        assertEquals(listOf(e01.title), found.titles(1))
+    }
+
+    @Test
+    fun `each episode gets its singles and the season's packs, ranked as a play of it ranks them`() {
+        val worse = e02.copy(title = "Harbor.Lights.S01E02.720p.HDTV.x264-B")
+        val tenBit = e02.copy(title = "Harbor.Lights.S01E02.2160p.WEB.H265.10bit-UHD")
+        val listings = listOf(e01, pack, worse, tenBit, e02)
+        // Episode 2 runs shorter: the pack's share of it is the same bytes in fewer minutes.
+        val req = season.copy(episodes = listOf(SeasonEpisode(1, runtimeMinutes = 45), SeasonEpisode(2, runtimeMinutes = 30)), seasonEpisodes = 10)
+        val result = findSeason(FakeIndexer("a.example", "q,tvdbid,season,ep", listings), req = req)
+        assertEquals(listOf(1, 2), result.byEpisode.keys.toList())
+        assertEquals(setOf(e01.title, pack.title), result.titles(1).toSet())
+        assertEquals(setOf(e02.title, pack.title, worse.title), result.titles(2).toSet())
+        assertEquals(emptyList(), result.byEpisode.getValue(1).hidden)
+        assertEquals(listOf(tenBit.title), result.byEpisode.getValue(2).hidden.map { it.item.title })
+        // Each list in the order a play of that episode finds it in, the remembered release aside.
+        req.episodes.forEach { e ->
+            requests.clear()
+            assertEquals(find(FakeIndexer("a.example", "q,tvdbid,season,ep", listings), req = req.request(e)).titles(), result.titles(e.number))
+        }
+        assertEquals(listOf(e02.title, pack.title, worse.title), result.titles(2))
+        // Each episode's runtime and the season's count make the pack's bitrate there.
+        val packOf = { e: Int -> result.byEpisode.getValue(e).playable.single { it.item.title == pack.title } }
+        assertEquals(30_000_000_000 * 8 / (10 * 45 * 60L), packOf(1).ranked.estimatedBitrate)
+        assertEquals(30_000_000_000 * 8 / (10 * 30 * 60L), packOf(2).ranked.estimatedBitrate)
+        assertEquals(req.request(req.episodes[1]), result.byEpisode.getValue(2).request)
+        assertTrue(result.byEpisode.values.flatMap { it.playable + it.hidden }.all { it.stage == SearchStage.SeasonPack })
+    }
+
+    @Test
+    fun `a release of several episodes is in each of them`() {
+        val both = Listing("Harbor.Lights.S01E02E03.1080p.WEB-DL.H.264-GRP", tvdb = 900001, season = 1, episode = 2)
+        val req = season.copy(episodes = (1..3).map { SeasonEpisode(it, runtimeMinutes = 45) })
+        val result = findSeason(FakeIndexer("a.example", "q,tvdbid,season,ep", listOf(e01, both)), req = req)
+        assertEquals(listOf(e01.title), result.titles(1))
+        assertEquals(listOf(both.title), result.titles(2))
+        assertEquals(listOf(both.title), result.titles(3))
+        assertEquals(result.byEpisode.getValue(2).playable.single().key, result.byEpisode.getValue(3).playable.single().key)
+    }
+
+    @Test
+    fun `an episode nothing was found for has an empty list, and the season counts what any episode took`() {
+        // A name search's answer: another show's release is found, never taken.
+        val spinoff = Listing("Harbor.Lights.Revisited.S01E02.720p.WEB.H264-SPINOFF", season = 1, episode = 2)
+        val result = findSeason(FakeIndexer("name.example", "q,season,ep", listOf(e01.copy(tvdb = null), spinoff)))
+        assertEquals(listOf(e01.title), result.titles(1))
+        val none = result.byEpisode.getValue(2)
+        assertEquals(emptyList(), none.playable + none.hidden)
+        assertEquals(2 to 0, none.stages.single().found to none.stages.single().accepted)
+        assertEquals(2 to 1, result.byEpisode.getValue(1).stages.single().let { it.found to it.accepted })
+        assertEquals(2 to 1, result.stages.single().found to result.stages.single().accepted)
+    }
+
+    @Test
+    fun `a failed indexer's report is kept, the other's releases given`() {
+        val result = findSeason(
+            FakeIndexer("a.example", "q,tvdbid,season,ep", listOf(e01)),
+            FakeIndexer("limit.example", "q,tvdbid,season,ep", emptyList(), failWith = 500),
+        )
+        assertEquals(listOf(e01.title), result.titles(1))
+        listOf(result.stages, result.byEpisode.getValue(1).stages, result.byEpisode.getValue(2).stages).forEach { stages ->
+            val failed = stages.single().indexers.single { it.indexer.id == "limit.example" }
+            assertIs<NewznabError.ApiLimitReached>(failed.error)
+        }
+        assertEquals(1, result.stages.single().indexers.single { it.indexer.id == "a.example" }.accepted)
+    }
+
+    @Test
+    fun `a play's pack stage and the season's search of its show ask the indexer once, whichever comes first`() = runBlocking<Unit> {
+        val indexer = FakeIndexer("a.example", "q,tvdbid,season,ep", listOf(e01, e02, pack))
+        fun seasonAsked() = requests.count { it.url.parameters["t"] == "tvsearch" && it.url.parameters["ep"] == null }
+
+        val (finder, configs) = finder(indexer)
+        finder.find(request, configs, context).last()
+        val found = finder.findSeason(season, configs, context)
+        assertEquals(1, seasonAsked())
+        assertEquals(setOf(e01.title, pack.title), found.titles(1).toSet())
+
+        requests.clear()
+        val (other, otherConfigs) = finder(indexer)
+        other.findSeason(season, otherConfigs, context)
+        val played = assertIs<FinderEvent.Finished>(other.find(request, otherConfigs, context).last()).result
+        assertEquals(1, seasonAsked())
+        assertEquals(listOf(e02.title, pack.title), played.titles())
+    }
+
+    @Test
+    fun `a torrent indexer's season answer joins the episodes once checked`() = runTest {
+        val search = CheckedSearch(
+            ListingSearch(tvCaps, emptyMap(), seasons = mapOf("indexer-a" to listOf(listed(usenetA, e01.title)), "prowlarr" to listOf(listed(prowlarr, pack.title, goodHash)))),
+        ) { _, items -> flow { delay(3_000); emit(items.map { it.copy(availability = Availability.Cached(listOf("torbox-1"))) }) } }
+        val finder = EpisodeReleaseFinder(search, defaultDispatcher = StandardTestDispatcher(testScheduler))
+        val result = finder.findSeason(season, listOf(usenetA, prowlarr), context)
+        // Its torrent is there with the service's answer: the search waited for the check.
+        listOf(1, 2).forEach { e ->
+            val torrent = result.byEpisode.getValue(e).let { it.playable + it.hidden }.single { it.item.indexerId == "prowlarr" }
+            assertEquals(Availability.Cached(listOf("torbox-1")), torrent.item.availability)
+        }
+        assertEquals(mapOf("indexer-a" to 1, "prowlarr" to 1), result.stages.single().indexers.associate { it.indexer.id to it.accepted })
     }
 
     @Test

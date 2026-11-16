@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.time.LocalDate
 import java.util.Locale
@@ -53,6 +54,29 @@ data class EpisodeRequest(
     /** How many episodes TMDB lists for the season: a season pack's size over it is an episode's, for its bitrate. */
     val seasonEpisodes: Int? = null,
 )
+
+/** One episode a [SeasonRequest] asks for: its [number], and what its releases are found and ranked by, as [EpisodeRequest]'s. */
+data class SeasonEpisode(
+    val number: Int,
+    /** For date-named releases of daily shows. */
+    val airDate: LocalDate? = null,
+    val runtimeMinutes: Int? = null,
+)
+
+/**
+ * A season's [episodes] to find releases for in one search ([EpisodeReleaseFinder.findSeason]): those asked for, not
+ * always all of them; [seasonEpisodes] is how many TMDB lists for the season, as [EpisodeRequest.seasonEpisodes].
+ */
+data class SeasonRequest(
+    val show: ShowRef,
+    val season: Int,
+    val episodes: List<SeasonEpisode>,
+    val seasonEpisodes: Int? = null,
+) {
+    /** [episode]'s request, as a play of it asks the finder. */
+    fun request(episode: SeasonEpisode): EpisodeRequest =
+        EpisodeRequest(show, season, episode.number, episode.airDate, episode.runtimeMinutes, seasonEpisodes)
+}
 
 /**
  * The release that played this episode last time, tried first: the search's release of the same [key] ([ReleaseKey], a
@@ -107,6 +131,13 @@ data class FindResult(
     val stages: List<StageReport>,
 )
 
+/**
+ * What a season's one search found ([EpisodeReleaseFinder.findSeason]): [byEpisode], each asked episode's releases by its
+ * number, in the request's order, as [FindResult] gives one episode's (an episode nothing was found for has an empty
+ * one); [stages], what each indexer did for the season, its error kept.
+ */
+data class SeasonFind(val byEpisode: Map<Int, FindResult>, val stages: List<StageReport>)
+
 sealed interface FinderEvent {
     data class StageStarted(val stage: SearchStage, val indexers: Int) : FinderEvent
     /**
@@ -155,11 +186,7 @@ class EpisodeReleaseFinder(
         context: RankingContext,
         remembered: RememberedPick? = null,
     ): Flow<FinderEvent> = channelFlow {
-        val ranking = context.copy(
-            runtimeMinutes = request.runtimeMinutes ?: context.runtimeMinutes,
-            originalLanguage = request.show.originalLanguage ?: context.originalLanguage,
-            seasonEpisodes = request.seasonEpisodes ?: context.seasonEpisodes,
-        )
+        val ranking = rankingFor(request, context)
         val enabled = indexers.count { it.enabled }
         val order = indexers.map { it.id }
         // Guards every stage's accepted releases and [finished], and keeps the results sent in the order they were made.
@@ -229,7 +256,7 @@ class EpisodeReleaseFinder(
         // Each search keeps what it found to itself while the two run at once; they are put together once both are done.
         send(FinderEvent.StageStarted(SearchStage.Episode, enabled))
         send(FinderEvent.StageStarted(SearchStage.SeasonPack, enabled))
-        val packs = async { stage(SearchStage.SeasonPack) { caps -> episodeQuery(caps, request, season = true, episode = false) } }
+        val packs = async { stage(SearchStage.SeasonPack) { caps -> seasonQuery(caps, request.show, request.season) } }
         val episode = stage(SearchStage.Episode) { caps -> episodeQuery(caps, request, season = true, episode = true) }
         val airDate = request.airDate?.takeIf { noPlayableSingle(episode) }?.let { date ->
             send(FinderEvent.StageStarted(SearchStage.AirDate, enabled))
@@ -256,6 +283,73 @@ class EpisodeReleaseFinder(
             finished = true
         }
     }.flowOn(defaultDispatcher)
+
+    /**
+     * Finds releases of [request]'s episodes with one search of each indexer (L393): the season-pack stage's own query
+     * ([seasonQuery]), so a play's pack stage and this share the answer [MultiIndexerSearch] keeps a while; one page, as a
+     * play's. Each result goes to every asked episode it is of ([accepts]): its own, a release of several holding it, and
+     * the season's packs. Each episode's list is ranked by [context] with its runtime and the season's count, as [find]
+     * ranks an episode's, its one stage counted for it. No air-date or name search: an episode the season's answer misses
+     * is searched on its own, with those, at its download's turn. A torrent indexer's torrents join as they are checked,
+     * which its search bounds. Safe to call on the main thread: it searches, checks and ranks on [defaultDispatcher].
+     */
+    suspend fun findSeason(request: SeasonRequest, indexers: List<IndexerConfig>, context: RankingContext): SeasonFind = withContext(defaultDispatcher) {
+        val answers = mutableListOf<SeasonAnswer>()
+        search.search(indexers) { caps -> seasonQuery(caps, request.show, request.season)?.first }.collect { outcome ->
+            when (outcome) {
+                is IndexerOutcome.Results -> answers += SeasonAnswer(outcome.indexer, describe(outcome.query), outcome.page.items).also { it.results += it.found }
+                // Its torrents are found now, and results once each is checked.
+                is IndexerOutcome.Checking -> answers += SeasonAnswer(outcome.indexer, describe(outcome.query), outcome.found.items)
+                is IndexerOutcome.Checked -> answers.firstOrNull { it.indexer.id == outcome.indexer.id }?.results?.addAll(outcome.items)
+                is IndexerOutcome.Failed -> answers += SeasonAnswer(outcome.indexer, null, error = outcome.error)
+                is IndexerOutcome.Skipped -> answers += SeasonAnswer(outcome.indexer, null, skipped = outcome.reason)
+            }
+        }
+        // Each name parsed once, however many episodes are asked whether they take it.
+        val parsed = HashMap<String, ParsedRelease>()
+        val asked = request.episodes.map(request::request)
+        fun takes(answer: SeasonAnswer, item: NewznabItem, episode: EpisodeRequest) =
+            accepts(item, parsed.getOrPut(item.title) { parse(item) }, episode, answer.byName)
+
+        val order = indexers.map { it.id }
+        val byEpisode = asked.associate { episode ->
+            val stage = Stage(SearchStage.SeasonPack)
+            stage.accepted += answers.flatMap { a -> a.results.filter { takes(a, it, episode) } }
+            stage.report = StageReport(SearchStage.SeasonPack, answers.map { a -> a.report(a.found.count { takes(a, it, episode) }) })
+            episode.episode to result(episode, rankingFor(episode, context), order, null, listOf(stage))
+        }
+        // The season's own count: what any asked episode took, so "none for season 2" means none for those asked.
+        val season = StageReport(SearchStage.SeasonPack, answers.map { a -> a.report(a.found.count { item -> asked.any { takes(a, item, it) } }) })
+        log.info(
+            "find season: {} of {} episodes found; {}: {}/{}", byEpisode.values.count { it.playable.isNotEmpty() }, asked.size,
+            season.stage, season.accepted, season.found,
+        )
+        SeasonFind(byEpisode, listOf(season))
+    }
+
+    /** What one indexer answered a season's search: what it [found], and of those its [results], a torrent indexer's once checked. */
+    private class SeasonAnswer(
+        val indexer: IndexerConfig,
+        /** How it was asked ([describe]); null when it wasn't. */
+        val by: String?,
+        val found: List<NewznabItem> = emptyList(),
+        val error: NewznabError? = null,
+        val skipped: String? = null,
+    ) {
+        val results = mutableListOf<NewznabItem>()
+
+        // As in [find]: an id search is the indexer's own match, a name search can return any similar title.
+        val byName: Boolean get() = by == "name"
+
+        fun report(accepted: Int) = IndexerReport(indexer, by, found.size, accepted, error, skipped)
+    }
+
+    /** [context] for [request]'s releases: its runtime, the show's original language and the season's count, where it has them. */
+    private fun rankingFor(request: EpisodeRequest, context: RankingContext) = context.copy(
+        runtimeMinutes = request.runtimeMinutes ?: context.runtimeMinutes,
+        originalLanguage = request.show.originalLanguage ?: context.originalLanguage,
+        seasonEpisodes = request.seasonEpisodes ?: context.seasonEpisodes,
+    )
 
     /**
      * What [stages] found, as one ranked list: a release more than one search found put down to the first of them, in the
@@ -297,8 +391,9 @@ class EpisodeReleaseFinder(
     private fun parse(item: NewznabItem): ParsedRelease = ReleaseParser.parse(item.title)
 
     /** The same in every stage: a season search lists the season's episodes too, the requested one among them. */
-    internal fun accepts(item: NewznabItem, request: EpisodeRequest, byName: Boolean): Boolean {
-        val parsed = parse(item)
+    internal fun accepts(item: NewznabItem, request: EpisodeRequest, byName: Boolean): Boolean = accepts(item, parse(item), request, byName)
+
+    private fun accepts(item: NewznabItem, parsed: ParsedRelease, request: EpisodeRequest, byName: Boolean): Boolean {
         val rightContent = matchesEpisode(parsed, request) || (parsed.isSeasonPack && request.season in parsed.seasons)
         return rightContent && matchesShow(item, parsed, request.show, trustIndexer = !byName)
     }
@@ -350,6 +445,13 @@ class EpisodeReleaseFinder(
             ids.imdb?.let { Triple("imdbid", TvIds(imdb = it), "IMDb id") },
             ids.tvmaze?.let { Triple("tvmazeid", TvIds(tvmaze = it), "TVmaze id") },
         ).firstOrNull { (param, _, _) -> caps.supports(SearchType.Tv, param) }?.let { (_, id, by) -> id to by }
+
+        /**
+         * The season-pack stage's query: [season] of [show] with no episode, which lists its packs and its episodes. A season's
+         * search ([findSeason]) asks the same, so a play's pack stage and it share one answer.
+         */
+        internal fun seasonQuery(caps: IndexerCaps, show: ShowRef, season: Int): Pair<SearchQuery, String>? =
+            episodeQuery(caps, EpisodeRequest(show, season, episode = 0), season = true, episode = false)
 
         internal fun episodeQuery(caps: IndexerCaps, request: EpisodeRequest, season: Boolean, episode: Boolean): Pair<SearchQuery, String>? {
             val s = request.season.takeIf { season }
