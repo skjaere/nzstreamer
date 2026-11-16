@@ -165,10 +165,12 @@ fun AppNav(
     // The search key's ask for voice, taken once by the Search it opens: saved, so a restore never asks again.
     val voice = rememberSaveable(saver = VoiceRequest.Saver) { VoiceRequest() }
     val container = LocalContext.current.container
-    // The notifications' ways to the Downloads page: on phones and tablets alone, in their layout (L369).
-    val downloadPages = io.skjaere.usenet.app.download.downloadPages(
-        DownloadPlaces.shown(formFactor, container.television), register = {}, open = { route -> nav.navigate(route) { launchSingleTop = true } },
-    )
+    // The ways to the downloads' pages, the notifications' and Home's, the Movie page's and Search's: on phones and tablets
+    // alone, in their layout (L369). Kept, so the graph that hands them on isn't built again as this composes again.
+    val downloadsShown = DownloadPlaces.shown(formFactor, container.television)
+    val downloadPages = remember(nav, downloadsShown) {
+        io.skjaere.usenet.app.download.downloadPages(downloadsShown, register = {}, open = { route -> nav.navigate(route) { launchSingleTop = true } })
+    }
     // On a TV the search key opens Search from a dialog or a sheet too, through the shell as the
     // activity's presses do: they are windows of their own, whose keys the activity never sees.
     val dialogSearchKeys = remember { Channel<Unit>(Channel.CONFLATED) }
@@ -203,7 +205,7 @@ fun AppNav(
         }
         val graph: @Composable () -> Unit = {
             NavHost(nav, startDestination = HomeRoute) {
-                appGraph(nav, container, jumps, formFactor, voice)
+                appGraph(nav, container, jumps, formFactor, voice, downloadPages)
                 downloadScreens(nav, DownloadPlaces.shown(formFactor, container.television))
                 appExtras?.run { screens(nav, container, formFactor) }
             }
@@ -271,9 +273,17 @@ fun AppNav(
  * Every screen, for both shells: the routes and what each screen's actions open. On a TV Settings
  * is a tab of its own (the rail's), so it has no Back of its own and Home's gear goes to that tab,
  * and each tab's screen starts with [TopLevelBack] (nothing on a phone). [voice]: the TV's search
- * key asking Search for voice.
+ * key asking Search for voice. [downloads]: the ways into the downloads' pages (L369), for Home's section, the Movie
+ * page's and Search's Open Downloads; none where downloads don't show.
  */
-fun NavGraphBuilder.appGraph(nav: NavController, container: AppContainer, jumps: CollectionJumpState, formFactor: FormFactor, voice: VoiceRequest? = null) {
+fun NavGraphBuilder.appGraph(
+    nav: NavController,
+    container: AppContainer,
+    jumps: CollectionJumpState,
+    formFactor: FormFactor,
+    voice: VoiceRequest? = null,
+    downloads: DownloadPages = DownloadPages(),
+) {
     fun back(screen: NavBackStackEntry): () -> Unit = { screen.ifResumed { nav.popBackStack() } }
     val tv = formFactor == FormFactor.Tv
     // "Set up with your phone" opens from these on a TV only: a phone has its keyboard at hand. Every one opens the same
@@ -316,6 +326,8 @@ fun NavGraphBuilder.appGraph(nav: NavController, container: AppContainer, jumps:
             onCollection = { screen.ifResumed { nav.switchTab(CollectionRoute) } },
             onImport = { screen.ifResumed { nav.navigate(ImportRoute()) } },
             onPhoneSetup = phoneSetup(screen),
+            onDownloads = downloads.downloads?.let { open -> { screen.ifResumed { open() } } },
+            onDownloadsShow = downloads.show?.let { open -> { id -> screen.ifResumed { open(id) } } },
         )
     }
     composable<CollectionRoute> { screen ->
@@ -336,7 +348,12 @@ fun NavGraphBuilder.appGraph(nav: NavController, container: AppContainer, jumps:
     }
     // The remote closes as the play it controls ends, and with its Back: once, whatever the moment (a crossfade's second tap).
     composable<TvRemoteRoute> { TvRemoteScreen(onBack = { if (nav.currentDestination?.hasRoute(TvRemoteRoute::class) == true) nav.popBackStack() }) }
-    composable<MovieRoute> { io.skjaere.usenet.app.collection.MovieScreen(it.toRoute<MovieRoute>().tmdbId, onBack = back(it)) }
+    composable<MovieRoute> { screen ->
+        io.skjaere.usenet.app.collection.MovieScreen(
+            screen.toRoute<MovieRoute>().tmdbId, onBack = back(screen),
+            onDownloads = downloads.downloads?.let { open -> { screen.ifResumed { open() } } },
+        )
+    }
     composable<SearchRoute> { screen ->
         TopLevelBack(nav, screen)
         SearchScreen(
@@ -348,6 +365,7 @@ fun NavGraphBuilder.appGraph(nav: NavController, container: AppContainer, jumps:
             onOpenMovie = { id -> screen.ifResumed { nav.navigate(MovieRoute(id)) } },
             onJumpToCollection = { target -> screen.ifResumed { nav.jumpToCollection(jumps, target) } },
             voiceRequest = voice,
+            onDownloads = downloads.downloads?.let { open -> { screen.ifResumed { open() } } },
         )
     }
     composable<SettingsRoute> { screen ->

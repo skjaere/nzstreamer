@@ -2,6 +2,14 @@ package io.skjaere.usenet.app.collection
 
 import io.skjaere.usenet.app.collection.model.MovieState
 import io.skjaere.usenet.app.collection.model.toSummary
+import io.skjaere.usenet.app.download.DownloadButtonWords
+import io.skjaere.usenet.app.download.DownloadHostRules
+import io.skjaere.usenet.app.download.DownloadMark
+import io.skjaere.usenet.app.download.PageLine
+import io.skjaere.usenet.app.download.TitleDownload
+import io.skjaere.usenet.app.download.TitleDownloads
+import io.skjaere.usenet.app.download.Tone
+import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.CollectedMovie
 import io.skjaere.usenet.data.MovieSummary
 import io.skjaere.usenet.data.WatchKey
@@ -24,14 +32,31 @@ import io.skjaere.usenet.releases.StaticDeviceCapabilities
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.time.LocalDate
+import java.util.Locale
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
-/** The movie page says what the collection's row says, from what is stored, and offers Play, Resume or Play again. */
+/**
+ * The movie page says what the collection's row says, from what is stored, and offers Play, Resume or Play again; on a
+ * phone, and Search's movie card, a Download button whose words and menu follow the film's download (DlPhoneMovie).
+ */
 class MoviePageTest {
+    private val saved = Locale.getDefault()
+
+    // Sizes are said with the device's decimal mark: these read as written here.
+    @BeforeEach
+    fun pin() = Locale.setDefault(Locale.US)
+
+    @AfterEach
+    fun unpin() = Locale.setDefault(saved)
+
     private val today = LocalDate.of(2026, 10, 14)
     private val collected = CollectedMovie(CollectedMovie.idFor(900011), 900011, "tt9000012", "Copper Crown", 2019, "/cc.jpg", addedAt = 1, updatedAt = 1)
     private val stored = MovieSummary(900011, originalTitle = null, runtimeMinutes = 118, releaseDay = LocalDate.of(2019, 3, 1).toEpochDay(), status = "Released", imdbId = "tt9000012")
@@ -161,5 +186,59 @@ class MoviePageTest {
         assertEquals("Play again", label(watch(watched = true)))
         // Under a minute in is no progress to resume.
         assertEquals("Play", label(watch(positionMs = 30_000)))
+    }
+
+    /** The film's download, 4.2 GB, as its page reads it from the runner. */
+    private fun dl(state: DownloadState, reason: String? = null, percent: Int? = null, missing: Int = 0, tried: Int = 0) =
+        TitleDownload("dl-film", state, reason, percent, 4_200_000_000, missing, tried)
+
+    @Test
+    fun `the Download button's words follow the film's download, with a second line where drawn`() {
+        fun words(d: TitleDownload?) = TitleDownloads.button(d).let { listOfNotNull(it.text, it.second?.text) }
+        assertEquals(DownloadButtonWords("Download", null, DownloadMark.Download), TitleDownloads.button(null))
+        assertEquals(listOf("Queued for download"), words(dl(DownloadState.Queued)))
+        assertEquals(listOf("Finding releases…"), words(dl(DownloadState.Resolving, DownloadHostRules.FINDING_RELEASES)))
+        assertEquals(listOf("Downloading", "42% of 4.2 GB"), words(dl(DownloadState.Running, percent = 42)))
+        assertEquals(listOf("Downloading", "Trying release 2 of 3"), words(dl(DownloadState.Resolving, "Trying release 2 of 3 · Fetching NZB")))
+        assertEquals(listOf("Queued for download", "Waiting for Wi-Fi"), words(dl(DownloadState.Waiting, DownloadHostRules.WAITING_FOR_WIFI)))
+        assertEquals(listOf("Paused", "42% of 4.2 GB"), words(dl(DownloadState.Paused, percent = 42)))
+        assertEquals(listOf("Downloaded", "4.2 GB"), words(dl(DownloadState.Done)))
+        assertEquals(listOf("Downloaded", "2 parts missing"), words(dl(DownloadState.Done, missing = 2)))
+        assertEquals(listOf("Download failed", "3 releases tried"), words(dl(DownloadState.Failed, tried = 3)))
+        // The detail is muted but where something went wrong; the mark is the row's.
+        assertEquals(PageLine("2 parts missing", Tone.Warn), TitleDownloads.button(dl(DownloadState.Done, missing = 2)).second)
+        assertEquals(PageLine("3 releases tried", Tone.Warn), TitleDownloads.button(dl(DownloadState.Failed, tried = 3)).second)
+        assertEquals(PageLine("42% of 4.2 GB", Tone.Muted), TitleDownloads.button(dl(DownloadState.Running, percent = 42)).second)
+        assertEquals(DownloadMark.Progress(0.42f, held = false), TitleDownloads.button(dl(DownloadState.Running, percent = 42)).mark)
+        assertEquals(DownloadMark.Failed, TitleDownloads.button(dl(DownloadState.Failed)).mark)
+        // Not drawn: held by Android, a wait only a Resume ends, a pause before its file is made.
+        assertEquals(listOf("Stopped by Android", "42% of 4.2 GB"), words(dl(DownloadState.Stopped, percent = 42)))
+        assertEquals(listOf("Queued for download", "Check your Usenet provider"), words(dl(DownloadState.Waiting, DownloadHostRules.CHECK_PROVIDER)))
+        assertEquals(listOf("Paused"), words(dl(DownloadState.Paused)))
+    }
+
+    @Test
+    fun `pressed once started, the button opens its menu by state, Open Downloads last`() {
+        fun menu(d: TitleDownload) = TitleDownloads.menu(d).map { it.label }
+        listOf(dl(DownloadState.Running), dl(DownloadState.Resolving), dl(DownloadState.Waiting, DownloadHostRules.WAITING_FOR_WIFI)).forEach {
+            assertEquals(listOf("Pause download", "Remove download", "Open Downloads"), menu(it), it.toString())
+        }
+        // Queued behind another: Pause is the running one's alone (L380).
+        assertEquals(listOf("Remove download", "Open Downloads"), menu(dl(DownloadState.Queued)))
+        listOf(dl(DownloadState.Paused), dl(DownloadState.Stopped)).forEach {
+            assertEquals(listOf("Resume download", "Remove download", "Open Downloads"), menu(it), it.toString())
+        }
+        assertEquals(listOf("Remove download", "Open Downloads"), menu(dl(DownloadState.Done, missing = 2)))
+        assertEquals(listOf("Download again", "Remove download", "Open Downloads"), menu(dl(DownloadState.Failed)))
+    }
+
+    @Test
+    fun `the button shows where downloads do, while a Usenet provider is usable or the film has a download`() {
+        assertTrue(TitleDownloads.offered(shown = true, usenet = true, download = null))
+        // Only debrid, or no provider at all: no new download (L370), but one made before still shows.
+        assertFalse(TitleDownloads.offered(shown = true, usenet = false, download = null))
+        assertTrue(TitleDownloads.offered(shown = true, usenet = false, download = dl(DownloadState.Done)))
+        // A TV, or a phone's layout on one: never (L369).
+        assertFalse(TitleDownloads.offered(shown = false, usenet = true, download = dl(DownloadState.Done)))
     }
 }

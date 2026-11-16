@@ -34,6 +34,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -41,6 +42,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -355,12 +357,27 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     val state: StateFlow<List<Item>> = if (!runs) {
         MutableStateFlow(emptyList())
     } else {
-        combine(dao.all(), writer.live) { rows, live ->
-            rows.filter { it.state != DownloadState.Deleting }.map { row ->
-                if (live != null && live.id == row.id) Item(row, live.written, writer.bytesPerSecond()) else Item(row, row.safeOffset, null)
-            }
-        }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+        combine(dao.all(), writer.live) { rows, live -> rows.filter { it.state != DownloadState.Deleting }.map { item(it, live) } }
+            .stateIn(scope, SharingStarted.Eagerly, emptyList())
     }
+
+    /**
+     * Show [showTmdbId]'s downloads but those removed, by season and episode, with the live write's bytes: its page's rows'
+     * marks (L384). None on a TV.
+     */
+    fun forShow(showTmdbId: Int): Flow<List<Item>> =
+        if (!runs) flowOf(emptyList()) else combine(dao.forShow(showTmdbId), writer.live) { rows, live -> rows.map { item(it, live) } }
+
+    /**
+     * Film [movieTmdbId]'s download but one removed, the latest added, with the live write's bytes: its page's and Search's
+     * card's Download button (L356). None on a TV.
+     */
+    fun forMovie(movieTmdbId: Int): Flow<Item?> =
+        if (!runs) flowOf(null) else combine(dao.forMovie(movieTmdbId), writer.live) { row, live -> row?.let { item(it, live) } }
+
+    /** [row] with what the writer says of it while it is the one written ([live]), else its safe offset. */
+    private fun item(row: Download, live: DownloadWriter.Live?): Item =
+        if (live != null && live.id == row.id) Item(row, live.written, writer.bytesPerSecond()) else Item(row, row.safeOffset, null)
 
     /** The finished downloads by watch key, the latest finished for each: what a play hook and the player ask (items 14, 15). */
     val done: StateFlow<Map<String, Download>> = if (!runs) {

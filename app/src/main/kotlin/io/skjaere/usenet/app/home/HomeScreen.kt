@@ -51,6 +51,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.skjaere.usenet.app.collection.rememberDpad
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.download.color
+import io.skjaere.usenet.app.download.downloadsShown
 import io.skjaere.usenet.app.link.CastButton
 import io.skjaere.usenet.app.link.PlayTarget
 import io.skjaere.usenet.app.link.deviceName
@@ -79,7 +81,9 @@ import io.skjaere.usenet.data.RecentSearch
 /**
  * Home: the first-run screen until a provider and an indexer (or "Not now") are saved, then the
  * search field, recent searches, Up next and the collection (on a TV, [TvHomeContent]'s rows of
- * cards). All of it is the user's own history and collection.
+ * cards). All of it is the user's own history and collection. On a phone or tablet, while something is queued or
+ * downloaded, a Downloads section comes between Up next and the collection (L384): See all opens the Downloads page
+ * ([onDownloads]), a show's row its downloads ([onDownloadsShow]), a film's row plays it.
  */
 @Composable
 fun HomeScreen(
@@ -92,6 +96,8 @@ fun HomeScreen(
     onImport: () -> Unit,
     onMovie: (Int) -> Unit = {},
     onPhoneSetup: (() -> Unit)? = null,
+    onDownloads: (() -> Unit)? = null,
+    onDownloadsShow: ((showTmdbId: Int) -> Unit)? = null,
 ) {
     val container = LocalContext.current.container
     val tv = LocalFormFactor.current == FormFactor.Tv
@@ -103,6 +109,9 @@ fun HomeScreen(
     val offer by vm.undoOffer.collectAsStateWithLifecycle()
     val focusAfter by vm.focusAfter.collectAsStateWithLifecycle()
     val playOn by container.playOn.target.collectAsStateWithLifecycle()
+    val downloads by vm.downloads.collectAsStateWithLifecycle()
+    // Phones and tablets alone, in their layout (L369), and only where the page is there to see them all.
+    val downloadsHere = downloadsShown() && onDownloads != null
     val edits = UpNextEdits(offer, focusAfter, vm::remove, vm::markWatched, vm::undo, vm::undoShown, vm::dismissUndo, vm::focusTaken)
     val s = setup ?: return
     if (!s.complete) {
@@ -120,6 +129,14 @@ fun HomeScreen(
             edits = edits,
             // The Cast button on phones and tablets alone (L36, L115).
             playOn = playOn.takeUnless { container.television }, onPlayOn = container.playOn::openSheet,
+            downloads = downloads.takeIf { downloadsHere }, onDownloads = { onDownloads?.invoke() },
+            onDownload = { row ->
+                when (val opens = row.opens) {
+                    HomeDownloadOpen.Page -> onDownloads?.invoke()
+                    is HomeDownloadOpen.Show -> onDownloadsShow?.invoke(opens.showTmdbId)
+                    is HomeDownloadOpen.Play -> vm.playDownload(opens.row)
+                }
+            },
         )
     }
 }
@@ -128,7 +145,9 @@ fun HomeScreen(
  * Home below the first run, [state] null until the library has answered. A TV remote's focus
  * starts on the search field; every row and button takes it in turn, outlined. Up next's rows
  * have a menu ([edits]), whose Remove and Mark watched offer Undo in a bar at Home's foot. [playOn]: where Play goes
- * (W11), the Cast button before Settings opening the Play on sheet ([onPlayOn]); null for none (a TV).
+ * (W11), the Cast button before Settings opening the Play on sheet ([onPlayOn]); null for none (a TV). [downloads]: Home's
+ * Downloads section (L384), between Up next and the collection, its See all opening the page ([onDownloads]) and each
+ * row what it names ([onDownload]); null for none.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -147,6 +166,9 @@ fun HomeContent(
     edits: UpNextEdits = UpNextEdits(),
     playOn: PlayTarget? = null,
     onPlayOn: () -> Unit = {},
+    downloads: HomeDownloads? = null,
+    onDownloads: () -> Unit = {},
+    onDownload: (HomeDownloadRow) -> Unit = {},
 ) {
     val searchFocus = remember { FocusRequester() }
     // A touch screen has nothing focused: the request only takes with a D-pad.
@@ -196,6 +218,23 @@ fun HomeContent(
                         "Nothing to resume yet. Search your indexers to find something to watch.",
                         style = AppType.secondary, color = colors.textSecondary, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
                     )
+                }
+            }
+            downloads?.let { section ->
+                item(key = "downloads-header") {
+                    SectionHeader(section.header, Modifier.padding(top = 20.dp)) {
+                        TextButton(onClick = onDownloads, modifier = Modifier.focusOutline(RoundedCornerShape(20.dp), fill = false)) {
+                            Text("See all", style = AppType.bodyStrong.copy(fontSize = 14.sp), color = colors.accent)
+                        }
+                    }
+                }
+                item(key = "downloads") {
+                    GroupCard {
+                        section.rows.forEachIndexed { i, row ->
+                            if (i > 0) InsetDivider()
+                            DownloadRow(row) { onDownload(row) }
+                        }
+                    }
                 }
             }
             if (!state.hasTmdbKey) {
@@ -352,6 +391,30 @@ internal fun UpNextRow.playsOn(target: PlayTarget?): PlayTarget? = when (target)
     null, PlayTarget.Phone -> null
     is PlayTarget.Tv -> target.takeIf { play.goesToTv }
     is PlayTarget.Cast -> target
+}
+
+/**
+ * A row of Home's Downloads (DlPhoneHome), in the collection rows' halves: the title, and how the download is in its
+ * colour, the one being written with a 2 dp bar under it. A tap opens what it names.
+ */
+@Composable
+private fun DownloadRow(row: HomeDownloadRow, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth().focusOutline().clickable(onClick = onClick)) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(row.title, style = AppType.body, color = colors.text, modifier = Modifier.weight(1f))
+            Text(row.status, style = AppType.secondary, color = row.tone.color(), modifier = Modifier.weight(1f, fill = false))
+        }
+        row.progress?.let { p ->
+            LinearProgressIndicator(
+                progress = { p }, modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp).fillMaxWidth().height(2.dp),
+                color = colors.accent, trackColor = colors.divider, drawStopIndicator = {}, gapSize = 0.dp,
+            )
+        }
+    }
 }
 
 @Composable

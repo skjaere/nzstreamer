@@ -1270,6 +1270,34 @@ class DownloadRunnerTest {
     }
 
     @Test
+    fun `a show's and a film's downloads come with the live write's bytes, the removed left out, and none on a TV`() = test {
+        val a = fake("hl-a").apply { hold = HOLD }
+        val runner = runner()
+        val first = runner.add(1, a)
+        val second = runner.add(2, fake("hl-b"))
+        val film = row(FILM, 0, 5, fake("cc")) { it.copy(watchKey = WatchKey.movie(MOVIE), kind = DownloadKind.Movie, title = "Copper Crown", showTmdbId = null, season = null, episode = null, movieTmdbId = MOVIE) }
+        host(runner)
+        runCurrent()
+        // The one being written says its bytes as they come, before its record does.
+        val show = runner.forShow(SHOW).first()
+        assertEquals(listOf(first, second), show.map { it.row.id })
+        assertEquals(HOLD, show.first().written)
+        assertNotNull(show.first().bytesPerSecond)
+        assertEquals(0L, show.last().written)
+        assertNull(show.last().bytesPerSecond)
+        assertEquals(film.id, runner.forMovie(MOVIE).first()?.row?.id)
+        assertNull(runner.forMovie(MOVIE + 1).first())
+        runner.remove(listOf(second))
+        assertEquals(listOf(first), runner.forShow(SHOW).first().map { it.row.id })
+        a.gate.complete(Unit)
+        advanceUntilIdle()
+        // A TV reads none, whatever the table holds.
+        val tv = runner(television = true)
+        assertEquals(emptyList(), tv.forShow(SHOW).first())
+        assertNull(tv.forMovie(MOVIE).first())
+    }
+
+    @Test
     fun `nothing runs on a TV, where only reconcile does anything`() = test {
         host = DownloadHost.Service
         val tv = runner(television = true)
@@ -1529,5 +1557,7 @@ class DownloadRunnerTest {
         const val FAILED = "dl-failed"
         const val WIFI = "dl-wifi"
         const val PAUSED = "dl-paused"
+        const val FILM = "dl-film"
+        const val MOVIE = 990_719
     }
 }

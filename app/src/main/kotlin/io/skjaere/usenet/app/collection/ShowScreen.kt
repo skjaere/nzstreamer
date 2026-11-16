@@ -16,8 +16,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -31,6 +35,17 @@ import io.skjaere.usenet.app.AppContainer
 import io.skjaere.usenet.app.DeviceClock
 import io.skjaere.usenet.app.TmdbLookup
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.download.DownloadEntry
+import io.skjaere.usenet.app.download.DownloadRequest
+import io.skjaere.usenet.app.download.DownloadSheet
+import io.skjaere.usenet.app.download.DownloadUndoBar
+import io.skjaere.usenet.app.download.TitleDownload
+import io.skjaere.usenet.app.download.TitleDownloadActions
+import io.skjaere.usenet.app.download.TitleDownloads
+import io.skjaere.usenet.app.download.downloadEntryHandler
+import io.skjaere.usenet.app.download.downloadsShown
+import io.skjaere.usenet.app.download.showDownloads
+import io.skjaere.usenet.app.download.usenetUsable
 import io.skjaere.usenet.app.link.CastButton
 import io.skjaere.usenet.app.link.PlayOnPrimary
 import io.skjaere.usenet.app.link.PlayTarget
@@ -124,6 +139,18 @@ class ShowViewModel(private val container: AppContainer, private val tmdbId: Int
     val today: StateFlow<LocalDate> = container.today.stateIn(viewModelScope, SharingStarted.Eagerly, LocalDate.now(clock))
     /** What "In collection ✓" removed on this visit: tapped again, the show comes back as it was (when it was added included). */
     private var removal: Removal? = null
+
+    /** The show's downloads by season and episode (L384), for the rows' marks and their ⋮; none on a TV. */
+    val downloads: StateFlow<Map<Pair<Int, Int>, TitleDownload>> = showDownloads(container, tmdbId).stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
+    /** Whether a Usenet provider is saved and on, which a new download needs (L370). */
+    val usenet: StateFlow<Boolean> = usenetUsable(container.settings).stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** What the rows' download entries do (L379, L380): the runner's calls and the Undo bar. */
+    val downloadActions = TitleDownloadActions(TitleDownloadActions.Deps.of(container), viewModelScope, container.appScope)
+
+    /** Episode [e]'s Download sheet's request, once TMDB has answered for the show: its names and season, its poster. */
+    fun downloadRequest(e: Episode): DownloadRequest? = details.value?.let { d -> DownloadRequest.Episode(episodePlay(d, e), d.posterPath) }
 
     init {
         // TMDB's language too: TmdbClient keeps each language's answers apart, so a page kept across a change asks in the new one.
@@ -237,7 +264,9 @@ class ShowViewModel(private val container: AppContainer, private val tmdbId: Int
 
 /**
  * A show's page. While the TV plays one of its episodes for this phone (W14), its button reads "Playing S02E04 · 32:10 on
- * Living room TV" and that episode's row "On Living room TV · 32:10": either opens the remote ([onRemote]).
+ * Living room TV" and that episode's row "On Living room TV · 32:10": either opens the remote ([onRemote]). On a phone or
+ * tablet each episode's row says its download and its ⋮ offers it (L356, L384): Download opens the Download sheet, and a
+ * download removed shows the Undo bar at the page's foot (L379).
  */
 @Composable
 fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}) {
@@ -255,6 +284,13 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}) {
     val choose by vm.choose.collectAsStateWithLifecycle()
     val chosenFailed by vm.chosenFailed.collectAsStateWithLifecycle()
     val today by vm.today.collectAsStateWithLifecycle()
+    val downloads by vm.downloads.collectAsStateWithLifecycle()
+    val usenet by vm.usenet.collectAsStateWithLifecycle()
+    // Downloads on phones and tablets alone, in their layout (L369): a TV's rows, and a phone's layout on a TV, have none.
+    val downloadsHere = downloadsShown()
+    // The episode whose Download sheet is up, by season and number.
+    var downloading by rememberSaveable { mutableStateOf<Pair<Int, Int>?>(null) }
+    val onDownloadEntry = downloadEntryHandler(vm.downloadActions, onDownload = {}, onDownloads = null)
     // Where Play goes (W11); a TV has no choice to make.
     val playOn by container.playOn.target.collectAsStateWithLifecycle()
     // The play this phone follows on a TV or a Cast device (W14, L91): a TV plays its own, and follows none.
@@ -298,68 +334,84 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}) {
         TvShowContent(ShowPageUi(d, selected, season, states, collected, artwork, today, nextUpError), vm, focus, tvMemory, okGuard)
         return
     }
-    Column(Modifier.fillMaxSize().pageOkGuard(okGuard)) {
-        // A TV's page has no bar: its title is its heading, and the remote's Back goes back.
-        if (!tv) {
-            TopBar(d?.name ?: "", onBack) {
-                // The Cast button, before the collection's toggle, on phones and tablets alone (L36, L115).
-                if (!container.television) CastButton(playOn, container.playOn::openSheet)
-                if (d != null) TextButton(onClick = { vm.toggleCollection() }) {
-                    Text(if (collected) "In collection ✓" else "+ Collection", style = AppType.secondary, color = if (collected) colors.muted else colors.accent)
-                }
-            }
-        }
-        if (d == null) {
-            error?.let { PageLoadFailure(SHOW_LOAD_FAILED + it, vm::shown) } ?: CircularProgressIndicator(Modifier.padding(24.dp), color = colors.accent)
-            return@Column
-        }
-        val progress = ShowProgress.of(d, states.values.toList().toEpisodeWatches(), today, d.recentlyAired())
-        LazyColumn(Modifier.fillMaxSize()) {
-            item { ShowHeader(d, progress, artwork, nextUpError, playOn, onTv, onRemote) { ref -> vm.playNext(ref) } }
-            item {
-                SeasonChips(
-                    d.seasons, selected, { n -> states.count { (key, st) -> key.first == n && st.watched } }, vm::selectSeason,
-                    Modifier.padding(vertical = 12.dp),
-                )
-            }
-            val s = (season as? SeasonState.Loaded)?.season
-            val failed = season as? SeasonState.Failed
-            if (failed != null) {
-                item {
-                    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(SEASON_LOAD_FAILED + failed.message, style = AppType.secondary, color = colors.textSecondary)
-                        SecondaryButton("Try again", { selected?.let(vm::selectSeason) })
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().pageOkGuard(okGuard)) {
+            // A TV's page has no bar: its title is its heading, and the remote's Back goes back.
+            if (!tv) {
+                TopBar(d?.name ?: "", onBack) {
+                    // The Cast button, before the collection's toggle, on phones and tablets alone (L36, L115).
+                    if (!container.television) CastButton(playOn, container.playOn::openSheet)
+                    if (d != null) TextButton(onClick = { vm.toggleCollection() }) {
+                        Text(if (collected) "In collection ✓" else "+ Collection", style = AppType.secondary, color = if (collected) colors.muted else colors.accent)
                     }
                 }
-            } else if (s == null) {
-                item { CircularProgressIndicator(Modifier.padding(24.dp), color = colors.accent) }
-            } else {
-                val mark = seasonMark(s.episodes, { d.hasAired(it, today) }, { states[it.season to it.episode]?.watched == true })
+            }
+            if (d == null) {
+                error?.let { PageLoadFailure(SHOW_LOAD_FAILED + it, vm::shown) } ?: CircularProgressIndicator(Modifier.padding(24.dp), color = colors.accent)
+                return@Column
+            }
+            val progress = ShowProgress.of(d, states.values.toList().toEpisodeWatches(), today, d.recentlyAired())
+            LazyColumn(Modifier.fillMaxSize()) {
+                item { ShowHeader(d, progress, artwork, nextUpError, playOn, onTv, onRemote) { ref -> vm.playNext(ref) } }
                 item {
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = { vm.mark(mark.episodes, mark.watched) }, enabled = mark.enabled) {
-                            Text(mark.label, style = AppType.secondary, color = colors.accent)
+                    SeasonChips(
+                        d.seasons, selected, { n -> states.count { (key, st) -> key.first == n && st.watched } }, vm::selectSeason,
+                        Modifier.padding(vertical = 12.dp),
+                    )
+                }
+                val s = (season as? SeasonState.Loaded)?.season
+                val failed = season as? SeasonState.Failed
+                if (failed != null) {
+                    item {
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(SEASON_LOAD_FAILED + failed.message, style = AppType.secondary, color = colors.textSecondary)
+                            SecondaryButton("Try again", { selected?.let(vm::selectSeason) })
                         }
                     }
-                }
-                item {
-                    GroupCard {
-                        s.episodes.forEachIndexed { i, e ->
-                            if (i > 0) InsetDivider()
-                            // The episode the TV or the Cast device plays says so, and opens the remote rather than starting it over (W14, L91).
-                            val playing = onTv?.takeIf { it.playingEpisodeOf(tmdbId) == e.season to e.episode }
-                            EpisodeRow(
-                                e, states[e.season to e.episode], d.hasAired(e, today), onPlay = if (playing != null) onRemote else { { vm.play(e) } },
-                                onChoose = { vm.chooseRelease(e) }, onMark = { w -> vm.mark(listOf(e), w) },
-                                still = e.stillPath, showArtwork = artwork, current = progress.nextUp.episodeRef() == EpisodeRef(e.season, e.episode),
-                                onTv = playing?.let { rememberRemoteEpisodeLine(container.remotePlaying, it) },
-                            )
+                } else if (s == null) {
+                    item { CircularProgressIndicator(Modifier.padding(24.dp), color = colors.accent) }
+                } else {
+                    val mark = seasonMark(s.episodes, { d.hasAired(it, today) }, { states[it.season to it.episode]?.watched == true })
+                    item {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = { vm.mark(mark.episodes, mark.watched) }, enabled = mark.enabled) {
+                                Text(mark.label, style = AppType.secondary, color = colors.accent)
+                            }
                         }
                     }
+                    item {
+                        GroupCard {
+                            s.episodes.forEachIndexed { i, e ->
+                                if (i > 0) InsetDivider()
+                                // The episode the TV or the Cast device plays says so, and opens the remote rather than starting it over (W14, L91).
+                                val playing = onTv?.takeIf { it.playingEpisodeOf(tmdbId) == e.season to e.episode }
+                                val download = downloads[e.season to e.episode]?.takeIf { downloadsHere }
+                                EpisodeRow(
+                                    e, states[e.season to e.episode], d.hasAired(e, today), onPlay = if (playing != null) onRemote else { { vm.play(e) } },
+                                    onChoose = { vm.chooseRelease(e) }, onMark = { w -> vm.mark(listOf(e), w) },
+                                    still = e.stillPath, showArtwork = artwork, current = progress.nextUp.episodeRef() == EpisodeRef(e.season, e.episode),
+                                    onTv = playing?.let { rememberRemoteEpisodeLine(container.remotePlaying, it) },
+                                    download = download,
+                                    downloadEntries = if (downloadsHere) TitleDownloads.entries(download, usenet) else emptyList(),
+                                    onDownloadEntry = { entry ->
+                                        if (entry == DownloadEntry.Download) downloading = e.season to e.episode else onDownloadEntry(entry, download)
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    // The footnote says what the ⋮ offers: a download only where it does.
+                    item { Footnote(if (downloadsHere && usenet) SHOW_FOOTNOTE_PHONE else SHOW_FOOTNOTE_PHONE_STREAM) }
                 }
-                item { Footnote(SHOW_FOOTNOTE_PHONE) }
             }
         }
+        if (downloadsHere) DownloadUndoBar(vm.downloadActions, Modifier.align(Alignment.BottomCenter))
+    }
+    // An episode's Download sheet, over the page, once its season is there (again, after a rotation); the sheet ends at
+    // once where downloads don't show.
+    downloading?.let { (seasonNumber, number) ->
+        val e = (season as? SeasonState.Loaded)?.season?.episodes?.firstOrNull { it.season == seasonNumber && it.episode == number }
+        e?.let(vm::downloadRequest)?.let { request -> DownloadSheet(request, onClose = { downloading = null }) }
     }
 }
 
@@ -438,6 +490,10 @@ internal fun seasonMark(episodes: List<Episode>, aired: (Episode) -> Boolean, wa
 internal fun chooseFileRequest(ep: EpisodePlay, item: RankedItem, alternatives: List<RankedItem> = emptyList()) =
     chosenRequest(ep, item, alternatives).copy(picker = ChooseFile(FilePicker.Episode(ep.season, ep.episode)))
 
-/** The Show page's footnote on a phone, and on a TV, whose remote has no tap. */
-const val SHOW_FOOTNOTE_PHONE = "Tap an episode to play the best release, or ⋮ to choose one yourself."
+/**
+ * The Show page's footnote on a phone, and on a TV, whose remote has no tap. A phone's says the ⋮ downloads (L356) where
+ * it does: on phones and tablets with a Usenet provider (L369, L370); else it says what it did before.
+ */
+const val SHOW_FOOTNOTE_PHONE = "Tap an episode to play the best release, or ⋮ to choose one yourself or download it."
+const val SHOW_FOOTNOTE_PHONE_STREAM = "Tap an episode to play the best release, or ⋮ to choose one yourself."
 const val SHOW_FOOTNOTE_TV = "Press OK on an episode to play the best release, or ⋮ to choose one yourself."

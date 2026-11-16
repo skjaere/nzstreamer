@@ -2,6 +2,7 @@ package io.skjaere.usenet.app.collection
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +23,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
@@ -41,6 +43,18 @@ import io.skjaere.usenet.app.collection.model.MovieRows
 import io.skjaere.usenet.app.collection.model.MovieState
 import io.skjaere.usenet.app.collection.model.toSummary
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.download.DownloadEntry
+import io.skjaere.usenet.app.download.DownloadRequest
+import io.skjaere.usenet.app.download.DownloadSheet
+import io.skjaere.usenet.app.download.DownloadUndoBar
+import io.skjaere.usenet.app.download.TitleDownload
+import io.skjaere.usenet.app.download.TitleDownloadActions
+import io.skjaere.usenet.app.download.TitleDownloadButton
+import io.skjaere.usenet.app.download.TitleDownloads
+import io.skjaere.usenet.app.download.downloadEntryHandler
+import io.skjaere.usenet.app.download.downloadsShown
+import io.skjaere.usenet.app.download.movieDownload
+import io.skjaere.usenet.app.download.usenetUsable
 import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.play.PlayRequest
 import io.skjaere.usenet.app.play.movieNoReleaseNote
@@ -127,6 +141,15 @@ class MovieViewModel(private val container: AppContainer, private val tmdbId: In
     /** What "In collection ✓" removed on this visit: tapped again, the movie comes back as it was (when it was added included). */
     private var removal: Removal? = null
 
+    /** The film's download (L356), for its Download button; none on a TV. */
+    val download: StateFlow<TitleDownload?> = movieDownload(container, tmdbId).stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** Whether a Usenet provider is saved and on, which a new download needs (L370). */
+    val usenet: StateFlow<Boolean> = usenetUsable(container.settings).stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** What the button's menu does (L379, L380): the runner's calls and the Undo bar. */
+    val downloadActions = TitleDownloadActions(TitleDownloadActions.Deps.of(container), viewModelScope, container.appScope)
+
     init {
         // TMDB's language too: TmdbClient keeps each language's answers apart, so a page kept across a change asks in the new one.
         answer.follow(library.movieSummary(tmdbId), container.settings.metadata.map { it.language }) { it.toSummary() }
@@ -138,6 +161,9 @@ class MovieViewModel(private val container: AppContainer, private val tmdbId: In
     }
 
     private fun target(): MovieTarget? = header.value?.let { movieTarget(it, details.value) }
+
+    /** The Download sheet's request: the film as Play looks for it, and its poster. */
+    fun downloadRequest(): DownloadRequest? = target()?.let { DownloadRequest.Movie(it, header.value?.posterPath) }
 
     /** Plays the movie where Play on says (L7): this phone, or the TV chosen. */
     fun play() {
@@ -208,8 +234,13 @@ class MovieViewModel(private val container: AppContainer, private val tmdbId: In
     }
 }
 
+/**
+ * A film's page. On a phone or tablet it has a Download button under Choose release (L356, DlPhoneMovie): Download opens
+ * the Download sheet; once started, its menu by state, Open Downloads opening the Downloads page ([onDownloads]), and a
+ * download removed shows the Undo bar at the page's foot (L379).
+ */
 @Composable
-fun MovieScreen(tmdbId: Int, onBack: () -> Unit) {
+fun MovieScreen(tmdbId: Int, onBack: () -> Unit, onDownloads: (() -> Unit)? = null) {
     val container = LocalContext.current.container
     val vm: MovieViewModel = viewModel(key = "movie-$tmdbId") { MovieViewModel(container, tmdbId) }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.shown() }
@@ -223,6 +254,12 @@ fun MovieScreen(tmdbId: Int, onBack: () -> Unit) {
     val chosenFailed by vm.chosenFailed.collectAsStateWithLifecycle()
     val today by vm.today.collectAsStateWithLifecycle()
     val playOn by container.playOn.target.collectAsStateWithLifecycle()
+    val download by vm.download.collectAsStateWithLifecycle()
+    val usenet by vm.usenet.collectAsStateWithLifecycle()
+    // Downloads on phones and tablets alone, in their layout (L369).
+    val downloadsHere = downloadsShown()
+    var downloadSheet by rememberSaveable { mutableStateOf(false) }
+    val onDownloadEntry = downloadEntryHandler(vm.downloadActions, onDownload = { downloadSheet = true }, onDownloads)
     val okGuard = rememberPageOkGuard()
     val tv = LocalFormFactor.current == FormFactor.Tv
     // A remote's focus back on Choose release once its list closes, which takes the page's place while it shows.
@@ -247,7 +284,10 @@ fun MovieScreen(tmdbId: Int, onBack: () -> Unit) {
     }
 
     // A TV has no Play on button: it plays itself (L36).
-    val ui = MoviePageUi(header, details?.overview, error, collected, artwork, state, today, playOn.takeUnless { container.television })
+    val ui = MoviePageUi(
+        header, details?.overview, error, collected, artwork, state, today, playOn.takeUnless { container.television },
+        download = download.takeIf { downloadsHere }, downloadOffered = TitleDownloads.offered(downloadsHere, usenet, download),
+    )
     val actions = MoviePageActions(
         play = vm::play,
         chooseRelease = {
@@ -258,8 +298,18 @@ fun MovieScreen(tmdbId: Int, onBack: () -> Unit) {
         toggleCollection = { vm.toggleCollection() },
         retry = vm::shown,
         playOn = container.playOn::openSheet,
+        download = { entry -> onDownloadEntry(entry, download) },
     )
-    if (tv) TvMovieContent(ui, actions, focus, okGuard) else MovieContent(ui, actions, focus, okGuard, onBack)
+    if (tv) {
+        TvMovieContent(ui, actions, focus, okGuard)
+        return
+    }
+    Box(Modifier.fillMaxSize()) {
+        MovieContent(ui, actions, focus, okGuard, onBack)
+        if (downloadsHere) DownloadUndoBar(vm.downloadActions, Modifier.align(Alignment.BottomCenter))
+    }
+    // The film's Download sheet, over the page; it ends at once where downloads don't show.
+    if (downloadSheet) vm.downloadRequest()?.let { request -> DownloadSheet(request, onClose = { downloadSheet = false }) }
 }
 
 /** What the Movie page shows: its [row] (null while loading, or when nothing names the movie), TMDB's [overview] and why it couldn't answer ([error]). */
@@ -274,6 +324,10 @@ internal data class MoviePageUi(
     val today: LocalDate,
     /** Where Play goes (W11), for the Cast button; null on a TV, which has none. */
     val playOn: PlayTarget? = null,
+    /** The film's download, where downloads show (L369); null with none. */
+    val download: TitleDownload? = null,
+    /** Whether the Download button shows ([TitleDownloads.offered]): never on a TV. */
+    val downloadOffered: Boolean = false,
 ) {
     val text: MoviePageText? = row?.let { moviePageText(it, today) }
     val watched: Boolean get() = watch?.takeIf { !it.deleted }?.watched == true
@@ -288,6 +342,8 @@ internal class MoviePageActions(
     val retry: () -> Unit,
     /** The Cast button: the Play on sheet. */
     val playOn: () -> Unit = {},
+    /** The Download button and its menu's entries: the sheet, the runner's calls, the Downloads page. */
+    val download: (DownloadEntry) -> Unit = {},
 )
 
 /** A phone's Movie page: one list under its bar. A remote starts on Play, and comes back from Choose release's list on it. */
@@ -329,6 +385,8 @@ internal fun MovieContent(ui: MoviePageUi, actions: MoviePageActions, focus: Ret
                             Modifier.padding(top = 6.dp).focusRequester(focus.requester(MOVIE_PLAY)).focusOutline(RoundedCornerShape(24.dp), color = colors.text, fill = false),
                         )
                         SecondaryButton("Choose release", actions.chooseRelease, Modifier.focusRequester(focus.requester(MOVIE_CHOOSE)).focusOutline(RoundedCornerShape(24.dp), fill = false))
+                        // A third, outlined button whose words follow the download (DlPhoneMovie); phones and tablets alone.
+                        if (ui.downloadOffered) TitleDownloadButton(ui.download, actions.download)
                         // The TV takes no release chosen by hand yet (W11).
                         // A TV only: a release chosen by hand casts with a Cast device chosen (L80), so nothing to say then.
                         if (ui.playOn is PlayTarget.Tv) Text(CHOSEN_PLAYS_HERE, style = AppType.small, color = colors.muted)

@@ -41,6 +41,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import io.skjaere.usenet.app.download.DownloadEntry
+import io.skjaere.usenet.app.download.DownloadLine
+import io.skjaere.usenet.app.download.DownloadMarkIcon
+import io.skjaere.usenet.app.download.PageLine
+import io.skjaere.usenet.app.download.TitleDownload
+import io.skjaere.usenet.app.download.TitleDownloads
 import io.skjaere.usenet.app.link.TvEpisodeLine
 import io.skjaere.usenet.app.tv.TvMenu
 import io.skjaere.usenet.app.tv.TvMenuItem
@@ -65,7 +71,9 @@ import io.skjaere.usenet.metadata.TmdbImages
  * [moreModifier] on its ⋮ (their focus requesters); [onChoose] says which opened the menu (the ⋮, or a long press). On a TV the row turns over when focused, [current] (the next-up
  * episode) is marked, and with [showArtwork] the episode's [still] is beside its name; a phone's row is as it was, save
  * that while the TV plays the episode for this phone ([onTv], W14) it says "On Living room TV · 32:10" in place of what
- * is left.
+ * is left. Where downloads show (L369, L384), a phone's row says its [download] in a line under the date, with its mark
+ * before the ✓, and TalkBack hears it as the row's state; the ⋮ then offers the download's [downloadEntries] after its
+ * own two (L380), each done by [onDownloadEntry]. A TV's row is given none, and is as it was.
  */
 @Composable
 internal fun EpisodeRow(
@@ -81,17 +89,20 @@ internal fun EpisodeRow(
     showArtwork: Boolean = false,
     current: Boolean = false,
     onTv: TvEpisodeLine? = null,
+    download: TitleDownload? = null,
+    downloadEntries: List<DownloadEntry> = emptyList(),
+    onDownloadEntry: (DownloadEntry) -> Unit = {},
 ) {
     var menu by remember { mutableStateOf(false) }
     // Which opened the menu, for the focus on the way back from Choose release: the ⋮, or the row's long press.
     var fromMore by remember { mutableStateOf(false) }
-    val text = episodeRowText(e, aired)
+    val text = episodeRowText(e, aired, download)
     val said = text.stateDescription?.let { Modifier.semantics { stateDescription = it } } ?: Modifier
     val left = state?.takeIf { !it.watched && it.positionMs >= 60_000 && it.durationMs > 0 }
     val more = @Composable {
         EpisodeMenu(
-            e, state?.watched == true, menu, onOpen = { fromMore = true; menu = true }, onDismiss = { menu = false },
-            onChoose = { onChoose(fromMore) }, onMark = onMark, modifier = moreModifier,
+            e, episodeMenu(state?.watched == true, downloadEntries), menu, onOpen = { fromMore = true; menu = true }, onDismiss = { menu = false },
+            onChoose = { onChoose(fromMore) }, onMark = onMark, onDownload = onDownloadEntry, modifier = moreModifier,
         )
     }
     if (LocalFormFactor.current == FormFactor.Tv) {
@@ -99,7 +110,7 @@ internal fun EpisodeRow(
         return
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        PhoneRowContent(e, aired, state?.watched == true, left, text, onTv, onPlay, { fromMore = false; menu = true }, modifier.then(said))
+        PhoneRowContent(e, aired, state?.watched == true, left, text, download, onTv, onPlay, { fromMore = false; menu = true }, modifier.then(said))
         Box(Modifier.padding(end = 4.dp)) { more() }
     }
 }
@@ -107,7 +118,16 @@ internal fun EpisodeRow(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun androidx.compose.foundation.layout.RowScope.PhoneRowContent(
-    e: Episode, aired: Boolean, watched: Boolean, left: WatchState?, text: EpisodeRowText, onTv: TvEpisodeLine?, onPlay: () -> Unit, onMenu: () -> Unit, modifier: Modifier,
+    e: Episode,
+    aired: Boolean,
+    watched: Boolean,
+    left: WatchState?,
+    text: EpisodeRowText,
+    download: TitleDownload?,
+    onTv: TvEpisodeLine?,
+    onPlay: () -> Unit,
+    onMenu: () -> Unit,
+    modifier: Modifier,
 ) {
     Row(
         // As tall as the row was with its ⋮ inside it, and the ✓ as far from the ⋮: a phone's rows look as they did.
@@ -119,6 +139,8 @@ private fun androidx.compose.foundation.layout.RowScope.PhoneRowContent(
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(e.name ?: "Episode ${e.episode}", style = AppType.body, color = if (aired) colors.text else colors.textSecondary, maxLines = 1)
             if (text.meta.isNotEmpty()) Text(text.meta, style = AppType.small, color = colors.muted)
+            // The download's line under the date (DlPhoneEpisodeRow), wrapping at large sizes rather than cut.
+            text.download?.let { DownloadLine(it) }
             if (onTv != null) {
                 Text(onTv.line, style = AppType.small, color = colors.accent)
                 LinearProgressIndicator(
@@ -133,6 +155,8 @@ private fun androidx.compose.foundation.layout.RowScope.PhoneRowContent(
                 )
             }
         }
+        // Its mark before the ✓: never in the green that says watched.
+        download?.let { DownloadMarkIcon(TitleDownloads.mark(it)) }
         if (watched) Text("✓", style = AppType.bodyStrong, color = colors.good)
     }
 }
@@ -228,44 +252,84 @@ private fun Still(path: String?, progress: Float?) {
 }
 
 /**
- * The row's ⋮ and its menu: Choose release, and Mark watched or unwatched. On a TV the menu's first item takes the focus
- * as it opens (a remote has nothing to point at it with), and its items turn over when focused. As it closes, the focus
- * is where it was before: on the ⋮, or on the row after a long press. The OK that opened it, held, picks nothing in it
- * (play/OkGuard.kt's rule).
+ * The row's ⋮ and its menu of [items] ([episodeMenu]): Choose release, Mark watched or unwatched, then on a phone its
+ * download's. On a TV the menu's first item takes the focus as it opens (a remote has nothing to point at it with), and
+ * its items turn over when focused. As it closes, the focus is where it was before: on the ⋮, or on the row after a long
+ * press. The OK that opened it, held, picks nothing in it (play/OkGuard.kt's rule).
  */
 @Composable
 private fun EpisodeMenu(
-    e: Episode, watched: Boolean, expanded: Boolean, onOpen: () -> Unit, onDismiss: () -> Unit, onChoose: () -> Unit, onMark: (Boolean) -> Unit, modifier: Modifier,
+    e: Episode,
+    items: List<EpisodeMenuItem>,
+    expanded: Boolean,
+    onOpen: () -> Unit,
+    onDismiss: () -> Unit,
+    onChoose: () -> Unit,
+    onMark: (Boolean) -> Unit,
+    onDownload: (DownloadEntry) -> Unit,
+    modifier: Modifier,
 ) {
     Box {
         IconButton(onClick = onOpen, modifier = modifier.focusOutline(CircleShape, fill = false)) {
             Icon(Icons.Filled.MoreVert, "More for episode ${e.episode}", tint = colors.muted)
         }
         TvMenu(expanded, onDismiss) { first ->
-            TvMenuItem("Choose release", first) {
-                onDismiss()
-                onChoose()
-            }
-            TvMenuItem(if (watched) "Mark unwatched" else "Mark watched") {
-                onDismiss()
-                onMark(!watched)
+            items.forEachIndexed { i, item ->
+                TvMenuItem(item.label, if (i == 0) first else Modifier) {
+                    onDismiss()
+                    when (item) {
+                        EpisodeMenuItem.ChooseRelease -> onChoose()
+                        is EpisodeMenuItem.Mark -> onMark(item.watched)
+                        is EpisodeMenuItem.Download -> onDownload(item.entry)
+                    }
+                }
             }
         }
     }
 }
 
-/**
- * What an episode row says: [meta] under its name, when it aired or airs and how long it runs;
- * [stateDescription], for TalkBack, that TMDB doesn't list it as aired yet (null once it does).
- */
-internal data class EpisodeRowText(val meta: String, val stateDescription: String?)
+/** An item of an episode's ⋮: Choose release, Mark it [watched] or not, or one of its download's (L380). */
+internal sealed interface EpisodeMenuItem {
+    val label: String
 
-internal fun episodeRowText(e: Episode, aired: Boolean) = EpisodeRowText(
+    data object ChooseRelease : EpisodeMenuItem {
+        override val label: String get() = "Choose release"
+    }
+
+    /** Marks the episode [watched], or unwatched. */
+    data class Mark(val watched: Boolean) : EpisodeMenuItem {
+        override val label: String get() = if (watched) "Mark watched" else "Mark unwatched"
+    }
+
+    data class Download(val entry: DownloadEntry) : EpisodeMenuItem {
+        override val label: String get() = entry.label
+    }
+}
+
+/**
+ * The ⋮'s items for an episode [watched] or not: Choose release and Mark watched or unwatched, where they always were, then
+ * its download's [downloads] by state (L380, DlPhoneEpisodeRow); none where downloads don't show.
+ */
+internal fun episodeMenu(watched: Boolean, downloads: List<DownloadEntry>): List<EpisodeMenuItem> =
+    listOf(EpisodeMenuItem.ChooseRelease, EpisodeMenuItem.Mark(!watched)) + downloads.map(EpisodeMenuItem::Download)
+
+/**
+ * What an episode row says: [meta] under its name, when it aired or airs and how long it runs; [stateDescription], for
+ * TalkBack, that TMDB doesn't list it as aired yet and how its download is ("Downloading, 42 percent"), null with neither;
+ * and the [download]'s line under the date (L384), null with none.
+ */
+internal data class EpisodeRowText(val meta: String, val stateDescription: String?, val download: List<PageLine>? = null)
+
+internal fun episodeRowText(e: Episode, aired: Boolean, download: TitleDownload? = null) = EpisodeRowText(
     meta = listOfNotNull(
         e.airDate?.let { if (aired) shortDate(it) else "Airs ${shortDate(it)}" } ?: if (!aired) "Not aired yet" else null,
         e.runtimeMinutes?.let { "$it min" },
     ).joinToString(" · "),
-    stateDescription = if (aired) null else "Hasn't aired yet according to TMDB",
+    stateDescription = listOfNotNull(
+        "Hasn't aired yet according to TMDB".takeIf { !aired },
+        download?.let(TitleDownloads::spoken)?.takeIf { it.isNotEmpty() },
+    ).joinToString(", ").ifEmpty { null },
+    download = download?.let(TitleDownloads::line)?.takeIf { it.isNotEmpty() },
 )
 
 /**

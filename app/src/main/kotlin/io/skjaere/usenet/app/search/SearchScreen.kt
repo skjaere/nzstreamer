@@ -84,6 +84,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import io.skjaere.usenet.app.CollectionJump
 import io.skjaere.usenet.app.collection.model.TitleKey
 import io.skjaere.usenet.app.collection.rememberDpad
+import io.skjaere.usenet.app.download.DownloadEntriesViewModel
+import io.skjaere.usenet.app.download.DownloadRequest
+import io.skjaere.usenet.app.download.DownloadSheet
+import io.skjaere.usenet.app.download.DownloadUndoBar
+import io.skjaere.usenet.app.download.downloadsShown
+import io.skjaere.usenet.app.download.movieDownloadSlot
+import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.collection.runCatchingFocus
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.link.CastButton
@@ -132,7 +139,8 @@ import kotlinx.coroutines.launch
  * "+ Collection" goes to the title in the collection once it is stored ([onJumpToCollection]), as
  * "In collection ›" does for one there already. A phone shows it in one column, the field on top; a
  * TV in two panes ([TvSearchContent]), the same state and the same lists in them, and a mic beside the field where a
- * speech recognizer resolves; [voiceRequest] is the remote's search key asking for it.
+ * speech recognizer resolves; [voiceRequest] is the remote's search key asking for it. On a phone or tablet a picked
+ * film's card has the Movie page's Download (L356, DlPhoneSearchMovie), whose Open Downloads is [onDownloads].
  */
 @Composable
 fun SearchScreen(
@@ -143,9 +151,16 @@ fun SearchScreen(
     onOpenMovie: (Int) -> Unit = {},
     onJumpToCollection: (CollectionJump) -> Unit = {},
     voiceRequest: VoiceRequest? = null,
+    onDownloads: (() -> Unit)? = null,
 ) {
     val container = LocalContext.current.container
     val vm: SearchViewModel = viewModel { SearchViewModel(SearchDeps.of(container), initial) }
+    // The movie card's Download (L356): its runner's calls and Undo bar, and its sheet over the screen; phones and tablets alone.
+    val downloads: DownloadEntriesViewModel = viewModel { DownloadEntriesViewModel(container) }
+    var downloadSheet by remember { mutableStateOf<DownloadRequest?>(null) }
+    val movieDownload: @Composable (TitleInfo) -> (@Composable (Modifier) -> Unit)? = { title ->
+        movieDownloadSlot(title.movieTarget(), title.posterPath, downloads.actions, onSheet = { downloadSheet = it }, onDownloads)
+    }
     val query by vm.query.collectAsStateWithLifecycle()
     val editing by vm.editing.collectAsStateWithLifecycle()
     val results by vm.results.collectAsStateWithLifecycle()
@@ -404,7 +419,7 @@ fun SearchScreen(
         r.nothingPlayable && r.grouped.hidden.isEmpty() -> nothingState(r, tv = tv, onWithoutEpisode = vm::searchWithoutEpisode)
         else -> resultsState(
             r, showArtwork, hasKey, bannerDismissed, collected, adding, ::collectionFocus, ::focusOf, tv = tv, accounts = accounts,
-            passedOver = passedOver,
+            passedOver = passedOver, movieDownload = movieDownload,
             onDismissBanner = vm::dismissNoKeyBanner,
             onAddToCollection = { t -> addAndJump(t.name) { vm.addToCollection(t) } },
             onJumpToCollection = { t -> jumpToCollection(CollectionJump(t.key.value, t.name, added = false)) },
@@ -524,8 +539,13 @@ fun SearchScreen(
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+        if (downloadsShown()) DownloadUndoBar(downloads.actions, Modifier.align(Alignment.BottomCenter))
     }
+    downloadSheet?.let { request -> DownloadSheet(request, onClose = { downloadSheet = null }) }
 }
+
+/** A picked film as Play and the Download sheet look for it: by its TMDB id, its IMDb id and its original language. */
+private fun TitleInfo.movieTarget() = MovieTarget(tmdbId, name, year, ids.imdb, runtimeMinutes, originalLanguage = originalLanguage)
 
 /**
  * Search on a TV: the field's gate at the top left with the recent searches
@@ -984,6 +1004,7 @@ private fun LazyListScope.resultsState(
     tv: Boolean,
     accounts: List<NamedAccount>,
     passedOver: Map<String, Set<String>>,
+    movieDownload: @Composable (TitleInfo) -> (@Composable (Modifier) -> Unit)?,
     onDismissBanner: () -> Unit,
     onAddToCollection: (TitleInfo) -> Unit,
     onJumpToCollection: (TitleInfo) -> Unit,
@@ -1011,12 +1032,15 @@ private fun LazyListScope.resultsState(
     if (title?.type == MediaType.Movie) {
         val movieGroup = r.grouped.movieGroup
         item {
+            // The film's Download where downloads show (L369), with a Usenet provider or a download of it (L370); else none.
+            val download = movieDownload(title)
             MovieHeroCard(
                 title, showArtwork, movieGroup, title.key in collected, title.key in adding,
                 onPlay = { movieGroup?.let(onPlay) }, onReleases = { movieGroup?.let(onOpen) },
                 onAdd = { onAddToCollection(title) }, onOpen = { onOpenMovie(title.tmdbId) }, onJump = { onJumpToCollection(title) },
                 collectionFocus = collectionFocus(title.key), openFocus = focusOf(title.openKey), releasesFocus = movieGroup?.let { focusOf(it.focusKey) },
                 tag = movieGroup?.best?.let { sourceTag(it, accounts, passedOver[it.key].orEmpty()) },
+                download = download,
             )
         }
     } else {

@@ -308,7 +308,9 @@ fun TvTitleCard(
 /**
  * Hero card for a picked movie: backdrop, poster, overview, best release, Play; Open goes to its page, and the collection as on the TV card.
  * [openFocus] and [releasesFocus] go on Open and on the releases button. [tag]: where the best release plays from, first
- * among its chips (L201; none while no debrid service is on).
+ * among its chips (L201; none while no debrid service is on). [download]: the film's Download button, on phones and tablets
+ * (L356, DlPhoneSearchMovie): Play then has a row of its own, and Download and N releases share the row under it, one
+ * under the other where they don't fit; null leaves the card as it was.
  */
 @Composable
 fun MovieHeroCard(
@@ -326,6 +328,7 @@ fun MovieHeroCard(
     openFocus: FocusRequester? = null,
     releasesFocus: FocusRequester? = null,
     tag: SourceTag? = null,
+    download: (@Composable (Modifier) -> Unit)? = null,
 ) {
     Column(Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(colors.surface)) {
         Box(Modifier.fillMaxWidth().height(110.dp).background(Brush.linearGradient(listOf(Color(0xFF4A3420), colors.surface)))) {
@@ -353,9 +356,54 @@ fun MovieHeroCard(
                     tag?.let { SourceTagChip(it) }
                     heroChips(best).forEach { InfoChip(it.text, it.kind, it.spoken) }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    PrimaryButton("Play", onPlay, Modifier.weight(1f), leading = { Icon(Icons.Filled.PlayArrow, null, Modifier.padding(end = 6.dp)) })
-                    SecondaryButton("${group.size} releases", onReleases, releasesFocus?.let { Modifier.focusRequester(it) } ?: Modifier)
+                val play = @Composable { modifier: Modifier ->
+                    PrimaryButton("Play", onPlay, modifier, leading = { Icon(Icons.Filled.PlayArrow, null, Modifier.padding(end = 6.dp)) })
+                }
+                val releases = @Composable { modifier: Modifier ->
+                    SecondaryButton("${group.size} releases", onReleases, modifier.then(releasesFocus?.let { Modifier.focusRequester(it) } ?: Modifier))
+                }
+                if (download == null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        play(Modifier.weight(1f))
+                        releases(Modifier)
+                    }
+                } else {
+                    play(Modifier.fillMaxWidth())
+                    HalvesOrStacked(gap = 10.dp) {
+                        download(Modifier)
+                        releases(Modifier)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Two buttons side by side in halves while both fit there whole, else one under the other, each the whole width
+ * (DlPhoneSearchMovie): at large font sizes a button's words never wrap inside a half.
+ */
+@Composable
+internal fun HalvesOrStacked(gap: Dp, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    Layout(content, modifier) { measurables, constraints ->
+        val width = constraints.maxWidth
+        val space = gap.roundToPx()
+        val half = ((width - space) / 2).coerceAtLeast(0)
+        val halves = measurables.size == 2 && measurables.all { it.maxIntrinsicWidth(Constraints.Infinity) <= half }
+        val each = if (halves) half else width
+        val placeables = measurables.map { it.measure(Constraints(minWidth = each, maxWidth = each, maxHeight = constraints.maxHeight)) }
+        if (halves) {
+            val height = placeables.maxOf { it.height }
+            layout(width, height) {
+                placeables.forEachIndexed { i, p -> p.placeRelative(i * (half + space), (height - p.height) / 2) }
+            }
+        } else {
+            val height = placeables.sumOf { it.height } + space * (placeables.size - 1).coerceAtLeast(0)
+            layout(width, height) {
+                var y = 0
+                placeables.forEach { p ->
+                    p.placeRelative(0, y)
+                    y += p.height + space
                 }
             }
         }

@@ -130,15 +130,15 @@ data class DownloadsDeps(
             },
             search = DownloadSheetDeps.of(container, ask = null),
             get = container.data.downloads::get,
-            play = { row -> play(container, row) },
+            play = { row -> playHere(container, row) },
             mark = { row, watched -> mark(container, row, watched) },
         )
 
         /**
          * Plays [row]'s file here (L353): by its title's own play, which the coordinator's hook turns to the file, so its
-         * progress and Up next are the title's either way.
+         * progress and Up next are the title's either way. Home's Downloads plays a film so too.
          */
-        private fun play(container: AppContainer, row: Download) {
+        internal fun playHere(container: AppContainer, row: Download) {
             when (row.kind) {
                 DownloadKind.Episode -> {
                     val target = EpisodeTarget(row.showTmdbId ?: return, row.title, row.season ?: return, row.episode ?: return)
@@ -219,11 +219,6 @@ class DownloadEdits(private val deps: DownloadsDeps, private val scope: Coroutin
 
     /** The bar is on screen: it goes [timeoutMs] later. */
     fun shown(timeoutMs: Long) = undo.shown(timeoutMs)
-
-    private companion object {
-        /** The files go this long after the bar has, so an Undo in its last moment still finds them. */
-        const val UNDO_SLACK_MILLIS = 1_000L
-    }
 }
 
 /**

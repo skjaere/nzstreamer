@@ -106,15 +106,22 @@ class DownloadIntentsTest {
     }
 
     @Test
-    fun `where downloads show, the ways in open the Downloads page, at a download's releases or playing it, and its settings`() {
+    fun `where downloads show, the ways in open the Downloads page, at a download's releases or playing it, a show's downloads and its settings`() {
         val opened = mutableListOf<Any>()
         val pages = downloadPages(shown = true, register = {}, open = { opened += it })
         pages.take(DownloadAsk.Open) {}
         pages.take(DownloadAsk.Choose(ID)) {}
         pages.take(DownloadAsk.Play(ID)) {}
+        // Home's row for a show's finished episodes (L384).
+        pages.show!!.invoke(SHOW)
         pages.settings!!.invoke()
-        assertEquals(listOf(DownloadsRoute(), DownloadsRoute(choose = ID), DownloadsRoute(play = ID), DownloadSettingsRoute), opened)
-        assertNull(downloadPages(shown = false, register = {}, open = { opened += it }).settings)
+        assertEquals(
+            listOf(DownloadsRoute(), DownloadsRoute(choose = ID), DownloadsRoute(play = ID), DownloadsShowRoute(SHOW), DownloadSettingsRoute),
+            opened,
+        )
+        val hidden = downloadPages(shown = false, register = {}, open = { opened += it })
+        assertNull(hidden.settings)
+        assertNull(hidden.show)
     }
 
     @Test
@@ -140,5 +147,6 @@ class DownloadIntentsTest {
 
     private companion object {
         const val ID = "c0ffee00-0000-4000-8000-000000000001"
+        const val SHOW = 990_717
     }
 }

@@ -15,8 +15,12 @@ import io.skjaere.usenet.app.collection.model.ShowSort
 import io.skjaere.usenet.app.collection.model.TitleKey
 import io.skjaere.usenet.app.collection.model.TitleRow
 import io.skjaere.usenet.app.collection.model.posterProgress
+import io.skjaere.usenet.app.download.DownloadsDeps
+import io.skjaere.usenet.app.download.PROGRESS_REDRAW_MILLIS
+import io.skjaere.usenet.app.download.atMostEvery
 import io.skjaere.usenet.app.saveOrLog
 import io.skjaere.usenet.data.CollectionCounts
+import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.RecentSearch
 import io.skjaere.usenet.data.UpNextRemoval
 import io.skjaere.usenet.data.WatchKind
@@ -162,6 +166,18 @@ class HomeViewModel(private val container: AppContainer, private val collectionR
     }
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /**
+     * Home's Downloads section (L384): null while nothing is queued or downloaded, and on a TV, where the runner has none. At
+     * most four redraws a second, as the writer says each chunk it writes.
+     */
+    val downloads: StateFlow<HomeDownloads?> = container.downloads.state.atMostEvery(PROGRESS_REDRAW_MILLIS).map(HomeDownloads::of)
+        .distinctUntilChanged().flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** A finished film's row in Home's Downloads: played here, from its file (L353), as the Downloads page plays it. */
+    fun playDownload(row: Download) {
+        DownloadsDeps.playHere(container, row)
+    }
 
     /** A row's Play: resumes what is in progress, or finds and plays a show's next episode, where Play on says (L7). */
     fun play(row: UpNextRow) {
