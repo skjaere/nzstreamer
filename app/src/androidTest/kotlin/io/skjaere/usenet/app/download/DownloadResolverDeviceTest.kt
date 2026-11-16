@@ -29,7 +29,9 @@ import io.skjaere.usenet.releases.ReleaseKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -59,7 +61,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * A season pack fetched once for its season (L394, M-pack): three episodes, each a split RAR4 set, posted as one release,
  * and three rows of the season, each with that release alone: the first grabs it and prepares it, the others take it from
  * the season's copy and the prepare held for it, through the app's runner, each file written whole. What the prepare read
- * is said through the instrumentation's status, never the log.
+ * is said through the instrumentation's status, never the log. The runner walks the app's whole queue, so the case runs
+ * only on a queue with nothing else to finish (a run cut short before its tearDown can leave some): it would take those
+ * up first, and change them.
  *
  * The rows, their folders, the season's copy and what the releases' checks left in the memory of releases found missing
  * are put back as they were; the server ends with its articles.
@@ -81,6 +85,9 @@ class DownloadResolverDeviceTest {
     private var row: Download? = null
     private val made = CopyOnWriteArrayList<String>()
 
+    /** The season pack's guid, this run's own: a copy a run cut short left under another can never be served to this one. */
+    private var seasonPack: String? = null
+
     @Before
     fun setUp() = runBlocking<Unit> {
         engineSetup("the engine on the test's own NNTP server") {
@@ -96,11 +103,12 @@ class DownloadResolverDeviceTest {
 
     @After
     fun tearDown() = runBlocking<Unit> {
-        scope.cancel()
+        // The walk over before its rows and the copy go: cancelled, it can still be ending a row, which nothing stops.
+        scope.coroutineContext.job.cancelAndJoin()
         PlaybackCoordinator.fetchNzb = realFetch
         row?.let { storage.delete(it.id) }
         made.forEach { storage.delete(it) }
-        storage.packs.folder(ReleaseKey.of(INDEXER.id, SEASON_PACK)).deleteRecursively()
+        seasonPack?.let { storage.packs.folder(ReleaseKey.of(INDEXER.id, it)).deleteRecursively() }
         container.library.clearTriedReleases()
         container.library.restoreTriedReleases(remembered)
         fixtures.close()
@@ -192,12 +200,16 @@ class DownloadResolverDeviceTest {
      */
     @Test
     fun aSeasonPackIsGrabbedAndPreparedOnceForItsSeasonsRowsEachFileWhole() = runBlocking<Unit> {
+        // Rows an earlier run left to finish would be walked before the season's, and changed: none may be there.
+        val left = container.data.downloads.queue().first().filter { it.state in DownloadRunner.GOING_ON }.map { it.id }
+        assertTrue("Downloads an earlier run left to finish, ${left.size}: $left", left.isEmpty())
         val salt = System.nanoTime()
+        val pack = "$SEASON_PACK-$salt".also { seasonPack = it }
         val episodes = (1..3).map { e ->
             fixtures.post(Packing.Rar4, "Harbor.Lights.S04E%02d.1080p.WEB.h264-PACK".format(e), DownloadFixtures.seeded(16 * DownloadFixtures.MB, salt + e), salt = "$salt")
         }
-        nzbs[SEASON_PACK] = fixtures.local.nzb(*episodes.flatMap { it.posted }.toTypedArray())
-        val candidate = DownloadCandidate(INDEXER.id, SEASON_PACK, "Harbor.Lights.S04.1080p.WEB.h264-PACK", size = episodes.sumOf { it.size })
+        nzbs[pack] = fixtures.local.nzb(*episodes.flatMap { it.posted }.toTypedArray())
+        val candidate = DownloadCandidate(INDEXER.id, pack, "Harbor.Lights.S04.1080p.WEB.h264-PACK", size = episodes.sumOf { it.size })
 
         // The engine's prepare, counted.
         val prepares = AtomicInteger()
@@ -235,17 +247,17 @@ class DownloadResolverDeviceTest {
         InstrumentationRegistry.getInstrumentation().sendStatus(
             STATUS, Bundle().apply { putString(M_PACK, "first prepare ${read[ids[0]]} bytes; with the held prepare ${read[ids[1]]} and ${read[ids[2]]} bytes") },
         )
-        assertEquals(listOf(SEASON_PACK), grabbed)
+        assertEquals(listOf(pack), grabbed)
         assertEquals("prepares", 1, prepares.get())
         done.forEachIndexed { i, row ->
             assertEquals("Harbor.Lights.S04E%02d.1080p.WEB.h264-PACK.mkv".format(i + 1), row.fileName)
-            assertEquals(listOf(ReleaseKey.of(INDEXER.id, SEASON_PACK)), row.tried)
+            assertEquals(listOf(ReleaseKey.of(INDEXER.id, pack)), row.tried)
             assertEquals(episodes[i].sha256, DownloadFixtures.sha256(storage.file(row) ?: throw AssertionError("no file for ${row.id}")))
         }
         // The season's last is done: its copy went with it.
-        val copy = storage.packs.folder(ReleaseKey.of(INDEXER.id, SEASON_PACK))
+        val copy = storage.packs.folder(ReleaseKey.of(INDEXER.id, pack))
         waitFor("the season's copy gone", 10_000) { true.takeIf { !copy.exists() } }
-        assertNull(storage.packs.find(ReleaseKey.of(INDEXER.id, SEASON_PACK)))
+        assertNull(storage.packs.find(ReleaseKey.of(INDEXER.id, pack)))
     }
 
     /** [data] posted as the file [name], its articles' ids a digest of its name, bytes and part size, as the fixtures' are. */
@@ -266,6 +278,7 @@ class DownloadResolverDeviceTest {
         const val FIRST = "hl-s03e02-kestrel"
         const val PACK = "hl-s03-pack-grp"
         const val THIRD = "hl-s03e02-wren"
+        /** The season pack's guid before each run's salt. */
         const val SEASON_PACK = "hl-s04-pack"
 
         /** The instrumentation status's code for a measurement: 2, "in progress", which no result parser counts as a test. */
