@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -27,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -259,6 +261,8 @@ fun MovieScreen(tmdbId: Int, onBack: () -> Unit, onDownloads: (() -> Unit)? = nu
     // Downloads on phones and tablets alone, in their layout (L369).
     val downloadsHere = downloadsShown()
     var downloadSheet by rememberSaveable { mutableStateOf(false) }
+    // What the Undo bar covers of the page's foot while it shows: the list ends above it.
+    var undoRoom by remember { mutableStateOf(0.dp) }
     val onDownloadEntry = downloadEntryHandler(vm.downloadActions, onDownload = { downloadSheet = true }, onDownloads)
     val okGuard = rememberPageOkGuard()
     val tv = LocalFormFactor.current == FormFactor.Tv
@@ -305,8 +309,8 @@ fun MovieScreen(tmdbId: Int, onBack: () -> Unit, onDownloads: (() -> Unit)? = nu
         return
     }
     Box(Modifier.fillMaxSize()) {
-        MovieContent(ui, actions, focus, okGuard, onBack)
-        if (downloadsHere) DownloadUndoBar(vm.downloadActions, Modifier.align(Alignment.BottomCenter))
+        MovieContent(ui, actions, focus, okGuard, onBack, listBottom = undoRoom)
+        if (downloadsHere) DownloadUndoBar(vm.downloadActions, Modifier.align(Alignment.BottomCenter), onRoom = { undoRoom = it })
     }
     // The film's Download sheet, over the page; it ends at once where downloads don't show.
     if (downloadSheet) vm.downloadRequest()?.let { request -> DownloadSheet(request, onClose = { downloadSheet = false }) }
@@ -346,9 +350,12 @@ internal class MoviePageActions(
     val download: (DownloadEntry) -> Unit = {},
 )
 
-/** A phone's Movie page: one list under its bar. A remote starts on Play, and comes back from Choose release's list on it. */
+/**
+ * A phone's Movie page: one list under its bar, ending [listBottom] above the page's foot (the Undo bar's room while it
+ * shows). A remote starts on Play, and comes back from Choose release's list on it.
+ */
 @Composable
-internal fun MovieContent(ui: MoviePageUi, actions: MoviePageActions, focus: ReturnFocus, okGuard: OkGuard, onBack: () -> Unit) {
+internal fun MovieContent(ui: MoviePageUi, actions: MoviePageActions, focus: ReturnFocus, okGuard: OkGuard, onBack: () -> Unit, listBottom: Dp = 0.dp) {
     val dpad = rememberDpad()
     val row = ui.row
     LaunchedEffect(row != null) {
@@ -366,7 +373,7 @@ internal fun MovieContent(ui: MoviePageUi, actions: MoviePageActions, focus: Ret
             return@Column
         }
         val text = ui.text ?: return@Column
-        LazyColumn(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = listBottom)) {
             item {
                 Row(Modifier.padding(horizontal = 16.dp).padding(top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     Poster(row.posterPath, ui.artwork, 96, 144, imageWidth = 342)

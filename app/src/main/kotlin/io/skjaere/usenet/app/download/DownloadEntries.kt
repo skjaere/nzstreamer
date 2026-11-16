@@ -30,6 +30,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsPropertyKey
@@ -37,6 +38,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -155,15 +157,23 @@ fun TitleDownloadButton(download: TitleDownload?, onEntry: (DownloadEntry) -> Un
     }
 }
 
-/** The Undo bar of a page's download entries ([actions]), at its foot while its offer lasts (L379): TalkBack's time where longer. */
+/**
+ * The Undo bar of a page's download entries ([actions]), at its foot while its offer lasts (L379): TalkBack's time where
+ * longer. [onRoom] is told how much of the page's foot it covers, none once it has gone, so the page's list can end above
+ * it, its last row and footnote scrolled clear of it at any font size.
+ */
 @Composable
-fun DownloadUndoBar(actions: TitleDownloadActions, modifier: Modifier = Modifier) {
+fun DownloadUndoBar(actions: TitleDownloadActions, modifier: Modifier = Modifier, onRoom: (Dp) -> Unit = {}) {
     val offer by actions.offer.collectAsStateWithLifecycle()
     val keepFor = undoTimeout(actions.undoMillis)
-    offer?.let { o ->
-        UndoBar(o.message, null, onUndo = actions::undo, modifier = modifier)
-        LaunchedEffect(o.id) { actions.shown(keepFor) }
+    val density = LocalDensity.current
+    val o = offer
+    if (o == null) {
+        LaunchedEffect(Unit) { onRoom(0.dp) }
+        return
     }
+    UndoBar(o.message, null, onUndo = actions::undo, modifier = modifier.onSizeChanged { onRoom(with(density) { it.height.toDp() }) })
+    LaunchedEffect(o.id) { actions.shown(keepFor) }
 }
 
 /**

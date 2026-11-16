@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -290,6 +291,8 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}) {
     val downloadsHere = downloadsShown()
     // The episode whose Download sheet is up, by season and number.
     var downloading by rememberSaveable { mutableStateOf<Pair<Int, Int>?>(null) }
+    // What the Undo bar covers of the page's foot while it shows: the list ends above it.
+    var undoRoom by remember { mutableStateOf(0.dp) }
     val onDownloadEntry = downloadEntryHandler(vm.downloadActions, onDownload = {}, onDownloads = null)
     // Where Play goes (W11); a TV has no choice to make.
     val playOn by container.playOn.target.collectAsStateWithLifecycle()
@@ -351,7 +354,7 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}) {
                 return@Column
             }
             val progress = ShowProgress.of(d, states.values.toList().toEpisodeWatches(), today, d.recentlyAired())
-            LazyColumn(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = undoRoom)) {
                 item { ShowHeader(d, progress, artwork, nextUpError, playOn, onTv, onRemote) { ref -> vm.playNext(ref) } }
                 item {
                     SeasonChips(
@@ -405,7 +408,7 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}) {
                 }
             }
         }
-        if (downloadsHere) DownloadUndoBar(vm.downloadActions, Modifier.align(Alignment.BottomCenter))
+        if (downloadsHere) DownloadUndoBar(vm.downloadActions, Modifier.align(Alignment.BottomCenter), onRoom = { undoRoom = it })
     }
     // An episode's Download sheet, over the page, once its season is there (again, after a rotation); the sheet ends at
     // once where downloads don't show.

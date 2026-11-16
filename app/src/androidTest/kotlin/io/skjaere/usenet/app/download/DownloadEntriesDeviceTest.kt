@@ -18,7 +18,9 @@ import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -300,6 +302,26 @@ class DownloadEntriesDeviceTest {
         pick("Undo")
         compose.waitTill("episode 2's download back") { drawn("Downloaded · 1.3 GB") && state(2) == "Downloaded" }
         assertEquals(DownloadState.Done, seeds.row(rows.getValue(2).id)?.state)
+    }
+
+    @Test
+    fun theUndoBarLeavesTheLastEpisodeAndTheFootnoteToScrollClearOfIt() {
+        seedSeason()
+        showPage()
+        menuOf(8)
+        pick("Remove download")
+        val bar = hasText("Deleted Harbor Lights S02E08")
+        compose.waitFor(bar)
+        // The page's list to its end, as far as it goes, while the bar shows.
+        val list = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange))
+        list.performScrollToNode(hasText(SHOW_FOOTNOTE_PHONE))
+        repeat(3) { list.performTouchInput { swipeUp() } }
+        compose.waitForIdle()
+        val barTop = compose.onNode(bar).fetchSemanticsNode().boundsInWindow.top
+        val foot = compose.onNode(hasText(SHOW_FOOTNOTE_PHONE)).fetchSemanticsNode().boundsInWindow
+        val last = rowNode(8).boundsInWindow
+        assertTrue("the footnote ($foot) under the bar (top $barTop)", foot.bottom <= barTop + 1f)
+        assertTrue("episode 8's row ($last) under the bar (top $barTop)", last.bottom <= barTop + 1f)
     }
 
     @Test
