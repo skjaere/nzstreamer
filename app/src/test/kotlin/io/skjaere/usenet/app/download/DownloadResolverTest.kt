@@ -1659,6 +1659,33 @@ class DownloadResolverTest {
     }
 
     /**
+     * L340, L431: a season row whose release's attempt had no answer, its NZB kept for it (cut short by a process death or a
+     * pause after its turn's search), takes that release up again first, from what was kept, with no grab, before a copy of
+     * its season's pack that leads: tried first, the pack would count that release as tried with no answer and write over
+     * its NZB, and with one try in all fail the row "No other release to try".
+     */
+    @Test
+    fun `a release whose attempt had no answer goes on from its kept NZB before its season's pack`() = runBlocking<Unit> {
+        keptForSeason(pack)
+        row(single, tried = listOf(single)) { it.withFacts(searched = true) }
+        storage.grabs[ID] = DownloadStorage.Grab(key(single), DownloadStorage.Source(single.nzb, null))
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver(attempts = 1).resolve(ID))
+        assertEquals(single.guid, ready.row.release?.guid)
+        assertEquals(emptyList(), grabbed)
+        assertEquals(emptyList(), searched)
+        assertEquals(listOf(key(single)), stored().tried)
+
+        // Three tries: the same, the pack's copy left for the season's other rows.
+        reset()
+        keptForSeason(pack)
+        row(single, tried = listOf(single)) { it.withFacts(searched = true) }
+        storage.grabs[ID] = DownloadStorage.Grab(key(single), DownloadStorage.Source(single.nzb, null))
+        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(emptyList(), grabbed)
+        assertEquals(listOf(key(single)), stored().tried)
+    }
+
+    /**
      * L398, L443: a turn whose search finds nothing fails "No playable release found"; one whose indexer answered its limit,
      * with nothing found elsewhere, waits as the limit, its wait kept; the indexers out of reach are backed off from, nothing
      * counted and the search still to come; found and none fits, it won't fit; the volume away, it waits for storage.

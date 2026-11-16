@@ -300,7 +300,8 @@ class DownloadResolver(
      * The copy of [row]'s season's pack its turn tries first (L431), where it is a season row's: one kept that leads, not
      * tried by it yet (one whose attempt had no answer, its NZB kept for it, is still to try), whose share of the episode
      * fits the room now and which, ranked alone for downloading with the episode's runtime, isn't above Download size. Null
-     * where none is, or no try is left.
+     * where none is, or no try is left; and while another release's attempt had no answer, its NZB kept for it: that goes on
+     * first from what was kept, as the class says, as a copy tried before it would count it and write over its NZB.
      */
     private suspend fun packFirst(row: Download): DownloadNzbs.Copy? {
         val show = row.showTmdbId ?: return null
@@ -311,9 +312,10 @@ class DownloadResolver(
         val copies = storage.packs(show, season).filter { it.meta.leads && it.meta.key !in tried }
         if (copies.isEmpty()) return null
         val space = storage.space(row.id) ?: return null
-        return copies.firstOrNull { copy ->
+        val copy = copies.firstOrNull { copy ->
             space.fits(ReleaseListMode.Download.need(ranked(copy.meta.candidate), row.seasonEpisodes)) && leads(row, copy.meta.key, copy.meta.candidate)
         }
+        return copy?.takeIf { kept == null || kept == it.meta.key }
     }
 
     /** At most this many releases are tried for a download: three, or "Releases to try" where lower (L340). */
