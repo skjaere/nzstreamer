@@ -67,7 +67,6 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -82,7 +81,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * file a volume, and two singles.
  * - The pack's ⋮ › Choose file: Fetching NZB and Opening in the play sheet's words while it waits, the release under them,
  *   what it does, Cancel; then its videos, largest first with their exact sizes, the episode's named, the finale greyed as
- *   it won't fit; one grab and one prepare, nothing in the NZB store. A pick goes back to the sheet as its Chosen file.
+ *   it won't fit; one grab and one prepare. A pick goes back to the sheet as its Chosen file. (That the app's grab and
+ *   prepare keep nothing in the NZB store is DownloadFileChoiceTest's, as they are seams here.)
  * - Download queues it: the pack first, then the single that fits; its pick, the pack's NZB and the indexer's password
  *   kept beside its marker; the file's own size as its need; the host asked for once.
  * - Cancel while it opens goes back to the list.
@@ -150,9 +150,6 @@ class DownloadFileChoiceDeviceTest {
         assertFalse(exists(hasText("Harbor.Lights.S02E08.mkv") and hasClickAction()))
         assertEquals("one grab", 1, grabs.get())
         assertEquals("one prepare", 1, prepares.get())
-        // Outside the NZB store (DN1's L383): nothing of the pack is kept there while its files are listed.
-        assertNull(container.store.get(PreparedNzb.idFor(PACK_NZB)))
-        assertNull(container.store.stored(PreparedNzb.idFor(PACK_NZB)))
 
         compose.onNode(hasText("Harbor.Lights.S02E04.mkv") and hasClickAction()).performScrollTo().performClick()
         waitFor(hasText(DownloadSheetModel.CHOSEN))

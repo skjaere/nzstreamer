@@ -38,6 +38,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import java.io.File
 import java.time.LocalDate
 import java.util.Locale
 import kotlin.test.assertContentEquals
@@ -332,6 +333,23 @@ class DownloadFileChoiceTest {
         runCurrent()
         assertNull(sheet.choice.value)
         assertEquals(emptyList(), fakes.calls)
+    }
+
+    /**
+     * DN1's L383, L403: the app's Choose file grabs the pack as Resolve grabs (the indexer's, through the coordinator's
+     * fetch) and opens it outside the NZB store: its prepare is the container's preparer, an NzbPreparer over the engine,
+     * which has no store to keep it in, and nothing of the sheet's deps touches the store. Read from the sources, as the
+     * app's deps are the container's, which a JVM test can't build.
+     */
+    @Test
+    fun `the app's Choose file grabs as Resolve does and opens the pack outside the NZB store`() {
+        val deps = File("src/main/kotlin/io/skjaere/usenet/app/download/DownloadSheetModel.kt").readText()
+            .substringAfter("fun of(container: AppContainer").substringBefore("\n        )\n")
+        assertTrue("prepare = { nzb, title, password -> container.preparer.prepare(nzb, title, password) }" in deps, deps)
+        assertTrue("indexerGrab(" in deps && "PlaybackCoordinator.fetchNzb(container, indexer, nzb)" in deps, deps)
+        assertFalse("container.store" in deps, "the sheet's deps touch the NZB store")
+        val app = File("src/main/kotlin/io/skjaere/usenet/app/UsenetApplication.kt").readText()
+        assertTrue("val preparer = NzbPreparer(EnginePrepareBackend(engine))" in app, "the container's preparer is one with no store")
     }
 
     @Test
