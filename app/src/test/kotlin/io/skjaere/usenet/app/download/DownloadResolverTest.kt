@@ -560,6 +560,56 @@ class DownloadResolverTest {
         assertEquals(listOf(pack.guid, pack.guid), opened.map { it.first })
     }
 
+    /**
+     * L394: one prepare of the pack per process. A process that dies as a row of the season is written loses the prepare it
+     * held; the row, opened again from its own NZB, prepares the pack again and holds that prepare for the season's next
+     * row, which takes the pack from the copy with no grab and no prepare of its own.
+     */
+    @Test
+    fun `a row opened again from its own NZB after a process death holds its prepare for the season's next row`() = runBlocking<Unit> {
+        episode(E1, 1, pack, single)
+        episode(E2, 2, pack, single)
+        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E1))
+
+        // A new process as E1 is written: the copies on disk, no prepare held.
+        storage.packs = packs()
+        val resolver = resolver()
+        val reopened = assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(E1))
+        assertEquals("Harbor.Lights.S02E01.1080p.WEB.h264-GRP.mkv", reopened.file.name)
+        dao.setState(E1, DownloadState.Done, null, NOW)
+
+        val next = assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(E2))
+        assertEquals("Harbor.Lights.S02E02.1080p.WEB.h264-GRP.mkv", next.file.name)
+        assertEquals(listOf(pack.guid), grabbed)
+        assertEquals(listOf(pack.guid, pack.guid), opened.map { it.first })
+        assertEquals(1, storage.packWrites, "the copy written once, by the first resolve")
+    }
+
+    /**
+     * L432 at a resolve's success, whichever way it succeeds: a process that died after a row kept its season pack's NZB as
+     * its own and before the copy was written leaves no copy. The row, opened again from its own NZB, keeps it for the
+     * season's rows still to finish then, and holds its prepare: the next row takes both, with no grab and no prepare.
+     */
+    @Test
+    fun `a row opened again from its own NZB of a season pack keeps the copy a process death cut short`() = runBlocking<Unit> {
+        episode(E1, 1, pack, single) { it.resolvedAs(pack, "Harbor.Lights.S02E01.1080p.WEB.h264-GRP.mkv", 1_000_000_001L).copy(tried = listOf(key(pack))) }
+        storage.sources[E1] = DownloadStorage.Source(pack.nzb, null)
+        episode(E2, 2, pack, single)
+        assertNull(storage.packs.find(key(pack)))
+
+        val resolver = resolver()
+        assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(E1))
+        val copy = assertNotNull(storage.packs.find(key(pack)))
+        assertEquals(DownloadNzbs.Meta(key(pack), pack.title, stored(E1).candidates.first(), SHOW, 2, leads = true), copy.meta)
+        assertContentEquals(pack.nzb, copy.source.nzb)
+        dao.setState(E1, DownloadState.Done, null, NOW)
+
+        val next = assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(E2))
+        assertEquals("Harbor.Lights.S02E02.1080p.WEB.h264-GRP.mkv", next.file.name)
+        assertEquals(emptyList(), grabbed)
+        assertEquals(listOf(pack.guid), opened.map { it.first })
+    }
+
     /** A row whose own release ranks first isn't served the season's pack: it grabs its own, and the copy stays for the rest. */
     @Test
     fun `a row whose single ranks first grabs the single and leaves the season's copy`() = runBlocking<Unit> {

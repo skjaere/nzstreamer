@@ -97,9 +97,9 @@ import kotlin.time.Duration.Companion.seconds
  * A season pack is fetched once for its season (L394, L432): resolved for one episode while another row of the show's
  * season is still to finish, its NZB is kept once for the season ([Storage.keepPack]), and a later row's attempt of it takes
  * that copy rather than grab it again, after the NZB kept for an attempt with no answer and before the indexer, and keeps
- * it for its attempt as a grab is kept. The pack
- * as this process last prepared it is kept too ([Storage.holdPrepare]), and handed back for that NZB rather than prepared
- * again ([heldPreparer]); a new process prepares it again from the copy, with no grab.
+ * it for its attempt as a grab is kept. The pack as this process last prepared it is kept too ([Storage.holdPrepare]), and
+ * handed back for that NZB rather than prepared again ([heldPreparer]); a new process prepares it again, from the copy or
+ * from a row's own NZB as it opens again, once, with no grab.
  *
  * Its log lines, the pipeline's and the memory of releases tried's among them (which name a play's release by its title),
  * name the download by its id and a release by its place among the row's ([naming]), never by the release's name.
@@ -225,8 +225,9 @@ class DownloadResolver(
     /**
      * [row] opened again from its own NZB (L346): prepared from the copy, no grab, its file found by its name (a position
      * can name another file once prepared again). The same size goes on from the safe offset; another starts again from
-     * its first byte, as nzb-streamer now lists the file otherwise. Null where it has no copy, or the copy no longer gives
-     * the file: then its candidates are resolved, the copy dropped first so that is never tried again.
+     * its first byte, as nzb-streamer now lists the file otherwise. A season pack's NZB is kept for its season, and its
+     * prepare held, as at a resolve's success ([keepPack]). Null where it has no copy, or the copy no longer gives the file:
+     * then its candidates are resolved, the copy dropped first so that is never tried again.
      */
     private suspend fun reopened(row: Download): Resolution? {
         val release = row.release ?: return null
@@ -253,9 +254,13 @@ class DownloadResolver(
             storage.dropSource(row.id)
             return null
         }
+        // A season pack is kept for its season and its prepare held, as at any resolve's success: after a process death, the
+        // season's next row takes both rather than grab or prepare it again.
+        suspend fun ready(kept: Download) =
+            Resolution.Ready(kept, prepared, file).also { keepPack(kept, Replay.candidate(release), prepared, source.nzb, source.password, copied = false) }
         if (file.size == size) {
             log.info("download {}: opened again from its own NZB at {} of {} bytes", row.id, row.safeOffset, size)
-            return Resolution.Ready(row, prepared, file)
+            return ready(row)
         }
         // What was written can't be told to be this file's: it starts again from its first byte.
         log.info("download {}: its file is listed at {} bytes now, not {}: starting again from 0", row.id, file.size, size)
@@ -263,7 +268,7 @@ class DownloadResolver(
             release = release.copy(fileIndex = file.index, fileSize = file.size), size = file.size, updatedAt = clock.now(),
         ) ?: return waiting(row.id, DownloadHostRules.STORAGE_UNAVAILABLE)
         downloads.update(again)
-        return room(again) ?: Resolution.Ready(again, prepared, file)
+        return room(again) ?: ready(again)
     }
 
     /**
