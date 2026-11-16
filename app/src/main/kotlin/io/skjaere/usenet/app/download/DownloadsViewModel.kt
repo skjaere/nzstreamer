@@ -54,8 +54,9 @@ import org.slf4j.LoggerFactory
  * download whose releases a choice replaces, its own room counted free); [network] and [online] the default network (a
  * metered one is mobile data); [restricted] whether Android limits the app in the background (L361). The runner's calls,
  * the host's schedule from the visible app (L335), TMDB's lookup of an episode ([lookUp]), the search a choice runs
- * ([search]: the Download sheet's), and a finished download's play and watched mark. [undoMillis]: the Undo bar's time
- * before TalkBack's own (L379).
+ * ([search]: the Download sheet's), and a finished download's play and watched mark. [work]: the app's scope, where the
+ * runner's calls and the marks run, so one asked as the page goes (Back as a download stops at its safe offset) is still
+ * made, as the title pages' are. [undoMillis]: the Undo bar's time before TalkBack's own (L379).
  */
 data class DownloadsDeps(
     val items: Flow<List<DownloadRunner.Item>>,
@@ -80,6 +81,7 @@ data class DownloadsDeps(
     val get: suspend (id: String) -> Download?,
     val play: (Download) -> Unit,
     val mark: suspend (Download, watched: Boolean) -> Unit,
+    val work: CoroutineScope,
     val undoMillis: Long = UNDO_MS,
 ) {
     /**
@@ -132,6 +134,7 @@ data class DownloadsDeps(
             get = container.data.downloads::get,
             play = { row -> playHere(container, row) },
             mark = { row, watched -> mark(container, row, watched) },
+            work = container.appScope,
         )
 
         /**
@@ -173,9 +176,10 @@ data class DownloadsDeps(
 /**
  * Select mode and the Undo bar of the Downloads page and a show's downloads (L379): what is selected, by row key; Delete
  * removes every download the selected rows stand for, hidden at once, their files going once the bar has gone; Undo
- * brings them back. One offer at a time: a new one makes the last final.
+ * brings them back. One offer at a time: a new one makes the last final. The bar is the page's ([scope]); the runner's
+ * calls run in the app's ([DownloadsDeps.work]), so a Delete asked as the page goes still stops and hides its downloads.
  */
-class DownloadEdits(private val deps: DownloadsDeps, private val scope: CoroutineScope) {
+class DownloadEdits(private val deps: DownloadsDeps, scope: CoroutineScope) {
     private val _selection = MutableStateFlow<Set<String>?>(null)
 
     /** The keys selected, or null outside select mode. */
@@ -209,7 +213,7 @@ class DownloadEdits(private val deps: DownloadsDeps, private val scope: Coroutin
         if (downloads.isEmpty()) return
         _selection.value = null
         undo.offer(DownloadsPage.deleted(downloads), downloads.map { it.id })
-        scope.launch { logged("remove ${downloads.size} downloads") { deps.remove(downloads.map { it.id }, keepFor + UNDO_SLACK_MILLIS) } }
+        deps.work.launch { logged("remove ${downloads.size} downloads") { deps.remove(downloads.map { it.id }, keepFor + UNDO_SLACK_MILLIS) } }
     }
 
     /**
@@ -218,7 +222,7 @@ class DownloadEdits(private val deps: DownloadsDeps, private val scope: Coroutin
      */
     fun undo() {
         val ids = undo.take() ?: return
-        scope.launch {
+        deps.work.launch {
             logged("bring ${ids.size} downloads back") {
                 deps.undoRemove(ids)
                 deps.schedule(ScheduleCause.Resume)
@@ -323,8 +327,9 @@ class DownloadsViewModel(
 
     fun mark(row: Download, watched: Boolean) = act("mark a download's title") { deps.mark(row, watched) }
 
+    /** Runs [action], one of the runner's calls, in the app's scope: one asked as the page goes is still made. */
     private fun act(what: String, action: suspend () -> Unit) {
-        viewModelScope.launch { logged(what, action) }
+        deps.work.launch { logged(what, action) }
     }
 
     private companion object {
@@ -352,7 +357,7 @@ class DownloadsShowViewModel(private val deps: DownloadsDeps, val showTmdbId: In
     fun play(row: Download) = deps.play(row)
 
     fun mark(row: Download, watched: Boolean) {
-        viewModelScope.launch { logged("mark a downloaded episode") { deps.mark(row, watched) } }
+        deps.work.launch { logged("mark a downloaded episode") { deps.mark(row, watched) } }
     }
 }
 

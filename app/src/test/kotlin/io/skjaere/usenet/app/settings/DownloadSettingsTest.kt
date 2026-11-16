@@ -12,14 +12,17 @@ import io.skjaere.usenet.data.PlaybackPrefs
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.releases.DownloadSize
 import io.skjaere.usenet.releases.StaticDeviceCapabilities
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -211,13 +214,16 @@ class DownloadSettingsTest {
     }
 
     /** The page's model over seams: the settings in a flow, the schedules and Delete all recorded, Android's answers set. */
-    private inner class Seams {
+    private inner class Seams(work: CoroutineScope) {
         val prefs = MutableStateFlow(DownloadPrefs())
         val rows = MutableStateFlow(listOf(done("a", 7_400_000_000)))
         val events = mutableListOf<String>()
         var notifications = false
         var sdCard = false
         var spaceReads = 0
+
+        /** What Delete all waits for before the runner has done it: the running download stopping. */
+        var deleting: suspend () -> Unit = {}
 
         val deps = DownloadSettingsDeps(
             rows = rows,
@@ -241,11 +247,13 @@ class DownloadSettingsTest {
             // The host reads the needs as it is scheduled (JobPlan.of): what it would have read is recorded.
             schedule = { cause -> events += "schedule $cause unmetered=${prefs.value.unmeteredOnly} charging=${prefs.value.whileCharging}" },
             deleteAll = {
+                deleting()
                 events += "delete all"
                 rows.value = emptyList()
             },
             notificationsOn = { notifications },
             sdCard = { sdCard },
+            work = work,
         )
     }
 
@@ -256,7 +264,8 @@ class DownloadSettingsTest {
     private fun test(body: suspend TestScope.(Seams, CoroutineScope) -> Unit) = runTest {
         val job = Job(coroutineContext[Job])
         try {
-            body(Seams(), CoroutineScope(coroutineContext + job))
+            val work = CoroutineScope(coroutineContext + job)
+            body(Seams(work), work)
         } finally {
             job.cancel()
         }
@@ -307,6 +316,21 @@ class DownloadSettingsTest {
         model.shown()
         assertTrue(model.notificationsOn.value)
         assertTrue(model.sdCard.value)
+    }
+
+    @Test
+    fun `Delete all asked as the page goes is still made, the runner's call being the app's own work`() = test { seams, _ ->
+        val stopped = CompletableDeferred<Unit>()
+        seams.deleting = { stopped.await() }
+        val page = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
+        val model = DownloadSettingsModel(seams.deps, page)
+        model.deleteAll()
+        runCurrent()
+        // Back once confirmed: the page's view model is cleared while the runner stops the download under way.
+        page.cancel()
+        stopped.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(listOf("delete all"), seams.events, "every download deleted, as the confirm said")
     }
 
     /** Keeps [model]'s flows collected, as the page does while it shows. */

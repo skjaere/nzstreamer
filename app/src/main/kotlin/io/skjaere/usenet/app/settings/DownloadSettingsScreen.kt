@@ -243,6 +243,8 @@ data class DownloadSettingsDeps(
     val deleteAll: suspend () -> Unit,
     val notificationsOn: () -> Boolean,
     val sdCard: () -> Boolean,
+    /** The app's scope, where Delete all runs: asked as the page goes, it still deletes every download. */
+    val work: CoroutineScope,
 ) {
     companion object {
         /** The app's: the runner's rows and Delete all, the downloads' storage, the settings, the hosts, and Android's answers. */
@@ -257,6 +259,7 @@ data class DownloadSettingsDeps(
             deleteAll = container.downloads::deleteAll,
             notificationsOn = { notificationsOn(context) },
             sdCard = { DownloadSettings.sdCardShown(volumes(context)) },
+            work = container.appScope,
         )
 
         /** Whether Android shows the app's notifications, and the Downloads channel's, once it is made, isn't turned off. */
@@ -315,8 +318,11 @@ class DownloadSettingsModel(private val deps: DownloadSettingsDeps, private val 
 
     fun setSizeCap(gbPerHour: Int?): Job = scope.launch { logged("save the download size") { deps.setSizeCap(gbPerHour) } }
 
-    /** Delete all, once its confirm is answered (L379): every download, the one under way stopped. */
-    fun deleteAll(): Job = scope.launch { logged("delete all downloads") { deps.deleteAll() } }
+    /**
+     * Delete all, once its confirm is answered (L379): every download, the one under way stopped. In the app's scope, so
+     * Back at once (the one under way can take a moment to stop) leaves nothing half deleted.
+     */
+    fun deleteAll(): Job = deps.work.launch { logged("delete all downloads") { deps.deleteAll() } }
 
     /** Saves a switch, then schedules the host with its new needs, read as it is scheduled. */
     private fun switched(what: String, save: suspend () -> Unit): Job = scope.launch {

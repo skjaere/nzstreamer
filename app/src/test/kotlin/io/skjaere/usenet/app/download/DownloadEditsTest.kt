@@ -1,5 +1,10 @@
 package io.skjaere.usenet.app.download
 
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import io.skjaere.usenet.app.NetworkNow
 import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
 import io.skjaere.usenet.app.play.EpisodePlay
@@ -14,12 +19,20 @@ import io.skjaere.usenet.releases.StaticDeviceCapabilities
 import io.skjaere.usenet.data.PlaybackPrefs
 import io.skjaere.usenet.search.FindResult
 import io.skjaere.usenet.search.FinderEvent
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.time.LocalDate
 import kotlin.test.assertEquals
@@ -31,6 +44,9 @@ import kotlin.test.assertEquals
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class DownloadEditsTest {
+    @AfterEach
+    fun main() = Dispatchers.resetMain()
+
     @Test
     fun `Undo brings the downloads back, then asks for the host from here, as removing the running one ended its walk`() = runTest {
         val fakes = PageFakes()
@@ -41,6 +57,39 @@ class DownloadEditsTest {
         edits.undo()
         runCurrent()
         assertEquals(listOf("remove [run] 11000", "undo [run]", "schedule ${ScheduleCause.Resume}"), fakes.calls, "back in the queue before the host is asked")
+    }
+
+    @Test
+    fun `a Delete asked as the page goes is still made, the runner's calls being the app's own work`() = runTest {
+        val fakes = PageFakes()
+        // The running download stops at its safe offset first, which takes a moment.
+        val stopped = CompletableDeferred<Unit>()
+        fakes.removing = { stopped.await() }
+        val page = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
+        val edits = DownloadEdits(fakes.deps(backgroundScope), page)
+        edits.remove(listOf(episode("run", 4, DownloadState.Running)), keepFor = 10_000)
+        runCurrent()
+        // Back: the page's view model is cleared while the runner stops the download.
+        page.cancel()
+        stopped.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("remove [run] 11000"), fakes.calls, "hidden and deleted after its Undo, not left running")
+    }
+
+    @Test
+    fun `a Pause asked as the page goes still holds the queue`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fakes = PageFakes()
+        val stopped = CompletableDeferred<Unit>()
+        fakes.pausing = { stopped.await() }
+        val store = ViewModelStore()
+        val vm = ViewModelProvider(store, viewModelFactory { initializer { DownloadsViewModel(fakes.deps(backgroundScope), SavedStateHandle()) } })[DownloadsViewModel::class.java]
+        vm.pause()
+        runCurrent()
+        store.clear()
+        stopped.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("pause"), fakes.calls)
     }
 
     internal companion object {
@@ -59,6 +108,10 @@ internal class PageFakes {
     val rows = mutableMapOf<String, Download>()
     val online = MutableStateFlow(true)
 
+    /** What a Pause and a Remove wait for before the runner has done them: the running download stopping. */
+    var pausing: suspend () -> Unit = {}
+    var removing: suspend () -> Unit = {}
+
     fun deps(outlive: CoroutineScope) = DownloadsDeps(
         items = flowOf(emptyList()),
         space = { DownloadSpace(available = 20_000_000_000, used = 0, queued = 0) },
@@ -69,9 +122,15 @@ internal class PageFakes {
         episodeStates = { flowOf(emptyMap()) },
         movieWatches = flowOf(emptyList()),
         showArtwork = flowOf(true),
-        pause = { calls += "pause" },
+        pause = {
+            pausing()
+            calls += "pause"
+        },
         resume = { calls += "resume" },
-        remove = { ids, keepFor -> calls += "remove $ids $keepFor" },
+        remove = { ids, keepFor ->
+            removing()
+            calls += "remove $ids $keepFor"
+        },
         undoRemove = { ids -> calls += "undo $ids" },
         move = { id, up -> calls += "move $id ${if (up) "up" else "down"}" },
         replace = { id, _ -> calls += "replace $id" },
@@ -100,6 +159,7 @@ internal class PageFakes {
         get = { rows[it] },
         play = { calls += "play ${it.id}" },
         mark = { row, watched -> calls += "mark ${row.id} $watched" },
+        work = outlive,
         undoMillis = 10_000,
     )
 }
