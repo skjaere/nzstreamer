@@ -48,8 +48,8 @@ import java.net.Socket
  * A release the two-phase pairs download from the mock NNTP server, its articles posted there beforehand with
  * tools/mock-seed (the README's device tests): its NZB and its file's SHA-256, androidTest assets ([nzb],
  * [sha256Asset]); the release's invented name ([release]); the file's exact [size]; and what each row is a download of
- * ([target]). Its bytes are seeded, not a video, and the device doesn't have them: the file is told by its SHA-256
- * alone, and Resolve runs no track probe for it, which no player could read.
+ * ([target]). Of a release of several files, one of them: the asset lists each file's SHA-256 by its name, as sha256sum
+ * does, and [file] names this one's. The device doesn't have the files: each is told by its SHA-256 alone.
  */
 class PairFixture(
     val nzb: String,
@@ -57,12 +57,20 @@ class PairFixture(
     val release: String,
     val size: Long,
     val target: DownloadTarget,
+    val file: String? = null,
 ) {
     /** The NZB's bytes, as an indexer would hand them over. */
     fun nzbBytes(): ByteArray = asset(nzb)
 
-    /** The file's SHA-256, in lowercase hex. */
-    val sha256: String by lazy { asset(sha256Asset).decodeToString().trim() }
+    /** The file's SHA-256, in lowercase hex: the asset's one, or its line for [file]. */
+    val sha256: String by lazy {
+        val listed = asset(sha256Asset).decodeToString()
+        if (file == null) {
+            listed.trim()
+        } else {
+            listed.lines().firstOrNull { it.substringAfter("  ") == file }?.substringBefore(' ') ?: throw AssertionError("$sha256Asset lists no $file")
+        }
+    }
 
     private fun asset(name: String) = InstrumentationRegistry.getInstrumentation().context.assets.open(name).use { it.readBytes() }
 
@@ -71,7 +79,8 @@ class PairFixture(
          * 48 MB (10^6) of seeded bytes as Harbor Lights S03E07, an invented release apart from the fake indexer's
          * catalog, in 64 articles of 750,000 bytes (app/src/androidTest/fixtures/pair-download.py makes it). An
          * episode, so Resolve's picker finds the file by its name, S03E07, as it would a real one: every row is a
-         * download of that episode, as an episode's picker takes no file named for another.
+         * download of that episode, as an episode's picker takes no file named for another. Seeded bytes, not a video:
+         * Resolve runs no track probe for it, which no player could read.
          */
         val HARBOR_LIGHTS = PairFixture(
             nzb = "pair-download.nzb",
@@ -79,6 +88,32 @@ class PairFixture(
             release = "Harbor.Lights.S03E07.1080p.WEB.h264-KESTREL",
             size = 48_000_000,
             target = DownloadTarget.episode(HARBOR_LIGHTS_SHOW, "Harbor Lights", 3, 7, seasonEpisodes = 10, episodeName = "The Breakwater"),
+        )
+
+        /**
+         * An invented season pack of Harbor Lights' season 3 holding two episodes, S03E07 ([PACK_E07]) and S03E08
+         * ([PACK_E08]), each a generated video of a minute (H.264 and AAC in Matroska, a test pattern and a tone, about
+         * 24 MB) in 32 articles, both in one NZB (app/src/androidTest/fixtures/pair-pack.sh makes and posts them). Real
+         * videos, so the app's own track probe reads them in the app's own process, as it would a real pack's.
+         */
+        const val PACK = "Harbor.Lights.S03.1080p.WEB.h264-KESTREL"
+
+        val PACK_E07 = PairFixture(
+            nzb = "pair-pack.nzb",
+            sha256Asset = "pair-pack.sha256",
+            release = PACK,
+            size = 23_759_835,
+            target = DownloadTarget.episode(HARBOR_LIGHTS_SHOW, "Harbor Lights", 3, 7, seasonEpisodes = 10, episodeName = "The Breakwater"),
+            file = "Harbor.Lights.S03E07.1080p.WEB.h264-KESTREL.mkv",
+        )
+
+        val PACK_E08 = PairFixture(
+            nzb = "pair-pack.nzb",
+            sha256Asset = "pair-pack.sha256",
+            release = PACK,
+            size = 23_702_833,
+            target = DownloadTarget.episode(HARBOR_LIGHTS_SHOW, "Harbor Lights", 3, 8, seasonEpisodes = 10, episodeName = "Slack Tide"),
+            file = "Harbor.Lights.S03E08.1080p.WEB.h264-KESTREL.mkv",
         )
 
         private const val HARBOR_LIGHTS_SHOW = 900_973
@@ -108,6 +143,9 @@ class PairFixture(
  * the user's stop would, and reconcile would hold a row it left under way before the pair's step. A host walking the
  * queue reopens each from its copy (DownloadResolver's reopen): no grab, no indexer. Should the copy no longer open,
  * Resolve falls back on the candidate, whose indexer was never saved: the row fails with no grab.
+ *
+ * A pair whose rows are of another kind seeds them in the same frame, with its own read-back ([SeasonPackSeed]: a
+ * season pack's copy and two rows of its season, which the host resolves).
  *
  * It reads back what it seeded and fails only where the seeding didn't take; what it found before and left after go out
  * as [PairRecord]'s lines. The settings stay as it left them for the Check: the pairs' runner installs the app afresh
@@ -151,11 +189,32 @@ object PairSeed {
     /** Seeds [plan] as the object says; the rows as seeded, in the queue's order. */
     suspend fun seed(plan: Plan = Plan()): List<Download> {
         require(plan.rows >= 1) { "A pair needs a download" }
+        val nzb = plan.fixture.nzbBytes()
+        return seed(
+            listOf(plan.fixture), plan.throttle, plan.serviceHost,
+            queue = { container -> (0 until plan.rows).map { n -> resolved(container, plan.fixture, n, nzb) } },
+            readBack = { container, _ -> resolvedRows(container, plan.fixture.size, nzb) },
+        )
+    }
+
+    /**
+     * What every pair's Start seeds, as the object says, around the rows [queue] seeds (with whatever else they need): the
+     * downloads emptied first, the mock alone, the switches off, the debrid seeding held off and the service host's override
+     * where [serviceHost]; after the rows, the throttle at [throttle]. Read back after: what [readBack] finds didn't take
+     * of the rows, and what didn't of the rest. The record compares each row's file with its episode's of [fixtures].
+     */
+    internal suspend fun seed(
+        fixtures: List<PairFixture>,
+        throttle: Long,
+        serviceHost: Boolean,
+        queue: suspend (AppContainer) -> List<Download>,
+        readBack: suspend (AppContainer, List<Download>) -> List<String>,
+    ): List<Download> {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val container = context.container
         assumeFalse("downloads never run on a TV (L369)", container.television)
         // What the boundary before left, before any of it goes. Reconciled first: the app's start does that anyway.
-        PairRecord.record("found", plan.fixture, strict = false)
+        PairRecord.record("found", fixtures, strict = false)
         if (!reachable()) throw AssertionError("the mock NNTP server isn't reachable at $MOCK_HOST:$MOCK_PORT")
         // The debug build's own seeding (its provider, while none was ever saved) first, so it never lands after the mock.
         withTimeout(SETUP_MILLIS) { container.devSettingsSaved.await() }
@@ -163,12 +222,11 @@ object PairSeed {
         val mock = mockAlone(container)
         debridHeldOff(container)
         val folder = File(context.filesDir, DownloadStorage.DIR).apply { mkdirs() }
-        if (plan.serviceHost) File(folder, DownloadDebug.HOST).writeText("service")
-        val nzb = plan.fixture.nzbBytes()
-        val rows = (0 until plan.rows).map { n -> resolved(container, plan.fixture, n, nzb) }
-        File(folder, DownloadDebug.THROTTLE).writeText("${plan.throttle}")
-        val problems = readBack(container, plan, rows, mock, nzb)
-        PairRecord.record("seeded", plan.fixture, strict = false)
+        if (serviceHost) File(folder, DownloadDebug.HOST).writeText("service")
+        val rows = queue(container)
+        File(folder, DownloadDebug.THROTTLE).writeText("$throttle")
+        val problems = readBack(container, rows) + readBackAround(container, rows, throttle, serviceHost, mock)
+        PairRecord.record("seeded", fixtures, strict = false)
         if (problems.isNotEmpty()) throw AssertionError("the seeding didn't take: ${problems.joinToString("; ")}")
         return rows
     }
@@ -255,17 +313,17 @@ object PairSeed {
         return dao.get(row.id) ?: throw AssertionError("download ${row.id} is gone")
     }
 
-    /** What didn't take of [plan], read back from the table, the folders, the seams, the settings and the engine. */
-    private suspend fun readBack(container: AppContainer, plan: Plan, rows: List<Download>, mock: String, nzb: ByteArray): List<String> {
+    /**
+     * What didn't take of the table's rows, each a download of the fixture of [size] bytes resolved ([resolved]) and waiting
+     * its turn, its own NZB [nzb].
+     */
+    private suspend fun resolvedRows(container: AppContainer, size: Long, nzb: ByteArray): List<String> {
         val problems = mutableListOf<String>()
         fun expect(ok: Boolean, what: () -> String) {
             if (!ok) problems += what()
         }
         val storage = container.downloadStorage
-        val size = plan.fixture.size
-        val all = container.data.downloads.all().first()
-        expect(all.map { it.id } == rows.map { it.id }) { "the table holds ${all.size} rows, not the ${rows.size} seeded" }
-        all.forEach { row ->
+        container.data.downloads.all().first().forEach { row ->
             expect(row.state == DownloadState.Queued && row.reason == null) { "download ${row.id} is ${row.state} (${row.reason}), not Queued" }
             expect(row.release != null && row.fileName != null) { "download ${row.id} keeps no release or file" }
             expect(row.size == size) { "download ${row.id} is kept at ${row.size} bytes, not $size" }
@@ -275,11 +333,26 @@ object PairSeed {
             expect(copy != null && copy.nzb.contentEquals(nzb) && copy.password == null) { "download ${row.id}'s own NZB isn't the fixture's, with no password" }
             expect(storage.grab(row.id) == null) { "download ${row.id} keeps a grab's NZB beside its own" }
         }
+        return problems
+    }
+
+    /**
+     * What didn't take of the rest, read back from the table, the seams, the settings and the engine: the table [rows]
+     * alone, all of them able to run in their order, the writer held to [throttle], the [serviceHost] override, the [mock]
+     * alone, the switches off, and the debug build's debrid seeding held off.
+     */
+    private suspend fun readBackAround(container: AppContainer, rows: List<Download>, throttle: Long, serviceHost: Boolean, mock: String): List<String> {
+        val problems = mutableListOf<String>()
+        fun expect(ok: Boolean, what: () -> String) {
+            if (!ok) problems += what()
+        }
+        val all = container.data.downloads.all().first()
+        expect(all.map { it.id } == rows.map { it.id }) { "the table holds ${all.size} rows, not the ${rows.size} seeded" }
         val runnable = container.downloads.runnable().map { it.id }
         expect(runnable == rows.map { it.id }) { "${runnable.size} downloads can run, not the ${rows.size} seeded" }
         val debug = container.downloadDebug
-        expect(debug.throttle == plan.throttle) { "the throttle reads ${debug.throttle}, not ${plan.throttle}" }
-        expect(debug.serviceHost == plan.serviceHost) { "the host override is ${if (debug.serviceHost) "there" else "missing"}" }
+        expect(debug.throttle == throttle) { "the throttle reads ${debug.throttle}, not $throttle" }
+        expect(debug.serviceHost == serviceHost) { "the host override is ${if (debug.serviceHost) "there" else "missing"}" }
         val usable = container.settings.usableProviders().map { it.record.id }
         expect(usable == listOf(mock)) { "${usable.size} providers usable, not the mock alone" }
         expect(container.engine.configuredProviders.value == listOf(mock)) { "the engine isn't on the mock alone" }
@@ -333,8 +406,10 @@ class PairRun : TestRule {
  *   host, the override, the throttle, the boot receiver's state, and the network;
  * - the trace (`files/downloads/.trace`), line by line as the app wrote it, those from this process's start on marked
  *   (this process's own start reconciles first, and may judge a row the boundary before left under way);
- * - each row's state, stop words, safe offset and size; each file's size, and whether its SHA-256 is the fixture's;
- * - what both `downloads/` folders hold, by name and size;
+ * - each row's state, stop words, safe offset and size; each file's size, and whether its SHA-256 is its episode's
+ *   fixture's;
+ * - what both `downloads/` folders hold, by name and size, and the season packs' copies (`.packs/`), each by its folder's
+ *   first 8 hex digits, with which of its files it has;
  * - Android's records of the app's ended processes (getHistoricalProcessExitReasons, 20 at most), each with how the
  *   app's reconcile reads it (DownloadExit.byUser), a description only where it is the system's own plain words;
  * - the pending jobs of every namespace: id, user-initiated or not, network, persisted, charging, bytes, pending
@@ -360,10 +435,11 @@ object PairRecord {
     }
 
     /**
-     * Says everything the object lists, after a "phase [phase]" line, the app's start in this process reconciled first.
-     * With [strict], fails at the end for each part it couldn't read; never for what it read.
+     * Says everything the object lists, after a "phase [phase]" line, the app's start in this process reconciled first,
+     * each row's file compared with its episode's of [fixtures]. With [strict], fails at the end for each part it couldn't
+     * read; never for what it read.
      */
-    suspend fun record(phase: String, fixture: PairFixture = PairFixture.HARBOR_LIGHTS, strict: Boolean = true) {
+    suspend fun record(phase: String, fixtures: List<PairFixture> = listOf(PairFixture.HARBOR_LIGHTS), strict: Boolean = true) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val container = context.container
         val unread = mutableListOf<String>()
@@ -383,8 +459,9 @@ object PairRecord {
         part("reconcile") { container.downloads.reconcile() }
         part("settings") { settings(context, container) }
         part("trace") { trace(context) }
-        part("rows") { rows(container, fixture) }
+        part("rows") { rows(container, fixtures) }
         part("folders") { folders(context) }
+        part("packs") { packs(context) }
         part("exits") { exits(context) }
         part("jobs") { jobs(context) }
         if (strict && unread.isNotEmpty()) throw AssertionError("not read: ${unread.joinToString()}")
@@ -462,7 +539,7 @@ object PairRecord {
         }
     }
 
-    private suspend fun rows(container: AppContainer, fixture: PairFixture) {
+    private suspend fun rows(container: AppContainer, fixtures: List<PairFixture>) {
         val storage = container.downloadStorage
         val rows = container.data.downloads.all().first()
         if (rows.isEmpty()) say("rows none")
@@ -486,6 +563,7 @@ object PairRecord {
                 video == null -> say("file id=${row.id} volume=away")
                 files.isEmpty() -> say("file id=${row.id} none")
             }
+            val fixture = fixtures.firstOrNull { it.target.watchKey == row.watchKey } ?: fixtures.first()
             files.forEach { file ->
                 val matches = file.length() == fixture.size && DownloadFixtures.sha256(file) == fixture.sha256
                 say("file id=${row.id} name=${name(file.name)} bytes=${file.length()} sha256-matches=$matches fixture-bytes=${fixture.size}")
@@ -499,6 +577,17 @@ object PairRecord {
                 val entries = dir?.listFiles().orEmpty().sortedBy { it.name }.map { "${name(it.name)}${if (it.isDirectory) "/" else ":${it.length()}"}" }
                 say("folder $where ${if (dir == null) "away" else entries.joinToString(" ").ifEmpty { "empty" }}")
             }
+    }
+
+    /** The season packs' copies, each by its folder's first 8 hex digits (never its key), and which of its files it has. */
+    private fun packs(context: Context) {
+        val copies = File(context.filesDir, DownloadNzbs.PATH).listFiles().orEmpty().sortedBy { it.name }
+        if (copies.isEmpty()) say("packs none")
+        copies.forEach { copy ->
+            val has = { file: String -> File(copy, file).isFile }
+            val name = copy.name.takeIf { HEX.matches(it) }?.take(8) ?: "(a name of another shape)"
+            say("pack $name meta=${has(DownloadNzbs.META)} nzb=${has(DownloadNzbs.NZB)} password=${if (has(DownloadNzbs.PASSWORD)) "set" else "none"}")
+        }
     }
 
     private fun exits(context: Context) {
@@ -585,6 +674,9 @@ object PairRecord {
     private val ID = Regex(ID_SHAPE)
 
     private val NAME = Regex("[A-Za-z0-9._~-]{1,64}")
+
+    /** A season pack's copy's folder: the SHA-256 of its release's key, in hex. */
+    private val HEX = Regex("[0-9a-f]{64}")
 
     private fun words(all: Iterable<String>) = all.joinToString("|", "(", ")")
 

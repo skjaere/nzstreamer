@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">
+<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
+  <file poster="seed@mock" date="1794830336" subject="[1/1] - &quot;Harbor.Lights.S03E07.1080p.WEB.h264-KESTREL.mkv&quot; yEnc (1/32)">
+    <groups>
+      <group>alt.binaries.test</group>
+    </groups>
+    <segments>
+      <segment bytes="773887" number="1">seed-41ec87ec-0-1@mock</segment>
+      <segment bytes="773933" number="2">seed-41ec87ec-0-2@mock</segment>
+      <segment bytes="774066" number="3">seed-41ec87ec-0-3@mock</segment>
+      <segment bytes="773883" number="4">seed-41ec87ec-0-4@mock</segment>
+      <segment bytes="773874" number="5">seed-41ec87ec-0-5@mock</segment>
+      <segment bytes="773935" number="6">seed-41ec87ec-0-6@mock</segment>
+      <segment bytes="773886" number="7">seed-41ec87ec-0-7@mock</segment>
+      <segment bytes="774018" number="8">seed-41ec87ec-0-8@mock</segment>
+      <segment bytes="773927" number="9">seed-41ec87ec-0-9@mock</segment>
+      <segment bytes="773873" number="10">seed-41ec87ec-0-10@mock</segment>
+      <segment bytes="773772" number="11">seed-41ec87ec-0-11@mock</segment>
+      <segment bytes="773999" number="12">seed-41ec87ec-0-12@mock</segment>
+      <segment bytes="773829" number="13">seed-41ec87ec-0-13@mock</segment>
+      <segment bytes="773915" number="14">seed-41ec87ec-0-14@mock</segment>
+      <segment bytes="773759" number="15">seed-41ec87ec-0-15@mock</segment>
+      <segment bytes="773970" number="16">seed-41ec87ec-0-16@mock</segment>
+      <segment bytes="773961" number="17">seed-41ec87ec-0-17@mock</segment>
+      <segment bytes="773863" number="18">seed-41ec87ec-0-18@mock</segment>
+      <segment bytes="773798" number="19">seed-41ec87ec-0-19@mock</segment>
+      <segment bytes="773969" number="20">seed-41ec87ec-0-20@mock</segment>
+      <segment bytes="774021" number="21">seed-41ec87ec-0-21@mock</segment>
+      <segment bytes="773949" number="22">seed-41ec87ec-0-22@mock</segment>
+      <segment bytes="773875" number="23">seed-41ec87ec-0-23@mock</segment>
+      <segment bytes="773683" number="24">seed-41ec87ec-0-24@mock</segment>
+      <segment bytes="773990" number="25">seed-41ec87ec-0-25@mock</segment>
+      <segment bytes="773709" number="26">seed-41ec87ec-0-26@mock</segment>
+      <segment bytes="773959" number="27">seed-41ec87ec-0-27@mock</segment>
+      <segment bytes="773786" number="28">seed-41ec87ec-0-28@mock</segment>
+      <segment bytes="774014" number="29">seed-41ec87ec-0-29@mock</segment>
+      <segment bytes="773721" number="30">seed-41ec87ec-0-30@mock</segment>
+      <segment bytes="773948" number="31">seed-41ec87ec-0-31@mock</segment>
+      <segment bytes="526241" number="32">seed-41ec87ec-0-32@mock</segment>
+    </segments>
+  </file>
+  <file poster="seed@mock" date="1794830338" subject="[1/1] - &quot;Harbor.Lights.S03E08.1080p.WEB.h264-KESTREL.mkv&quot; yEnc (1/32)">
+    <groups>
+      <group>alt.binaries.test</group>
+    </groups>
+    <segments>
+      <segment bytes="773858" number="1">seed-fefe0fc4-0-1@mock</segment>
+      <segment bytes="774271" number="2">seed-fefe0fc4-0-2@mock</segment>
+      <segment bytes="773985" number="3">seed-fefe0fc4-0-3@mock</segment>
+      <segment bytes="774211" number="4">seed-fefe0fc4-0-4@mock</segment>
+      <segment bytes="773931" number="5">seed-fefe0fc4-0-5@mock</segment>
+      <segment bytes="773874" number="6">seed-fefe0fc4-0-6@mock</segment>
+      <segment bytes="773880" number="7">seed-fefe0fc4-0-7@mock</segment>
+      <segment bytes="774030" number="8">seed-fefe0fc4-0-8@mock</segment>
+      <segment bytes="773835" number="9">seed-fefe0fc4-0-9@mock</segment>
+      <segment bytes="773790" number="10">seed-fefe0fc4-0-10@mock</segment>
+      <segment bytes="773911" number="11">seed-fefe0fc4-0-11@mock</segment>
+      <segment bytes="773944" number="12">seed-fefe0fc4-0-12@mock</segment>
+      <segment bytes="773961" number="13">seed-fefe0fc4-0-13@mock</segment>
+      <segment bytes="774013" number="14">seed-fefe0fc4-0-14@mock</segment>
+      <segment bytes="773982" number="15">seed-fefe0fc4-0-15@mock</segment>
+      <segment bytes="773848" number="16">seed-fefe0fc4-0-16@mock</segment>
+      <segment bytes="774049" number="17">seed-fefe0fc4-0-17@mock</segment>
+      <segment bytes="773945" number="18">seed-fefe0fc4-0-18@mock</segment>
+      <segment bytes="773836" number="19">seed-fefe0fc4-0-19@mock</segment>
+      <segment bytes="773881" number="20">seed-fefe0fc4-0-20@mock</segment>
+      <segment bytes="773747" number="21">seed-fefe0fc4-0-21@mock</segment>
+      <segment bytes="773757" number="22">seed-fefe0fc4-0-22@mock</segment>
+      <segment bytes="774018" number="23">seed-fefe0fc4-0-23@mock</segment>
+      <segment bytes="773720" number="24">seed-fefe0fc4-0-24@mock</segment>
+      <segment bytes="773837" number="25">seed-fefe0fc4-0-25@mock</segment>
+      <segment bytes="774034" number="26">seed-fefe0fc4-0-26@mock</segment>
+      <segment bytes="773865" number="27">seed-fefe0fc4-0-27@mock</segment>
+      <segment bytes="774068" number="28">seed-fefe0fc4-0-28@mock</segment>
+      <segment bytes="774040" number="29">seed-fefe0fc4-0-29@mock</segment>
+      <segment bytes="773957" number="30">seed-fefe0fc4-0-30@mock</segment>
+      <segment bytes="774127" number="31">seed-fefe0fc4-0-31@mock</segment>
+      <segment bytes="467349" number="32">seed-fefe0fc4-0-32@mock</segment>
+    </segments>
+  </file>
+</nzb>

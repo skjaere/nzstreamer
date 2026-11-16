@@ -26,8 +26,9 @@ import java.io.File
  * process before, and this one's start reconciles, and may run a job, after the step.
  *
  * Its end ([putBack]) leaves nothing of the pair running or kept: the downloads' jobs cancelled and the service
- * stopped, the rows and their files deleted, the debug seams' files (`.host`, `.throttle`) removed. The trace stays,
- * for the runner's logs; the settings stay as Start left them, as the runner installs the app afresh for each pair.
+ * stopped, the rows and their files deleted, the season packs' copies with them, the debug seams' files (`.host`,
+ * `.throttle`) removed. The trace stays, for the runner's logs; the settings stay as Start left them, as the runner
+ * installs the app afresh for each pair.
  */
 class PairCheck(private val fixture: PairFixture = PairFixture.HARBOR_LIGHTS) {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -116,8 +117,8 @@ class PairCheck(private val fixture: PairFixture = PairFixture.HARBOR_LIGHTS) {
     /** The reopens of download [id] this process wrote: after the Resume it took. */
     fun ownReopens(id: String): List<PairRecord.Traced> = traced().filter { it.at >= since && it.event == "reopen" && it["id"] == id }
 
-    /** Every one of [ids] Done in Room, its whole file there: the fixture's size and SHA-256. */
-    suspend fun assertWhole(ids: List<String>) {
+    /** Every one of [ids] Done in Room, its whole file there: [fixture]'s size and SHA-256, the pair's own by default. */
+    suspend fun assertWhole(ids: List<String>, fixture: PairFixture = this.fixture) {
         val storage = container.downloadStorage
         ids.forEach { id ->
             val row = dao.get(id) ?: throw AssertionError("$id is gone")
@@ -201,6 +202,7 @@ class PairCheck(private val fixture: PairFixture = PairFixture.HARBOR_LIGHTS) {
             }
         }
         back { dao.all().first().forEach { container.downloadStorage.delete(it.id) } }
+        back { File(context.filesDir, DownloadNzbs.PATH).deleteRecursively() }
         back {
             val manager = context.getSystemService(NotificationManager::class.java)
             manager.cancel(DownloadNotifications.ONGOING_ID)
