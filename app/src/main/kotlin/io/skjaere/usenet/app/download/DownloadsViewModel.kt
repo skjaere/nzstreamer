@@ -212,9 +212,18 @@ class DownloadEdits(private val deps: DownloadsDeps, private val scope: Coroutin
         scope.launch { logged("remove ${downloads.size} downloads") { deps.remove(downloads.map { it.id }, keepFor + UNDO_SLACK_MILLIS) } }
     }
 
+    /**
+     * The bar's Undo: what it named comes back as it was, then the host is asked for from here (L335), as one removed as
+     * it ran ended its host's walk and is queued again with nothing to take it up.
+     */
     fun undo() {
         val ids = undo.take() ?: return
-        scope.launch { logged("bring ${ids.size} downloads back") { deps.undoRemove(ids) } }
+        scope.launch {
+            logged("bring ${ids.size} downloads back") {
+                deps.undoRemove(ids)
+                deps.schedule(ScheduleCause.Resume)
+            }
+        }
     }
 
     /** The bar is on screen: it goes [timeoutMs] later. */

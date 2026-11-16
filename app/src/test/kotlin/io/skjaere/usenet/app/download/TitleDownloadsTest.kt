@@ -114,7 +114,8 @@ class TitleDownloadsTest {
         assertEquals("Deleted Harbor Lights S02E04 · 1.3 GB", actions.offer.value?.message)
         actions.undo()
         runCurrent()
-        assertEquals(listOf("remove [a] 13000", "undo [a]"), calls)
+        // Back in the queue, then the host asked for from here: one removed as it ran ended its host's walk (L335).
+        assertEquals(listOf("remove [a] 13000", "undo [a]", "schedule ${ScheduleCause.Resume}"), calls)
         assertNull(actions.offer.value)
         // The bar goes by itself once it has shown its time.
         actions.take(DownloadEntry.Remove, d(DownloadState.Done), keepFor = 12_000)

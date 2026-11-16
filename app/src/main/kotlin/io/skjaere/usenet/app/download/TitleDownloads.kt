@@ -245,9 +245,9 @@ internal const val UNDO_SLACK_MILLIS = 1_000L
  * What a title's download entries do on the Show page, the Movie page and Search's card (L379, L380), as the Downloads
  * page does: Pause holds the whole queue; Resume lets it go on, then asks for its host from here, the visible app (L335);
  * Download again tries a failed one again from its releases, then asks for its host; Remove hides it at once with the
- * Undo bar ([offer]), its files going a second after the bar has ([UNDO_SLACK_MILLIS]), and Undo brings it back. Download
- * (the sheet) and Open Downloads (the page) are the page's own. The runner's calls run in [work], the app's scope, so one
- * asked as the page closes is still made; the bar is the page's ([scope]).
+ * Undo bar ([offer]), its files going a second after the bar has ([UNDO_SLACK_MILLIS]), and Undo brings it back, then asks
+ * for its host. Download (the sheet) and Open Downloads (the page) are the page's own. The runner's calls run in [work],
+ * the app's scope, so one asked as the page closes is still made; the bar is the page's ([scope]).
  */
 class TitleDownloadActions(private val deps: Deps, scope: CoroutineScope, private val work: CoroutineScope) {
     /** The runner's calls, the host's schedule, a row read for the bar's words, and the bar's time before TalkBack's ([undoMillis]). */
@@ -304,10 +304,16 @@ class TitleDownloadActions(private val deps: Deps, scope: CoroutineScope, privat
         }
     }
 
-    /** The bar's Undo: what it named comes back as it was, while its time lasts. */
+    /**
+     * The bar's Undo: what it named comes back as it was, while its time lasts, then the host is asked for from here (L335):
+     * one removed as it ran ended its host's walk, and is queued again with nothing to take it up.
+     */
     fun undo() {
         val ids = undo.take() ?: return
-        act("bring a download back") { deps.undoRemove(ids) }
+        act("bring a download back") {
+            deps.undoRemove(ids)
+            deps.schedule(ScheduleCause.Resume)
+        }
     }
 
     /** The bar is on screen: it goes [timeoutMs] later. */
