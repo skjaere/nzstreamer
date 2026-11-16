@@ -33,6 +33,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -329,6 +330,26 @@ class DownloadsPageTest {
         fakes.online.value = true
         runCurrent()
         assertEquals(emptySet(), choice.needsConnection.value)
+    }
+
+    @Test
+    fun `a failed lookup greys Choose release a while only, so TMDB is asked again while the network stays up`() = runTest {
+        val fakes = Fakes()
+        val choice = fakes.choice(this)
+        val row = episode("q5", 5, DownloadState.Queued)
+        fakes.tmdbFails = true
+        choice.open(row)
+        runCurrent()
+        assertFalse(choice.can(row, true, choice.needsConnection.value))
+        advanceTimeBy(DownloadChoice.LOOKUP_RETRY_MILLIS - 1)
+        assertFalse(choice.can(row, true, choice.needsConnection.value), "greyed a while: TMDB just failed")
+        advanceTimeBy(2)
+        assertTrue(choice.can(row, true, choice.needsConnection.value), "online throughout, it can be asked again")
+        fakes.tmdbFails = false
+        choice.open(row)
+        runCurrent()
+        assertEquals(listOf("lookUp $HL 2 5", "lookUp $HL 2 5", "find"), fakes.calls)
+        assertIs<DownloadChoice.State.Choosing>(choice.state.value)
     }
 
     /** What a choice reads and asks, faked; what it asked recorded. */

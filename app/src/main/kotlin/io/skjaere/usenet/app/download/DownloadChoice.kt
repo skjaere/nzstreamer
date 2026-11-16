@@ -8,6 +8,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,7 +25,8 @@ import org.slf4j.LoggerFactory
  * first ([lookUp]), as a play of an episode known by its numbers is. A film's is built from its row.
  *
  * Offline ([online] false) it opens nothing, and the page greys its items "Needs a connection"; so it does for a download
- * whose lookup failed ([needsConnection]), until the network comes back.
+ * whose lookup failed ([needsConnection]), for [LOOKUP_RETRY_MILLIS] or until the network comes back, whichever is first:
+ * a TMDB that failed once is asked again, as the network may well have stayed up meanwhile.
  */
 class DownloadChoice(
     private val scope: CoroutineScope,
@@ -46,7 +48,7 @@ class DownloadChoice(
 
     private val _needsConnection = MutableStateFlow<Set<String>>(emptySet())
 
-    /** The downloads whose lookup on TMDB failed: greyed "Needs a connection" until the network comes back. */
+    /** The downloads whose lookup on TMDB failed lately: greyed "Needs a connection" a while, or until the network comes back. */
     val needsConnection: StateFlow<Set<String>> = _needsConnection.asStateFlow()
 
     /** The choice under way: its lookup, then its list's search, both ended by [close]. */
@@ -74,6 +76,11 @@ class DownloadChoice(
                 log.info("download {}: couldn't look it up on TMDB to choose its release: {}", row.id, e::class.simpleName)
                 _needsConnection.update { it + row.id }
                 _state.value = State.None
+                // Greyed a while, not for as long as the page lives: the next try may find TMDB answering.
+                scope.launch {
+                    delay(LOOKUP_RETRY_MILLIS)
+                    _needsConnection.update { it - row.id }
+                }
                 return@launch
             }
             // The list's search runs in this job, so a close ends it; what its pick starts outlives both (the deps' own scope).
@@ -109,7 +116,10 @@ class DownloadChoice(
         )
     }
 
-    private companion object {
-        val log = LoggerFactory.getLogger(DownloadChoice::class.java)
+    companion object {
+        /** How long a download whose lookup failed stays greyed while online: then TMDB can be asked again. */
+        const val LOOKUP_RETRY_MILLIS = 30_000L
+
+        private val log = LoggerFactory.getLogger(DownloadChoice::class.java)
     }
 }
