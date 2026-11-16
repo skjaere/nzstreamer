@@ -101,6 +101,20 @@ class DownloadNzbsTest {
         assertNull(packs.held())
     }
 
+    /**
+     * L379: a row of the season removed whose Undo can still bring it back holds the copy as one still to finish; another
+     * season's doesn't, and once its Undo has gone (no longer among those removed) nothing holds it.
+     */
+    @Test
+    fun `a copy is held by a removed row of its season while its Undo can bring it back`() = runBlocking<Unit> {
+        packs.write(meta, nzb, PASSWORD)
+        val rows = listOf(row("e1", 2, 1, DownloadState.Done), row("e2", 2, 2, DownloadState.Deleting), row("e3", 3, 1, DownloadState.Deleting))
+        packs.sweep(rows, removed = setOf("e2", "e3"))
+        assertNotNull(packs.find(key))
+        packs.sweep(rows, removed = setOf("e3"))
+        assertNull(packs.find(key))
+    }
+
     /** A process that died between the NZB's write and the meta's leaves no copy, and nothing of it once swept. */
     @Test
     fun `a folder with no meta is no copy, and the sweep takes it with its NZB and password`() = runBlocking<Unit> {

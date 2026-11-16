@@ -25,9 +25,10 @@ import java.security.MessageDigest
  * never starts with ".", so reconcile tells the folder from a download's by its name.
  *
  * A copy is held while any row of its show and season is still to finish, read from the rows at each [sweep]: no count
- * that could drift. The sweep runs at reconcile and at each row's end, and deletes what no row holds, and any folder with
- * no readable `meta` with its `.tmp` files, so a process that died between the `nzb` and the `meta` leaves no NZB or
- * password behind. Writes, reads and sweeps take turns: a sweep never takes a copy half written.
+ * that could drift. A row removed whose Undo can still bring it back counts as one still to finish. The sweep runs at
+ * reconcile and at each row's end, and deletes what no row holds, and any folder with no readable `meta` with its `.tmp`
+ * files, so a process that died between the `nzb` and the `meta` leaves no NZB or password behind. Writes, reads and
+ * sweeps take turns: a sweep never takes a copy half written.
  *
  * The password is never logged; a log line names a copy by its folder's first 8 hex digits.
  */
@@ -83,12 +84,13 @@ class DownloadNzbs(private val dir: File, private val io: CoroutineDispatcher = 
     }
 
     /**
-     * Deletes every copy no row of [rows] holds (one of its show and season still to finish, [DownloadRunner.GOING_ON]),
-     * and whatever else is in the folder that is no copy, its `.tmp` files with it. The prepare held goes with its copy.
+     * Deletes every copy no row of [rows] holds (one of its show and season still to finish, [DownloadRunner.GOING_ON], or
+     * one of [removed], the ids of rows removed whose Undo can still bring them back), and whatever else is in the folder
+     * that is no copy, its `.tmp` files with it. The prepare held goes with its copy.
      */
-    suspend fun sweep(rows: List<Download>): Unit = turns.withLock {
+    suspend fun sweep(rows: List<Download>, removed: Set<String> = emptySet()): Unit = turns.withLock {
         withContext(io) {
-            val holding = rows.filter { it.state in DownloadRunner.GOING_ON }
+            val holding = rows.filter { it.state in DownloadRunner.GOING_ON || it.id in removed }
                 .mapNotNullTo(HashSet()) { row -> row.showTmdbId?.let { show -> row.season?.let { show to it } } }
             dir.listFiles().orEmpty().forEach { entry ->
                 val meta = if (entry.isDirectory) meta(entry) else null

@@ -254,7 +254,8 @@ class DownloadRunnerDeps(
  *   starts until Resume (L380). "Stopped by Android" holds it the same way (L359).
  * - The waits for the providers and for storage end the walk, so the host ends (L388); the other rows wait their turn.
  * - The NZB and its password go once the file is complete, the item fails or is cancelled (L346); a season pack's copy
- *   goes at the end of the last download of its season still to finish, whichever end it is (L394, [Storage.sweepPacks]).
+ *   goes at the end of the last download of its season still to finish, whichever end it is, one removed counting as
+ *   still to finish while its Undo can bring it back (L394, [Storage.sweepPacks]).
  * - Remove hides a download at once and deletes it once its Undo has gone (L379); Cancel deletes it at once.
  * - A season is queued at once, all or none, a failed episode's row put back rather than queued twice ([enqueueAll],
  *   L392, L396).
@@ -304,8 +305,11 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         /** Whether the primary volume's folder is there. */
         fun volumeThere(): Boolean
 
-        /** Drops the season packs' copies no download still to finish holds now (L394). */
-        suspend fun sweepPacks()
+        /**
+         * Drops the season packs' copies no download still to finish holds now (L394), nor one of [removed], the ids of
+         * those removed whose Undo can still bring them back.
+         */
+        suspend fun sweepPacks(removed: Set<String>)
 
         companion object {
             fun of(storage: DownloadStorage): Storage = object : Storage {
@@ -327,7 +331,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 override suspend fun delete(id: String) = storage.delete(id)
                 override suspend fun reconcile() = storage.reconcile()
                 override fun volumeThere() = storage.volumeThere()
-                override suspend fun sweepPacks() = storage.sweepPacks()
+                override suspend fun sweepPacks(removed: Set<String>) = storage.sweepPacks(removed)
             }
         }
     }
@@ -385,8 +389,16 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /** What a removed download was, to put it back on Undo; [token] is its removal's, whose timer deletes it. */
     private class Removed(val state: DownloadState, val reason: String?, val token: Any)
 
-    // Under [changes].
+    // Changed under [changes] and [removals] both, beside the row's own state, and read under either.
     private val removed = HashMap<String, Removed>()
+
+    /**
+     * Taken with each change of [removed], and by each sweep of the season packs' copies, which counts a row removed with
+     * its Undo still to come as one still to finish (L394): so a sweep from the walk, which can't take the queue's lock,
+     * reads the rows and [removed] as one, never a row Deleting that its Undo has brought back, nor one removed but not yet
+     * in [removed].
+     */
+    private val removals = Mutex()
 
     /** What ends a wait before Resolve is asked again sooner: [retryNow], [resume], and the network's return (L381). */
     private val wakes = BackoffWakes(deps.network)
@@ -604,7 +616,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         if (!runs) return
         changes.withLock {
             stop(id)
-            removed.remove(id)
+            removals.withLock { removed.remove(id) }
             val row = dao.get(id) ?: return@withLock
             deps.storage.dropSource(id)
             delete(id)
@@ -626,8 +638,10 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             ids.mapNotNull { id ->
                 stop(id)
                 val row = dao.get(id)?.takeIf { it.state != DownloadState.Deleting } ?: return@mapNotNull null
-                removed[id] = Removed(row.state, row.reason, token)
-                dao.setState(id, DownloadState.Deleting, null, now())
+                removals.withLock {
+                    removed[id] = Removed(row.state, row.reason, token)
+                    dao.setState(id, DownloadState.Deleting, null, now())
+                }
                 passHold(row)
                 id
             }
@@ -638,7 +652,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             delay(keepFor)
             changes.withLock {
                 marked.filter { removed[it]?.token === token }.forEach { id ->
-                    removed.remove(id)
+                    removals.withLock { removed.remove(id) }
                     if (dao.get(id)?.state == DownloadState.Deleting) delete(id)
                 }
                 sweepPacks()
@@ -657,7 +671,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         if (!runs) return
         val count = changes.withLock {
             current?.job?.cancelAndJoin()
-            removed.clear()
+            removals.withLock { removed.clear() }
             val rows = dao.all().first()
             rows.forEach { row ->
                 // One that can't be dropped stops none of the others: reconcile finishes what is left.
@@ -687,11 +701,13 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         if (!runs) return
         changes.withLock {
             ids.forEach { id ->
-                val was = removed.remove(id) ?: return@forEach
-                if (dao.get(id)?.state != DownloadState.Deleting) return@forEach
-                // One stopped as it ran goes back to the queue, to go on from its safe offset when its turn comes.
-                val running = was.state == DownloadState.Running || was.state == DownloadState.Resolving
-                dao.setState(id, if (running) DownloadState.Queued else was.state, if (running) null else was.reason, now())
+                removals.withLock {
+                    val was = removed.remove(id) ?: return@withLock
+                    if (dao.get(id)?.state != DownloadState.Deleting) return@withLock
+                    // One stopped as it ran goes back to the queue, to go on from its safe offset when its turn comes.
+                    val running = was.state == DownloadState.Running || was.state == DownloadState.Resolving
+                    dao.setState(id, if (running) DownloadState.Queued else was.state, if (running) null else was.reason, now())
+                }
             }
         }
     }
@@ -1230,12 +1246,13 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     }
 
     /**
-     * A download's end, whichever it is: the season packs' copies no download still to finish holds now go (L394). A
-     * failure is logged, and the next start's reconcile sweeps them.
+     * A download's end, whichever it is: the season packs' copies no download still to finish holds now go (L394), one
+     * removed whose Undo can still bring it back counted as still to finish ([removals]). A failure is logged, and the next
+     * start's reconcile sweeps them.
      */
     private suspend fun sweepPacks() {
         try {
-            deps.storage.sweepPacks()
+            removals.withLock { deps.storage.sweepPacks(removed.keys.toSet()) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

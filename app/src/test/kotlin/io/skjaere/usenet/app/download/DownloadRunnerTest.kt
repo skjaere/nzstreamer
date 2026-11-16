@@ -1699,6 +1699,49 @@ class DownloadRunnerTest {
         assertNull(storage.packs.find(PACK.key))
     }
 
+    /**
+     * L394, L379: a row removed with its Undo still to come is still to finish for its season's copy, as an Undo brings it
+     * back: a row of the season that ends meanwhile leaves the copy for it. Once the Undo has gone and the row is deleted,
+     * the copy goes with it.
+     */
+    @Test
+    fun `a season pack's copy stays for the season's rows removed while their Undo can bring them back`() = test {
+        val runner = runner()
+        storage.packs.write(PACK, PACK_NZB, "s3cret")
+        val a = fake("hl-a").apply { hold = HOLD }
+        val running = runner.add(1, a)
+        val second = runner.add(2, fake("hl-b"))
+        val third = runner.add(3, fake("hl-c"))
+        host(runner)
+        runCurrent()
+        assertEquals(DownloadState.Running, stored(running).state)
+
+        // The season's others removed by mistake; the one under way ends within the Undo bar's time.
+        runner.remove(listOf(second, third))
+        runCurrent()
+        a.gate.complete(Unit)
+        advanceTimeBy(DownloadRunner.UNDO_MILLIS / 2)
+        runCurrent()
+        assertEquals(DownloadState.Done, stored(running).state)
+        assertEquals(DownloadState.Deleting, stored(second).state)
+        assertNotNull(storage.packs.find(PACK.key), "the copy, while an Undo can bring the season's others back")
+
+        // Brought back: still to finish, the copy theirs once the removal's time is over.
+        runner.undoRemove(listOf(second, third))
+        advanceTimeBy(DownloadRunner.UNDO_MILLIS)
+        runCurrent()
+        assertEquals(DownloadState.Queued, stored(second).state)
+        assertNotNull(storage.packs.find(PACK.key))
+
+        // Removed again, and deleted once the Undo has gone: the copy with them.
+        runner.remove(listOf(second, third))
+        advanceTimeBy(DownloadRunner.UNDO_MILLIS + 1)
+        runCurrent()
+        assertNull(dao.get(second))
+        assertNull(dao.get(third))
+        assertNull(storage.packs.find(PACK.key))
+    }
+
     /** Resolve's fake, answering as DownloadResolver does, as the class says. */
     private inner class FakeResolver {
         val calls = mutableListOf<String>()
@@ -1943,9 +1986,9 @@ class DownloadRunnerTest {
             packs.sweep(dao.all().first())
         }
 
-        override suspend fun sweepPacks() {
+        override suspend fun sweepPacks(removed: Set<String>) {
             events += "sweep packs"
-            packs.sweep(dao.all().first())
+            packs.sweep(dao.all().first(), removed)
         }
 
         override fun volumeThere() = there

@@ -52,8 +52,11 @@ class DownloadStorage(
     /** The season packs' NZBs, each kept once for its season's downloads, in filesDir's `downloads/.packs/` (L394). */
     val packs = DownloadNzbs(File(filesDir, DownloadNzbs.PATH), io)
 
-    /** Drops the season packs' copies no download still to finish holds (L394): at a download's end. */
-    suspend fun sweepPacks() = packs.sweep(downloads.all().first())
+    /**
+     * Drops the season packs' copies no download still to finish holds (L394), nor one of [removed], removed with its Undo
+     * still to come: at a download's end.
+     */
+    suspend fun sweepPacks(removed: Set<String> = emptySet()) = packs.sweep(downloads.all().first(), removed)
 
     /** The steps of a delete, in order, each one a process may die after. */
     enum class DeleteStep { Marked, VideoGone, BookkeepingGone }
