@@ -186,6 +186,7 @@ fun PlaybackScreen(onBack: () -> Unit) {
 
         SectionHeader("Maximum bitrate")
         BitrateChoices(
+            cells = MAX_BITRATE_CELLS, unit = MBPS,
             chosen = prefs.maxBitrate?.let { it / 1_000_000 }?.toInt(),
             label = { mbps -> if (mbps == null) "No maximum bitrate" else "Maximum bitrate $mbps Mbps" },
             onPick = { mbps -> vm.update { it.copy(maxBitrateMbps = mbps) } },
@@ -195,6 +196,7 @@ fun PlaybackScreen(onBack: () -> Unit) {
         if (CastBitrateSetting.shows(container.television)) {
             SectionHeader(CastBitrateSetting.TITLE)
             BitrateChoices(
+                cells = CastBitrateSetting.CHOICES, unit = MBPS,
                 chosen = CastBitrateSetting.chosen(prefs),
                 label = CastBitrateSetting::label,
                 onPick = { mbps -> vm.update { CastBitrateSetting.picked(it, mbps) } },
@@ -251,32 +253,39 @@ fun PlaybackScreen(onBack: () -> Unit) {
     }
 }
 
+/** Maximum bitrate's cells: Not set, then [PlaybackPrefs.MAX_BITRATES_MBPS]. */
+private val MAX_BITRATE_CELLS: List<Int?> = listOf<Int?>(null) + PlaybackPrefs.MAX_BITRATES_MBPS
+
+private const val MBPS = "Mbps"
+
 /**
- * A maximum bitrate's twelve choices, Not set and [PlaybackPrefs.MAX_BITRATES_MBPS]: three full rows of four, a true grid
- * that a remote's Up and Down go straight through (L309), each as wide as the others, and as tall as the tallest a large
- * font makes. [chosen] is ticked; TalkBack reads each by [label].
+ * A grid of number [cells] in [unit], Not set (null) first: Maximum bitrate's twelve, three full rows of four, and
+ * Settings › Downloads' Download size's eight, two (item 20). A true grid that a remote's Up and Down go straight through
+ * (L309), each cell as wide as the others, and as tall as the tallest a large font makes. [chosen] is ticked; TalkBack
+ * reads each by [label].
  */
 @Composable
-private fun BitrateChoices(chosen: Int?, label: (Int?) -> String, onPick: (Int?) -> Unit) {
-    (listOf<Int?>(null) + PlaybackPrefs.MAX_BITRATES_MBPS).chunked(4).forEachIndexed { row, choices ->
+internal fun BitrateChoices(cells: List<Int?>, unit: String, chosen: Int?, label: (Int?) -> String, onPick: (Int?) -> Unit) {
+    cells.chunked(4).forEachIndexed { row, choices ->
         Row(
             Modifier.padding(horizontal = 16.dp).padding(top = if (row > 0) 8.dp else 0.dp).fillMaxWidth().height(IntrinsicSize.Min),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            choices.forEach { mbps ->
-                val selected = chosen == mbps
+            choices.forEach { value ->
+                val selected = chosen == value
                 Column(
                     Modifier.weight(1f).heightIn(min = 56.dp).fillMaxHeight().clip(RoundedCornerShape(12.dp))
                         .background(if (selected) colors.accentTint else colors.surface)
                         .border(if (selected) 2.dp else 1.dp, if (selected) colors.accent else colors.chip, RoundedCornerShape(12.dp))
-                        .semantics { contentDescription = label(mbps) }
-                        .selectable(selected, role = Role.RadioButton) { onPick(mbps) }
-                        .padding(vertical = 4.dp),
+                        .semantics { contentDescription = label(value) }
+                        .selectable(selected, role = Role.RadioButton) { onPick(value) }
+                        // A unit that wraps at a large font size keeps clear of the cell's edge.
+                        .padding(horizontal = 2.dp, vertical = 4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
-                    Text(mbps?.toString() ?: "Not set", style = if (selected) AppType.bodyStrong else AppType.body, color = colors.text, textAlign = TextAlign.Center)
-                    if (mbps != null) Text("Mbps", style = AppType.small, color = colors.muted)
+                    Text(value?.toString() ?: "Not set", style = if (selected) AppType.bodyStrong else AppType.body, color = colors.text, textAlign = TextAlign.Center)
+                    if (value != null) Text(unit, style = AppType.small, color = colors.muted, textAlign = TextAlign.Center)
                 }
             }
             repeat(4 - choices.size) { Spacer(Modifier.weight(1f)) }

@@ -8,13 +8,14 @@ import kotlin.test.assertTrue
 /**
  * The downloads' sources point at nothing a reader of the repository can't open: no drawing of the private design canvas,
  * and every Python file they name named by its path in the repository. Their own folders (main, the JVM tests and the
- * device tests) and the drawn icons with their test, read as text, comments with the code.
+ * device tests), the drawn icons and Settings › Downloads' page with their tests, read as text, comments with the code.
  */
 class DownloadSourceWordsTest {
     private val sources: List<File> = listOf(
         "src/main/kotlin/io/skjaere/usenet/app/download", "src/test/kotlin/io/skjaere/usenet/app/download",
         "src/androidTest/kotlin/io/skjaere/usenet/app/download", "src/main/kotlin/io/skjaere/usenet/app/ui/DownloadIcons.kt",
-        "src/test/kotlin/io/skjaere/usenet/app/ui/DownloadIconsTest.kt",
+        "src/test/kotlin/io/skjaere/usenet/app/ui/DownloadIconsTest.kt", "src/main/kotlin/io/skjaere/usenet/app/settings/DownloadSettingsScreen.kt",
+        "src/test/kotlin/io/skjaere/usenet/app/settings/DownloadSettingsTest.kt",
     ).flatMap { File(it).walkTopDown().filter { file -> file.isFile && file.extension == "kt" && file.name != OWN }.toList() }
 
     @Test

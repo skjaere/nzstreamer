@@ -525,6 +525,41 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         }
     }
 
+    /**
+     * Deletes every download (Settings › Downloads' Delete all, which asks first; L379): the running one stopped, then each,
+     * its NZB first, then its file, bookkeeping and row in the crash-safe order, those removed and waiting for their Undo's
+     * end with them, so their timers find nothing and an Undo brings nothing back. Then the files are brought into step, a
+     * folder no row has deleted too (item 4). Nothing is left to run: the walk ends, and its host.
+     */
+    suspend fun deleteAll() {
+        if (!runs) return
+        val count = changes.withLock {
+            current?.job?.cancelAndJoin()
+            removed.clear()
+            val rows = dao.all().first()
+            rows.forEach { row ->
+                // One that can't be dropped stops none of the others: reconcile finishes what is left.
+                try {
+                    deps.storage.dropSource(row.id)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    log.warn("download {}: couldn't drop its NZB: {}", row.id, e::class.simpleName)
+                }
+                delete(row.id)
+            }
+            rows.size
+        }
+        try {
+            deps.storage.reconcile()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("Couldn't bring the downloads' files into step after Delete all: {}", e::class.simpleName)
+        }
+        log.info("Downloads: all {} deleted", count)
+    }
+
     /** Brings back the downloads [ids] [remove] hid, while their Undo lasts: as they were, one stopped as it ran queued again. */
     suspend fun undoRemove(ids: Collection<String>) {
         if (!runs) return

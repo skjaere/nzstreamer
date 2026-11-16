@@ -8,9 +8,10 @@ import kotlin.test.assertTrue
 
 /**
  * L369: downloads show on phones and tablets alone, and their screens are reached by their routes. So a download route or
- * screen is named only in the download package (`app/download/`) and in the block that decides, from where downloads
- * show, what the phone's graph has: AppNav's `downloadScreens(nav, shown)`, which registers them while `shown` and gives
- * back no way in elsewhere (DownloadIntentsTest has its case). Named anywhere else, a route would be a way in that
+ * screen is named only in the download package (`app/download/`), in Settings › Downloads' own file (item 20's page, among
+ * the settings' pages), and in the block that decides, from where downloads show, what the phone's graph has: AppNav's
+ * `downloadScreens(nav, shown)`, which registers them while `shown` and gives back no way in elsewhere (DownloadIntentsTest
+ * has its case). Named anywhere else, a route would be a way in that
  * DownloadPlaces.shown doesn't see: a TV, or a phone's layout on one, could open it. Every source the app builds from is
  * read as text, comments included, as DebridEntrySourcesTest reads them: main's, Discover's and the release (Play) build's.
  */
@@ -30,7 +31,7 @@ class DownloadEntrySourcesTest {
         assertTrue(block.takesShown, block.text.lines().first())
         // And the package's own routes and screens, which the rule guards by name.
         val declared = declaredIn(sources)
-        assertTrue(declared.containsAll(listOf("DownloadsScreen", "DownloadsShowScreen")), declared.toString())
+        assertTrue(declared.containsAll(listOf("DownloadsScreen", "DownloadsShowScreen", "DownloadSettingsScreen")), declared.toString())
     }
 
     @Test
@@ -74,20 +75,29 @@ class DownloadEntrySourcesTest {
         assertEquals(listOf("$APP/AppNav.kt:2: DownloadsRoute (in downloadScreens, which doesn't take shown)"), misplaced(mapOf("$APP/AppNav.kt" to ungated)))
         // Whole names alone: a name that only starts with one is someone else's.
         assertEquals(emptyList(), misplaced(mapOf("$APP/Routes.kt" to "@Serializable data object DownloadsRouteHelp")))
+        // Settings › Downloads' own file is the downloads' own: its screen is guarded by name, and named there freely.
+        val settings = mapOf(
+            "$APP/settings/DownloadSettingsScreen.kt" to "@Composable\nfun DownloadSettingsScreen(onBack: () -> Unit) {\n}\n",
+            "$APP/settings/SettingsScreen.kt" to "// Opens DownloadSettingsScreen.\n",
+        )
+        assertEquals(listOf("$APP/settings/SettingsScreen.kt:1: DownloadSettingsScreen"), misplaced(settings))
     }
 
     /** A declaration's [text], from its keyword to its body's closing brace, and whether its parameters take `shown`. */
     private class Block(val range: IntRange, val text: String, val takesShown: Boolean)
 
-    /** The routes and screens the download package declares in [files]. */
+    /** The routes and screens the downloads' own files declare in [files]. */
     private fun declaredIn(files: Map<String, String>): List<String> =
-        files.filterKeys { it.startsWith("$APP/download/") }.values.flatMap { declared.findAll(it).map { m -> m.groupValues[1] } }.distinct()
+        files.filterKeys(::own).values.flatMap { declared.findAll(it).map { m -> m.groupValues[1] } }.distinct()
 
-    /** Each download route or screen named outside `app/download/` and the allowed block taking `shown`: "path:line: name". */
+    /** Whether [path] is one of the downloads' own: the download package's, or Settings › Downloads' page. */
+    private fun own(path: String): Boolean = path.startsWith("$APP/download/") || path in pages
+
+    /** Each download route or screen named outside the downloads' own files and the allowed block taking `shown`: "path:line: name". */
     private fun misplaced(files: Map<String, String>): List<String> {
         val names = (routes + declaredIn(files)).distinct()
         val pattern = Regex("""\b(${names.joinToString("|") { Regex.escape(it) }})\b""")
-        return files.filterKeys { !it.startsWith("$APP/download/") }.toSortedMap().flatMap { (path, text) ->
+        return files.filterKeys { !own(it) }.toSortedMap().flatMap { (path, text) ->
             val blocks = allowed.filter { it.first == path.substringAfterLast('/') }.mapNotNull { (_, name) -> blockIn(text, name)?.let { name to it } }
             pattern.findAll(text).mapNotNull { found ->
                 val at = "$path:${text.substring(0, found.range.first).count { it == '\n' } + 1}: ${found.value}"
@@ -135,5 +145,8 @@ class DownloadEntrySourcesTest {
 
         /** The block outside the download package that may name its routes and screens, by file name and declaration. */
         val allowed = listOf("AppNav.kt" to "downloadScreens")
+
+        /** The downloads' own pages outside the download package: Settings › Downloads, with the other settings pages. */
+        val pages = setOf("$APP/settings/DownloadSettingsScreen.kt")
     }
 }

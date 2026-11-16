@@ -482,6 +482,54 @@ class DownloadRunnerTest {
     }
 
     /**
+     * Settings › Downloads' Delete all (item 20, L379), which the page asks about first: every download goes at once, the
+     * running one stopped first and its NZB dropped before the rest of it, each file, bookkeeping and row in the crash-safe
+     * order, those removed and waiting for their Undo's end with them (their timers then find nothing, and an Undo brings
+     * nothing back); then reconcile, for a folder left without a row. The walk ends, with nothing left to run.
+     */
+    @Test
+    fun `delete all stops the running one and deletes every download, those waiting for their Undo's end too`() = test {
+        val d = fake("hl-d")
+        val e = fake("hl-e")
+        val a = fake("hl-a", password = "s3cret")
+        val b = fake("hl-b")
+        val runner = runner()
+        val finished = runner.add(1, d)
+        val removed = runner.add(2, e)
+        host(runner)
+        advanceUntilIdle()
+        runner.remove(listOf(removed))
+        a.hold = HOLD
+        val running = runner.add(3, a)
+        val queued = runner.add(4, b)
+        val walk = host(runner)
+        runCurrent()
+        assertTrue(storage.part(running).isFile)
+        assertTrue(File(storage.bookkeeping(running), "nzb").isFile)
+        val reconciles = storage.reconciles
+
+        runner.deleteAll()
+        runCurrent()
+        assertEquals(emptyMap(), dao.rows.value)
+        listOf(finished, removed, running, queued).forEach { id ->
+            assertFalse(storage.videoFolder(id).exists(), "$id's video")
+            assertFalse(storage.bookkeeping(id).exists(), "$id's bookkeeping")
+        }
+        assertEquals(listOf("drop source $running", "delete $running"), storage.events.filter { it == "drop source $running" || it == "delete $running" })
+        assertEquals(reconciles + 1, storage.reconciles, "reconciled after")
+        assertTrue(walk.isCompleted)
+        assertEquals(emptyList(), runner.state.value)
+        assertEquals(emptyMap(), runner.done.value)
+        assertEquals(emptyList(), b.opens, "the queued one never started")
+
+        runner.undoRemove(listOf(removed))
+        advanceTimeBy(DownloadRunner.UNDO_MILLIS + 1)
+        runCurrent()
+        assertNull(dao.get(removed))
+        assertEquals(1, storage.events.count { it == "delete $removed" }, "deleted once, by Delete all")
+    }
+
+    /**
      * Whether a live walk will take up what is queued now, for the app's schedule (L335): from a walk's start until its
      * last look finds nothing to run, false in that same step, before its host can end. A Download or Resume that comes as
      * the walk ends is scheduled, never left with no host; one while it runs is taken up by it.
@@ -1315,6 +1363,7 @@ class DownloadRunnerTest {
         tv.retry(QUEUED)
         tv.remove(listOf(QUEUED))
         tv.cancel(QUEUED)
+        tv.deleteAll()
         advanceUntilIdle()
         assertEquals(emptyList(), resolver.calls)
         assertEquals(DownloadState.Queued, stored(QUEUED).state)

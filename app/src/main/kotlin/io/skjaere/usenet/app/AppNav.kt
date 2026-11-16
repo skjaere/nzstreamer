@@ -274,7 +274,7 @@ fun AppNav(
  * is a tab of its own (the rail's), so it has no Back of its own and Home's gear goes to that tab,
  * and each tab's screen starts with [TopLevelBack] (nothing on a phone). [voice]: the TV's search
  * key asking Search for voice. [downloads]: the ways into the downloads' pages (L369), for Home's section, the Movie
- * page's and Search's Open Downloads; none where downloads don't show.
+ * page's and Search's Open Downloads, and Settings' Downloads row; none where downloads don't show.
  */
 fun NavGraphBuilder.appGraph(
     nav: NavController,
@@ -389,6 +389,8 @@ fun NavGraphBuilder.appGraph(
             onPrivacy = { screen.ifResumed { nav.navigate(PrivacyRoute) } },
             onTorrentIndexers = debrid.torrentIndexers?.let { open -> { screen.ifResumed { open() } } },
             onDebridServices = debrid.services?.let { open -> { screen.ifResumed { open() } } },
+            // Settings › Downloads, where downloads show (L369): none elsewhere.
+            onDownloads = downloads.settings?.let { open -> { screen.ifResumed { open() } } },
         )
     }
     composable<PhonesRoute> { screen ->
@@ -466,7 +468,7 @@ fun NavGraphBuilder.appGraph(
 /**
  * The downloads' screens (W108, L369), in the phone's graph alone, while [shown] (DownloadPlaces.shown): where downloads
  * don't show, none is there and the ways into them it gives back are null, so nothing opens one. The Downloads page, a
- * show's downloads, and Settings › Downloads, which item 20's page fills: until then its route shows a placeholder.
+ * show's downloads, and Settings › Downloads (item 20), which the page's gear and Settings' Downloads row open.
  */
 fun NavGraphBuilder.downloadScreens(nav: NavController, shown: Boolean): DownloadPages {
     fun back(screen: NavBackStackEntry): () -> Unit = { screen.ifResumed { nav.popBackStack() } }
@@ -492,8 +494,9 @@ fun NavGraphBuilder.downloadScreens(nav: NavController, shown: Boolean): Downloa
                     onOpenShow = { id -> screen.ifResumed { nav.navigate(ShowRoute(id)) } },
                 )
             }
-            // Item 20 puts Settings › Downloads' own page here.
-            composable<io.skjaere.usenet.app.download.DownloadSettingsRoute> { PlaceholderScreen("Settings › Downloads") }
+            composable<io.skjaere.usenet.app.download.DownloadSettingsRoute> { screen ->
+                io.skjaere.usenet.app.settings.DownloadSettingsScreen(onBack = back(screen))
+            }
         },
         open = { route -> nav.navigate(route) { launchSingleTop = true } },
     )

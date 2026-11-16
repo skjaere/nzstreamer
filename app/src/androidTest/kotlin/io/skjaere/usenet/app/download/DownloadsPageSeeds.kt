@@ -102,6 +102,9 @@ internal class DownloadsPageSeeds(private val context: Context, private val cont
 
     fun row(id: String): Download? = runBlocking { dao.get(id) }
 
+    /** Whether [id] is a row this test seeded. */
+    fun isMine(id: String): Boolean = id in seeded
+
     /**
      * The page's deps: the app's runner, its calls and its rows (the test's own alone), and seams for the rest: the space
      * ([space]), the network (Wi-Fi, or mobile data where [metered]), the background limit ([restricted]), the schedule,

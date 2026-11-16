@@ -30,6 +30,7 @@ import io.skjaere.usenet.app.debrid.DebridGate
 import io.skjaere.usenet.app.debrid.HubLine
 import io.skjaere.usenet.app.debrid.debridServicesHubLine
 import io.skjaere.usenet.app.debrid.torrentIndexersHubLine
+import io.skjaere.usenet.app.download.downloadsShown
 import io.skjaere.usenet.app.link.PHONES_TITLE
 import io.skjaere.usenet.app.link.TVS_TITLE
 import io.skjaere.usenet.app.link.tvsLine
@@ -45,6 +46,7 @@ import io.skjaere.usenet.app.ui.rememberInitialFocus
 import io.skjaere.usenet.releases.QualityPreference
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import java.util.Locale
@@ -92,6 +94,15 @@ class SettingsViewModel(container: AppContainer) : ViewModel() {
             cast = GoogleCastPage.rowLine(s.cast.look),
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsSummary())
+
+    /**
+     * Settings › Downloads' line (item 20): what downloads hold, whether one runs, and when they run, from the runner's rows
+     * (their files' sizes, not the live write's bytes, so it changes as they do) and the downloads' settings. Empty on a
+     * TV's, which has no such row.
+     */
+    val downloads = combine(container.downloads.state.map { items -> items.map { it.row } }.distinctUntilChanged(), settings.downloads) { rows, prefs ->
+        DownloadSettings.hubLine(rows, prefs)
+    }.distinctUntilChanged().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
 }
 
 fun languageName(code: String): String = Locale.forLanguageTag(code).getDisplayLanguage(Locale.ENGLISH).ifEmpty { code }
@@ -112,18 +123,22 @@ fun qualityLabel(q: QualityPreference): String = when (q) {
  * This device, since it is about where plays go (null shows none). [onCast]: a phone's Google Cast (L112),
  * after the TVs, where plays go too (null shows none). [onPrivacy]: Privacy, under About, on every device
  * (L138). [onTorrentIndexers]: Torrent indexers, after Indexers, while debrid shows (null shows none; L192), and
- * [onDebridServices] Debrid services between them (L196). The rows and their order are [settingsHub]'s.
+ * [onDebridServices] Debrid services between them (L196). [onDownloads]: Settings › Downloads, after Cache, where downloads
+ * show (item 20; W108, L369): on a TV, or in the TV's layout, there is none whoever passes it (null shows none). The rows
+ * and their order are [settingsHub]'s.
  */
 @Composable
 fun SettingsScreen(
     onBack: (() -> Unit)?, onProviders: () -> Unit, onIndexers: () -> Unit, onMetadata: () -> Unit, onPlayback: () -> Unit, onCache: () -> Unit,
     onLogs: () -> Unit, onThisDevice: () -> Unit = {}, onPhoneSetup: (() -> Unit)? = null, onPhones: (() -> Unit)? = null,
     onTvs: (() -> Unit)? = null, onCast: (() -> Unit)? = null, onPrivacy: () -> Unit = {}, onTorrentIndexers: (() -> Unit)? = null,
-    onDebridServices: (() -> Unit)? = null,
+    onDebridServices: (() -> Unit)? = null, onDownloads: (() -> Unit)? = null,
 ) {
     val container = LocalContext.current.container
     val vm: SettingsViewModel = viewModel { SettingsViewModel(container) }
     val summary by vm.summary.collectAsStateWithLifecycle()
+    val downloads by vm.downloads.collectAsStateWithLifecycle()
+    val downloadsShown = downloadsShown()
     val rows = remember { HashMap<String, FocusRequester>() }
     fun row(title: String): FocusRequester = rows.getOrPut(title) { FocusRequester() }
     // The row that opened a page: saved, as this screen is gone while the page covers it.
@@ -148,6 +163,7 @@ fun SettingsScreen(
         put(HubRow.Metadata, onMetadata)
         put(HubRow.Playback, onPlayback)
         put(HubRow.Cache, onCache)
+        if (downloadsShown) onDownloads?.let { put(HubRow.Downloads, it) }
         put(HubRow.ThisDevice, onThisDevice)
         onTvs?.let { put(HubRow.Tvs, it) }
         onCast?.let { put(HubRow.GoogleCast, it) }
@@ -164,6 +180,7 @@ fun SettingsScreen(
         HubRow.Metadata -> summary.metadata
         HubRow.Playback -> summary.playback
         HubRow.Cache -> summary.cache
+        HubRow.Downloads -> downloads
         HubRow.ThisDevice -> thisDevice
         HubRow.Tvs -> summary.tvs
         HubRow.GoogleCast -> summary.cast
@@ -200,6 +217,7 @@ enum class HubRow(val title: String) {
     Metadata("Metadata"),
     Playback("Quality and languages"),
     Cache("Cache"),
+    Downloads("Downloads"),
     ThisDevice("This device"),
     Tvs(TVS_TITLE),
     GoogleCast(GoogleCastPage.TITLE),
@@ -217,15 +235,19 @@ const val HUB_FOOTNOTE = "Backup is still to come."
  * The hub's groups and their rows (CsPhoneSettingsCast 1; W60, L112, L138). [optional]: of the rows not every hub has,
  * those its caller opens: a TV's Set up with your phone and Phones, first; a phone's TVs and Google Cast, last in
  * Playback, Google Cast never on a [television] (L110); Debrid services, then Torrent indexers, after Indexers on both
- * (DbPhoneSources, DbTvSources 1), only while debrid is [shown] (L192). About, with Privacy, last, on every device.
+ * (DbPhoneSources, DbTvSources 1), only while debrid is [shown] (L192); a phone's or tablet's Downloads after Cache, both
+ * this device's storage, never on a [television] (item 20; W108, L369). About, with Privacy, last, on every device.
  */
 fun settingsHub(television: Boolean, optional: Set<HubRow>, shown: Boolean): List<HubGroup> {
     fun has(row: HubRow) = row in optional && (row != HubRow.GoogleCast || GoogleCastPage.shows(television)) &&
-        (row !in debridRows || shown)
+        (row !in debridRows || shown) && (row != HubRow.Downloads || !television)
     return listOfNotNull(
         HubGroup(null, listOf(HubRow.PhoneSetup, HubRow.Phones).filter(::has)).takeIf { it.rows.isNotEmpty() },
         HubGroup("Sources", listOf(HubRow.Providers, HubRow.Indexers) + debridRows.filter(::has) + HubRow.Metadata),
-        HubGroup("Playback", listOf(HubRow.Playback, HubRow.Cache, HubRow.ThisDevice) + listOf(HubRow.Tvs, HubRow.GoogleCast).filter(::has)),
+        HubGroup(
+            "Playback",
+            listOf(HubRow.Playback, HubRow.Cache) + listOf(HubRow.Downloads).filter(::has) + HubRow.ThisDevice + listOf(HubRow.Tvs, HubRow.GoogleCast).filter(::has),
+        ),
         HubGroup("App", listOf(HubRow.Logs)),
         HubGroup("About", listOf(HubRow.Privacy)),
     )

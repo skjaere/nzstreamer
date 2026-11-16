@@ -8,6 +8,7 @@ import kotlin.test.assertEquals
  * and Google Cast; on a TV, Set up with your phone and Phones come first, and never Google Cast, even if asked for (L110).
  * About, with Privacy, on both, its line saying what leaves the device it is on; under it the footnote. Debrid services
  * and Torrent indexers follow Indexers in Sources on both (DbPhoneSources, DbTvSources 1), only while debrid shows (L192).
+ * Downloads follows Cache in Playback on a phone or tablet, never on a TV (item 20; W108, L369).
  */
 class SettingsScreenRowsTest {
     @Test
@@ -15,17 +16,19 @@ class SettingsScreenRowsTest {
         assertEquals(
             listOf(
                 HubGroup("Sources", listOf(HubRow.Providers, HubRow.Indexers, HubRow.DebridServices, HubRow.TorrentIndexers, HubRow.Metadata)),
-                HubGroup("Playback", listOf(HubRow.Playback, HubRow.Cache, HubRow.ThisDevice, HubRow.Tvs, HubRow.GoogleCast)),
+                HubGroup("Playback", listOf(HubRow.Playback, HubRow.Cache, HubRow.Downloads, HubRow.ThisDevice, HubRow.Tvs, HubRow.GoogleCast)),
                 HubGroup("App", listOf(HubRow.Logs)),
                 HubGroup("About", listOf(HubRow.Privacy)),
             ),
-            settingsHub(television = false, optional = setOf(HubRow.Tvs, HubRow.GoogleCast, HubRow.DebridServices, HubRow.TorrentIndexers), shown = true),
+            settingsHub(
+                television = false, optional = setOf(HubRow.Tvs, HubRow.GoogleCast, HubRow.DebridServices, HubRow.TorrentIndexers, HubRow.Downloads), shown = true,
+            ),
         )
         assertEquals("What leaves this phone, and to whom", privacyRowLine(television = false))
     }
 
     @Test
-    fun `a TV's hub, with its phone's rows first, About last and no Google Cast`() {
+    fun `a TV's hub, with its phone's rows first, About last and no Google Cast or Downloads`() {
         assertEquals(
             listOf(
                 HubGroup(null, listOf(HubRow.PhoneSetup, HubRow.Phones)),
@@ -34,7 +37,10 @@ class SettingsScreenRowsTest {
                 HubGroup("App", listOf(HubRow.Logs)),
                 HubGroup("About", listOf(HubRow.Privacy)),
             ),
-            settingsHub(television = true, optional = setOf(HubRow.PhoneSetup, HubRow.Phones, HubRow.GoogleCast, HubRow.DebridServices, HubRow.TorrentIndexers), shown = true),
+            settingsHub(
+                television = true, optional = setOf(HubRow.PhoneSetup, HubRow.Phones, HubRow.GoogleCast, HubRow.DebridServices, HubRow.TorrentIndexers, HubRow.Downloads),
+                shown = true,
+            ),
         )
         assertEquals("What leaves this TV, and to whom", privacyRowLine(television = true))
     }
@@ -50,12 +56,27 @@ class SettingsScreenRowsTest {
         assertEquals(
             listOf(
                 "Set up with your phone", "Phones", "Usenet providers", "Indexers", "Debrid services", "Torrent indexers", "Metadata", "Quality and languages", "Cache",
-                "This device", "TVs",
+                "Downloads", "This device", "TVs",
                 "Google Cast", "Logs", "Privacy",
             ),
             HubRow.entries.map { it.title },
         )
         assertEquals("Backup is still to come.", HUB_FOOTNOTE)
+    }
+
+    /**
+     * Item 20 (W108, L369): Downloads right after Cache, both this device's storage, where the caller opens it (a phone or
+     * tablet, while DownloadPlaces.shown); never on a TV, whoever asks for it, nor where the caller doesn't open it.
+     */
+    @Test
+    fun `the Downloads row comes after Cache on a phone, and never on a TV`() {
+        val playback = settingsHub(television = false, optional = setOf(HubRow.Downloads), shown = true).single { it.heading == "Playback" }
+        assertEquals(listOf(HubRow.Playback, HubRow.Cache, HubRow.Downloads, HubRow.ThisDevice), playback.rows)
+        listOf(false, true).forEach { shown ->
+            val tv = settingsHub(television = true, optional = setOf(HubRow.Downloads), shown = shown).flatMap { it.rows }
+            assertEquals(false, HubRow.Downloads in tv, "debrid shown $shown")
+        }
+        assertEquals(false, HubRow.Downloads in settingsHub(television = false, optional = emptySet(), shown = true).flatMap { it.rows })
     }
 
     /** L209 (DbTvSignIn 5): Set up with your phone's line names what its page takes, the debrid cards while debrid shows. */
