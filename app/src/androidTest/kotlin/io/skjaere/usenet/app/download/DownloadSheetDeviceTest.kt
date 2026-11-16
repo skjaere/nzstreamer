@@ -3,8 +3,11 @@ package io.skjaere.usenet.app.download
 import android.content.res.Configuration
 import android.os.Build
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
@@ -71,7 +74,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * - Choose release opens the list ranked for downloading; Back comes back to the sheet; a tap there downloads that
  *   release, first, and closes both.
  * - With the metered seam on, "Starts on Wi-Fi", on the sheet and in the list.
- * - At twice the font size, nothing cut off: Finding, the pick, and a film that won't fit.
+ * - At twice the font size, nothing cut off: Finding, the pick, and a film that won't fit, the sheet's content laid out
+ *   at that size in the test's window (the sheet's own window takes the system's); that film's list downloads what fits.
  *
  * The free space and the queue it reads are seams, so the numbers it says are the test's. The rows it queued are deleted
  * after each case, their folders with them, and the downloads' jobs cancelled. The show and film are invented.
@@ -86,6 +90,9 @@ class DownloadSheetDeviceTest {
     private val dao = container.data.downloads
     private val scheduled = AtomicInteger()
     private var closes = 0
+
+    /** The font size the case shows the sheet at, which its words are laid out at. */
+    private var fontScale = 1f
 
     /** The search answers once it is let go: at once, unless a case holds it. */
     private val answer = CompletableDeferred<Unit>()
@@ -178,7 +185,7 @@ class DownloadSheetDeviceTest {
 
     @Test
     fun atTwiceTheFontSizeNothingIsCutOff() = runBlocking<Unit> {
-        show(EPISODE, deps(metered = true), fontScale = 2f)
+        showContent(EPISODE, deps(metered = true), fontScale = 2f)
         waitFor(hasText(DownloadSheetModel.FINDING))
         listOf("Harbor Lights · S02E04 · Low Water", DownloadSheetModel.FINDING, DownloadSheetModel.FINDING_NOTE, "Cancel").forEach(::assertWhole)
 
@@ -196,7 +203,7 @@ class DownloadSheetDeviceTest {
     fun aFilmThatWontFitSaysWhatItNeedsWholeAtTwiceTheFontSize() = runBlocking<Unit> {
         answer.complete(Unit)
         // 3.0 GB free: after 1.0 GB kept free and the 1.2 GB a queued download still needs.
-        show(FILM, deps(space = DownloadSpace(available = 5_200_000_000, used = 0, queued = 1_200_000_000, queuedDownloads = 1)), fontScale = 2f)
+        showContent(FILM, deps(space = WONT_FIT_SPACE), fontScale = 2f)
         waitFor(hasText(DownloadSheetModel.WONT_FIT))
         assertEquals("a film ranked for downloading too", listOf(RankingTarget.Download), rankedBy.map { it.target })
         listOf(
@@ -205,7 +212,13 @@ class DownloadSheetDeviceTest {
             DownloadSheetModel.CHOOSE_RELEASE, DownloadSheetModel.STORAGE_SETTINGS, "Cancel",
         ).forEach(::assertWhole)
         assertFalse("no Download for one that won't fit", exists(hasText(DownloadSheetModel.TITLE) and hasClickAction()))
+    }
 
+    @Test
+    fun aFilmThatWontFitDownloadsTheReleaseThatFitsFromItsList() = runBlocking<Unit> {
+        answer.complete(Unit)
+        show(FILM, deps(space = WONT_FIT_SPACE))
+        waitFor(hasText(DownloadSheetModel.WONT_FIT))
         // Its list greys it, and downloads the one that fits.
         tap(DownloadSheetModel.CHOOSE_RELEASE)
         waitFor(hasText("Download Copper Crown"))
@@ -218,8 +231,28 @@ class DownloadSheetDeviceTest {
         assertEquals(2022 to 112, row.year to row.runtimeMinutes)
     }
 
+    /**
+     * The sheet's content for [request] over [deps], at [fontScale], in the test's own window: the sheet's window lays its
+     * words out at the system's font size, whatever a page's density says, so a case at twice the size shows its content.
+     */
+    private fun showContent(request: DownloadRequest, deps: DownloadSheetDeps, fontScale: Float) {
+        this.fontScale = fontScale
+        val scaled = context.createConfigurationContext(Configuration(context.resources.configuration).apply { this.fontScale = fontScale })
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(scaled)) {
+                AppTheme {
+                    val scope = rememberCoroutineScope()
+                    val model = remember { DownloadSheetModel(request, deps, scope) }
+                    LaunchedEffect(model) { model.start() }
+                    DownloadSheetContent(request, model, onChoose = {}, onClose = {})
+                }
+            }
+        }
+    }
+
     /** The sheet for [request] over the app's own runner, with [deps], at [fontScale], as a page's Download opens it. */
     private fun show(request: DownloadRequest, deps: DownloadSheetDeps, fontScale: Float = 1f) {
+        this.fontScale = fontScale
         val scaled = context.createConfigurationContext(Configuration(context.resources.configuration).apply { this.fontScale = fontScale })
         var open by mutableStateOf(true)
         compose.setContent {
@@ -306,6 +339,8 @@ class DownloadSheetDeviceTest {
 
     /** A button's [text] whole, as [assertWhole], where the same words are also a title's. */
     private fun assertWholeButton(text: String) {
+        // In sight first: at twice the size the sheet's buttons are below the fold, and a node out of sight has no bounds.
+        compose.onNode(hasText(text) and hasClickAction()).performScrollTo()
         val button = compose.onAllNodes(hasText(text) and hasClickAction()).fetchSemanticsNodes().single()
         val node = compose.onAllNodes(hasText(text), useUnmergedTree = true).fetchSemanticsNodes()
             .firstOrNull { it.textLayout() != null && button.boundsInWindow.contains(it.boundsInWindow.center) } ?: throw AssertionError("no button '$text'")
@@ -314,6 +349,8 @@ class DownloadSheetDeviceTest {
 
     private fun assertWhole(text: String, node: SemanticsNode) {
         val layout = node.textLayout()!!
+        // At the font size the case asked for: a window of its own (a sheet's, a dialog's) lays out at the system's.
+        assertEquals("'$text' laid out at font scale ${layout.layoutInput.density.fontScale}", fontScale, layout.layoutInput.density.fontScale)
         val last = layout.lineCount - 1
         assertFalse(
             "'$text' is cut: ${layout.lineCount} lines in ${layout.layoutInput.constraints}",
@@ -365,6 +402,9 @@ class DownloadSheetDeviceTest {
             item(ATMOS, 3_400_000_000, score = 2.0),
             item(FERRY, 9_800_000_000, indexer = "dl-sheet-b", score = 1.0),
         )
+
+        /** 3.0 GB free: after 1.0 GB kept free and the 1.2 GB a queued download still needs. */
+        val WONT_FIT_SPACE = DownloadSpace(available = 5_200_000_000, used = 0, queued = 1_200_000_000, queuedDownloads = 1)
 
         val FILM_RELEASES = listOf(item(COPPER, 4_300_000_000, score = 3.0), item(COPPER_BLURAY, 8_900_000_000, score = 2.0), item(COPPER_720, 2_200_000_000, score = 1.0))
     }

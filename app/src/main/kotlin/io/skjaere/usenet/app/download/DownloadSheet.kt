@@ -101,7 +101,6 @@ internal fun DownloadSheet(request: DownloadRequest, onClose: () -> Unit, deps: 
     // Back from Android's storage page: the room made there read again.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { model.shown() }
     val state by model.state.collectAsStateWithLifecycle()
-    val downloading by model.downloading.collectAsStateWithLifecycle()
     val closed by model.closed.collectAsStateWithLifecycle()
     var listing by remember(model) { mutableStateOf(false) }
     LaunchedEffect(closed) { if (closed) onClose() }
@@ -115,19 +114,31 @@ internal fun DownloadSheet(request: DownloadRequest, onClose: () -> Unit, deps: 
         DownloadReleaseList(listed.first, request.title, listed.second, onBack = { listing = false })
         return
     }
-    val context = LocalContext.current
     ModalBottomSheet(
         onDismissRequest = onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = colors.background,
         dragHandle = { BottomSheetDefaults.DragHandle() },
     ) {
-        Column(Modifier.navigationBarsPadding().padding(bottom = 16.dp).verticalScroll(rememberScrollState())) {
-            SheetTitle(DownloadSheetModel.TITLE, request.subtitle)
-            when (val s = state) {
-                DownloadSheetState.Finding -> Finding(onCancel = onClose)
-                is DownloadSheetState.Pick -> Pick(s, downloading, onDownload = model::download, onChoose = { listing = true }, onCancel = onClose)
-                is DownloadSheetState.WontFit -> WontFit(s, onChoose = { listing = true }, onStorage = { openStorageSettings(context) }, onCancel = onClose)
-                is DownloadSheetState.NoRelease -> NoRelease(s, onClose = onClose)
-            }
+        DownloadSheetContent(request, model, onChoose = { listing = true }, onClose = onClose)
+    }
+}
+
+/**
+ * What the sheet shows of [model] for [request]: its title, then Finding, the pick, Won't fit or no release, scrolling at
+ * large font sizes; [onChoose] opens Choose release's list, [onClose] ends it. A composable of its own, as the sheet's
+ * window lays it out at the system's font size whatever a page's own says: a test lays this out at twice the size itself.
+ */
+@Composable
+internal fun DownloadSheetContent(request: DownloadRequest, model: DownloadSheetModel, onChoose: () -> Unit, onClose: () -> Unit) {
+    val state by model.state.collectAsStateWithLifecycle()
+    val downloading by model.downloading.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    Column(Modifier.navigationBarsPadding().padding(bottom = 16.dp).verticalScroll(rememberScrollState())) {
+        SheetTitle(DownloadSheetModel.TITLE, request.subtitle)
+        when (val s = state) {
+            DownloadSheetState.Finding -> Finding(onCancel = onClose)
+            is DownloadSheetState.Pick -> Pick(s, downloading, onDownload = model::download, onChoose = onChoose, onCancel = onClose)
+            is DownloadSheetState.WontFit -> WontFit(s, onChoose = onChoose, onStorage = { openStorageSettings(context) }, onCancel = onClose)
+            is DownloadSheetState.NoRelease -> NoRelease(s, onClose = onClose)
         }
     }
 }
