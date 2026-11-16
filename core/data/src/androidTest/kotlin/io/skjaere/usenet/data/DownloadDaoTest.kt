@@ -12,8 +12,8 @@ import org.junit.runner.RunWith
 
 /**
  * This device's downloads as the library stores them (L351): the queue in its order and a move in it, the finished ones
- * by watch key, a show's and a film's, the progress record written whole, a row read back as it was written, and a
- * delete.
+ * by watch key, a show's and a film's, the progress record written whole, a row read back as it was written (version 15's
+ * search facts, file chosen by hand and limit's wait among it), and a delete.
  */
 @RunWith(AndroidJUnit4::class)
 class DownloadDaoTest {
@@ -142,6 +142,32 @@ class DownloadDaoTest {
         val done = row.copy(state = DownloadState.Done, reason = null, safeOffset = 880_000_000, completedAt = 13, updatedAt = 13)
         downloads.update(done)
         assertEquals(done, downloads.get(row.id))
+    }
+
+    @Test
+    fun aRowsSearchFactsPickAndLimitWaitAreWrittenAndReadBack() = runBlocking<Unit> {
+        val search = """{"name":"Harbor Lights","year":2021,"tvdb":700002,"tmdb":900002,"airDate":"2023-03-14","runtimeMinutes":52,"searched":false}"""
+        val pick = """{"index":3,"name":"Harbor.Lights.S02E05.1080p.WEB.h264-PACK.mkv","size":1412345678,"nzbId":"a1b2c3d4"}"""
+        val limitWait = """{"indexerId":"fake","kind":"Search","since":1700000000000,"until":1700003600000}"""
+        val row = episode("a", 5, position = 0, season = 2).copy(search = search, pick = pick, limitWait = limitWait)
+        downloads.insert(row)
+        downloads.insert(episode("b", 6, position = 1, season = 2))
+        assertEquals(row, downloads.get("a"))
+        // A row without them reads none.
+        val plain = downloads.get("b")
+        assertEquals(listOf(null, null, null), listOf(plain?.search, plain?.pick, plain?.limitWait))
+
+        // The whole row's write changes them, and clears them, as the runner does at Done.
+        val waiting = row.copy(state = DownloadState.Waiting, limitWait = """{"indexerId":"fake","kind":"Download","since":1700000500000}""", updatedAt = 20)
+        downloads.update(waiting)
+        assertEquals(waiting, downloads.get("a"))
+        val done = waiting.copy(state = DownloadState.Done, search = null, pick = null, limitWait = null, completedAt = 30, updatedAt = 30)
+        downloads.update(done)
+        assertEquals(done, downloads.get("a"))
+        // A state's write leaves them be.
+        downloads.update(waiting)
+        downloads.setState("a", DownloadState.Queued, null, 40)
+        assertEquals(waiting.copy(state = DownloadState.Queued, reason = null, updatedAt = 40), downloads.get("a"))
     }
 
     @Test

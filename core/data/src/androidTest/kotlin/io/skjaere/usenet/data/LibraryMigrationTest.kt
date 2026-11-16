@@ -20,8 +20,8 @@ import org.junit.runner.RunWith
  * original language among its TMDB facts), 8 (with when a release needed a password it didn't come with), 9
  * (with which kind a recent search is: a search of the indexers, or a TMDB title opened), 10 (with whether
  * a show's audio is the audio description), 11 (with the titles taken out of Home's Up next), 12 (with where a
- * remembered release played from), 13 (with when a release was found a copy of a disc) and 14 (with this device's
- * downloads).
+ * remembered release played from), 13 (with when a release was found a copy of a disc), 14 (with this device's
+ * downloads) and 15 (with a download's search facts, its file chosen by hand and the indexer's limit it waits out).
  */
 @RunWith(AndroidJUnit4::class)
 class LibraryMigrationTest {
@@ -717,11 +717,91 @@ class LibraryMigrationTest {
         }
     }
 
-    /** Every migration in turn, from the first version on, ends at the schema Room expects of version 14. */
+    /**
+     * Version 15 adds a download's search facts, its file chosen by hand and the indexer's limit it waits out
+     * ([Download.search], [Download.pick], [Download.limitWait]): every version 14 row stays, a finished download and the
+     * watch state of its episode among them, with none of the three.
+     */
     @Test
-    fun theWholeChainFrom1To14Validates() {
+    fun everyVersion14RowSurvivesTheMigrationTo15() {
+        val key = "episode:tmdb:900002:s1:e2"
+        helper.createDatabase(NAME, 14).use { db ->
+            db.execSQL(
+                "INSERT INTO watch_state (`key`, kind, showTmdbId, season, episode, movieTmdbId, title, positionMs, durationMs, watched, lastPlayedAt, " +
+                    "updatedAt, deleted, release_indexerId, release_guid, release_title, release_downloadTemplate, release_fileIndex, release_nzbId, " +
+                    "release_fileName, release_fileSize, release_source) VALUES " +
+                    "('$key', 'Episode', 900002, 1, 2, NULL, 'Harbor Lights S01E02', 700000, 2700000, 0, 22, 23, 0, " +
+                    "'fake', 'hl-s01e02', 'Harbor.Lights.S01E02.1080p.WEB.h264-GRP', 'http://x/api?t=get&id=hl-s01e02&apikey={apikey}', 0, 'abc', " +
+                    "'Harbor.Lights.S01E02.1080p.WEB.h264-GRP.mkv', 1400000000, NULL)",
+            )
+            db.execSQL(
+                "INSERT INTO download (id, watchKey, kind, title, subtitle, showTmdbId, season, episode, seasonEpisodes, episodeName, movieTmdbId, " +
+                    "year, runtimeMinutes, posterPath, stillPath, state, reason, position, candidates, tried, oneVideo, fileName, size, indexerSize, " +
+                    "safeOffset, gaps, relativePath, video, tracks, createdAt, completedAt, updatedAt, release_indexerId, release_guid, release_title, " +
+                    "release_downloadTemplate, release_fileIndex, release_nzbId, release_fileName, release_fileSize, release_source) VALUES " +
+                    "('9b0f6a52-3c1d-4e7a-8f20-5d6c7b8a9e01', '$key', 'Episode', 'Harbor Lights', 'S01E02 · Low Water', 900002, 1, 2, 10, 'Low Water', NULL, " +
+                    "NULL, 52, '/p.jpg', '/s.jpg', 'Done', NULL, 0, " +
+                    "'[{\"indexerId\":\"fake\",\"guid\":\"hl-s01e02\",\"title\":\"Harbor.Lights.S01E02.1080p.WEB.h264-GRP\",\"size\":1450000000}]', " +
+                    "'[\"fake/hl-s01e02\"]', 1, 'Harbor.Lights.S01E02.1080p.WEB.h264-GRP.mkv', 1400000000, 1450000000, 1400000000, " +
+                    "'[{\"first\":10,\"last\":20}]', 'downloads/9b0f6a52-3c1d-4e7a-8f20-5d6c7b8a9e01/v.mkv', '{\"fps\":23.976}', NULL, 40, 41, 41, " +
+                    "'fake', 'hl-s01e02', 'Harbor.Lights.S01E02.1080p.WEB.h264-GRP', NULL, 0, 'abc', 'Harbor.Lights.S01E02.1080p.WEB.h264-GRP.mkv', " +
+                    "1400000000, NULL)",
+            )
+        }
+
+        helper.runMigrationsAndValidate(NAME, 15, true, LibraryDatabase.MIGRATION_14_15).use { db ->
+            fun count(table: String) = db.query("SELECT COUNT(*) FROM $table").use { it.moveToFirst(); it.getInt(0) }
+            assertEquals(1, count("watch_state"))
+            assertEquals(1, count("download"))
+            db.query("SELECT search, pick, limitWait FROM download").use { c ->
+                c.moveToFirst()
+                assertEquals(listOf(true, true, true), (0 until c.columnCount).map { c.isNull(it) })
+            }
+        }
+
+        val room = Room.databaseBuilder(instrumentation.targetContext, LibraryDatabase::class.java, NAME).addMigrations(*LibraryDatabase.MIGRATIONS).build()
+        try {
+            val library = LibraryRepository(room) { 50 }
+            runBlocking {
+                val release = RememberedRelease(
+                    "fake", "hl-s01e02", "Harbor.Lights.S01E02.1080p.WEB.h264-GRP", "http://x/api?t=get&id=hl-s01e02&apikey={apikey}", 0, "abc",
+                    "Harbor.Lights.S01E02.1080p.WEB.h264-GRP.mkv", 1_400_000_000,
+                )
+                assertEquals(release, library.lastRelease(key))
+                assertEquals(700_000L, library.state(key).first()?.positionMs)
+                val done = Download(
+                    id = "9b0f6a52-3c1d-4e7a-8f20-5d6c7b8a9e01", watchKey = key, kind = DownloadKind.Episode, title = "Harbor Lights",
+                    subtitle = "S01E02 · Low Water", showTmdbId = 900002, season = 1, episode = 2, seasonEpisodes = 10, episodeName = "Low Water",
+                    runtimeMinutes = 52, posterPath = "/p.jpg", stillPath = "/s.jpg", state = DownloadState.Done, position = 0,
+                    candidates = listOf(DownloadCandidate("fake", "hl-s01e02", "Harbor.Lights.S01E02.1080p.WEB.h264-GRP", size = 1_450_000_000)),
+                    tried = listOf("fake/hl-s01e02"), oneVideo = true, release = release.copy(downloadTemplate = null),
+                    fileName = "Harbor.Lights.S01E02.1080p.WEB.h264-GRP.mkv", size = 1_400_000_000, indexerSize = 1_450_000_000,
+                    safeOffset = 1_400_000_000, gaps = listOf(DownloadGap(10, 20)), relativePath = "downloads/9b0f6a52-3c1d-4e7a-8f20-5d6c7b8a9e01/v.mkv",
+                    video = """{"fps":23.976}""", createdAt = 40, completedAt = 41, updatedAt = 41,
+                )
+                assertEquals(done, room.downloads().doneFor(key))
+                // The new columns at work: a queued episode of the same season, with its search facts, a pick and a limit's wait.
+                val queued = done.copy(
+                    id = "c2d4e6f8-1a3b-4c5d-8e7f-9a0b1c2d3e4f", watchKey = "episode:tmdb:900002:s1:e3", episode = 3, subtitle = "S01E03",
+                    episodeName = null, state = DownloadState.Waiting, position = 1, candidates = emptyList(), tried = emptyList(), oneVideo = false,
+                    release = null, fileName = null, size = null, safeOffset = 0, gaps = emptyList(), relativePath = null, video = null,
+                    completedAt = null, search = """{"name":"Harbor Lights","searched":true}""",
+                    pick = """{"index":2,"name":"Harbor.Lights.S01E03.1080p.WEB.h264-PACK.mkv","size":1400000000,"nzbId":"def"}""",
+                    limitWait = """{"indexerId":"fake","kind":"Download","since":50}""",
+                )
+                room.downloads().insert(queued)
+                assertEquals(queued, room.downloads().get(queued.id))
+            }
+        } finally {
+            room.close()
+        }
+    }
+
+    /** Every migration in turn, from the first version on, ends at the schema Room expects of version 15. */
+    @Test
+    fun theWholeChainFrom1To15Validates() {
         helper.createDatabase(NAME, 1).close()
-        helper.runMigrationsAndValidate(NAME, 14, true, *LibraryDatabase.MIGRATIONS).close()
+        helper.runMigrationsAndValidate(NAME, 15, true, *LibraryDatabase.MIGRATIONS).close()
     }
 
     private companion object {

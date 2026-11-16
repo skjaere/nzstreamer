@@ -390,7 +390,7 @@ private val gapsSerializer: KSerializer<List<DownloadGap>> = ListSerializer(Down
         CollectedMovie::class, ShowSummary::class, MovieSummary::class, SummaryRefresh::class, TriedRelease::class, UpNextRemoval::class,
         Download::class,
     ],
-    version = 14,
+    version = 15,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -573,10 +573,21 @@ abstract class LibraryDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Version 15 adds a download's search facts, its file chosen by hand and the indexer's limit it waits out
+         * ([Download.search], [Download.pick], [Download.limitWait], L405); every version 14 row stays, with none of them.
+         */
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // As Room creates them (schemas/.../15.json). Columns only.
+                listOf("search", "pick", "limitWait").forEach { db.execSQL("ALTER TABLE `download` ADD COLUMN `$it` TEXT") }
+            }
+        }
+
         /** Every migration, oldest first, as [create] opens the database with them. */
         val MIGRATIONS = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
-            MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
+            MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
         )
 
         /** The app's library, or another file of [name] (the scale tests' own, so the app's is never touched). */

@@ -63,6 +63,11 @@ data class DownloadGap(val first: Long, val last: Long)
  * so far. [relativePath]: the finished file's path under the app's folder on the primary volume
  * ("downloads/<id>/v.mkv", its `.part` until done), set once the file is made and its whole [size] allocated, and null
  * while there is none; so a row with one holds its size on the device, and one without still needs it (DownloadSpace).
+ *
+ * Version 15's three (L405), JSON the app reads and writes, as [video] and [tracks] are: a season row's search facts
+ * ([search], L392: the show's names and ids, the episode's air date and runtime, whether its turn has searched), the file
+ * chosen in a pack by hand ([pick], L403: never in [release]), and an indexer's limit the row waits out ([limitWait],
+ * L434: which indexer, which limit, since and until when, as the row's [reason] names none). Null where there is none.
  */
 @Entity(tableName = "download", indices = [Index("watchKey"), Index("showTmdbId"), Index("position")])
 data class Download(
@@ -99,6 +104,11 @@ data class Download(
     val createdAt: Long,
     val completedAt: Long? = null,
     val updatedAt: Long,
+    // No default value in the schema (no @ColumnInfo(defaultValue)), as MIGRATION_14_15's ADD COLUMN makes them: Room
+    // compares the two as it opens the database.
+    val search: String? = null,
+    val pick: String? = null,
+    val limitWait: String? = null,
 ) {
     companion object {
         /** A new download's id: a random UUID, whose letters, digits and hyphens a URI and a folder's name hold as they are. */
