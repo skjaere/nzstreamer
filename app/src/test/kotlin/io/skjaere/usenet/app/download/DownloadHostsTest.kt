@@ -42,6 +42,10 @@ class DownloadHostsTest {
     /** What was asked of Android, in turn: the service's start and the job's schedule, each with its cause. */
     private val asked = mutableListOf<String>()
 
+    /** What holds the job from running now, as its constraints judge the device; and what the next download was said to wait for. */
+    private var need: ServicePlan.Need = ServicePlan.Need.Met
+    private val said = mutableListOf<String>()
+
     /** What happens once the ask has read whether a walk is under way or the job waits, after the first of the two reads. */
     private var afterRead: (() -> Unit)? = null
 
@@ -68,6 +72,8 @@ class DownloadHostsTest {
                 asked += "job ${cause.name}"
                 scheduleJob(cause)
             },
+            need = { need },
+            waits = { words -> said += words },
         ),
     )
 
@@ -197,6 +203,43 @@ class DownloadHostsTest {
         assertTrue(hosts(debug = DownloadDebug.Off).schedule(ScheduleCause.AppStart))
         assertEquals(listOf("job AppStart"), asked)
         assertEquals(emptyList(), traced())
+    }
+
+    /**
+     * Android 14 on, the job waits under its constraints, never started, where the service would wait in place: the download
+     * it would run next says what for, as the service's does (DlPhoneMovie's "Queued for download" over "Waiting for Wi-Fi").
+     */
+    @Test
+    fun `a job that waits for its network or the charger says so on the download it would run next`() = runBlocking<Unit> {
+        need = ServicePlan.Need.Network(DownloadHostRules.WAITING_FOR_WIFI)
+        assertTrue(hosts().schedule(ScheduleCause.Download))
+        assertEquals(listOf(DownloadHostRules.WAITING_FOR_WIFI), said)
+        // A job already waiting: still said, of whichever download is next now.
+        pending = true
+        need = ServicePlan.Need.Charger
+        assertFalse(hosts().schedule(ScheduleCause.AppStart))
+        assertEquals(listOf(DownloadHostRules.WAITING_FOR_WIFI, DownloadHostRules.WAITING_TO_CHARGE), said)
+        pending = false
+        // Its needs met: it runs, and says nothing.
+        need = ServicePlan.Need.Met
+        assertTrue(hosts().schedule(ScheduleCause.Resume))
+        // A walk under way, from the background, nothing to run, a job Android refused: nothing said.
+        need = ServicePlan.Need.Network(DownloadHostRules.WAITING_FOR_NETWORK)
+        walking = true
+        hosts().schedule(ScheduleCause.Resume)
+        walking = false
+        visible = false
+        hosts().schedule(ScheduleCause.Resume)
+        visible = true
+        rows = emptyList()
+        hosts().schedule(ScheduleCause.Resume)
+        rows = listOf(row())
+        jobTaken = false
+        hosts().schedule(ScheduleCause.Resume)
+        jobTaken = true
+        // The service waits in place and says it itself (item 10).
+        hosts(sdk = 33).schedule(ScheduleCause.Resume)
+        assertEquals(listOf(DownloadHostRules.WAITING_FOR_WIFI, DownloadHostRules.WAITING_TO_CHARGE), said)
     }
 
     /** A download that can run: Harbor Lights' episode, queued. */

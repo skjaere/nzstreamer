@@ -328,6 +328,35 @@ class UidtHostDeviceTest {
     }
 
     /**
+     * Queued on mobile data with Only on Wi-Fi or Ethernet on (a new install's): the job is scheduled from the activity and
+     * waits for Wi-Fi, never started, and the download says so ("Waiting for Wi-Fi", as the Movie page's button and the
+     * episode row draw it), where without a stop of a running job nothing would; back on Wi-Fi the job runs it.
+     */
+    @Test
+    fun queuedOnMobileDataItSaysWaitingForWifiAndTheJobRunsItOnWifi() = runBlocking<Unit> {
+        queue(9)
+        val id = made.single()
+        dataWas = shell("settings get global mobile_data").trim()
+        shell("svc data enable")
+        wifiOff = true
+        shell("svc wifi disable")
+        waitFor("on mobile data", 60_000) { container.defaultNetwork.now.value.takeIf { it.usable && !it.unmetered } }
+        ActivityScenario.launch(MainActivity::class.java).use {
+            val waiting = waitFor("the download saying it waits for Wi-Fi", 30_000) { runBlocking { dao.get(id) }?.takeIf { it.state == DownloadState.Waiting } }
+            assertEquals(DownloadHostRules.WAITING_FOR_WIFI, waiting.reason)
+            val words = TitleDownloads.button(TitleDownload.of(DownloadRunner.Item(waiting, waiting.safeOffset, null)))
+            assertEquals(TitleDownloads.QUEUED to DownloadHostRules.WAITING_FOR_WIFI, words.text to words.second?.text)
+            assertNotNull("the job waits for its network", scheduler.getPendingJob(JobPlan.ID))
+            assertEquals("never started on mobile data", emptyList<Long>(), starts())
+        }
+        throttle(FAST)
+        shell("svc wifi enable")
+        wifiOff = false
+        waitFor("the job on Wi-Fi", 120_000) { starts().firstOrNull() }
+        underWay(id)
+    }
+
+    /**
      * Android runs the job again after a timeout when its backoff lets it, which on phone34 came 110 s, 156 s and over 300 s
      * after the stop in three runs: the case runs it as soon as the stop is seen, its backoff cut short from the shell and
      * its constraints still asked (`cmd jobscheduler run` without -f).

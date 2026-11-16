@@ -78,13 +78,37 @@ class DownloadHosts(private val deps: DownloadHostsDeps) {
         }
     }
 
-    /** Schedules the job for [cause] as [DownloadHostRules.schedules] allows, for the [rows] that can run. */
+    /**
+     * Schedules the job for [cause] as [DownloadHostRules.schedules] allows, for the [rows] that can run. A job that waits
+     * under its constraints, scheduled now or already waiting, has the download it would run next say what it waits for
+     * ([sayWait]), as the service does while it waits in place.
+     */
     private suspend fun scheduleJob(cause: ScheduleCause, visible: Boolean, rows: List<Download>): ScheduleResult {
         // Waiting first: a start ahead of its walk reads as waiting until its walk takes the queue up, and walking from then.
         val pending = deps.pending()
-        val schedules = DownloadHostRules.schedules(cause, deps.television, visible, rows.isNotEmpty(), deps.walking(), pending)
-        if (!schedules) return ScheduleResult.Skipped
-        return if (deps.scheduleJob(cause, rows)) ScheduleResult.Scheduled else ScheduleResult.Refused
+        val walking = deps.walking()
+        val schedules = DownloadHostRules.schedules(cause, deps.television, visible, rows.isNotEmpty(), walking, pending)
+        if (!schedules) {
+            if (visible && rows.isNotEmpty() && pending && !walking) sayWait()
+            return ScheduleResult.Skipped
+        }
+        if (!deps.scheduleJob(cause, rows)) return ScheduleResult.Refused
+        sayWait()
+        return ScheduleResult.Scheduled
+    }
+
+    /**
+     * The job waits while its network or the charger isn't there, never started, so no stop of it says why: the download
+     * it would run next says it ("Waiting for Wi-Fi", "Waiting to charge"), as the page, the title's pages and Home read it.
+     * Nothing while its needs are met: it runs.
+     */
+    private suspend fun sayWait() {
+        val words = when (val need = deps.need()) {
+            is ServicePlan.Need.Network -> need.words
+            ServicePlan.Need.Charger -> DownloadHostRules.WAITING_TO_CHARGE
+            ServicePlan.Need.Met -> return
+        }
+        deps.waits(words)
     }
 
     companion object {
@@ -108,7 +132,9 @@ class DownloadHosts(private val deps: DownloadHostsDeps) {
  * What [DownloadHosts] reads and asks of Android: the app's ([of]), or a test's fakes. [startService] starts the service
  * from the visible app, throwing [IllegalStateException] where Android refuses it; [pending] says whether the job waits to
  * run, or runs ahead of its walk ([DownloadJobService.pending]), and [scheduleJob] schedules it for the rows that can run,
- * whether Android took it (both Android 14's).
+ * whether Android took it (both Android 14's). [need] is what holds the job back now, its network or the charger as the
+ * settings ask for them ([ServicePlan.need]), and [waits] has the download it would run next say so
+ * ([DownloadRunner.hostWaits]).
  */
 class DownloadHostsDeps(
     /** Whether this is a TV, where nothing of downloads runs (W108, L369). */
@@ -127,6 +153,8 @@ class DownloadHostsDeps(
     val startService: () -> Unit,
     val pending: () -> Boolean,
     val scheduleJob: suspend (cause: ScheduleCause, rows: List<Download>) -> Boolean,
+    val need: suspend () -> ServicePlan.Need = { ServicePlan.Need.Met },
+    val waits: suspend (words: String) -> Unit = {},
 ) {
     companion object {
         /** The app's: the container's runner and settings, the service, and the job on Android 14 and later. */
@@ -143,6 +171,12 @@ class DownloadHostsDeps(
             scheduleJob = { cause, rows ->
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) scheduleJob(context, container, cause, rows) else false
             },
+            // The default network as the service judges it, the one JobScheduler judges the job's by (ServicePlan.networkMet).
+            need = {
+                val needs = DownloadHostRules.needs(container.settings.downloads.first())
+                ServicePlan.need(needs, ServicePlan.networkMet(container.defaultNetwork.now.value, needs.unmetered), !needs.charging || pluggedIn(context))
+            },
+            waits = { words -> container.downloads.hostWaits(words) },
         )
 
         /** Whether the job waits to run ([DownloadJobService.pending]). */

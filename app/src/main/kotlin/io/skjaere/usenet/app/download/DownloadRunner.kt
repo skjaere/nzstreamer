@@ -692,10 +692,11 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     }
 
     /**
-     * The service waits in place for its need (item 10), its walk stopped where it was: the download it would run next says
-     * why ([reason]: "Waiting for Wi-Fi", "Waiting to charge"), the one a stopped walk left under way first, else the first
-     * that can run, so the page and the notification say what holds it. A need's wait still runs (L388), so the next walk
-     * takes it up first. Under the queue's lock: nothing while a walk runs one, nor in a held queue.
+     * The host waits for its need: the service in place (item 10), its walk stopped where it was, or the job under its
+     * constraints, scheduled and not started (L335). The download it would run next says why ([reason]: "Waiting for
+     * Wi-Fi", "Waiting to charge"), the one a stopped walk left under way first, else the first that can run, so the page,
+     * the title's pages and the notification say what holds it. A need's wait still runs (L388), so the next walk takes it
+     * up first. Under the queue's lock: nothing while a walk runs one, nor in a held queue.
      */
     suspend fun hostWaits(reason: String) {
         if (!runs) return
