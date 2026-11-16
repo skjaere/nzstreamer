@@ -27,10 +27,14 @@ import io.skjaere.usenet.search.RankedItem
 import io.skjaere.usenet.search.SearchStage
 import io.skjaere.usenet.search.SeasonFind
 import io.skjaere.usenet.search.SeasonRequest
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import java.time.LocalDate
+import kotlin.coroutines.ContinuationInterceptor
+import kotlin.coroutines.CoroutineContext
 
 /**
  * What a Download sheet reads and asks, faked, for the one episode's or film's sheet and the season's alike; what it
@@ -79,6 +83,9 @@ internal class SheetFakes {
     /** The releases Choose file grabbed, by key, and the NZBs it prepared with the password given beside each, in order. */
     val grabbed = mutableListOf<String>()
     val prepared = mutableListOf<Pair<ByteArray, String?>>()
+
+    /** How often Choose file's work went to where it reads NZBs ([DownloadSheetDeps.nzbReading]), off the sheet's thread. */
+    var readsAway = 0
 
     fun deps(outlive: CoroutineScope) = DownloadSheetDeps(
         findEpisode = { request, context ->
@@ -131,7 +138,16 @@ internal class SheetFakes {
         },
         providersLeftOut = { leftOut },
         today = { SheetFixtures.TODAY },
+        nzbReading = Away(outlive.coroutineContext[ContinuationInterceptor] as? CoroutineDispatcher ?: Dispatchers.Unconfined),
     )
+
+    /** Where Choose file reads NZBs: [inner], the test's own dispatcher, so its virtual time holds, each dispatch counted. */
+    private inner class Away(private val inner: CoroutineDispatcher) : CoroutineDispatcher() {
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            readsAway++
+            inner.dispatch(context, block)
+        }
+    }
 
     private fun queued(target: DownloadTarget, candidates: List<DownloadCandidate>) = Download(
         id = "queued", watchKey = target.watchKey, kind = target.kind, title = target.title, position = 0, candidates = candidates,

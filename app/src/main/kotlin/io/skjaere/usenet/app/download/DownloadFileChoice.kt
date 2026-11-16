@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import kotlin.time.TimeSource
 
@@ -147,8 +148,9 @@ class DownloadFileChoice internal constructor(
         }
         log.info("{}Choose file: the pack's NZB fetched, {} bytes", named, fetched.bytes.size)
         _state.value = State.Opening(StepStatus.Done(fetching.elapsedNow().inWholeMilliseconds, formatSize(fetched.bytes.size.toLong())), StepStatus.Running())
-        // The NZB's own password wins: nzb-streamer reads it, and one given to prepare would take its place.
-        val password = fetched.password?.takeIf { ownPassword(fetched.bytes) == null }
+        // The NZB's own password wins: nzb-streamer reads it, and one given to prepare would take its place. A pack's NZB of
+        // several MB is read off the sheet's main thread, its scope's.
+        val password = fetched.password?.takeIf { withContext(deps.nzbReading) { ownPassword(fetched.bytes) } == null }
         val prepared = when (val outcome = deps.prepare(fetched.bytes, release.item.title, password)) {
             is PrepareOutcome.Ready -> outcome.nzb
             is PrepareOutcome.NeedsPassword -> return failed("opened", AttemptFailure.Passworded)

@@ -128,6 +128,8 @@ class DownloadFileChoiceTest {
         runCurrent()
         choice.files()
         assertEquals(listOf("idx-b/$PACK"), fakes.grabbed)
+        // The pack's NZB, several MB of it, read for its own password off the sheet's main thread.
+        assertTrue(fakes.readsAway > 0, "the NZB read where the deps say, not on the sheet's thread")
         // The indexer's password beside the NZB, which has none of its own, as a play gives it.
         assertEquals(INDEXERS_PASSWORD, fakes.prepared.single().second)
         assertContentEquals(PACK_NZB, fakes.prepared.single().first)

@@ -56,6 +56,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.plus
 import org.slf4j.LoggerFactory
 import java.time.LocalDate
+import kotlin.coroutines.CoroutineContext
 
 /**
  * What a Download sheet is for (L338): an episode, searched as Choose release searches it, or a film, searched as its page
@@ -215,6 +216,11 @@ data class DownloadSheetDeps(
     /** Whether a provider is left out of the engine: a pack missing articles may then be whole on it, as a play's words say. */
     val providersLeftOut: () -> Boolean = { false },
     val today: () -> LocalDate = { LocalDate.now() },
+    /**
+     * Where Choose file reads a pack's NZB for its own password: off the sheet's main thread, as a pack's NZB of several MB
+     * takes a while to parse, as the rest of the app parses one (a test's dispatcher keeps its virtual time).
+     */
+    val nzbReading: CoroutineContext = Dispatchers.Default,
 ) {
     companion object {
         /**
