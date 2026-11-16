@@ -32,6 +32,8 @@ class DownloadSpaceTest {
         )
         assertEquals(20 * GB, space.available)
         assertEquals(3_200_000_000, space.queued)
+        // The two still to make their file: the sheet's "the queued downloads still need".
+        assertEquals(2, space.queuedDownloads)
         assertEquals(4 * GB, space.used)
         assertEquals(15_800_000_000, space.free)
         // The video cache's own reserve, so downloads never make Android clear it or TMDB's cache (C14).
@@ -47,6 +49,7 @@ class DownloadSpaceTest {
         assertEquals(3_100_000_000, space.used)
         // Its remaining 1.8 GB is allocated already: only the queued one's 1.2 GB is set aside from what Android can give.
         assertEquals(1_200_000_000, space.queued)
+        assertEquals(1, space.queuedDownloads)
         assertEquals(41 * GB - GB - 1_200_000_000, space.free)
 
         // While it resolves, before its file is made, it still needs its whole size, as a queued one does.

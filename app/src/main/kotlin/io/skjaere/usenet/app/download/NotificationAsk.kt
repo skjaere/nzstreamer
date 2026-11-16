@@ -61,6 +61,9 @@ class NotificationAsk(
         waiting.await()
     }
 
+    /** Whether the next Download asks ([due]): the Download sheet's line about it shows while it does. */
+    suspend fun due(): Boolean = due(sdk, shown(), asked(), granted())
+
     /** Android answered, allowed or refused, or the activity ended with the dialog up: the downloads waiting for it start. */
     fun answered() {
         answer?.complete(Unit)

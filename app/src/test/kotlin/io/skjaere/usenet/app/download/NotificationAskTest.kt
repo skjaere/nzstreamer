@@ -43,6 +43,21 @@ class NotificationAskTest {
     }
 
     @Test
+    fun `whether it is due reads the device, where downloads show, the saved setting and the permission now`() = runTest {
+        val fakes = Fakes()
+        val ask = fakes.make()
+        assertTrue(ask.due(), "the Download sheet's line shows")
+        fakes.granted = true
+        assertFalse(ask.due(), "allowed since")
+        fakes.granted = false
+        fakes.asked = true
+        assertFalse(ask.due(), "asked before")
+        assertFalse(Fakes(sdk = 32).make().due())
+        assertFalse(Fakes(shown = false).make().due())
+        assertEquals(0, fakes.launches, "nothing asked of Android")
+    }
+
+    @Test
     fun `the first Download asks once, saved before Android's dialog, and goes on with either answer`() = runTest {
         val fakes = Fakes()
         val ask = fakes.make()

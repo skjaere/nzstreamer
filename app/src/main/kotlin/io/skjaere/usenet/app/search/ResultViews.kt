@@ -65,17 +65,19 @@ fun sourceLabel(s: Source?): String? = when (s) {
     Source.Hdtv -> "HDTV"; Source.Dvd -> "DVD"; Source.Telesync, Source.Cam -> "CAM"; null -> null
 }
 
-/** The short chips for a release: "1080p · WEB-DL · 2.1 GB · ≈ 8.0 Mbps". */
-fun summaryChips(item: RankedItem): List<String> {
+/** A release's quality as its name says it: "1080p", "WEB-DL", and HEVC or AV1 (with 10-bit) where it is one of those. */
+fun qualityParts(item: RankedItem): List<String> {
     val p = item.parsed
     return listOfNotNull(
         p.resolution?.let { "${it}p" },
         sourceLabel(p.source),
         p.videoCodec?.takeIf { it.name == "Hevc" || it.name == "Av1" }?.let { it.label + if (p.tenBit) " 10-bit" else "" },
-        item.item.sizeBytes.takeIf { it > 0 }?.let(::formatSize),
-        bitrateChip(item.ranked),
     )
 }
+
+/** The short chips for a release: "1080p · WEB-DL · 2.1 GB · ≈ 8.0 Mbps". */
+fun summaryChips(item: RankedItem): List<String> =
+    qualityParts(item) + listOfNotNull(item.item.sizeBytes.takeIf { it > 0 }?.let(::formatSize), bitrateChip(item.ranked))
 
 /**
  * The ranker's own estimate of the release's bitrate, from the ranking its list was made with (so the chip and the order
