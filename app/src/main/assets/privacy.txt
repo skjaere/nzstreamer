@@ -2,7 +2,7 @@ NZStreamer has no analytics, no ads and no server of its own. What leaves this p
 
 ## Your providers and indexers
 
-The app sends your searches to the indexers you add, and asks your Usenet providers for the parts of what you play. It comes with none set up. Their own terms apply.
+The app sends your searches to the indexers you add, and asks your Usenet providers for the parts of what you play or download. It comes with none set up. Their own terms apply.
 
 [debrid]## Your torrent indexers and debrid services
 
@@ -36,7 +36,7 @@ While you cast, your phone sends the video to the Cast device over your home net
 
 ## On this device
 
-Your settings, your library and what the app learns about your Cast devices stay on this device. Android’s transfer to a new phone may copy them, but never your passwords, keys or TV pairings. Passwords and keys are stored encrypted, the app makes no cloud backups, and logs leave the device only when you share them from Settings › Logs.
+Your settings, your library and what the app learns about your Cast devices stay on this device. Android’s transfer to a new phone may copy them, but never your passwords, keys or TV pairings. Downloads stay on this phone or tablet, in NZStreamer’s own storage: they aren’t backed up or copied to a new phone, and uninstalling the app deletes them. Passwords and keys are stored encrypted, the app makes no cloud backups, and logs leave the device only when you share them from Settings › Logs.
 
 ## This website
 

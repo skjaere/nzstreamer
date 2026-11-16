@@ -13,8 +13,8 @@
 </p>
 
 NZStreamer plays video from Usenet on Android phones, tablets and TVs. It streams straight from your own Usenet
-provider, using NZBs from your own indexers: nothing is downloaded first. It comes with no providers, indexers or
-content of its own.
+provider, using NZBs from your own indexers, and on phones and tablets it can also save a release to the device to watch
+offline. It comes with no providers, indexers or content of its own.
 
 ## What it does
 
@@ -51,6 +51,10 @@ content of its own.
 - Says when the stream is slower than the video needs, and asks what to do when a release turns out to miss parts.
 - Phones: picture-in-picture, double-tap to seek, fit, fill and zoom.
 - TVs: switches the TV to the video's frame rate (optional), and seeks faster while a remote key is held.
+
+### Offline (phones and tablets)
+- Saves a release to the app's own storage on the device, to play without a network: one at a time, in the background,
+  going on after a dropped connection or a restart. Not on TVs.
 
 ### Phones and TVs together
 - Play on TV: pair your phone with your TV on your home network by matching numbers, start plays on the TV from the

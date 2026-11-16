@@ -25,6 +25,10 @@ internal const val DEBRID_HEADING = "Your torrent indexers and debrid services"
  * Discover, as the release APK carries the asset (checkNoDiscover reads every entry); "This website" is there. The site's
  * page, kept private, is checked against it by PrivacySitePageTest when given the page (item 53, L137).
  *
+ * L374 (downloads, on phones and tablets): the providers' part says the app asks for the parts of what you play or
+ * download, and "On this device" says downloads stay in the app's own storage, out of backups and transfers, and go with
+ * an uninstall. No new recipient.
+ *
  * L211, L192: the asset marks its debrid parts, the opening's words naming torrent indexers and debrid services and the
  * part about them, which says what the app sends them, what stays in an account and what the app removes from a TorBox
  * account (L255), the one service it names, in that sentence alone. The page shows them while debrid shows and leaves them
@@ -125,6 +129,25 @@ class PrivacyTextTest {
         assertTrue("never your passwords, keys or TV pairings" in device, device)
     }
 
+    /** L374: a download's parts come from the same providers as a play's, so their part says both, and names no one new. */
+    @Test
+    fun `the providers' part says the app asks for the parts of what you play or download`() {
+        val providers = section("Your providers and indexers")
+        assertTrue("asks your Usenet providers for the parts of what you play or download." in providers, providers)
+        assertFalse("for the parts of what you play." in text, "the words from before downloads")
+        assertEquals(listOf(OPENING), hidden.first().paragraphs, "the opening, and so its recipients, as before")
+    }
+
+    /** L374, L350: downloads stay on the device, out of Android's backups and its transfer to a new phone, and an uninstall deletes them. */
+    @Test
+    fun `On this device says downloads stay, aren't backed up or copied to a new phone, and go with an uninstall`() {
+        val device = section("On this device")
+        assertTrue(DOWNLOADS_STAY in device, device)
+        // Said where the transfer is, after what it may copy.
+        assertTrue(device.indexOf("never your passwords, keys or TV pairings") < device.indexOf(DOWNLOADS_STAY), device)
+        assertEquals(device, hidden.single { it.heading == "On this device" }.paragraphs.joinToString(" "), "the same in the hidden form the site holds")
+    }
+
     @Test
     fun `the beta builds' TMDB sentence is there and names nothing of Discover`() {
         assertTrue("In the beta builds, the lists of titles to browse are asked of TMDB" in section("TMDB"))
@@ -143,6 +166,11 @@ class PrivacyTextTest {
             "NZStreamer has no analytics, no ads and no server of its own. What leaves this phone goes to your own Usenet " +
                 "providers and indexers, to TMDB with your own key, to TheIntroDB while its switch is on, and to Google while " +
                 "its Cast software runs."
+
+        /** L374's sentence in "On this device". */
+        const val DOWNLOADS_STAY =
+            "Downloads stay on this phone or tablet, in NZStreamer’s own storage: they aren’t backed up or copied to a new phone, " +
+                "and uninstalling the app deletes them."
 
         /** The opening's words naming the debrid recipients (L211), marked in the asset. */
         const val DEBRID_WORDS = "to your own torrent indexers and debrid services, "
