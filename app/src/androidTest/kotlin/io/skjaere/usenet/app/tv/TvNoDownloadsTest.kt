@@ -201,7 +201,11 @@ class TvNoDownloadsTest {
                         onDownloads = { opened++ }, onDownloadsShow = { opened++ },
                     )
                 } else {
-                    SettingsScreen(onBack = null, onProviders = {}, onIndexers = {}, onMetadata = {}, onPlayback = {}, onCache = {}, onLogs = {})
+                    // Given a Downloads page to open, as a phone's Settings is: the hub's own gates leave its row out on a TV.
+                    SettingsScreen(
+                        onBack = null, onProviders = {}, onIndexers = {}, onMetadata = {}, onPlayback = {}, onCache = {}, onLogs = {},
+                        onDownloads = { opened++ },
+                    )
                 }
             }
         }
