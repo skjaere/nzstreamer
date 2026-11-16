@@ -32,11 +32,12 @@ class ReleaseListModeTest {
 
     private val gb = 1_000_000_000L
 
-    private fun item(title: String, size: Long, indexer: String = "a") = RankedItem(
+    private fun item(title: String, size: Long, indexer: String = "a", hash: String? = null) = RankedItem(
         NewznabItem(
             indexerId = indexer, guid = title, title = title, sizeBytes = size, publishedAt = null, postedAt = null,
             categories = emptyList(), grabs = null, passworded = false, files = null, tvdbId = null, tmdbId = null, imdbId = null,
             tvmazeId = null, season = null, episode = null, coverUrl = null, mediaInfo = null, downloadTemplate = null, attributes = emptyMap(),
+            infoHash = hash,
         ),
         RankedRelease(ReleaseFacts("$indexer/$title", title, size), ReleaseParser.parse(title), playable = true, score = 1.0, reasons = emptyList(), estimatedBitrate = null),
     )
@@ -99,7 +100,52 @@ class ReleaseListModeTest {
         assertNull(uncounted.packLine(pack))
     }
 
+    /**
+     * Choose file in download mode (L403): on a Usenet release that holds several episodes (a season pack, a release of two)
+     * and fits, where the list offers it at all; greyed "Needs Wi-Fi" on mobile data while downloads wait for Wi-Fi or
+     * Ethernet, as opening its pack reads tens of MB; never on a single episode, a release that won't fit, or a torrent.
+     */
+    @Test
+    fun `Choose file is offered on a Usenet pack that fits, greyed on mobile data, and never on a single episode, one too big or a torrent`() {
+        val chosen = mutableListOf<RankedItem>()
+        fun mode(free: Long, startsOnWifi: Boolean = false) = ReleaseListMode.Download(free, startsOnWifi, seasonEpisodes = 8, onChooseFile = { chosen += it }) {}
+        val two = item(TWO, 2_400_000_000)
+        val torrentPack = item(PACK_TORRENT, 11_200_000_000, indexer = "t", hash = "0123456789abcdef0123456789abcdef01234567")
+        assertEquals(ReleaseListMode.Download.FileChoiceOffer.Offered, mode(3 * gb).fileChoice(pack))
+        assertEquals(ReleaseListMode.Download.FileChoiceOffer.Offered, mode(3 * gb).fileChoice(two))
+        assertNull(mode(3 * gb).fileChoice(episode), "a single episode")
+        // The pack's share of 1.4 GB doesn't fit in 1.0 GB: its card is greyed, and offers nothing.
+        assertFalse(mode(gb).fits(pack))
+        assertNull(mode(gb).fileChoice(pack), "a greyed card")
+        assertNull(mode(14 * gb).fileChoice(torrentPack), "a torrent")
+        assertEquals(ReleaseListMode.Download.FileChoiceOffer.NeedsWifi, mode(3 * gb, startsOnWifi = true).fileChoice(pack))
+        assertEquals("Needs Wi-Fi", ReleaseListMode.Download.NEEDS_WIFI)
+        // A list that offers it on no card.
+        assertNull(download(14 * gb).fileChoice(pack))
+        assertEquals(emptyList(), chosen)
+    }
+
+    /**
+     * The list's cards take Choose file in download mode from the mode ([ReleaseListMode.Download.fileChoice]): offered there
+     * as it says, greyed with its line; a play's list keeps its own rule (a release of several episodes, its own onChooseFile).
+     * Read from ReleaseList's source, as the card is a composable: the old rule, which kept it off every download list, gone.
+     */
+    @Test
+    fun `the list's cards offer Choose file in download mode as the mode says, greyed with its line, and a play's as before`() {
+        val source = java.io.File("src/main/kotlin/io/skjaere/usenet/app/search/ReleaseList.kt").readText()
+        assertFalse("download == null && item.offersFileChoice" in source, "Choose file kept off every download list")
+        listOf(
+            "val offer = download?.fileChoice(item)",
+            "offer != null -> download.onChooseFile?.let { choose -> { choose(item) } }",
+            "download == null -> onChooseFile?.takeIf { item.offersFileChoice }?.let { choose -> { choose(item) } }",
+            "chooseFileNote = ReleaseListMode.Download.NEEDS_WIFI.takeIf { offer == ReleaseListMode.Download.FileChoiceOffer.NeedsWifi }",
+            "enabled = chooseFileNote == null",
+        ).forEach { assertTrue(it in source, "ReleaseList.kt lacks: $it") }
+    }
+
     private companion object {
+        const val TWO = "Harbor.Lights.S02E04E05.1080p.WEB-DL.DDP5.1.H.264-WREN"
+        const val PACK_TORRENT = "Harbor.Lights.S02.1080p.WEB.H264-SALTMARSH"
         const val KESTREL = "Harbor.Lights.S02E04.1080p.WEB-DL.DDP5.1.H.265-KESTREL"
         const val PACK = "Harbor.Lights.S02.1080p.WEB-DL.DDP5.1.H.264-DRIFTWOOD"
         const val FERRY = "Harbor.Lights.S02E04.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-FERRY"

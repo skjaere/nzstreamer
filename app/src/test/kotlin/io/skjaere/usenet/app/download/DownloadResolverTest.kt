@@ -1689,6 +1689,48 @@ class DownloadResolverTest {
         assertEquals(listOf("${unnamedPack.guid}/Harbor.Lights.4_6.mp4@fake"), checked)
     }
 
+    /**
+     * L403: a file chosen by hand in a pack (Choose file) is picked from the pack's NZB kept with its row, with no question
+     * and no grab: its volumes checked once it is picked, and probed, as any release's file is. The pick wins over the file
+     * that played the episode last.
+     */
+    @Test
+    fun `a file chosen by hand in a pack is picked from the NZB kept with its row, with no question and no grab`() = runBlocking<Unit> {
+        row(unnamedPack, single) { it.copy(pick = DownloadColumns.text(DownloadPick(3, "Harbor.Lights.4_6.mp4", 900_000_004L, PreparedNzb.idFor(unnamedPack.nzb)))) }
+        storage.keepGrab(ID, key(unnamedPack), unnamedPack.nzb, null)
+        lastPlayed[WatchKey.episode(SHOW, 2, 4)] = RememberedRelease(
+            INDEXER, unnamedPack.guid, unnamedPack.title, null, fileIndex = 1, nzbId = PreparedNzb.idFor(unnamedPack.nzb), fileName = "Harbor.Lights.2-6.mp4",
+            fileSize = 900_000_002L,
+        )
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertEquals("Harbor.Lights.4_6.mp4", ready.file.name)
+        assertEquals(emptyList(), grabbed)
+        assertEquals(listOf(unnamedPack.guid), opened.map { it.first })
+        assertEquals(listOf(key(unnamedPack)), probed)
+        // Only the chosen file's volume, once the pack was open.
+        assertEquals(listOf("${unnamedPack.guid}/Harbor.Lights.4_6.mp4@fake"), checked)
+        assertEquals(unnamedPack.guid, stored().release?.guid)
+        assertEquals("Harbor.Lights.4_6.mp4", stored().fileName)
+    }
+
+    /**
+     * L403 with DN1's L339: a chosen file no longer in its pack's NZB (a pack grabbed again, listed otherwise) falls back to
+     * the episode's file there; with none named for the episode, that attempt fails, and the next release is tried.
+     */
+    @Test
+    fun `a chosen file no longer in its pack falls back to the episode's file, else that attempt fails`() = runBlocking<Unit> {
+        row(pack) { it.copy(pick = DownloadColumns.text(DownloadPick(9, "Harbor.Lights.S02E04.REPACK.mkv", 1_000_000_009L, PreparedNzb.idFor(pack.nzb)))) }
+        storage.keepGrab(ID, key(pack), pack.nzb, null)
+        assertEquals("Harbor.Lights.S02E04.1080p.WEB.h264-GRP.mkv", assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).file.name)
+
+        reset()
+        row(unnamedPack, single) { it.copy(pick = DownloadColumns.text(DownloadPick(9, "Harbor.Lights.9_6.mp4", 900_000_009L, PreparedNzb.idFor(unnamedPack.nzb)))) }
+        storage.keepGrab(ID, key(unnamedPack), unnamedPack.nzb, null)
+        assertEquals("a8f3c1.mkv", assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).file.name)
+        assertEquals(listOf(single.guid), grabbed)
+        assertEquals(listOf(key(single)), probed)
+    }
+
     /** The turn's lines, the pack's attempt and a release passed over among them, name the row by its id: no release, key or title. */
     @Test
     fun `a turn's lines name the row by its id, never a release, a key or the show`() = runBlocking<Unit> {

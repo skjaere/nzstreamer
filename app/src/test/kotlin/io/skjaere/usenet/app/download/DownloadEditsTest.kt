@@ -104,7 +104,7 @@ class DownloadEditsTest {
         val row = episode("run", 4, DownloadState.Running)
         fakes.rows[row.id] = row
         val candidates = listOf(DownloadCandidate("idx-a", "pack", "Harbor.Lights.S02.1080p.WEB-DL.H.264-WREN", size = 11_200_000_000))
-        assertEquals(row, fakes.deps(backgroundScope).replacing(row).enqueue(DownloadTarget.episode(HL, "Harbor Lights", 2, 4), candidates, 1_400_000_000))
+        assertEquals(row, fakes.deps(backgroundScope).replacing(row).enqueue(DownloadTarget.episode(HL, "Harbor Lights", 2, 4), candidates, 1_400_000_000, null))
         assertEquals(listOf("replace run 1400000000"), fakes.calls)
     }
 
@@ -262,7 +262,7 @@ internal class PageFakes {
         },
         undoRemove = { ids -> calls += "undo $ids" },
         move = { id, up -> calls += "move $id ${if (up) "up" else "down"}" },
-        replace = { id, _, need -> calls += "replace $id $need" },
+        replace = { id, _, need, _ -> calls += "replace $id $need" },
         retry = { id -> calls += "retry $id" },
         schedule = { cause -> calls += "schedule $cause" },
         lookUp = { show, season, episode ->
@@ -281,11 +281,13 @@ internal class PageFakes {
             prefs = { DownloadPrefs() },
             network = { NetworkNow(usable = true, unmetered = true, wifi = true) },
             askDue = { false },
-            enqueue = { _, _, _ -> null },
+            enqueue = { _, _, _, _ -> null },
             enqueueAll = { error("No season queued from the Downloads page") },
             beforeDownload = {},
             schedule = {},
             outlive = outlive,
+            grab = { error("No pack opened from the Downloads page's edits") },
+            prepare = { _, _, _ -> error("No pack opened from the Downloads page's edits") },
         ),
         get = { rows[it] },
         play = { calls += "play ${it.id}" },

@@ -526,7 +526,7 @@ class DownloadsPageTest {
             prefs = { DownloadPrefs() },
             network = { NetworkNow(usable = true, unmetered = true, wifi = true) },
             askDue = { false },
-            enqueue = { _, candidates, _ ->
+            enqueue = { _, candidates, _, _ ->
                 calls += "replace"
                 replaced += row.id to candidates
                 row
@@ -535,6 +535,8 @@ class DownloadsPageTest {
             beforeDownload = {},
             schedule = { calls += "schedule" },
             outlive = scope,
+            grab = { error("No pack opened by Choose release's tap") },
+            prepare = { _, _, _ -> error("No pack opened by Choose release's tap") },
         )
     }
 

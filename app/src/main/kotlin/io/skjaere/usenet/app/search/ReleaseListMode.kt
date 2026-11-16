@@ -16,9 +16,16 @@ sealed interface ReleaseListMode {
      * this device (DownloadSpace.free), against which each release's [need] is checked: one that won't fit stays in its
      * place, greyed and not tappable. [startsOnWifi]: this phone is on mobile data while downloads wait for Wi-Fi or
      * Ethernet. [seasonEpisodes]: the season's episode count (TMDB's) for an episode's list, which a season pack's share of
-     * the one episode is reckoned by, as the ranker reckons its bitrate.
+     * the one episode is reckoned by, as the ranker reckons its bitrate. [onChooseFile]: Choose file on a pack's card, which
+     * opens the pack to choose the one file to download ([fileChoice], L403); none where the list offers it on no card.
      */
-    class Download(val free: Long, val startsOnWifi: Boolean, val seasonEpisodes: Int? = null, val onDownload: (RankedItem) -> Unit) : ReleaseListMode {
+    class Download(
+        val free: Long,
+        val startsOnWifi: Boolean,
+        val seasonEpisodes: Int? = null,
+        val onChooseFile: ((RankedItem) -> Unit)? = null,
+        val onDownload: (RankedItem) -> Unit,
+    ) : ReleaseListMode {
         /** What [item] needs on this device for the one episode or film: a season pack's share where its season is counted, else its size. */
         fun need(item: RankedItem): Long = need(item, seasonEpisodes)
 
@@ -52,6 +59,21 @@ sealed interface ReleaseListMode {
 
         private fun packShare(item: RankedItem): Long? = episodeShare(item.item.sizeBytes, item.parsed, seasonEpisodes)
 
+        /**
+         * Choose file on [item]'s card (L403), where the list offers it ([onChooseFile]): on a Usenet release named as
+         * several episodes ([offersFileChoice]) that fits; greyed, [FileChoiceOffer.NeedsWifi], on mobile data while
+         * downloads wait for Wi-Fi or Ethernet, as opening its pack reads tens of MB (W110). Null on any other card: a single
+         * episode, one greyed as it won't fit, a torrent.
+         */
+        fun fileChoice(item: RankedItem): FileChoiceOffer? = when {
+            onChooseFile == null || item.item.infoHash != null || !item.offersFileChoice || !fits(item) -> null
+            startsOnWifi -> FileChoiceOffer.NeedsWifi
+            else -> FileChoiceOffer.Offered
+        }
+
+        /** How a card offers Choose file: [Offered], or greyed as opening its pack [NeedsWifi]. */
+        enum class FileChoiceOffer { Offered, NeedsWifi }
+
         companion object {
             /**
              * What [item] needs on this device for one episode of a season of [seasonEpisodes] (TMDB's count), or for a film
@@ -62,6 +84,9 @@ sealed interface ReleaseListMode {
 
             const val RANKED_FOR_DOWNLOADING = "Ranked for downloading: smaller first"
             const val STARTS_ON_WIFI = "Starts on Wi-Fi: this phone is on mobile data."
+
+            /** Under a greyed Choose file, on mobile data while downloads wait for Wi-Fi or Ethernet. */
+            const val NEEDS_WIFI = "Needs Wi-Fi"
         }
     }
 }

@@ -6,6 +6,7 @@ import io.skjaere.usenet.app.play.MissingReleases
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.play.PlayingPack
 import io.skjaere.usenet.app.play.ProbedTracksSerializer
+import io.skjaere.usenet.app.play.RememberedFile
 import io.skjaere.usenet.app.play.Replay
 import io.skjaere.usenet.app.play.STEP_LABELS
 import io.skjaere.usenet.app.play.VideoTiming
@@ -802,7 +803,10 @@ class DownloadResolver(
 
     /**
      * The episode's file in a release, else its largest video; in the release that played it last, the file that played
-     * (Replay.picker), so a file chosen while streaming a pack is picked again with no question (L402).
+     * (Replay.picker), so a file chosen while streaming a pack is picked again with no question (L402). A file chosen by
+     * hand in the pack (Choose file, L403) wins: in that NZB, the row's kept grab, it is picked with no question, by its
+     * name and size, as a remembered file is ([RememberedFile]); where it is no longer there, the episode's, else that
+     * attempt fails (L339). Its pack, the row's first release, isn't checked whole: the chosen file's volumes are.
      */
     private suspend fun picker(row: Download): FilePicker {
         val season = row.season
@@ -811,6 +815,10 @@ class DownloadResolver(
             FilePicker.Episode(season, episode) to WatchTarget(WatchKind.Episode, WatchTitle.episode(row.title, season, episode), row.showTmdbId, season, episode)
         } else {
             FilePicker.Largest to WatchTarget(WatchKind.Movie, row.title, movieTmdbId = row.movieTmdbId)
+        }
+        DownloadColumns.pick(row)?.let { pick ->
+            log.info("download {}: its file chosen by hand in its pack, picked with no question", row.id)
+            return RememberedFile(pick.index, base, pick.nzbId, row.candidates.firstOrNull()?.title, pick.name, pick.size)
         }
         val remembered = try {
             lastRelease(row.watchKey)

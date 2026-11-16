@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.download
 
+import android.annotation.SuppressLint
 import android.content.Context
 import io.skjaere.usenet.app.AppContainer
 import io.skjaere.usenet.app.NetworkNow
@@ -8,15 +9,22 @@ import io.skjaere.usenet.app.collection.ListSearch
 import io.skjaere.usenet.app.collection.ReleaseChooser
 import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
 import io.skjaere.usenet.app.play.EpisodePlay
+import io.skjaere.usenet.app.play.FileChoice
 import io.skjaere.usenet.app.play.MovieTarget
+import io.skjaere.usenet.app.play.PlaybackCoordinator
+import io.skjaere.usenet.app.play.indexerGrab
 import io.skjaere.usenet.app.play.movieNoReleaseNote
 import io.skjaere.usenet.app.play.noRelease
+import io.skjaere.usenet.app.play.playCandidate
 import io.skjaere.usenet.app.search.MovieFind
 import io.skjaere.usenet.app.search.ReleaseListMode
 import io.skjaere.usenet.app.search.findMovieReleases
 import io.skjaere.usenet.app.search.forEpisode
 import io.skjaere.usenet.app.search.qualityParts
 import io.skjaere.usenet.app.search.rankedAgain
+import io.skjaere.usenet.core.FetchedNzb
+import io.skjaere.usenet.core.FilePicker
+import io.skjaere.usenet.core.PrepareOutcome
 import io.skjaere.usenet.core.formatSize
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
@@ -43,6 +51,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.plus
 import org.slf4j.LoggerFactory
@@ -150,15 +159,31 @@ sealed interface DownloadSheetState {
 
     /** No Usenet release to download: what each search of the indexers did ([stages]), as the play sheet says it, and its [note]. */
     data class NoRelease(val stages: List<Pair<String, String>>, val note: String? = null) : DownloadSheetState
+
+    /**
+     * A file chosen in a pack, back on the sheet (L403, L435): the pack [item] of [group], listed in [mode], and its [file],
+     * which needs its own exact size; the [chosen] file and the pack's NZB that Download keeps with the download; what is
+     * [free] for a new download, when it would [start], and whether the sheet says that Android asks next ([asks], L358).
+     */
+    data class Chosen(
+        val group: ResultGroup,
+        val item: RankedItem,
+        val mode: ReleaseListMode.Download,
+        val file: FileChoice,
+        val chosen: ChosenFile,
+        val free: Long,
+        val start: DownloadStart,
+        val asks: Boolean,
+    ) : DownloadSheetState
 }
 
 /**
  * What a Download sheet reads and asks, one title's or a season's: the app's ([of]), or a test's fakes. [findEpisode],
  * [findMovie] and [findSeason] are the searches, by the ranking [context] given; [space], [rows], [prefs], [network] and
  * [charging] what the sheet says of the device; [askDue] and [beforeDownload] Android's notification ask (L358);
- * [enqueue] (one title) or [enqueueAll] (a season's episodes) and [schedule] the download, counted at what the sheet
- * reckoned its pick needs until it is resolved, and its host. What Download starts runs in [outlive], on the main
- * thread, so the sheet's close never cuts it short.
+ * [enqueue] (one title, with a file chosen in a pack where one was) or [enqueueAll] (a season's episodes) and [schedule]
+ * the download, counted at what the sheet reckoned its pick needs until it is resolved, and its host. What Download starts
+ * runs in [outlive], on the main thread, so the sheet's close never cuts it short. [grab] and [prepare] are Choose file's.
  */
 data class DownloadSheetDeps(
     val findEpisode: (request: EpisodeRequest, context: RankingContext) -> Flow<FinderEvent>,
@@ -177,12 +202,18 @@ data class DownloadSheetDeps(
     /** Whether the device is on the charger now, which Only while charging waits for (L365). */
     val charging: () -> Boolean = { true },
     val askDue: suspend () -> Boolean,
-    val enqueue: suspend (target: DownloadTarget, candidates: List<DownloadCandidate>, need: Long) -> Download?,
+    val enqueue: suspend (target: DownloadTarget, candidates: List<DownloadCandidate>, need: Long, chosen: ChosenFile?) -> Download?,
     /** A season's episodes queued at once, in episode order ([DownloadRunner.enqueueAll]): the rows queued, none on a TV. */
     val enqueueAll: suspend (items: List<DownloadRunner.QueueItem>) -> List<Download>,
     val beforeDownload: suspend () -> Unit,
     val schedule: suspend () -> Unit,
     val outlive: CoroutineScope,
+    /** Choose file's one grab of a pack's NZB from its indexer, with the password sent beside it (L403). */
+    val grab: suspend (item: RankedItem) -> FetchedNzb,
+    /** Choose file's one prepare of a pack's NZB, outside the NZB store (DN1's L383). */
+    val prepare: suspend (nzb: ByteArray, title: String, password: String?) -> PrepareOutcome,
+    /** Whether a provider is left out of the engine: a pack missing articles may then be whole on it, as a play's words say. */
+    val providersLeftOut: () -> Boolean = { false },
     val today: () -> LocalDate = { LocalDate.now() },
 ) {
     companion object {
@@ -190,8 +221,10 @@ data class DownloadSheetDeps(
          * The app's: the episode finder, the film's search and the season's over the Usenet indexers alone (L370), ranked
          * for downloading; the downloads' storage, rows and settings; the default network and the charger, as [context]
          * reads it; the activity's notification [ask] (none outside MainActivity); the runner's queue, and its host
-         * scheduled from the visible app (L335).
+         * scheduled from the visible app (L335). Choose file's grab is the coordinator's, as a download's Resolve grabs
+         * (its test seam), and its prepare the container's preparer, which keeps nothing in the NZB store.
          */
+        @SuppressLint("VisibleForTests") // The coordinator's grab, read as each grab is made, so a test serves both.
         fun of(container: AppContainer, ask: NotificationAsk?, context: Context) = DownloadSheetDeps(
             findEpisode = { request, context -> flow { emitAll(container.finder.find(request, usenetIndexers(container), context)) } },
             findMovie = { movie, context -> findMovieReleases(container, movie, indexers = { usenetIndexers(container) }, context = { context }) },
@@ -204,11 +237,20 @@ data class DownloadSheetDeps(
             charging = { pluggedIn(context) },
             askDue = { ask?.due() == true },
             // One per title: a sheet restored after its Download, or a second tap, has the download already queued.
-            enqueue = { target, candidates, need -> container.downloads.enqueue(target, candidates, need, onePerTitle = true) },
+            enqueue = { target, candidates, need, chosen ->
+                container.downloads.enqueue(target, candidates, need, onePerTitle = true, pick = chosen?.pick, grab = chosen?.grab)
+            },
             enqueueAll = { items -> container.downloads.enqueueAll(items) },
             beforeDownload = { ask?.beforeDownload() },
             schedule = { container.downloadHosts.schedule(ScheduleCause.Download) },
             outlive = container.appScope + Dispatchers.Main.immediate,
+            grab = { item ->
+                val indexers = container.indexerConfigs().associateBy { it.id }
+                indexerGrab(mapOf(item.key to item.item), indexers) { indexer, nzb -> PlaybackCoordinator.fetchNzb(container, indexer, nzb) }
+                    .fetchWithPassword(item.playCandidate)
+            },
+            prepare = { nzb, title, password -> container.preparer.prepare(nzb, title, password) },
+            providersLeftOut = { container.engine.leftOut.value.isNotEmpty() },
         )
 
         /** The indexers a download searches: the app's Usenet ones ([usenetOnly]). */
@@ -229,13 +271,86 @@ data class DownloadSheetDeps(
  * - [DownloadSheetState.Pick]: the download ranking's first Usenet release, with the space free and when it starts.
  * - [DownloadSheetState.WontFit]: the first doesn't fit; Choose release shows the ones that do.
  * - [DownloadSheetState.NoRelease]: nothing to download, with the indexers' lines.
+ * - [DownloadSheetState.Chosen]: a file chosen in a pack from the list (Choose file, L403, L435), with its exact size.
  *
  * Torrents are left out (L370). [download] (the sheet's Download, or a tap in the list) queues the download with up to 10
  * releases that fit, in download order, the one chosen first, and the sheet is [closed]; then Android's notification ask
- * where it is due, then the host's schedule. The search runs in [scope], the sheet's, and goes with it.
+ * where it is due, then the host's schedule. A file chosen in a pack goes with it: the pack first, the file's size its
+ * need, the pack's NZB kept with the download. The search runs in [scope], the sheet's, and goes with it.
+ *
+ * The list's Choose file ([chooseFile], an episode's alone) opens a pack's files ([choice]) in [scope] too. A file chosen
+ * there comes back to the sheet as its Chosen file; where the list replaces download [replacing]'s releases (the Downloads
+ * page's Choose release), it replaces them at once, as a tap in that list does. A pack whose files couldn't be listed is
+ * marked in the list with why ([failed]).
  */
-class DownloadSheetModel(private val request: DownloadRequest, private val deps: DownloadSheetDeps, private val scope: CoroutineScope) {
+class DownloadSheetModel(
+    private val request: DownloadRequest,
+    private val deps: DownloadSheetDeps,
+    private val scope: CoroutineScope,
+    private val replacing: String? = null,
+) {
     private val chooser = ReleaseChooser<DownloadRequest>(scope)
+
+    private val _choice = MutableStateFlow<DownloadFileChoice?>(null)
+
+    /** Choose file under way on a pack of the list: its sheet over the list while it is there. */
+    val choice: StateFlow<DownloadFileChoice?> = _choice.asStateFlow()
+
+    private val _failed = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /** Why each pack whose Choose file couldn't list its files failed, by key, as the list marks it (L435). */
+    val failed: StateFlow<Map<String, String>> = _failed.asStateFlow()
+
+    /** Choose file on [item], one of the list shown now: where its card offers it ([ReleaseListMode.Download.fileChoice]). */
+    fun chooseFile(item: RankedItem) {
+        when (val s = _state.value) {
+            is DownloadSheetState.Pick -> chooseFile(item, s.group, s.mode)
+            is DownloadSheetState.WontFit -> chooseFile(item, s.group, s.mode)
+            is DownloadSheetState.Chosen -> chooseFile(item, s.group, s.mode)
+            else -> Unit
+        }
+    }
+
+    /** Choose file's Cancel, Try another release and Close: its sheet goes, and the grab or prepare under way with it. */
+    fun closeChoice() {
+        _choice.value?.cancel()
+        _choice.value = null
+    }
+
+    /**
+     * Opens [item]'s files, a pack of [group] listed in [mode]: an episode's, where its card offers Choose file now (never
+     * greyed for Wi-Fi), and no Download under way. One open before is closed first.
+     */
+    private fun chooseFile(item: RankedItem, group: ResultGroup, mode: ReleaseListMode.Download) {
+        val play = (request as? DownloadRequest.Episode)?.play ?: return
+        if (mode.fileChoice(item) != ReleaseListMode.Download.FileChoiceOffer.Offered || _downloading.value || _closed.value) return
+        closeChoice()
+        val choice = DownloadFileChoice(
+            item, request.subtitle, FilePicker.Episode(play.season, play.episode), play.episodeName, deps, scope, replacing,
+            onFailed = { reason -> _failed.update { it + (item.key to reason) } },
+        ) { file, picked -> chosen(item, group, mode, file, picked) }
+        _choice.value = choice
+        choice.start()
+    }
+
+    /**
+     * [file] of the pack [item] chosen (L435): from the Downloads page its download's release replaced at once; else back
+     * on the sheet as its Chosen file, with the space free, when it would start and the ask's line, as a pick says them.
+     * The files' sheet goes once the Chosen file is there to show, so the sheet never shows its pick before it meanwhile.
+     */
+    private fun chosen(item: RankedItem, group: ResultGroup, mode: ReleaseListMode.Download, file: FileChoice, chosen: ChosenFile) {
+        if (replacing != null) {
+            _choice.value = null
+            return download(item, group, mode, file.sizeBytes, chosen)
+        }
+        scope.launch {
+            val prefs = deps.prefs()
+            val network = deps.network()
+            val free = deps.space()?.free ?: 0
+            _state.value = DownloadSheetState.Chosen(group, item, mode, file, chosen, free, startOf(deps.rows(), prefs, network, deps.charging), deps.askDue())
+            _choice.value = null
+        }
+    }
 
     /** What the search said of its indexers, for [DownloadSheetState.NoRelease]: the last of it, set before its releases. */
     private var said = DownloadSheetState.NoRelease(emptyList())
@@ -270,7 +385,9 @@ class DownloadSheetModel(private val request: DownloadRequest, private val deps:
             chooser.state.collectLatest { chosen ->
                 if (chosen is ChooseState.Ready) {
                     found = chosen.group
-                    _state.value = decide(chosen.group)
+                    val now = decide(chosen.group)
+                    // A file chosen in a pack stays chosen as more is found: Choose release lists the new releases.
+                    if (_state.value !is DownloadSheetState.Chosen) _state.value = now
                 }
             }
         }
@@ -282,33 +399,39 @@ class DownloadSheetModel(private val request: DownloadRequest, private val deps:
      */
     fun shown() {
         val group = found ?: return
-        if (_downloading.value || _closed.value) return
+        // A file chosen in a pack stays chosen: its room was read as it was chosen, and Download reads it again at Resolve.
+        if (_downloading.value || _closed.value || _state.value is DownloadSheetState.Chosen) return
         scope.launch {
             val now = decide(group)
             // A search that found more meanwhile has said its own.
-            if (found === group && !_downloading.value) _state.value = now
+            if (found === group && !_downloading.value && _state.value !is DownloadSheetState.Chosen) _state.value = now
         }
     }
 
-    /** The sheet's Download: the pick, with the other releases that fit after it. */
+    /** The sheet's Download: the pick, with the other releases that fit after it; a file chosen in a pack, the pack first. */
     fun download() {
-        val pick = _state.value as? DownloadSheetState.Pick ?: return
-        download(pick.best, pick.group, pick.mode)
+        when (val s = _state.value) {
+            is DownloadSheetState.Pick -> download(s.best, s.group, s.mode)
+            is DownloadSheetState.Chosen -> download(s.item, s.group, s.mode, s.file.sizeBytes, s.chosen)
+            else -> Unit
+        }
     }
 
     /**
      * Queues [chosen] with [group]'s other releases that fit after it, in their order (L338), closes the sheet, then asks
      * Android about notifications where that is due and schedules the host: either answer starts the download (L358).
-     * Once. Where the runner queues nothing (a TV's), nothing is asked or scheduled.
+     * Once. Where the runner queues nothing (a TV's), nothing is asked or scheduled. With a [file] chosen in the pack
+     * [chosen] (L403), the download keeps it and the pack's NZB, and counts its exact size as its [need].
      */
-    private fun download(chosen: RankedItem, group: ResultGroup, mode: ReleaseListMode.Download) {
+    private fun download(chosen: RankedItem, group: ResultGroup, mode: ReleaseListMode.Download, need: Long = mode.need(chosen), file: ChosenFile? = null) {
         if (_downloading.value || _closed.value) return
         _downloading.value = true
         deps.outlive.launch {
             try {
                 val candidates = candidates(chosen, group, mode)
-                // Counted at what it needs here, a season pack's share of its episode, not the pack's whole size.
-                deps.enqueue(request.target, candidates, mode.need(chosen)) ?: return@launch
+                // Counted at what it needs here, a season pack's share of its episode, not the pack's whole size; a file
+                // chosen in it, at that file's own size.
+                deps.enqueue(request.target, candidates, need, file) ?: return@launch
                 _closed.value = true
                 deps.beforeDownload()
                 deps.schedule()
@@ -365,7 +488,9 @@ class DownloadSheetModel(private val request: DownloadRequest, private val deps:
         val prefs = deps.prefs()
         val network = deps.network()
         lateinit var mode: ReleaseListMode.Download
-        mode = ReleaseListMode.Download(free, startsOnWifi(prefs, network), request.seasonEpisodes) { item -> download(item, group, mode) }
+        // Choose file is an episode's: which of a pack's videos is it (L403).
+        val chooseFile = { item: RankedItem -> chooseFile(item, group, mode) }.takeIf { request is DownloadRequest.Episode }
+        mode = ReleaseListMode.Download(free, startsOnWifi(prefs, network), request.seasonEpisodes, chooseFile) { item -> download(item, group, mode) }
         val need = mode.need(best)
         if (!mode.fits(best)) return DownloadSheetState.WontFit(group, best, mode, need, free, space?.queued ?: 0, space?.queuedDownloads ?: 0, deps.askDue())
         return DownloadSheetState.Pick(group, best, mode, need, free, startOf(deps.rows(), prefs, network, deps.charging), deps.askDue())
@@ -376,6 +501,8 @@ class DownloadSheetModel(private val request: DownloadRequest, private val deps:
         const val FINDING = "Finding releases…"
         const val FINDING_NOTE = "Searches your indexers and ranks what they find for downloading. Nothing is downloaded until you choose Download."
         const val BEST = "Best match"
+        const val CHOSEN = "Chosen file"
+        const val FILES_SIZE = "The size is the file's, read from the release."
         const val INDEXERS_SIZE = "The size is the indexer's. It is checked again when the download starts."
         const val STAYS = "Downloads stay in NZStreamer's own storage on this device, and are deleted if you uninstall the app."
         const val ASKS = "Android asks next whether NZStreamer may show notifications. They show how the download is going, with Pause and Cancel."
@@ -433,6 +560,12 @@ class DownloadSheetModel(private val request: DownloadRequest, private val deps:
 
         /** "1080p · WEB-DL · HEVC · about 1.2 GB": the release's quality as its name says it, and what it needs here. */
         fun quality(item: RankedItem, need: Long): String = (qualityParts(item) + "about ${formatSize(need)}").joinToString(" · ")
+
+        /** "1080p · WEB-DL · 1.3 GB": the pack's quality as its name says it, and the chosen file's exact size. */
+        fun chosenQuality(chosen: DownloadSheetState.Chosen): String = (qualityParts(chosen.item) + formatSize(chosen.file.sizeBytes)).joinToString(" · ")
+
+        /** Over the chosen file's name: "Season pack · only this file is downloaded:"; a release of several episodes, without its kind. */
+        fun onlyThisFile(item: RankedItem): String = if (item.parsed.isSeasonPack) "Season pack · only this file is downloaded:" else "Only this file is downloaded:"
 
         /** "14.0 GB free on this device". */
         fun free(free: Long): String = "${formatSize(free)} free on this device"

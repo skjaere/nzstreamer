@@ -75,7 +75,7 @@ data class DownloadsDeps(
     val remove: suspend (ids: Collection<String>, keepFor: Long) -> Unit,
     val undoRemove: suspend (ids: Collection<String>) -> Unit,
     val move: suspend (id: String, up: Boolean) -> Unit,
-    val replace: suspend (id: String, candidates: List<DownloadCandidate>, need: Long) -> Unit,
+    val replace: suspend (id: String, candidates: List<DownloadCandidate>, need: Long, chosen: ChosenFile?) -> Unit,
     val retry: suspend (id: String) -> Unit,
     val schedule: suspend (ScheduleCause) -> Unit,
     val lookUp: suspend (showTmdbId: Int, season: Int, episode: Int) -> EpisodePlay,
@@ -96,8 +96,8 @@ data class DownloadsDeps(
     fun replacing(row: Download): DownloadSheetDeps = search.copy(
         space = { space(row.id) },
         askDue = { false },
-        enqueue = { _, candidates, need ->
-            replace(row.id, candidates, need)
+        enqueue = { _, candidates, need, chosen ->
+            replace(row.id, candidates, need, chosen)
             get(row.id)
         },
         beforeDownload = {},
@@ -125,7 +125,7 @@ data class DownloadsDeps(
             remove = { ids, keepFor -> container.downloads.remove(ids, keepFor) },
             undoRemove = container.downloads::undoRemove,
             move = container.downloads::move,
-            replace = container.downloads::replace,
+            replace = { id, candidates, need, chosen -> container.downloads.replace(id, candidates, need, chosen?.pick, chosen?.grab) },
             retry = container.downloads::retry,
             schedule = { cause -> container.downloadHosts.schedule(cause) },
             lookUp = { show, season, episode ->

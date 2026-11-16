@@ -602,15 +602,22 @@ private fun ChoiceFinding(row: Download, onBack: () -> Unit) {
 
 /**
  * Choose release's list for [choice]: the release list in download mode once found (item 16), a tap replacing the
- * download's releases and closing it; nothing found, the indexers' lines as the Download sheet says them.
+ * download's releases and closing it; nothing found, the indexers' lines as the Download sheet says them. A pack's Choose
+ * file opens its files in a sheet over the list (L435): a file chosen there replaces the download's release at once, as a
+ * tap does; Cancel and Try another release go back to the list, where a pack that failed says why; Close closes the list.
  */
 @Composable
 private fun ChoiceList(choice: DownloadChoice.State.Choosing, onBack: () -> Unit) {
     val state by choice.model.state.collectAsStateWithLifecycle()
+    val failed by choice.model.failed.collectAsStateWithLifecycle()
+    val files by choice.model.choice.collectAsStateWithLifecycle()
+    files?.let { DownloadFileChoiceSheet(it, onCancel = choice.model::closeChoice, onTryAnother = choice.model::closeChoice, onClose = onBack) }
     when (val s = state) {
         DownloadSheetState.Finding -> ChoiceFinding(choice.row, onBack)
-        is DownloadSheetState.Pick -> ReleaseList(s.group, choice.row.title, onBack = onBack, mode = s.mode)
-        is DownloadSheetState.WontFit -> ReleaseList(s.group, choice.row.title, onBack = onBack, mode = s.mode)
+        is DownloadSheetState.Pick -> ReleaseList(s.group, choice.row.title, onBack = onBack, failed = failed, mode = s.mode)
+        is DownloadSheetState.WontFit -> ReleaseList(s.group, choice.row.title, onBack = onBack, failed = failed, mode = s.mode)
+        // Never here: a file chosen on this page replaces the download's release at once.
+        is DownloadSheetState.Chosen -> ReleaseList(s.group, choice.row.title, onBack = onBack, failed = failed, mode = s.mode)
         is DownloadSheetState.NoRelease -> Column(Modifier.fillMaxSize()) {
             TopBar(DownloadsPage.choosing(choice.row), onBack)
             Text(

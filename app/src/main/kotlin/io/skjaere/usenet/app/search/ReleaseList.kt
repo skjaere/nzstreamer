@@ -24,6 +24,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -40,6 +41,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -94,8 +97,10 @@ private val RELEASE_LIST_MARKS = CoroutineName("release list marks")
  *
  * In download [mode] ([ReleaseListMode.Download], L355, L386) the list is for this device: "Download S02E04" in a bar with
  * no Cast button, the download icon's line in the "Ranked for" line's place, each release that won't fit greyed in its
- * place with what it needs, a season pack's share of the episode under its name, no Choose file, and a tap that
- * downloads the release at once ([ReleaseListMode.Download.onDownload]) rather than playing it ([onPlay], a play's).
+ * place with what it needs, a season pack's share of the episode under its name, and a tap that downloads the release at
+ * once ([ReleaseListMode.Download.onDownload]) rather than playing it ([onPlay], a play's). Choose file there is the
+ * mode's ([ReleaseListMode.Download.fileChoice], L403): on a pack's card that fits, greyed "Needs Wi-Fi" on mobile data;
+ * [onChooseFile] is a play's. One marked [failed] there is a pack whose Choose file couldn't list its files.
  */
 @Composable
 fun ReleaseList(
@@ -189,6 +194,8 @@ fun ReleaseList(
         LazyColumn(listModifier.fillMaxSize(), state = rows, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)) {
             itemsIndexed(sorted, key = { _, it -> it.key }) { i, item ->
                 val wontFit = download?.wontFit(item)
+                // A download's Choose file, as its mode offers it on this card: none, offered, or greyed for Wi-Fi (L403).
+                val offer = download?.fileChoice(item)
                 val play = { onPlay(item) }
                 val save = {
                     if (!downloading) {
@@ -198,10 +205,15 @@ fun ReleaseList(
                 }
                 ReleaseCard(
                     item, if (sort == Sort.Best) (if (i == 0) "Best match" else "#${i + 1}") else null, known[item.key], wontFit ?: failed[item.key] ?: serviceMarks[item.key],
-                    // Never for a download: a file is picked by the attempt that needs one (L386).
-                    onChooseFile = onChooseFile?.takeIf { download == null && item.offersFileChoice }?.let { choose -> { choose(item) } },
+                    onChooseFile = when {
+                        download == null -> onChooseFile?.takeIf { item.offersFileChoice }?.let { choose -> { choose(item) } }
+                        offer != null -> download.onChooseFile?.let { choose -> { choose(item) } }
+                        else -> null
+                    },
+                    chooseFileNote = ReleaseListMode.Download.NEEDS_WIFI.takeIf { offer == ReleaseListMode.Download.FileChoiceOffer.NeedsWifi },
                     tag = sourceTag(item, accounts),
                     note = download?.packLine(item),
+                    clickLabel = if (download == null) "Play" else "Download",
                     // One that won't fit is greyed in its place, as a hidden one is: nothing a tap could start.
                     onClick = when {
                         download == null -> play
@@ -264,8 +276,9 @@ private fun DownloadLine(lines: List<String>) {
  * [known]: what is known of its being missing on the providers, which a muted chip says; [failure]: why it didn't start
  * when it was chosen here, in the play sheet's words, or why a play would skip a torrent its debrid service failed before
  * ("No longer cached"), or in download mode that it won't fit. [onChooseFile]: its menu's Choose file, opened from its ⋮
- * or by a long press (a remote's long OK). [tag]: where it plays from, after its rank (L201; none while no debrid service
- * is on). [note]: a line under its name (a season pack's share of the episode, in download mode). With no [onClick] it is
+ * or by a long press (a remote's long OK), greyed with [chooseFileNote] under it where it can't open now. [tag]: where it
+ * plays from, after its rank (L201; none while no debrid service is on). [note]: a line under its name (a season pack's
+ * share of the episode, in download mode). [clickLabel]: what a tap does, as TalkBack says it. With no [onClick] it is
  * greyed, and not marked Best match's way even when it ranks first.
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -276,8 +289,10 @@ private fun ReleaseCard(
     known: KnownMissing?,
     failure: String?,
     onChooseFile: (() -> Unit)? = null,
+    chooseFileNote: String? = null,
     tag: SourceTag? = null,
     note: String? = null,
+    clickLabel: String = "Play",
     onClick: (() -> Unit)?,
 ) {
     val best = rank == "Best match" && onClick != null
@@ -296,7 +311,7 @@ private fun ReleaseCard(
                 when {
                     // A hidden one plays nothing: read as one, its tag and reasons with its name.
                     onClick == null -> Modifier.semantics(mergeDescendants = true) {}
-                    onChooseFile != null -> Modifier.combinedClickable(onClickLabel = "Play", onClick = onClick, onLongClick = { menu = true })
+                    onChooseFile != null -> Modifier.combinedClickable(onClickLabel = clickLabel, onClick = onClick, onLongClick = { menu = true })
                     else -> Modifier.clickable(onClick = onClick)
                 },
             )
@@ -319,7 +334,19 @@ private fun ReleaseCard(
                 // A remote's arrows don't reach a button inside the row: a long OK on the row opens the menu instead.
                 IconButton(onClick = { menu = true }, modifier = Modifier.size(32.dp)) { Icon(Icons.Filled.MoreVert, "More for ${item.item.title}", tint = colors.muted) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = colors.surface) {
-                    DropdownMenuItem(text = { Text("Choose file", style = AppType.body) }, onClick = { menu = false; onChooseFile() })
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text("Choose file", style = AppType.body)
+                                chooseFileNote?.let { Text(it, style = AppType.small, color = colors.muted) }
+                            }
+                        },
+                        onClick = { menu = false; onChooseFile() },
+                        modifier = Modifier.semantics { role = Role.Button },
+                        // Greyed as Material greys an item, its line read with it; TalkBack says it is dimmed.
+                        enabled = chooseFileNote == null,
+                        colors = if (chooseFileNote == null) MenuDefaults.itemColors() else MenuDefaults.itemColors(disabledTextColor = colors.text.copy(alpha = 0.38f)),
+                    )
                 }
             }
         }

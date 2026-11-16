@@ -20,10 +20,11 @@ import org.slf4j.LoggerFactory
 /**
  * Choose another release and Choose release on the Downloads page (item 19): the release list in download mode for a
  * download already queued, running or failed, whose pick replaces its releases ([DownloadSheetModel] over the deps
- * [sheet] gives for it, whose enqueue is the runner's replace). An episode's search needs the show's ids, aliases,
- * original language, air date and the season's count of episodes: a season row keeps them (its search facts, L433) and is
- * searched by them with no TMDB call; any other episode's row doesn't, and it is looked up on TMDB first ([lookUp]), as a
- * play of an episode known by its numbers is. A film's is built from its row.
+ * [sheet] gives for it, whose enqueue is the runner's replace), as a file chosen in a pack there does (Choose file, L435).
+ * An episode's search needs the show's ids, aliases, original language, air date and the season's count of episodes: a
+ * season row keeps them (its search facts, L433) and is searched by them with no TMDB call; any other episode's row
+ * doesn't, and it is looked up on TMDB first ([lookUp]), as a play of an episode known by its numbers is. A film's is
+ * built from its row.
  *
  * Offline ([online] false) it opens nothing, and the page greys its items "Needs a connection"; so it does for a download
  * whose lookup failed ([needsConnection]), for [LOOKUP_RETRY_MILLIS] or until the network comes back, whichever is first:
@@ -84,8 +85,9 @@ class DownloadChoice(
                 }
                 return@launch
             }
-            // The list's search runs in this job, so a close ends it; what its pick starts outlives both (the deps' own scope).
-            val model = DownloadSheetModel(request, sheet(row), this)
+            // The list's search runs in this job, so a close ends it, and a pack's Choose file with it; what its pick starts
+            // outlives both (the deps' own scope). A file chosen in a pack replaces the download's release at once (L435).
+            val model = DownloadSheetModel(request, sheet(row), this, replacing = row.id)
             model.start()
             _state.value = State.Choosing(row, model)
             // The pick replaced its releases: the list closes, and the page shows the row queued again.

@@ -47,7 +47,9 @@ import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
@@ -700,12 +702,7 @@ private fun ChoosingFileSheet(
         FromLine(from, waiting = true)
         CastLine(cast)
         GoesOnLine(goesOn)
-        Text(s.lookingFor, style = AppType.cardTitle, color = colors.text, modifier = Modifier.padding(horizontal = 20.dp).semantics { heading() })
-        Text(
-            s.prompt,
-            style = AppType.secondary, color = colors.textSecondary, modifier = Modifier.padding(horizontal = 20.dp).padding(top = 4.dp, bottom = 6.dp),
-        )
-        Text(s.release, style = AppType.release, color = colors.muted, modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 10.dp))
+        FileQuestion(s.lookingFor, s.prompt, s.release)
         GroupCard {
             s.files.forEachIndexed { i, file ->
                 if (i > 0) InsetDivider()
@@ -720,18 +717,41 @@ private fun ChoosingFileSheet(
 }
 
 /**
- * A video to choose: its name, and its size (and that it is a sample, or named for the episode looked for). At least 48 dp
- * tall, growing with the font size.
+ * The question of which file it is, over the files: what is looked for ([lookingFor], a heading), the [prompt], and the
+ * [release] whose files they are. A play's file chooser's, and a download's Choose file's.
  */
 @Composable
-private fun FileRow(file: FileChoice, modifier: Modifier, onClick: () -> Unit) {
+internal fun FileQuestion(lookingFor: String, prompt: String, release: String) {
+    Text(lookingFor, style = AppType.cardTitle, color = colors.text, modifier = Modifier.padding(horizontal = 20.dp).semantics { heading() })
+    Text(
+        prompt,
+        style = AppType.secondary, color = colors.textSecondary, modifier = Modifier.padding(horizontal = 20.dp).padding(top = 4.dp, bottom = 6.dp),
+    )
+    Text(release, style = AppType.release, color = colors.muted, modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 10.dp))
+}
+
+/**
+ * A video to choose: its name, and its size (and that it is a sample, or named for the episode looked for). At least 48 dp
+ * tall, growing with the font size. A tap does what [clickLabel] says, as TalkBack says it. With [wontFit] (a download's
+ * Choose file, a file larger than the room) it is greyed, that line under its name, and a tap does nothing; read as dimmed.
+ */
+@Composable
+internal fun FileRow(file: FileChoice, modifier: Modifier, clickLabel: String = "Play this file", wontFit: String? = null, onClick: () -> Unit) {
+    val greyed = wontFit != null
     Row(
-        modifier.fillMaxWidth().focusOutline().clickable(onClickLabel = "Play this file", onClick = onClick)
+        modifier.fillMaxWidth()
+            .then(
+                if (greyed) Modifier.semantics(mergeDescendants = true) { disabled() }
+                else Modifier.focusOutline().clickable(onClickLabel = clickLabel, role = Role.Button, onClick = onClick),
+            )
             .heightIn(min = 48.dp).padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(file.name, style = AppType.release, color = if (file.sample) colors.muted else colors.text, modifier = Modifier.weight(1f))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(file.name, style = AppType.release, color = if (file.sample || greyed) colors.muted else colors.text)
+            wontFit?.let { Text("✕ $it", style = AppType.secondary, color = colors.warn) }
+        }
         Text(
             listOfNotNull(file.named?.let { "Named $it" }, "Sample".takeIf { file.sample }, formatSize(file.sizeBytes)).joinToString(" · "),
             style = AppType.secondary, color = colors.muted,

@@ -14,8 +14,9 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isEnabled
+import androidx.compose.ui.test.isNotEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
-import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.text.TextLayoutResult
@@ -43,10 +44,10 @@ import org.junit.runner.RunWith
 /**
  * Choose release in download mode (W112, L355, L386): "Download S02E04" with no Cast button; the download icon's line with
  * the space free and, on mobile data, that it starts on Wi-Fi; a release that won't fit greyed in its place with what it
- * needs, which a tap doesn't download; a season pack's share of the episode and no Choose file; a tap that downloads the
- * release at once, once, its caller closing the list; and at twice the font size nothing cut off. Invented releases of one
- * episode and of a film, in a fixed order as a search would rank them for downloading, with no ranker, server or account,
- * as ReleaseListOrderDeviceTest builds them.
+ * needs, which a tap doesn't download; a season pack's share of the episode, its ⋮ offering Choose file (L403), greyed
+ * "Needs Wi-Fi" on mobile data; a tap that downloads the release at once, once, its caller closing the list; and at twice
+ * the font size nothing cut off. Invented releases of one episode and of a film, in a fixed order as a search would rank
+ * them for downloading, with no ranker, server or account, as ReleaseListOrderDeviceTest builds them.
  */
 @RunWith(AndroidJUnit4::class)
 class DownloadReleaseListDeviceTest {
@@ -59,13 +60,16 @@ class DownloadReleaseListDeviceTest {
     private val downloaded = mutableListOf<String>()
     private var choseFile = 0
 
+    /** The packs whose Choose file a download list's menu chose, by key, in order. */
+    private val chosenFiles = mutableListOf<String>()
+
     private fun download(free: Long, startsOnWifi: Boolean = false, close: () -> Unit = {}) =
-        ReleaseListMode.Download(free, startsOnWifi, seasonEpisodes = 8) { release ->
+        ReleaseListMode.Download(free, startsOnWifi, seasonEpisodes = 8, onChooseFile = { chosenFiles += it.key }) { release ->
             downloaded += release.key
             close()
         }
 
-    /** [group]'s list in [mode], at [fontScale]; Choose file offered, as a play's list of an episode offers it. */
+    /** [group]'s list in [mode], at [fontScale]; a play's Choose file offered too, as a play's list of an episode offers it. */
     private fun show(mode: ReleaseListMode, group: ResultGroup = episode(), title: String = "Harbor Lights", fontScale: Float = 1f) {
         var shown by mutableStateOf(mode)
         showing = { shown = it }
@@ -119,17 +123,53 @@ class DownloadReleaseListDeviceTest {
         assertTrue("the pack fits by its share", exists(hasText(PACK) and hasClickAction()))
     }
 
+    /**
+     * L403: a season pack that fits has its ⋮, whose Choose file opens the pack to choose the file to download (the list's
+     * caller's); a single episode has none, nor a pack greyed as it won't fit. A play's list keeps its own Choose file.
+     */
     @Test
-    fun aSeasonPacksCardSaysWhatThisEpisodeComesToAndOffersNoChooseFile() {
+    fun aSeasonPacksCardSaysWhatThisEpisodeComesToAndItsMenuOffersChooseFile() {
         show(download(14 * GB))
         assertTrue("the pack's share", exists(hasText(PACK) and hasText("Season pack · this episode about 1.4 GB")))
-        assertFalse("no ⋮ for Choose file", exists(hasContentDescription("More for $PACK")))
+        assertFalse("no ⋮ for a single episode", exists(hasContentDescription("More for $KESTREL")))
+        compose.onNode(hasContentDescription("More for $PACK")).performClick()
+        compose.waitUntil(5_000) { exists(hasText("Choose file") and hasClickAction()) }
+        assertTrue("offered, not greyed", exists(hasText("Choose file") and isEnabled()))
+        assertFalse(exists(hasText(ReleaseListMode.Download.NEEDS_WIFI)))
+        compose.onNode(hasText("Choose file") and hasClickAction()).performClick()
+        compose.waitForIdle()
+        assertEquals(listOf(key(PACK)), chosenFiles)
+        assertEquals("Choose file downloads nothing", emptyList<String>(), downloaded)
+        assertEquals("never the play's", 0, choseFile)
+
+        // 1.0 GB free: the pack's share doesn't fit, its card greyed, and no ⋮.
+        showing(download(GB))
+        compose.waitUntil(5_000) { exists(hasText("✕ Won't fit: needs about 1.4 GB")) }
+        assertFalse("no ⋮ on a greyed card", exists(hasContentDescription("More for $PACK")))
 
         // A play's list offers it there, and says nothing of the episode's share.
         showing(ReleaseListMode.Play)
         compose.waitUntil(5_000) { exists(hasContentDescription("More for $PACK")) }
         assertFalse("no share in a play's list", exists(hasText("Season pack · this episode about 1.4 GB")))
-        assertEquals("nothing chose a file", 0, choseFile)
+        compose.onNode(hasContentDescription("More for $PACK")).performClick()
+        compose.waitUntil(5_000) { exists(hasText("Choose file") and hasClickAction()) }
+        compose.onNode(hasText("Choose file") and hasClickAction()).performClick()
+        compose.waitForIdle()
+        assertEquals("the play's own", 1, choseFile)
+        assertEquals(listOf(key(PACK)), chosenFiles)
+    }
+
+    /** W110, L403: on mobile data while downloads wait for Wi-Fi or Ethernet, the pack's Choose file is greyed, "Needs Wi-Fi", and opens nothing. */
+    @Test
+    fun onMobileDataThePacksChooseFileIsGreyedNeedsWifiAndOpensNothing() {
+        show(download(14 * GB, startsOnWifi = true))
+        compose.onNode(hasContentDescription("More for $PACK")).performClick()
+        compose.waitUntil(5_000) { exists(hasText(ReleaseListMode.Download.NEEDS_WIFI)) }
+        assertTrue("greyed, and read as dimmed", exists(hasText("Choose file") and hasText(ReleaseListMode.Download.NEEDS_WIFI) and isNotEnabled()))
+        compose.onNode(hasText("Choose file")).performClick()
+        compose.waitForIdle()
+        assertEquals(emptyList<String>(), chosenFiles)
+        assertEquals(emptyList<String>(), downloaded)
     }
 
     @Test
@@ -166,6 +206,11 @@ class DownloadReleaseListDeviceTest {
         compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText(ATMOS))
         compose.waitForIdle()
         assertWhole("✕ Won't fit: needs about 3.4 GB")
+        // The pack's greyed Choose file, its line under it.
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasContentDescription("More for $PACK"))
+        compose.onNode(hasContentDescription("More for $PACK")).performClick()
+        compose.waitUntil(5_000) { exists(hasText(ReleaseListMode.Download.NEEDS_WIFI)) }
+        listOf("Choose file", ReleaseListMode.Download.NEEDS_WIFI).forEach(::assertWhole)
     }
 
     /** A film's: its name in the title, its year in the subtitle. */
@@ -205,9 +250,10 @@ class DownloadReleaseListDeviceTest {
             "'$text' is cut: ${layout.lineCount} lines in ${layout.layoutInput.constraints}",
             layout.didOverflowHeight || layout.isLineEllipsized(last) || layout.getLineEnd(last) != text.length,
         )
-        val screen = compose.onRoot().fetchSemanticsNode().boundsInRoot
-        val bounds = node.boundsInRoot
-        assertTrue("'$text' ($bounds) leaves the screen ($screen)", bounds.left >= screen.left && bounds.right <= screen.right + 1f)
+        // In its window, which a menu's popup has of its own: inside the screen's width either way.
+        val width = context.resources.displayMetrics.widthPixels
+        val bounds = node.boundsInWindow
+        assertTrue("'$text' ($bounds) leaves the screen (0-$width)", bounds.left >= 0f && bounds.right <= width + 1f)
     }
 
     private fun key(name: String) = "${RELEASES.first { it.first == name }.third}/$name"

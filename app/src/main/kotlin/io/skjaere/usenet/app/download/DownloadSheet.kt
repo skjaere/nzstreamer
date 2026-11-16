@@ -74,7 +74,9 @@ import io.skjaere.usenet.search.ResultGroup
  * for downloading, the space free and when it would start, or why it won't fit, or that nothing was found. [request] is
  * what an episode's ⋮, a film's page and Search's movie card hand it; [onClose] ends it: Cancel, Close, a swipe, or once
  * Download has queued the download and asked for its host. Choose release opens the release list ranked for downloading
- * over the page; a tap there downloads that release and ends both, and Back comes back to the sheet.
+ * over the page; a tap there downloads that release and ends both, and Back comes back to the sheet. A pack's Choose file
+ * there opens its files in a sheet over the list (L403, L435); a file chosen comes back to this sheet as its Chosen file,
+ * and Close does too, while Cancel and Try another release go back to the list.
  *
  * Phones and tablets alone (W108, L369): where downloads don't show, it ends at once and shows nothing.
  */
@@ -103,16 +105,31 @@ internal fun DownloadSheet(request: DownloadRequest, onClose: () -> Unit, deps: 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { model.shown() }
     val state by model.state.collectAsStateWithLifecycle()
     val closed by model.closed.collectAsStateWithLifecycle()
+    val choice by model.choice.collectAsStateWithLifecycle()
+    val failed by model.failed.collectAsStateWithLifecycle()
     var listing by remember(model) { mutableStateOf(false) }
     LaunchedEffect(closed) { if (closed) onClose() }
+    // A file chosen in a pack: back on the sheet, as its Chosen file (L435).
+    LaunchedEffect(state) { if (state is DownloadSheetState.Chosen) listing = false }
     if (closed) return
     val listed = when (val s = state) {
         is DownloadSheetState.Pick -> s.group to s.mode
         is DownloadSheetState.WontFit -> s.group to s.mode
+        is DownloadSheetState.Chosen -> s.group to s.mode
         else -> null
     }
     if (listing && listed != null) {
-        DownloadReleaseList(listed.first, request.title, listed.second, onBack = { listing = false })
+        DownloadReleaseList(listed.first, request.title, listed.second, failed, onBack = { listing = false }) {
+            choice?.let { files ->
+                DownloadFileChoiceSheet(
+                    files, onCancel = model::closeChoice, onTryAnother = model::closeChoice,
+                    onClose = {
+                        model.closeChoice()
+                        listing = false
+                    },
+                )
+            }
+        }
         return
     }
     ModalBottomSheet(
@@ -140,6 +157,7 @@ internal fun DownloadSheetContent(request: DownloadRequest, model: DownloadSheet
             is DownloadSheetState.Pick -> Pick(s, downloading, onDownload = model::download, onChoose = onChoose, onCancel = onClose)
             is DownloadSheetState.WontFit -> WontFit(s, onChoose = onChoose, onStorage = { openStorageSettings(context) }, onCancel = onClose)
             is DownloadSheetState.NoRelease -> NoRelease(s, onClose = onClose)
+            is DownloadSheetState.Chosen -> Chosen(s, downloading, onDownload = model::download, onChoose = onChoose, onCancel = onClose)
         }
     }
 }
@@ -162,6 +180,37 @@ private fun Pick(s: DownloadSheetState.Pick, busy: Boolean, onDownload: () -> Un
     Release(s.best, s.need, s.mode)
     GroupCard {
         Line(DownloadSheetModel.free(s.free), sub = DownloadSheetModel.INDEXERS_SIZE)
+        InsetDivider()
+        StartLine(s.start)
+    }
+    SheetNote(DownloadSheetModel.STAYS)
+    if (s.asks) AskLine()
+    Buttons {
+        PrimaryButton(
+            DownloadSheetModel.TITLE, onDownload, Modifier.fillMaxWidth(), enabled = !busy,
+            leading = { Icon(DownloadIcon, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(22.dp)) },
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            SecondaryButton(DownloadSheetModel.CHOOSE_RELEASE, onChoose, Modifier.weight(1f), enabled = !busy)
+            SecondaryButton("Cancel", onCancel, Modifier.weight(1f))
+        }
+    }
+}
+
+/**
+ * A file chosen in a pack (L435), in the pick's place and look: "Chosen file", the pack's quality with the file's exact
+ * size, the pack, the file under the line that only it is downloaded, the pack's chips; the space free with where the size
+ * comes from, when it starts, where downloads stay, and the ask's line where due. Download, Choose release and Cancel as
+ * the pick has them.
+ */
+@Composable
+private fun Chosen(s: DownloadSheetState.Chosen, busy: Boolean, onDownload: () -> Unit, onChoose: () -> Unit, onCancel: () -> Unit) {
+    Release(DownloadSheetModel.CHOSEN, DownloadSheetModel.chosenQuality(s), s.item) {
+        Text(DownloadSheetModel.onlyThisFile(s.item), style = AppType.secondary, color = colors.textSecondary)
+        Text(s.file.name, style = AppType.release, color = colors.chipText)
+    }
+    GroupCard {
+        Line(DownloadSheetModel.free(s.free), sub = DownloadSheetModel.FILES_SIZE)
         InsetDivider()
         StartLine(s.start)
     }
@@ -236,17 +285,24 @@ internal fun NoRelease(heading: String, stages: List<Pair<String, String>>, note
  * it needs here ("about 1.2 GB"), its name, a season pack's share of the episode, and its chips as the list has them.
  */
 @Composable
-private fun Release(item: RankedItem, need: Long, mode: ReleaseListMode.Download) {
+private fun Release(item: RankedItem, need: Long, mode: ReleaseListMode.Download) =
+    Release(DownloadSheetModel.BEST, DownloadSheetModel.quality(item, need), item) {
+        mode.packLine(item)?.let { Text(it, style = AppType.secondary, color = colors.textSecondary) }
+    }
+
+/** A release on the sheet: its [label] and its tag, its [quality] line, its name, what goes [under] it, and its chips. */
+@Composable
+private fun Release(label: String, quality: String, item: RankedItem, under: @Composable () -> Unit) {
     val container = LocalContext.current.container
     val accounts by remember(container) { container.serviceNames }.collectAsStateWithLifecycle(emptyList())
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(DownloadSheetModel.BEST, style = AppType.small.copy(fontWeight = FontWeight.SemiBold), color = colors.accent)
+            Text(label, style = AppType.small.copy(fontWeight = FontWeight.SemiBold), color = colors.accent)
             sourceTag(item, accounts)?.let { SourceTagChip(it) }
         }
-        Text(DownloadSheetModel.quality(item, need), style = AppType.cardTitle, color = colors.text)
+        Text(quality, style = AppType.cardTitle, color = colors.text)
         Text(item.item.title, style = AppType.release, color = colors.chipText)
-        mode.packLine(item)?.let { Text(it, style = AppType.secondary, color = colors.textSecondary) }
+        under()
         ReasonChips(item, bitrate = true)
     }
 }
@@ -304,15 +360,17 @@ internal fun Buttons(content: @Composable () -> Unit) {
 }
 
 /**
- * Choose release from the sheet (L355, L386): the release list in download [mode], over the page as a page of its own;
- * Back, or its arrow, comes back to the sheet ([onBack]).
+ * Choose release from the sheet (L355, L386): the release list in download [mode], over the page as a page of its own,
+ * each pack whose Choose file failed marked with why ([failed]); Back, or its arrow, comes back to the sheet ([onBack]).
+ * What goes [over] it (Choose file's sheet) is shown above it, in its window.
  */
 @Composable
-private fun DownloadReleaseList(group: ResultGroup, title: String, mode: ReleaseListMode.Download, onBack: () -> Unit) {
+private fun DownloadReleaseList(group: ResultGroup, title: String, mode: ReleaseListMode.Download, failed: Map<String, String>, onBack: () -> Unit, over: @Composable () -> Unit) {
     Dialog(onDismissRequest = onBack, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Box(Modifier.fillMaxSize().background(colors.background).safeDrawingPadding()) {
-            ReleaseList(group, title, onBack = onBack, mode = mode)
+            ReleaseList(group, title, onBack = onBack, failed = failed, mode = mode)
         }
+        over()
     }
 }
 

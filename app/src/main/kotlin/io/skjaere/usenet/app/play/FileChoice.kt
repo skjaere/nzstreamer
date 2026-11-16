@@ -34,7 +34,20 @@ internal fun lookingFor(request: PlayRequest): String {
     val episode = request.watch.episodeTarget?.label
         ?: (request.picker as? FilePicker.Episode)?.let { EpisodeTarget.label(it.season, it.episode) }
         ?: return "Choose the file to play"
-    return "Looking for $episode" + request.episodeName?.let { " '$it'" }.orEmpty()
+    return lookingFor(episode, request.episodeName)
+}
+
+/** "Looking for S02E01 'Brine'": the [episode] a file is chosen for, with TMDB's [name] for it where there is one. A download's too. */
+internal fun lookingFor(episode: String, name: String?): String = "Looking for $episode" + name?.let { " '$it'" }.orEmpty()
+
+/**
+ * [choices], videos of a release, as the file chooser lists them: largest first, samples last, each named for [episode]
+ * ("Named S02E04") where its name says it is that one. A play's and a download's alike.
+ */
+internal fun fileChoices(choices: List<ListedFile>, episode: FilePicker.Episode?): List<FileChoice> {
+    val label = episode?.let { EpisodeTarget.label(it.season, it.episode) }
+    return choices.sortedWith(compareBy<ListedFile> { VideoFileFilter.isSample(it.path) }.thenByDescending { it.size })
+        .map { FileChoice(it.index, it.name, it.size, VideoFileFilter.isSample(it.path), label.takeIf { _ -> episode?.wants(it.name) == true }) }
 }
 
 /**
@@ -46,9 +59,7 @@ internal fun fileChoice(request: PlayRequest, release: String, choices: List<Lis
     val episode = ((request.picker as? ChooseFile)?.wanted ?: request.picker) as? FilePicker.Episode
     val label = episode?.let { EpisodeTarget.label(it.season, it.episode) }
     return PlayState.ChoosingFile(
-        request.title, request.subtitle, lookingFor(request), release,
-        choices.sortedWith(compareBy<ListedFile> { VideoFileFilter.isSample(it.path) }.thenByDescending { it.size })
-            .map { FileChoice(it.index, it.name, it.size, VideoFileFilter.isSample(it.path), label.takeIf { _ -> episode?.wants(it.name) == true }) },
+        request.title, request.subtitle, lookingFor(request), release, fileChoices(choices, episode),
         prompt = if (asked) label?.let { "Choose the file to play as $it:" } ?: "Choose the file to play:" else PlayState.ChoosingFile.NONE_NAMED,
         asked = asked,
     )

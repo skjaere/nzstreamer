@@ -3,6 +3,10 @@ package io.skjaere.usenet.app.download
 import io.skjaere.usenet.app.NetworkNow
 import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.search.MovieFind
+import io.skjaere.usenet.core.FetchException
+import io.skjaere.usenet.core.FetchedNzb
+import io.skjaere.usenet.core.PrepareOutcome
+import io.skjaere.usenet.core.UsenetError
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadPrefs
@@ -60,6 +64,22 @@ internal class SheetFakes {
     val seasonRequests = mutableListOf<SeasonRequest>()
     val enqueuedAll = mutableListOf<List<DownloadRunner.QueueItem>>()
 
+    /** The file chosen in a pack that each download queued came with (Choose file, L403): none for any other. */
+    val chosen = mutableListOf<ChosenFile?>()
+
+    /** Choose file's grab of a pack's NZB, by its release: by default none is there to grab. */
+    var nzbs: suspend (RankedItem) -> FetchedNzb = { throw FetchException("Indexer no longer set up") }
+
+    /** Choose file's prepare of a pack's NZB: by default none opens. */
+    var opens: suspend (nzb: ByteArray, title: String, password: String?) -> PrepareOutcome = { _, _, _ -> PrepareOutcome.Failed(UsenetError.NotConfigured) }
+
+    /** Whether a provider is left out of the engine, as Choose file's words for a pack missing articles read it. */
+    var leftOut = false
+
+    /** The releases Choose file grabbed, by key, and the NZBs it prepared with the password given beside each, in order. */
+    val grabbed = mutableListOf<String>()
+    val prepared = mutableListOf<Pair<ByteArray, String?>>()
+
     fun deps(outlive: CoroutineScope) = DownloadSheetDeps(
         findEpisode = { request, context ->
             contexts += context
@@ -81,10 +101,11 @@ internal class SheetFakes {
         network = { network },
         charging = { charging },
         askDue = { ask?.due() == true },
-        enqueue = { target, candidates, need ->
+        enqueue = { target, candidates, need, file ->
             calls += "enqueue"
             enqueued += target to candidates
             needs += need
+            chosen += file
             queued(target, candidates).takeIf { queues }
         },
         enqueueAll = { items ->
@@ -98,6 +119,17 @@ internal class SheetFakes {
         },
         schedule = { calls += "schedule" },
         outlive = outlive,
+        grab = { item ->
+            calls += "grab"
+            grabbed += item.key
+            nzbs(item)
+        },
+        prepare = { nzb, title, password ->
+            calls += "prepare"
+            prepared += nzb to password
+            opens(nzb, title, password)
+        },
+        providersLeftOut = { leftOut },
         today = { SheetFixtures.TODAY },
     )
 
