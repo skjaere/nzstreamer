@@ -13,9 +13,10 @@ import io.skjaere.usenet.data.DownloadState
  * downloads hold, each file made so far at its whole size, as it is allocated whole before its first byte (C8): the
  * running one counts whole. [queued]: what the downloads still to make their file need, their exact size once resolved,
  * else the indexer's; nothing of it allocated yet. [queuedDownloads]: how many those are, as the Download sheet says why
- * less is free than Android's own page says.
+ * less is free than Android's own page says. [deleting]: what the downloads removed and still to be deleted hold, their
+ * files going once their Undo has gone (L379): the Downloads page's strip counts it free at once.
  */
-data class DownloadSpace(val available: Long, val used: Long, val queued: Long, val queuedDownloads: Int = 0) {
+data class DownloadSpace(val available: Long, val used: Long, val queued: Long, val queuedDownloads: Int = 0, val deleting: Long = 0) {
     /** What a new download may take: [available] less what is kept free ([KEPT_FREE]) and [queued]; never below 0. */
     val free: Long get() = (available - KEPT_FREE - queued).coerceAtLeast(0)
 
@@ -48,7 +49,8 @@ data class DownloadSpace(val available: Long, val used: Long, val queued: Long, 
          * the file, which goes before the new one is made.
          */
         fun of(allocatable: Long, usable: Long, rows: List<Download>, except: String? = null): DownloadSpace {
-            val (checked, counted) = rows.filter { it.state != DownloadState.Deleting }.partition { it.id == except }
+            val (gone, kept) = rows.partition { it.state == DownloadState.Deleting }
+            val (checked, counted) = kept.partition { it.id == except }
             val (made, toMake) = counted.partition { it.relativePath != null }
             val waiting = toMake.filter { it.state in GOING_ON }
             return DownloadSpace(
@@ -56,6 +58,7 @@ data class DownloadSpace(val available: Long, val used: Long, val queued: Long, 
                 used = made.sumOf { it.wholeSize },
                 queued = waiting.sumOf { it.wholeSize },
                 queuedDownloads = waiting.size,
+                deleting = gone.filter { it.relativePath != null }.sumOf { it.wholeSize },
             )
         }
 

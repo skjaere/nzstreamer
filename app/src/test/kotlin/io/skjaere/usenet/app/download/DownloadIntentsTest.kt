@@ -106,6 +106,18 @@ class DownloadIntentsTest {
     }
 
     @Test
+    fun `where downloads show, the ways in open the Downloads page, at a download's releases or playing it, and its settings`() {
+        val opened = mutableListOf<Any>()
+        val pages = downloadPages(shown = true, register = {}, open = { opened += it })
+        pages.take(DownloadAsk.Open) {}
+        pages.take(DownloadAsk.Choose(ID)) {}
+        pages.take(DownloadAsk.Play(ID)) {}
+        pages.settings!!.invoke()
+        assertEquals(listOf(DownloadsRoute(), DownloadsRoute(choose = ID), DownloadsRoute(play = ID), DownloadSettingsRoute), opened)
+        assertNull(downloadPages(shown = false, register = {}, open = { opened += it }).settings)
+    }
+
+    @Test
     fun `the token is random, kept in the app's own files, and the same for the next process`() {
         val first = DownloadToken(dir)
         val value = first.value

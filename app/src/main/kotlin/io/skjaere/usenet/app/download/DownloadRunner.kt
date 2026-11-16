@@ -82,13 +82,16 @@ data class DownloadTarget(
     }
 
     companion object {
-        /** Episode [episode] of [season] of the show [title], whose season has [seasonEpisodes] episodes (offline Next, item 15). */
+        /**
+         * Episode [episode] of [season] of the show [title], whose season has [seasonEpisodes] episodes (offline Next, item
+         * 15), and which runs [runtimeMinutes] (a show's downloads say it).
+         */
         fun episode(
             showTmdbId: Int, title: String, season: Int, episode: Int, seasonEpisodes: Int? = null, episodeName: String? = null,
-            subtitle: String? = null, posterPath: String? = null, stillPath: String? = null,
+            subtitle: String? = null, posterPath: String? = null, stillPath: String? = null, runtimeMinutes: Int? = null,
         ) = DownloadTarget(
             DownloadKind.Episode, title, subtitle, showTmdbId = showTmdbId, season = season, episode = episode, seasonEpisodes = seasonEpisodes,
-            episodeName = episodeName, posterPath = posterPath, stillPath = stillPath,
+            episodeName = episodeName, runtimeMinutes = runtimeMinutes, posterPath = posterPath, stillPath = stillPath,
         )
 
         /** The film [title]. */
@@ -476,10 +479,10 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
     /**
      * Removes the downloads [ids] (L379): each hidden at once (Deleting), one running stopped first, and deleted, files and
-     * all, once the Undo bar's time has gone, unless [undoRemove] brought it back. A process that dies meanwhile leaves
-     * them Deleting, for the next start's reconcile to finish.
+     * all, once the Undo bar's time has gone ([keepFor]: the bar's own, longer with TalkBack), unless [undoRemove] brought it
+     * back. A process that dies meanwhile leaves them Deleting, for the next start's reconcile to finish.
      */
-    suspend fun remove(ids: Collection<String>) {
+    suspend fun remove(ids: Collection<String>, keepFor: Long = deps.undoMillis) {
         if (!runs) return
         val token = Any()
         val marked = changes.withLock {
@@ -493,9 +496,9 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             }
         }
         if (marked.isEmpty()) return
-        log.info("Downloads: {} removed, deleted in {} s unless brought back", marked.size, deps.undoMillis / 1000)
+        log.info("Downloads: {} removed, deleted in {} s unless brought back", marked.size, keepFor / 1000)
         scope.launch {
-            delay(deps.undoMillis)
+            delay(keepFor)
             changes.withLock {
                 marked.filter { removed[it]?.token === token }.forEach { id ->
                     removed.remove(id)

@@ -447,11 +447,39 @@ fun NavGraphBuilder.appGraph(nav: NavController, container: AppContainer, jumps:
 
 /**
  * The downloads' screens (W108, L369), in the phone's graph alone, while [shown] (DownloadPlaces.shown): where downloads
- * don't show, none is there and the ways into them it gives back are null, so nothing opens one. The Downloads page
- * registers itself here once it is built; until then there are none.
+ * don't show, none is there and the ways into them it gives back are null, so nothing opens one. The Downloads page, a
+ * show's downloads, and Settings › Downloads, which item 20's page fills: until then its route shows a placeholder.
  */
-fun NavGraphBuilder.downloadScreens(nav: NavController, shown: Boolean): DownloadPages =
-    io.skjaere.usenet.app.download.downloadPages(shown, register = {}, open = { route -> nav.navigate(route) })
+fun NavGraphBuilder.downloadScreens(nav: NavController, shown: Boolean): DownloadPages {
+    fun back(screen: NavBackStackEntry): () -> Unit = { screen.ifResumed { nav.popBackStack() } }
+    return io.skjaere.usenet.app.download.downloadPages(
+        shown,
+        register = {
+            // By their full names, never imported: this block is the one place outside the download package that names them.
+            composable<io.skjaere.usenet.app.download.DownloadsRoute> { screen ->
+                val route = screen.toRoute<io.skjaere.usenet.app.download.DownloadsRoute>()
+                io.skjaere.usenet.app.download.DownloadsScreen(
+                    onBack = back(screen),
+                    onSettings = { screen.ifResumed { nav.navigate(io.skjaere.usenet.app.download.DownloadSettingsRoute) { launchSingleTop = true } } },
+                    onShow = { id -> screen.ifResumed { nav.navigate(io.skjaere.usenet.app.download.DownloadsShowRoute(id)) } },
+                    onOpenMovie = { id -> screen.ifResumed { nav.navigate(MovieRoute(id)) } },
+                    choose = route.choose,
+                    play = route.play,
+                )
+            }
+            composable<io.skjaere.usenet.app.download.DownloadsShowRoute> { screen ->
+                io.skjaere.usenet.app.download.DownloadsShowScreen(
+                    screen.toRoute<io.skjaere.usenet.app.download.DownloadsShowRoute>().showTmdbId,
+                    onBack = back(screen),
+                    onOpenShow = { id -> screen.ifResumed { nav.navigate(ShowRoute(id)) } },
+                )
+            }
+            // Item 20 puts Settings › Downloads' own page here.
+            composable<io.skjaere.usenet.app.download.DownloadSettingsRoute> { PlaceholderScreen("Settings › Downloads") }
+        },
+        open = { route -> nav.navigate(route) { launchSingleTop = true } },
+    )
+}
 
 /**
  * Debrid's screens (L192), in the graph only while [shown]: hidden, none is there, and the ways into them it gives back

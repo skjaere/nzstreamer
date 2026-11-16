@@ -411,7 +411,7 @@ private fun CollectionTopBar(
 
 /** A Dense pill (40 dp, chip fill, 48 dp target); an icon alone with its description when the bar is short of room. */
 @Composable
-private fun TopPill(name: String, icon: ImageVector, compact: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit, label: String = name) {
+internal fun TopPill(name: String, icon: ImageVector, compact: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit, label: String = name) {
     val shape = RoundedCornerShape(20.dp)
     Box(
         modifier.heightIn(min = 48.dp).focusOutline(RoundedCornerShape(24.dp), fill = false)
@@ -507,7 +507,7 @@ private fun SelectBar(ui: CollectionUi, selection: SelectionUi, compact: Boolean
 }
 
 @Composable
-private fun ActionPill(text: String, icon: ImageVector?, enabled: Boolean, modifier: Modifier = Modifier, said: String? = null, onClick: () -> Unit) {
+internal fun ActionPill(text: String, icon: ImageVector?, enabled: Boolean, modifier: Modifier = Modifier, said: String? = null, onClick: () -> Unit) {
     OutlinedButton(
         onClick = onClick, enabled = enabled,
         modifier = modifier.heightIn(min = 48.dp).focusOutline(RoundedCornerShape(24.dp), fill = false).then(said?.let { s -> Modifier.semantics { contentDescription = s } } ?: Modifier),

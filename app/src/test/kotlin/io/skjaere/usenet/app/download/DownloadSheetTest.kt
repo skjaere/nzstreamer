@@ -396,6 +396,8 @@ class DownloadSheetTest {
         assertEquals(SHOW_ID to (2 to 4), target.showTmdbId to (target.season to target.episode))
         assertEquals(8, target.seasonEpisodes)
         assertEquals("Low Water", target.episodeName)
+        // Its length, which a show's downloads say beside its size.
+        assertEquals(52, target.runtimeMinutes)
         assertEquals("/poster.jpg" to "/still.jpg", target.posterPath to target.stillPath)
         assertEquals("Harbor Lights · S02E04 · Low Water", EPISODE.subtitle)
         assertEquals("Harbor Lights", EPISODE.title)

@@ -57,14 +57,15 @@ object DownloadIntents {
 }
 
 /**
- * The ways into the Downloads page (L369): null where downloads don't show, as debrid's are while it is hidden, and null
- * until the page is in the graph. [downloads]: the page; [chooseRelease]: the page at a download's list of
- * releases; [play]: a finished download played.
+ * The ways into the Downloads page (L369): null where downloads don't show, as debrid's are while it is hidden.
+ * [downloads]: the page; [chooseRelease]: the page at a download's list of releases; [play]: a finished download played,
+ * from the page; [settings]: Settings › Downloads, for the Settings hub's row (item 20).
  */
 data class DownloadPages(
     val downloads: (() -> Unit)? = null,
     val chooseRelease: ((id: String) -> Unit)? = null,
     val play: ((id: String) -> Unit)? = null,
+    val settings: (() -> Unit)? = null,
 ) {
     /**
      * Takes [ask] where it leads: the page; Resume opens it and [resume]s the queue, from the visible app (C4); a play or a
@@ -85,13 +86,19 @@ data class DownloadPages(
 
 /**
  * The downloads' part of the phone's graph (L369): while [shown], [register] adds their screens, and the ways into them
- * open their routes by [open]; where downloads don't show, neither runs. The page and its routes fill the ways in here
- * once they are built; until then there are none. AppNav's `downloadScreens` is this over its graph and navigation.
+ * open their routes by [open]: the Downloads page, at a download's releases or playing a finished one there, and
+ * Settings › Downloads. Where downloads don't show, neither runs. AppNav's `downloadScreens` is this over its graph and
+ * navigation.
  */
-fun downloadPages(shown: Boolean, register: () -> Unit, @Suppress("UNUSED_PARAMETER") open: (route: Any) -> Unit): DownloadPages {
+fun downloadPages(shown: Boolean, register: () -> Unit, open: (route: Any) -> Unit): DownloadPages {
     if (!shown) return DownloadPages()
     register()
-    return DownloadPages()
+    return DownloadPages(
+        downloads = { open(DownloadsRoute()) },
+        chooseRelease = { id -> open(DownloadsRoute(choose = id)) },
+        play = { id -> open(DownloadsRoute(play = id)) },
+        settings = { open(DownloadSettingsRoute) },
+    )
 }
 
 /**

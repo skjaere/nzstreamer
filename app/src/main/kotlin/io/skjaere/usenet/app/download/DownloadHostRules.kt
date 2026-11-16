@@ -249,7 +249,7 @@ object DownloadHostRules {
      * "0.5 of 1.2 GB": [done] in [total]'s unit, as [formatSize] says [total]: whole KB under 1 MB, MB with one decimal under
      * 10 MB, whole MB under 1 GB, then GB with one decimal, each rounded half up.
      */
-    private fun progress(done: Long, total: Long): String {
+    internal fun progress(done: Long, total: Long): String {
         val whole = formatSize(total)
         val (unit, decimals) = when {
             whole.endsWith(" KB") -> 1_000L to false
@@ -262,7 +262,7 @@ object DownloadHostRules {
     }
 
     /** "2 min left", "1 h 5 min left": [remaining] bytes at [bytesPerSecond], in whole minutes rounded up; null with no rate yet. */
-    private fun timeLeft(remaining: Long, bytesPerSecond: Long?): String? {
+    internal fun timeLeft(remaining: Long, bytesPerSecond: Long?): String? {
         if (bytesPerSecond == null || bytesPerSecond <= 0) return null
         val perMinute = bytesPerSecond * 60
         val minutes = (remaining.coerceAtLeast(0) + perMinute - 1) / perMinute

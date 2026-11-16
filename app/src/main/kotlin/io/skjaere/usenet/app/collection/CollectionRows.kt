@@ -212,7 +212,7 @@ private fun Pill(text: String, background: Color, color: Color) {
 
 /** Select mode's 32 dp mark before the poster: accent with a check when selected, a ring when not. */
 @Composable
-private fun SelectMark(selected: Boolean) {
+internal fun SelectMark(selected: Boolean) {
     Box(
         Modifier.size(32.dp).clip(CircleShape).then(
             if (selected) Modifier.background(colors.accent) else Modifier.border(2.dp, colors.markOutline, CircleShape),

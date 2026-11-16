@@ -80,6 +80,8 @@ class DownloadSpaceTest {
         assertEquals(2 * GB + 6 * GB + GB, space.used)
         assertEquals(3 * GB + 500_000_000, space.queued)
         assertEquals(30 * GB - GB - 3_500_000_000, space.free)
+        // What the removed one holds: the Downloads page's strip counts it free at once.
+        assertEquals(8 * GB, space.deleting)
     }
 
     @Test

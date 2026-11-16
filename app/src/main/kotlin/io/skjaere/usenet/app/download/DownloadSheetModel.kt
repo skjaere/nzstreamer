@@ -67,7 +67,7 @@ sealed interface DownloadRequest {
             get() = DownloadTarget.episode(
                 showTmdbId = play.showTmdbId, title = play.showName, season = play.season, episode = play.episode,
                 seasonEpisodes = play.seasonEpisodes, episodeName = play.episodeName, subtitle = play.subtitle, posterPath = posterPath,
-                stillPath = play.stillPath,
+                stillPath = play.stillPath, runtimeMinutes = play.runtimeMinutes,
             )
         override val title: String get() = play.showName
         override val subtitle: String get() = "${play.showName} · ${play.subtitle}"

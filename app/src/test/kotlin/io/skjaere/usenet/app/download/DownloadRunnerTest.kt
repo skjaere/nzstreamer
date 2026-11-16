@@ -462,6 +462,25 @@ class DownloadRunnerTest {
         assertTrue(storage.part(stopped).isFile)
     }
 
+    @Test
+    fun `a remove given the Undo bar's own time keeps what it removed that long`() = test {
+        val d = fake("hl-d")
+        val runner = runner()
+        val finished = runner.add(1, d)
+        host(runner)
+        advanceUntilIdle()
+        // TalkBack's longer bar (L379): its files stay until it has gone.
+        runner.remove(listOf(finished), keepFor = 3 * DownloadRunner.UNDO_MILLIS)
+        advanceTimeBy(DownloadRunner.UNDO_MILLIS + 1)
+        runCurrent()
+        assertEquals(DownloadState.Deleting, stored(finished).state)
+        assertTrue(storage.video(finished).isFile)
+        advanceTimeBy(2 * DownloadRunner.UNDO_MILLIS)
+        runCurrent()
+        assertNull(dao.get(finished))
+        assertFalse(storage.videoFolder(finished).exists())
+    }
+
     /**
      * Whether a live walk will take up what is queued now, for the app's schedule (L335): from a walk's start until its
      * last look finds nothing to run, false in that same step, before its host can end. A Download or Resume that comes as
