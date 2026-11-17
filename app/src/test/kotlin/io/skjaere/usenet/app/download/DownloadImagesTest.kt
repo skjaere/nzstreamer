@@ -195,6 +195,59 @@ class DownloadImagesTest {
         assertEquals(8, fetch.asked.size)
     }
 
+    /**
+     * L411: a refresh under way stops as the app leaves the front or goes offline, the picture it waits on kept nothing and
+     * none asked after; what is left is fetched the next time it is in front and online.
+     */
+    @Test
+    fun `a refresh under way stops as the app leaves the front or goes offline`() = runTest {
+        val images = images()
+        val rows = (1..3).map { made(episode("e$it", it)) }
+        val front = MutableStateFlow(true)
+        val online = MutableStateFlow(true)
+        val answer = CompletableDeferred<Unit>()
+        fetch.gate = answer
+        backgroundScope.launch { images.follow(MutableStateFlow(rows), front, online) }
+        runCurrent()
+        assertEquals(listOf(posterUrl(POSTER)), fetch.asked, "waiting on the host's first answer")
+
+        front.value = false
+        runCurrent()
+        answer.complete(Unit)
+        runCurrent()
+        assertEquals(listOf(posterUrl(POSTER)), fetch.asked, "nothing more asked in the background")
+        rows.forEach { assertEquals(setOf(DownloadStorage.MARKER), names(it.id), it.id) }
+
+        // In front again, then offline as the first answer is awaited.
+        val again = CompletableDeferred<Unit>()
+        fetch.gate = again
+        front.value = true
+        runCurrent()
+        assertEquals(2, fetch.asked.size)
+        online.value = false
+        runCurrent()
+        again.complete(Unit)
+        runCurrent()
+        assertEquals(2, fetch.asked.size, "nothing more asked offline")
+
+        // Online again: every one fetched.
+        fetch.gate = null
+        online.value = true
+        runCurrent()
+        rows.forEach { assertEquals(setOf(DownloadStorage.MARKER, "poster.jpg", "still.jpg"), names(it.id), it.id) }
+    }
+
+    /**
+     * L411: the refresh reads the device's network as it is, from the app's start, not the pages' offline signal, which
+     * reads as online for its first three seconds (OfflineSignal). Nothing in a JVM test makes the container, so its
+     * source is read.
+     */
+    @Test
+    fun `the container's refresh follows the device's network itself`() {
+        val source = File("src/main/kotlin/io/skjaere/usenet/app/UsenetApplication.kt").readText()
+        assertEquals(1, Regex(Regex.escape("downloadImages.follow(downloads.done.map { it.values.toList() }, foreground, validatedNetwork)")).findAll(source).count())
+    }
+
     @Test
     fun `nothing is fetched while Show artwork is off, and the copies go as it is switched off, with no restart`() = runTest {
         val images = images()

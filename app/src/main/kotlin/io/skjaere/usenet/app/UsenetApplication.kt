@@ -801,10 +801,12 @@ class AppContainer(private val context: Context) {
             }
         }
         // The downloads' pictures (L411): those 180 days old deleted now, all of them as Show artwork is switched off, and a
-        // finished one's missing or 30 days old fetched again while the app is in front and online. None on a TV (L369).
+        // finished one's missing or 30 days old fetched again while the app is in front and online. Online as the device's
+        // network says now, from the start: the pages' offline signal reads as online for its first three seconds. None on
+        // a TV (L369).
         appScope.launch {
             if (!DownloadHostRules.runs(television)) return@launch
-            saveOrLog("keep the downloads' pictures") { downloadImages.follow(downloads.done.map { it.values.toList() }, foreground, offline.map { !it }) }
+            saveOrLog("keep the downloads' pictures") { downloadImages.follow(downloads.done.map { it.values.toList() }, foreground, validatedNetwork) }
         }
         // What plays added to a TorBox account that an earlier process left goes a grace from now (L245), and the records
         // of an account signed out of, switched to keep its adds or given a new key go as it changes.

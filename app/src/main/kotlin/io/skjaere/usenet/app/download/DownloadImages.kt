@@ -21,9 +21,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -152,7 +152,7 @@ class DownloadImages(
      * For the process's life, where downloads run: the start's [sweep]; every copy dropped as Show artwork is off, as it
      * starts and whenever it is switched off; and while it is on, the app in front ([inFront]) and [online], the finished
      * ones of [done] whose copies are missing or [REFRESH_MILLIS] old fetched again, each time those come to hold and as
-     * downloads finish.
+     * downloads finish. A refresh under way stops as soon as they cease to hold: what is left waits for the next time.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     suspend fun follow(done: Flow<List<Download>>, inFront: Flow<Boolean>, online: Flow<Boolean>): Unit = coroutineScope {
@@ -162,7 +162,8 @@ class DownloadImages(
         }
         combine(artwork, inFront, online) { on, front, net -> on && front && net }
             .distinctUntilChanged()
-            .flatMapLatest { refreshing -> if (refreshing) done.map { rows -> rows.filter { it.state == DownloadState.Done } } else emptyFlow() }
+            // Not refreshing: nothing, told as such, so the refresh under way is cancelled.
+            .flatMapLatest { refreshing -> if (refreshing) done.map { rows -> rows.filter { it.state == DownloadState.Done } } else flowOf(emptyList()) }
             .collectLatest { rows -> quietly("keep the finished downloads' pictures") { keep(rows) } }
     }
 
