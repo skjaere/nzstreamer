@@ -65,6 +65,9 @@ object CastFakes {
     /** The settings as [started] first found them, which [reset] puts back. */
     @Volatile private var settingsBefore: AppSettings? = null
 
+    /** How long the debug build's start may take to save its dev settings. */
+    private const val SEEDING_MILLIS = 60_000L
+
     private val realRoutes = CastSeams.routes
     private val realConnector = CastSeams.connector
     private val realAnnounce = CastSeams.announce
@@ -94,11 +97,14 @@ object CastFakes {
 
     /**
      * As if Google's software started, with no Google call: the Cast group looks for devices through a test's fakes, this
-     * phone looking for them ("Look for Cast devices" chosen) and the introduction shown (L143).
+     * phone looking for them ("Look for Cast devices" chosen) and the introduction shown (L143). The settings [reset] puts
+     * back are taken once the debug build's start has saved its dev settings: taken before, the whole store put back
+     * after would wipe them (the provider, the indexers) for the rest of the test process.
      */
     fun started() {
         val app = InstrumentationRegistry.getInstrumentation().targetContext.container
         runBlocking {
+            withTimeout(SEEDING_MILLIS) { app.devSettingsSaved.await() }
             if (settingsBefore == null) settingsBefore = app.settings.settings.first()
             app.settings.updateCast { it.copy(look = true, introShown = true) }
             // Read by the app before a test's list opens: the group looks at once, with no row to tap first.
