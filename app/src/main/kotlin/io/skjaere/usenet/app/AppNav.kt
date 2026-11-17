@@ -247,7 +247,8 @@ fun AppNav(
     LaunchedEffect(nav, downloads) {
         downloads.collect { ask ->
             nav.currentBackStackEntryFlow.first()
-            downloadPages.take(ask) {
+            // A show's notification names one of its downloads: the page reads the show from it, once the runner lists it.
+            downloadPages.take(ask, rowOf = container.downloads::listed) {
                 container.appScope.launch {
                     saveOrLog("resume the downloads") {
                         container.downloads.resume()
@@ -494,10 +495,12 @@ fun NavGraphBuilder.downloadScreens(nav: NavController, shown: Boolean): Downloa
                 )
             }
             composable<io.skjaere.usenet.app.download.DownloadsShowRoute> { screen ->
+                val route = screen.toRoute<io.skjaere.usenet.app.download.DownloadsShowRoute>()
                 io.skjaere.usenet.app.download.DownloadsShowScreen(
-                    screen.toRoute<io.skjaere.usenet.app.download.DownloadsShowRoute>().showTmdbId,
+                    route.showTmdbId,
                     onBack = back(screen),
                     onOpenShow = { id -> screen.ifResumed { nav.navigate(ShowRoute(id)) } },
+                    play = route.play,
                 )
             }
             composable<io.skjaere.usenet.app.download.DownloadSettingsRoute> { screen ->

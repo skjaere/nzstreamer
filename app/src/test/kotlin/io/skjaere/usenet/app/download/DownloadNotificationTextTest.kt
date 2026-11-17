@@ -21,6 +21,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -28,8 +29,9 @@ import kotlin.test.assertTrue
 /**
  * The download notifications as the app posts them (L358, L380, L387, C4; DlPhoneNotification): the ongoing one, from the
  * runner's state, with its words by state, how far it is, what else is queued and its actions; the status one a host's end
- * leaves; Finished and Failed; nothing of any on a secure lock screen; never a release's name; and the ongoing one
- * updated at most once a second, on the test's virtual clock. The show, the film and the release are invented.
+ * leaves; Finished and Failed; one Finished notification per show (L437, L445); nothing of any on a secure lock screen;
+ * never a release's name; and the ongoing one updated at most once a second, on the test's virtual clock. The show, the
+ * film and the release are invented.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class DownloadNotificationTextTest {
@@ -193,8 +195,11 @@ class DownloadNotificationTextTest {
             DownloadNotices.tapToResume(episode(DownloadState.Waiting)),
             DownloadNotices.finished(episode(DownloadState.Done)),
             DownloadNotices.failed(episode(DownloadState.Failed, reason = DownloadResolver.INCOMPLETE, tried = 3)),
+            // The show's one (L437, L445), of one episode and of several.
+            assertNotNull(DownloadNotices.show(listOf(episode(DownloadState.Done)), SHOW)),
+            assertNotNull(DownloadNotices.show(season(1 to DownloadState.Done, 5 to DownloadState.Done, 6 to DownloadState.Running), SHOW)),
         )
-        notices.forEach { assertEquals(NotificationCompat.VISIBILITY_SECRET, it.visibility, "${it.kind}") }
+        notices.forEach { assertEquals(NotificationCompat.VISIBILITY_SECRET, it.visibility, "${it.kind} ${it.title}") }
     }
 
     @Test
@@ -258,29 +263,170 @@ class DownloadNotificationTextTest {
     }
 
     @Test
-    fun `finished and failed ones are posted as a download comes to them, and withdrawn as it leaves them`() {
+    fun `finished films and failed ones are posted as a download comes to them, and withdrawn as it leaves them`() {
         val watch = DownloadNotices.Watch()
         // What the process finds at its start was there before: nothing is said of it again.
-        assertEquals(emptyList(), watch.next(listOf(episode(DownloadState.Done, id = "old"), episode(DownloadState.Running))))
-        assertEquals(emptyList(), watch.next(listOf(episode(DownloadState.Done, id = "old"), episode(DownloadState.Running))))
-        val done = watch.next(listOf(episode(DownloadState.Done, id = "old"), episode(DownloadState.Done), episode(DownloadState.Running, id = "b")))
-        assertEquals(listOf(DownloadNotices.Change.Post(DownloadNotices.finished(episode(DownloadState.Done)))), done)
-        val failed = watch.next(listOf(episode(DownloadState.Done, id = "old"), episode(DownloadState.Done), episode(DownloadState.Failed, id = "b", reason = DownloadResolver.INCOMPLETE, tried = 3)))
-        assertEquals(listOf(DownloadNotices.Change.Post(DownloadNotices.failed(episode(DownloadState.Failed, id = "b", reason = DownloadResolver.INCOMPLETE, tried = 3)))), failed)
+        assertEquals(emptyList(), watch.next(listOf(film(DownloadState.Done, id = "old"), film(DownloadState.Running))))
+        assertEquals(emptyList(), watch.next(listOf(film(DownloadState.Done, id = "old"), film(DownloadState.Running))))
+        val done = watch.next(listOf(film(DownloadState.Done, id = "old"), film(DownloadState.Done), episode(DownloadState.Running, id = "b")))
+        // A film keeps its own (L437), by its download's id.
+        assertEquals(listOf(DownloadNotices.Change.Post(DownloadNotices.finished(film(DownloadState.Done)))), done)
+        assertEquals("a", DownloadNotices.finished(film(DownloadState.Done)).tag)
+        assertNull(DownloadNotices.finished(film(DownloadState.Done)).show)
+        val failed = watch.next(listOf(film(DownloadState.Done, id = "old"), film(DownloadState.Done), episode(DownloadState.Failed, id = "b", reason = DownloadResolver.INCOMPLETE, tried = 3)))
+        // A failed episode keeps its own too, with Choose release.
+        val failure = DownloadNotices.failed(episode(DownloadState.Failed, id = "b", reason = DownloadResolver.INCOMPLETE, tried = 3))
+        assertEquals(listOf(DownloadNotices.Change.Post(failure)), failed)
+        assertEquals("b", failure.tag)
         // Tried again, removed (hidden at once, L379) or gone: what was said of it goes.
-        val left = watch.next(listOf(episode(DownloadState.Deleting), episode(DownloadState.Queued, id = "b")))
+        val left = watch.next(listOf(film(DownloadState.Deleting), episode(DownloadState.Queued, id = "b")))
         assertEquals(setOf(DownloadNotices.Change.Withdraw("a"), DownloadNotices.Change.Withdraw("b"), DownloadNotices.Change.Withdraw("old")), left.toSet())
         assertEquals(emptyList(), watch.next(emptyList()))
     }
 
+    /**
+     * L437: a show's episodes finishing are one Finished notification, tagged by the show: "Harbor Lights · 3 of 5
+     * downloaded" over the episodes and their size, Play playing the show's next and a tap opening its downloads, both
+     * naming the show's latest finished download alone (L445).
+     */
+    @Test
+    fun `a show's finished episodes are one notification, tagged by the show, in the drawn words`() {
+        val first = assertNotNull(DownloadNotices.show(season(1 to DownloadState.Done, 5 to DownloadState.Running, 6 to DownloadState.Queued, 7 to DownloadState.Queued, 8 to DownloadState.Queued), SHOW))
+        assertEquals(Kind.Finished, first.kind)
+        assertEquals(DownloadNotice.FINISHED_CHANNEL, first.channel)
+        assertEquals("Harbor Lights · 1 of 5 downloaded", first.title)
+        assertEquals("S02E01 · 1.4 GB", first.text)
+        assertNull(first.subText)
+        assertEquals(listOf(Action.PlayShow), first.actions)
+        assertEquals("Play", Action.PlayShow.label)
+        assertEquals(Tap.Show, first.tap)
+        assertEquals(DownloadNotice.Icon.Downloaded, first.icon)
+        assertTrue(first.onlyAlertOnce)
+        assertTrue(first.autoCancel)
+        assertEquals(SHOW, first.show)
+        assertEquals(DownloadNotice.showTag(SHOW), first.tag)
+        assertEquals("e1", first.rowId)
+        val third = assertNotNull(DownloadNotices.show(season(1 to DownloadState.Done, 5 to DownloadState.Done, 6 to DownloadState.Done, 7 to DownloadState.Running, 8 to DownloadState.Queued), SHOW))
+        assertEquals("Harbor Lights · 3 of 5 downloaded", third.title)
+        assertEquals("S02E01, S02E05, S02E06 · 4.2 GB", third.text)
+        // Its intents name the latest finished, never the show.
+        assertEquals("e6", third.rowId)
+        assertEquals(first.tag, third.tag)
+        // Every one of them finished: what the last post said, read from the rows.
+        val all = assertNotNull(DownloadNotices.show(season(1 to DownloadState.Done, 5 to DownloadState.Done, 6 to DownloadState.Done, 7 to DownloadState.Done, 8 to DownloadState.Done), SHOW))
+        assertEquals("Harbor Lights · 5 of 5 downloaded", all.title)
+        assertEquals("5 episodes · 7.0 GB", all.text)
+        // None finished, or another show's: nothing to say.
+        assertNull(DownloadNotices.show(season(1 to DownloadState.Running, 5 to DownloadState.Queued), SHOW))
+        assertNull(DownloadNotices.show(season(1 to DownloadState.Done), SHOW + 1))
+        listOf(first, third, all).forEach { notice ->
+            listOf(notice.title, notice.text, notice.tag.orEmpty(), notice.rowId).forEach { line ->
+                listOf("KESTREL", "1080p", "Harbor.Lights", "v.mkv", "idx").forEach { assertFalse(it in line, "\"$line\" holds \"$it\"") }
+            }
+        }
+    }
+
+    @Test
+    fun `past three episodes, how many and their size`() {
+        val rows = season(
+            1 to DownloadState.Done, 2 to DownloadState.Done, 3 to DownloadState.Done, 4 to DownloadState.Done, 5 to DownloadState.Done, 6 to DownloadState.Done,
+            7 to DownloadState.Running, 8 to DownloadState.Queued,
+        )
+        val notice = assertNotNull(DownloadNotices.show(rows, SHOW))
+        assertEquals("Harbor Lights · 6 of 8 downloaded", notice.title)
+        assertEquals("6 episodes · 8.4 GB", notice.text)
+    }
+
+    @Test
+    fun `one episode of a show alone says it as a finished one does, and is still the show's`() {
+        val notice = assertNotNull(DownloadNotices.show(listOf(episode(DownloadState.Done)), SHOW))
+        assertEquals("Harbor Lights · S02E04", notice.title)
+        assertEquals("Downloaded · 1.2 GB", notice.text)
+        assertEquals(listOf(Action.PlayShow), notice.actions)
+        assertEquals(Tap.Show, notice.tap)
+        assertEquals(DownloadNotice.showTag(SHOW), notice.tag)
+        assertEquals("Downloaded · 2 parts missing · 1.2 GB", DownloadNotices.show(listOf(episode(DownloadState.Done, gaps = 2)), SHOW)?.text)
+        // Queued again after its queue was empty: the new one alone, not the five before it.
+        val again = season(1 to DownloadState.Done, 5 to DownloadState.Done, 6 to DownloadState.Done, 7 to DownloadState.Done, 8 to DownloadState.Done) +
+            seasonEpisode(9, DownloadState.Done, createdAt = 500, completedAt = 600)
+        val alone = assertNotNull(DownloadNotices.show(again, SHOW))
+        assertEquals("Harbor Lights · S02E09", alone.title)
+        assertEquals("e9", alone.rowId)
+    }
+
+    @Test
+    fun `the count after a process start is read from the rows, the episodes finished before it counted`() {
+        val watch = DownloadNotices.Watch()
+        // The process starts with two finished and three to go: nothing said of what was there.
+        assertEquals(emptyList(), watch.next(season(1 to DownloadState.Done, 5 to DownloadState.Done, 6 to DownloadState.Running, 7 to DownloadState.Queued, 8 to DownloadState.Queued)))
+        val changes = watch.next(season(1 to DownloadState.Done, 5 to DownloadState.Done, 6 to DownloadState.Done, 7 to DownloadState.Running, 8 to DownloadState.Queued))
+        val notice = assertIs<DownloadNotices.Change.Post>(changes.single()).notice
+        assertEquals("Harbor Lights · 3 of 5 downloaded", notice.title)
+    }
+
+    @Test
+    fun `the show's notification is updated in place as its episodes finish, and as one leaves, and withdrawn once none is finished`() {
+        val watch = DownloadNotices.Watch()
+        assertEquals(emptyList(), watch.next(season(1 to DownloadState.Running, 5 to DownloadState.Queued, 6 to DownloadState.Queued, 7 to DownloadState.Queued, 8 to DownloadState.Queued)))
+        val first = assertIs<DownloadNotices.Change.Post>(
+            watch.next(season(1 to DownloadState.Done, 5 to DownloadState.Running, 6 to DownloadState.Queued, 7 to DownloadState.Queued, 8 to DownloadState.Queued)).single(),
+        ).notice
+        assertEquals("Harbor Lights · 1 of 5 downloaded", first.title)
+        // The next one: posted again under the same tag, which Android updates in place with no sound (only the first alerts).
+        val second = assertIs<DownloadNotices.Change.Post>(
+            watch.next(season(1 to DownloadState.Done, 5 to DownloadState.Done, 6 to DownloadState.Running, 7 to DownloadState.Queued, 8 to DownloadState.Queued)).single(),
+        ).notice
+        assertEquals("Harbor Lights · 2 of 5 downloaded", second.title)
+        assertEquals("S02E01, S02E05 · 2.7 GB", second.text)
+        assertEquals(first.tag, second.tag)
+        assertTrue(second.onlyAlertOnce)
+        // One removed (hidden at once, L379): said again where it still shows, never posted anew.
+        val removed = season(1 to DownloadState.Deleting, 5 to DownloadState.Done, 6 to DownloadState.Running, 7 to DownloadState.Queued, 8 to DownloadState.Queued)
+        val update = assertIs<DownloadNotices.Change.Update>(watch.next(removed).single()).notice
+        assertEquals("Harbor Lights · 1 of 4 downloaded", update.title)
+        assertEquals("S02E05 · 1.3 GB", update.text)
+        assertEquals("e5", update.rowId)
+        assertEquals(first.tag, update.tag)
+        // The show's last finished one gone: taken back.
+        val none = season(6 to DownloadState.Running, 7 to DownloadState.Queued, 8 to DownloadState.Queued)
+        assertEquals(listOf(DownloadNotices.Change.Withdraw(DownloadNotice.showTag(SHOW))), watch.next(none))
+        assertEquals(emptyList(), watch.next(none))
+    }
+
     private fun ongoing(vararg items: DownloadRunner.Item): DownloadNotice = assertNotNull(DownloadNotices.ongoing(items.toList()))
+
+    /** Copper Crown, a film, 1.2 GB, as [episode] has it otherwise. */
+    private fun film(state: DownloadState, id: String = "a") = episode(state, id).copy(
+        kind = DownloadKind.Movie, watchKey = WatchKey.movie(900003), title = "Copper Crown", subtitle = null, showTmdbId = null, season = null,
+        episode = null, episodeName = null, movieTmdbId = 900003,
+    )
+
+    /**
+     * Episodes of Harbor Lights' season 2, each [Pair] its number and state, all queued together (a season's Download) and
+     * finished in the order given: S02E01 1.4 GB, S02E05 1.3 GB, S02E06 1.5 GB, the others 1.4 GB.
+     */
+    private fun season(vararg episodes: Pair<Int, DownloadState>): List<Download> =
+        episodes.mapIndexed { i, (number, state) -> seasonEpisode(number, state, createdAt = 10, completedAt = 20L + i) }
+
+    private fun seasonEpisode(number: Int, state: DownloadState, createdAt: Long, completedAt: Long): Download {
+        val size = when (number) {
+            5 -> 1_300_000_000L
+            6 -> 1_500_000_000L
+            else -> 1_400_000_000L
+        }
+        return episode(state, id = "e$number").copy(
+            watchKey = WatchKey.episode(SHOW, 2, number), subtitle = "S02E0$number", episode = number, episodeName = null, size = size, indexerSize = size,
+            safeOffset = if (state == DownloadState.Done) size else 0, createdAt = createdAt, completedAt = completedAt.takeIf { state == DownloadState.Done },
+            updatedAt = completedAt,
+        )
+    }
 
     private fun item(row: Download, written: Long = row.safeOffset, bytesPerSecond: Long? = null) = DownloadRunner.Item(row, written, bytesPerSecond)
 
     /** Harbor Lights S02E04, 1.2 GB, half way: its release named as a release is, which no notification says. */
     private fun episode(state: DownloadState, id: String = "a", reason: String? = null, gaps: Int = 0, tried: Int = 0) = Download(
-        id = id, watchKey = WatchKey.episode(900002, 2, 4), kind = DownloadKind.Episode, title = "Harbor Lights", subtitle = "S02E04 · Low Water",
-        showTmdbId = 900002, season = 2, episode = 4, episodeName = "Low Water", state = state, reason = reason, position = 0,
+        id = id, watchKey = WatchKey.episode(SHOW, 2, 4), kind = DownloadKind.Episode, title = "Harbor Lights", subtitle = "S02E04 · Low Water",
+        showTmdbId = SHOW, season = 2, episode = 4, episodeName = "Low Water", state = state, reason = reason, position = 0,
         candidates = listOf(DownloadCandidate("idx", "g1", RELEASE, size = 1_200_000_000)), tried = (1..tried).map { "idx:g$it" },
         release = RememberedRelease("idx", "g1", RELEASE, fileIndex = 0, fileName = "$RELEASE.mkv", fileSize = 1_200_000_000),
         fileName = "$RELEASE.mkv", size = 1_200_000_000, indexerSize = 1_190_000_000, safeOffset = HALF,
@@ -289,6 +435,7 @@ class DownloadNotificationTextTest {
     )
 
     private companion object {
+        const val SHOW = 900002
         const val RELEASE = "Harbor.Lights.S02E04.1080p.WEB-DL.H.265-KESTREL"
         const val HALF = 500_000_000L
 

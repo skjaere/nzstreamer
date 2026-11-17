@@ -37,8 +37,12 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.app.collection.model.TitleKey
 import io.skjaere.usenet.app.home.HomeCollection
+import io.skjaere.usenet.app.download.Tone
 import io.skjaere.usenet.app.home.HomeCollectionRow
 import io.skjaere.usenet.app.home.HomeContent
+import io.skjaere.usenet.app.home.HomeDownloadOpen
+import io.skjaere.usenet.app.home.HomeDownloadRow
+import io.skjaere.usenet.app.home.HomeDownloads
 import io.skjaere.usenet.app.home.HomeState
 import io.skjaere.usenet.app.home.MARK_WATCHED
 import io.skjaere.usenet.app.home.REMOVE_FROM_UP_NEXT
@@ -63,7 +67,7 @@ import org.junit.runner.RunWith
 /**
  * Home's content with a TV remote (focus starts on the search field, every element takes it) and at twice the font size
  * (nothing cut); Up next's menu, from each row's ⋮ or a long press, with TalkBack's actions for it, and the Undo bar after
- * Remove (L21, L23).
+ * Remove (L21, L23); a show's row in Home's Downloads at twice the font size (L436).
  */
 @RunWith(AndroidJUnit4::class)
 class HomeLayoutTest {
@@ -108,15 +112,18 @@ class HomeLayoutTest {
     private val picked = mutableListOf<Pair<String, String>>()
     private val recording = UpNextEdits(remove = { picked += REMOVE_FROM_UP_NEXT to it.title }, markWatched = { picked += MARK_WATCHED to it.title })
 
-    /** Home on [state] at [fontScale] ([scale], which a test may change after), Up next's menu and bar as [edits] says, else as [fake] does them. */
-    private fun showHome(fontScale: Float = 1f, state: HomeState = home, edits: UpNextEdits? = null) {
+    /**
+     * Home on [state] at [fontScale] ([scale], which a test may change after), Up next's menu and bar as [edits] says, else as
+     * [fake] does them, with [downloads] as its Downloads section.
+     */
+    private fun showHome(fontScale: Float = 1f, state: HomeState = home, edits: UpNextEdits? = null, downloads: HomeDownloads? = null) {
         scale = fontScale
         shownState.value = state
         val context = instrumentation.targetContext
         compose.setContent {
             val scaled = remember(scale) { context.createConfigurationContext(Configuration(context.resources.configuration).apply { this.fontScale = scale }) }
             CompositionLocalProvider(LocalDensity provides Density(scaled)) {
-                AppTheme { HomeContent(shownState.value, artwork = false, {}, {}, {}, {}, {}, {}, {}, {}, edits = edits ?: fake.edits()) }
+                AppTheme { HomeContent(shownState.value, artwork = false, {}, {}, {}, {}, {}, {}, {}, {}, edits = edits ?: fake.edits(), downloads = downloads) }
             }
         }
     }
@@ -380,5 +387,47 @@ class HomeLayoutTest {
         // A row as tall as its words: the long title wraps instead of being cut.
         val title = compose.onAllNodes(hasText("Copper Valley at the End of the Long Northern Road"), useUnmergedTree = true).fetchSemanticsNodes().first { it.textLayout() != null }
         assertTrue("the long title is on ${title.textLayout()!!.lineCount} line(s)", title.textLayout()!!.lineCount > 1)
+    }
+
+    /**
+     * L436: a show's queued episodes are one row of Home's Downloads: its title, then how many are in its queue over its
+     * first episode's line, the one written with its bar. At twice the font size the two halves keep their place, and the
+     * queue's two lines wrap in theirs, whole, the count over the episode's line; TalkBack reads the row as one.
+     */
+    @Test
+    fun atTwiceTheFontSizeAShowsQueueRowKeepsItsHalvesAndBothItsLinesWhole() {
+        val downloads = HomeDownloads(
+            14_600_000_000,
+            listOf(
+                HomeDownloadRow("show-1", "Harbor Lights", "S02E01 · downloading 42%", Tone.Accent, 0.42f, HomeDownloadOpen.Page, queue = "5 in the queue"),
+                HomeDownloadRow("cc", "Copper Crown", "Downloaded · 5.5 GB", Tone.Muted, null, HomeDownloadOpen.Page),
+                HomeDownloadRow("show-3", "Quiet Meridian", "2 episodes · 3.6 GB", Tone.Muted, null, HomeDownloadOpen.Show(3)),
+            ),
+        )
+        // Up next and the collection left out: their rows name the same shows.
+        showHome(fontScale = 2f, state = home.copy(upNext = emptyList(), collection = null), downloads = downloads)
+        val queue = hasText("5 in the queue")
+        scrolledTo(queue)
+        // The section's header is drawn in capitals.
+        val problems = listOf(
+            "Downloads · 14.6 GB", "5 in the queue", "S02E01 · downloading 42%", "Copper Crown", "Downloaded · 5.5 GB", "Quiet Meridian", "2 episodes · 3.6 GB",
+        ).mapNotNull { words ->
+            scrolledTo(hasText(words, ignoreCase = true))
+            cut(hasText(words, ignoreCase = true), "'$words'")
+        }
+        assertEquals(emptyList<String>(), problems)
+        scrolledTo(queue)
+        fun box(words: String) = compose.onAllNodes(hasText(words), useUnmergedTree = true).fetchSemanticsNodes().first { it.textLayout() != null }.onScreen()
+        // The row: one clickable node TalkBack reads with its title and both its lines.
+        val row = compose.onNode(hasClickAction() and hasText("Harbor Lights") and hasText("5 in the queue") and hasText("S02E01 · downloading 42%")).fetchSemanticsNode().onScreen()
+        val middle = row.center.x
+        val title = box("Harbor Lights")
+        val count = box("5 in the queue")
+        val line = box("S02E01 · downloading 42%")
+        assertTrue("the title ($title) in the row's first half ($row)", title.left >= row.left && title.right <= middle)
+        assertTrue("the queue ($count) in the row's second half ($row)", count.left >= middle && count.right <= row.right)
+        assertTrue("the episode's line ($line) in the row's second half ($row)", line.left >= middle && line.right <= row.right)
+        assertEquals("both lines start together", count.left, line.left, 1f)
+        assertTrue("the count ($count) over the episode's line ($line)", count.bottom <= line.top)
     }
 }

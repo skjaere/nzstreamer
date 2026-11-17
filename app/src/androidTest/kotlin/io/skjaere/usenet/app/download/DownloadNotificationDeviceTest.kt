@@ -1,6 +1,8 @@
 package io.skjaere.usenet.app.download
 
 import android.Manifest
+import android.app.Activity
+import android.app.ActivityOptions
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Intent
@@ -9,14 +11,34 @@ import android.os.ParcelFileDescriptor
 import android.service.notification.StatusBarNotification
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
+import io.skjaere.usenet.app.FakeTmdb
+import io.skjaere.usenet.app.ImmersiveHintSeen
 import io.skjaere.usenet.app.MainActivity
+import io.skjaere.usenet.app.PlayerActivity
 import io.skjaere.usenet.app.R
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.waitFor
+import io.skjaere.usenet.core.FetchException
+import io.skjaere.usenet.data.AppSettings
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
+import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.data.EpisodeRef
+import io.skjaere.usenet.data.RememberedRelease
+import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.data.WatchTitle
+import io.skjaere.usenet.metadata.EpisodeSummary
+import io.skjaere.usenet.metadata.ExternalIds
+import io.skjaere.usenet.metadata.SeasonSummary
+import io.skjaere.usenet.metadata.ShowDetails
+import io.skjaere.usenet.player.PlayUris
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -33,9 +55,13 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.nio.ByteBuffer
+import java.time.LocalDate
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The download notifications on a phone (item 11, L358, L380, L387, C4; DlPhoneNotification). No host exists yet in the
@@ -46,14 +72,24 @@ import java.io.File
  *   small icon.
  * - Pause and Cancel reach the runner as immutable broadcasts to the receiver, which isn't exported.
  * - The status one a host's end leaves, gone as a host starts; Finished with Play, Failed with Choose release.
+ * - A show's episodes finishing: one Finished notification for the show, updated in place, secret on a lock screen, and
+ *   its Play reaching the coordinator's hook with the show's next downloaded episode, through MainActivity and the show's
+ *   downloads (L437, L445).
  * - MainActivity's download extras: a resume without the app's token only opens the page, and resumes nothing; the app's
  *   own resumes.
  *
  * The rows are seeded through the runner (their folders and markers made) and put back after, with every notification
- * the test made. The app's POST_NOTIFICATIONS is granted for it, as it is left after. The show is invented.
+ * the test made. The app's POST_NOTIFICATIONS is granted for it, as it is left after. The shows are invented. Where the
+ * app opens, nothing is searched for, grabbed or asked of TMDB: the indexers are off, the grab seam refuses and TMDB's
+ * seams are a strict fake, each put back after.
  */
 @RunWith(AndroidJUnit4::class)
+@androidx.annotation.OptIn(UnstableApi::class)
 class DownloadNotificationDeviceTest {
+    /** The player hides the system bars: Android's hint about that would take its window's focus. */
+    @get:Rule
+    val immersiveHint = ImmersiveHintSeen()
+
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context = instrumentation.targetContext
     private val container = context.container
@@ -65,6 +101,16 @@ class DownloadNotificationDeviceTest {
 
     /** Where the test's rows go in the queue: before any other's, so the queue's Pause takes the test's running one. */
     private var base: Long? = null
+
+    // What a case that opens the app changed (quiet), put back after.
+    private var tmdb: FakeTmdb? = null
+    private var saved: AppSettings? = null
+    private val realFetch = PlaybackCoordinator.fetchNzb
+    private val realNext = PlayerActivity.nextEpisode
+    private val realPrevious = PlayerActivity.previousEpisode
+    private val realLookUp = PlayerActivity.lookUpSegments
+    private val grabs = AtomicInteger()
+    private val played = mutableListOf<Download>()
 
     @Before
     fun setUp() {
@@ -79,6 +125,33 @@ class DownloadNotificationDeviceTest {
     @After
     fun tearDown() = runBlocking<Unit> {
         scope.cancel()
+        // The app and its player, where a case opened them.
+        finishAll<PlayerActivity>()
+        finishAll<MainActivity>()
+        container.playback.cancel()
+        played.forEach { row ->
+            try {
+                // The player saves where it was as it closes: let it, before its marks are taken back.
+                waitFor("the player's save on closing", 10_000) { runBlocking { container.library.state(row.watchKey).first() }?.takeIf { it.lastPlayedAt > 0 } }
+            } catch (e: AssertionError) {
+                // It never played: nothing to wait for.
+            }
+            // Out of Up next, unwatched, its release forgotten, as before the test.
+            container.library.markEpisodes(listOf(EpisodeRef(PLAYED, 1, row.episode!!, WatchTitle.episode(PLAYED_NAME, 1, row.episode!!))), watched = false)
+            row.release?.let { container.library.forgetRelease(row.watchKey, it) }
+        }
+        try {
+            tmdb?.close()
+        } catch (e: AssertionError) {
+            // What the app asked of other titles was refused, never sent.
+        }
+        if (tmdb != null) {
+            PlaybackCoordinator.fetchNzb = realFetch
+            PlayerActivity.nextEpisode = realNext
+            PlayerActivity.previousEpisode = realPrevious
+            PlayerActivity.lookUpSegments = realLookUp
+        }
+        saved?.let { container.settings.restore(it) }
         // The job an own Resume schedules (item 9), ended before its rows go.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             DownloadJobService.scheduler(context).cancelAll()
@@ -88,6 +161,7 @@ class DownloadNotificationDeviceTest {
             container.downloadStorage.delete(id)
             manager.cancel(id, DownloadNotifications.DONE_ID)
         }
+        listOf(SHOW, OTHER, PLAYED).forEach { manager.cancel(DownloadNotice.showTag(it), DownloadNotifications.DONE_ID) }
         manager.cancel(DownloadNotifications.ONGOING_ID)
         manager.cancel(DownloadNotifications.STATUS_ID)
         // As the app is left: allowed to post.
@@ -164,11 +238,13 @@ class DownloadNotificationDeviceTest {
         // Rows the app's watch has seen under way before they end.
         waitFor("both under way in the runner's state") { container.downloads.state.value.count { it.row.id in setOf(done, failed) && it.row.state == DownloadState.Running }.takeIf { it == 2 } }
         delay(500)
-        val row = dao.get(done)!!
-        dao.update(row.copy(state = DownloadState.Done, safeOffset = row.size!!, completedAt = row.updatedAt + 1, updatedAt = row.updatedAt + 1))
         val bad = dao.get(failed)!!
         dao.update(bad.copy(state = DownloadState.Failed, reason = DownloadResolver.INCOMPLETE, tried = listOf("t1", "t2", "t3"), updatedAt = bad.updatedAt + 1))
-        val finished = waitFor("the finished notification") { active(DownloadNotifications.DONE_ID, done) }.notification
+        waitFor("the failed notification first") { active(DownloadNotifications.DONE_ID, failed) }
+        finish(done)
+        // An episode is its show's (L437): the one finished alone says it as before, under the show's tag, none of its own.
+        val finished = waitFor("the finished notification") { active(DownloadNotifications.DONE_ID, DownloadNotice.showTag(SHOW)) }.notification
+        assertNull(active(DownloadNotifications.DONE_ID, done))
         assertEquals(DownloadNotice.FINISHED_CHANNEL, finished.channelId)
         assertEquals("Harbor Lights · S02E04", finished.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
         assertEquals("Downloaded · 1.2 GB", finished.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
@@ -192,7 +268,95 @@ class DownloadNotificationDeviceTest {
         // Removed (hidden at once, L379) or tried again: what was said of it goes.
         container.downloads.remove(listOf(done))
         container.downloads.retry(failed)
-        waitFor("both taken back") { if (active(DownloadNotifications.DONE_ID, done) == null && active(DownloadNotifications.DONE_ID, failed) == null) Unit else null }
+        waitFor("both taken back") {
+            if (active(DownloadNotifications.DONE_ID, DownloadNotice.showTag(SHOW)) == null && active(DownloadNotifications.DONE_ID, failed) == null) Unit else null
+        }
+    }
+
+    /**
+     * L437, L445: as two episodes of a show finish, the manager holds one Finished notification for it, tagged by the show
+     * and updated in place, alerting once and secret on a lock screen, with Play; its Play and its tap name the show's
+     * latest finished download, so another show's are told apart. A removal updates it; the last finished one's takes it
+     * back.
+     */
+    @Test
+    fun twoEpisodesOfAShowFinishingAreOneNotificationUpdatedInPlaceAndSecret() = runBlocking<Unit> {
+        val first = seed(4, DownloadState.Running)
+        val second = seed(5, DownloadState.Running)
+        seed(6, DownloadState.Queued)
+        waitFor("all three in the runner's state") { container.downloads.state.value.count { it.row.id in made }.takeIf { it == 3 } }
+        delay(500)
+        finish(first)
+        val one = waitFor("the show's notification") { shown(SHOW)?.takeIf { title(it) == "Harbor Lights · 1 of 3 downloaded" } }
+        assertEquals("S02E04 · 1.2 GB", text(one))
+        finish(second)
+        val two = waitFor("the show's notification updated") { shown(SHOW)?.takeIf { title(it) == "Harbor Lights · 2 of 3 downloaded" } }
+        assertEquals("S02E04, S02E05 · 2.4 GB", text(two))
+        // One notification for the two: none of the show's downloads has one of its own.
+        val finishedOnes = manager.activeNotifications.filter { it.id == DownloadNotifications.DONE_ID && (it.tag in made || it.tag == DownloadNotice.showTag(SHOW)) }
+        assertEquals(listOf(DownloadNotice.showTag(SHOW)), finishedOnes.map { it.tag })
+        val n = two.notification
+        assertEquals(DownloadNotice.FINISHED_CHANNEL, n.channelId)
+        assertEquals("nothing on a secure lock screen (L387)", Notification.VISIBILITY_SECRET, n.visibility)
+        assertNull("no public version", n.publicVersion)
+        assertTrue("alerts once: its updates are silent", n.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0)
+        assertEquals(R.drawable.ic_stat_downloaded, n.smallIcon.resId)
+        assertEquals(listOf("Play"), n.actions.orEmpty().map { it.title.toString() })
+        val play = n.actions.single().actionIntent
+        assertTrue("Play is the activity's, immutable", play.isActivity && play.isImmutable)
+        assertTrue("a tap opens the app", n.contentIntent.isActivity && n.contentIntent.isImmutable)
+        // Another show's notification, built as the app builds it: its Play and tap are its own.
+        val other = Download(
+            id = Download.newId(), watchKey = WatchKey.episode(OTHER, 1, 1), kind = DownloadKind.Episode, title = "Copper Crown", showTmdbId = OTHER, season = 1,
+            episode = 1, state = DownloadState.Done, position = 0, size = SIZE, indexerSize = SIZE, safeOffset = SIZE, createdAt = 1, completedAt = 2, updatedAt = 2,
+        )
+        val built = notifications.build(checkNotNull(DownloadNotices.show(listOf(other), OTHER)))
+        assertNotEquals(play, built.actions.single().actionIntent)
+        assertNotEquals(n.contentIntent, built.contentIntent)
+        // Removed (hidden at once, L379): updated in place; the show's last finished one removed: taken back.
+        container.downloads.remove(listOf(first))
+        val left = waitFor("updated as one leaves") { shown(SHOW)?.takeIf { title(it) == "Harbor Lights · 1 of 2 downloaded" } }
+        assertEquals("S02E05 · 1.2 GB", text(left))
+        container.downloads.remove(listOf(second))
+        waitFor("taken back once none is finished") { if (shown(SHOW) == null) Unit else null }
+    }
+
+    /**
+     * L437, L445: the show's notification's Play, sent as a tap sends it, opens the app with the app's token on the show's
+     * downloads, read from the download it names, and plays the show's next downloaded episode there: through the
+     * coordinator's hook, which launches the file's `download://` URI and holds it, nothing searched or grabbed. The next
+     * is S01E01 (nothing watched), though the notification names S01E02, the latest finished.
+     */
+    @Test
+    fun theShowsPlayPlaysItsNextDownloadedEpisodeThroughTheHook() = runBlocking<Unit> {
+        quiet()
+        val e1 = underWay(1)
+        val e2 = underWay(2)
+        waitFor("both under way in the runner's state") { container.downloads.state.value.count { it.row.id in setOf(e1.id, e2.id) && it.row.state == DownloadState.Running }.takeIf { it == 2 } }
+        delay(500)
+        val first = written(e1)
+        val latest = written(e2)
+        played += first
+        val shown = waitFor("the show's notification") { shown(PLAYED)?.takeIf { title(it) == "$PLAYED_NAME · 2 of 2 downloaded" } }
+        val play = shown.notification.actions.single()
+        assertEquals("Play", play.title.toString())
+        // As a tap sends it, with the sender's leave to start an activity, as the system's tap has (Android 14's mode).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            @Suppress("DEPRECATION")
+            val options = ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+            play.actionIntent.send(context, 0, null, null, null, null, options.toBundle())
+        } else {
+            play.actionIntent.send()
+        }
+        val main = waitFor("the app opened by its Play") { resumed<MainActivity>() }
+        assertEquals(DownloadAsk.PlayShow(latest.id), onMain { main.downloadAsked })
+        val player = waitFor("the player ready on the show's next episode", READY_MILLIS) {
+            resumed<PlayerActivity>()?.takeIf { p -> onMain { p.player?.playbackState } == Player.STATE_READY }
+        }
+        assertEquals(PlayUris.download(first.id), onMain { player.player!!.currentMediaItem?.localConfiguration?.uri?.toString() })
+        // The hook's hold, or the player's after it (L413): the file is the one played.
+        assertTrue("held: ${container.downloads.held.value}", first.id in container.downloads.held.value)
+        assertEquals("indexer grabs", 0, grabs.get())
     }
 
     @Test
@@ -215,6 +379,98 @@ class DownloadNotificationDeviceTest {
             }
             assertNotEquals("nothing held", DownloadHostRules.STOPPED_BY_ANDROID, resumed.reason)
         }
+    }
+
+    /** [id]'s download finished just now, as the writer leaves one: Done, written whole. */
+    private suspend fun finish(id: String) {
+        val row = dao.get(id)!!
+        val at = maxOf(System.currentTimeMillis(), row.updatedAt + 1)
+        dao.update(row.copy(state = DownloadState.Done, safeOffset = row.size!!, completedAt = at, updatedAt = at))
+    }
+
+    /**
+     * Nothing searched for, grabbed or asked of TMDB while the app is open: the indexers off, the grab seam refusing (and
+     * counting), TMDB's seams a strict fake knowing only [PLAYED], and the player's lookups none.
+     */
+    private suspend fun quiet() {
+        saved = container.settings.settings.first()
+        container.settings.indexers.first().filter { it.enabled }.forEach { container.settings.setIndexerEnabled(it.id, false) }
+        tmdb = FakeTmdb(
+            shows = mapOf(
+                PLAYED to ShowDetails(
+                    PLAYED, PLAYED_NAME, null, 2024, null, null, null, "Ended", false, 6, listOf(SeasonSummary(1, null, 6, LocalDate.now().minusDays(400), null)),
+                    lastEpisode = EpisodeSummary(1, 6, "Slack Water", LocalDate.now().minusDays(300)), nextEpisode = null, ids = ExternalIds(),
+                ),
+            ),
+            strict = true,
+        )
+        PlaybackCoordinator.fetchNzb = { _, _, _ ->
+            grabs.incrementAndGet()
+            throw FetchException("Not to be fetched", stopsAll = true)
+        }
+        PlayerActivity.nextEpisode = { _, _ -> null }
+        PlayerActivity.previousEpisode = { _, _ -> null }
+        PlayerActivity.lookUpSegments = { _, _, _ -> emptyList() }
+    }
+
+    /** Episode [episode] of Quiet Meridian's season 1 under way, its release kept as Resolve keeps one, first in the queue. */
+    private suspend fun underWay(episode: Int): Download {
+        val name = "Quiet.Meridian.S01E0$episode.720p.WEB.h264-WREN.mkv"
+        val now = System.currentTimeMillis()
+        val first = base ?: ((dao.all().first().filter { it.id !in made }.minOfOrNull { it.position } ?: 0) - 100).also { base = it }
+        val row = Download(
+            id = Download.newId(), watchKey = WatchKey.episode(PLAYED, 1, episode), kind = DownloadKind.Episode, title = PLAYED_NAME, subtitle = "S01E0$episode",
+            showTmdbId = PLAYED, season = 1, episode = episode, seasonEpisodes = 6, state = DownloadState.Running, position = first + episode,
+            release = RememberedRelease("idx-notify", "qm-10$episode", name.removeSuffix(".mkv"), null, 0, "nzb-qm-10$episode", name), fileName = name,
+            createdAt = now, updatedAt = now,
+        )
+        made += row.id
+        container.downloadStorage.add(row)
+        return row
+    }
+
+    /** [row]'s file written whole (the device tests' chapters.mkv) and renamed done, then its row Done, as the writer leaves one. */
+    private suspend fun written(row: Download): Download {
+        val storage = container.downloadStorage
+        val bytes = DownloadFixtures.media(MEDIA)
+        val name = checkNotNull(row.fileName)
+        storage.open(row.id, name, bytes.size.toLong()).use { channel ->
+            val buffer = ByteBuffer.wrap(bytes)
+            while (buffer.hasRemaining()) channel.write(buffer)
+            channel.force(true)
+        }
+        storage.finish(row.id, name)
+        val size = bytes.size.toLong()
+        val at = System.currentTimeMillis()
+        val done = row.copy(
+            state = DownloadState.Done, release = checkNotNull(row.release).copy(fileSize = size), size = size, indexerSize = size, safeOffset = size,
+            relativePath = storage.relativePath(row.id, name), completedAt = at, updatedAt = at,
+        )
+        dao.update(done)
+        return done
+    }
+
+    /** The show [show]'s Finished notification, as the manager holds it. */
+    private fun shown(show: Int): StatusBarNotification? = active(DownloadNotifications.DONE_ID, DownloadNotice.showTag(show))
+
+    private fun title(n: StatusBarNotification): String = n.notification.extras.getCharSequence(Notification.EXTRA_TITLE).toString()
+
+    private fun text(n: StatusBarNotification): String = n.notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+
+    private inline fun <reified A : Activity> resumed(): A? = onMain {
+        ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).filterIsInstance<A>().firstOrNull()
+    }
+
+    /** Finishes every [A] there is, in any stage. */
+    private inline fun <reified A : Activity> finishAll() = instrumentation.runOnMainSync {
+        val monitor = ActivityLifecycleMonitorRegistry.getInstance()
+        listOf(Stage.RESUMED, Stage.PAUSED, Stage.STOPPED, Stage.STARTED, Stage.CREATED).flatMap(monitor::getActivitiesInStage).filterIsInstance<A>().forEach { it.finish() }
+    }
+
+    private fun <T> onMain(block: () -> T): T {
+        var result: Result<T>? = null
+        instrumentation.runOnMainSync { result = runCatching(block) }
+        return result!!.getOrThrow()
     }
 
     /** Episode [episode] of Harbor Lights' season 2, 1.2 GB, half of it written, in [state], first in the queue. */
@@ -254,5 +510,16 @@ class DownloadNotificationDeviceTest {
     private companion object {
         const val SHOW = 900_771
         const val SIZE = 1_200_000_000L
+
+        /** Another invented show, whose notification is only built. */
+        const val OTHER = 900_772
+
+        /** The invented show whose notification's Play the test sends. */
+        const val PLAYED = 900_773
+        const val PLAYED_NAME = "Quiet Meridian"
+
+        /** The device tests' film with chapters: six minutes at 10 fps, 0.7 MB. */
+        const val MEDIA = "chapters.mkv"
+        const val READY_MILLIS = 30_000L
     }
 }

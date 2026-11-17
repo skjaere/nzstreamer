@@ -281,6 +281,8 @@ class MainActivity : ComponentActivity() {
             play = intent.getStringExtra(EXTRA_DOWNLOAD_PLAY),
             choose = intent.getStringExtra(EXTRA_DOWNLOAD_CHOOSE),
             token = intent.getStringExtra(EXTRA_DOWNLOAD_TOKEN),
+            show = intent.getStringExtra(EXTRA_DOWNLOAD_SHOW),
+            playShow = intent.getStringExtra(EXTRA_DOWNLOAD_PLAY_SHOW),
         )
         val ask = DownloadIntents.ask(
             extras,
@@ -309,6 +311,8 @@ class MainActivity : ComponentActivity() {
         private const val EXTRA_DOWNLOAD_RESUME = "downloadResume"
         private const val EXTRA_DOWNLOAD_PLAY = "downloadPlay"
         private const val EXTRA_DOWNLOAD_CHOOSE = "downloadChoose"
+        private const val EXTRA_DOWNLOAD_SHOW = "downloadShow"
+        private const val EXTRA_DOWNLOAD_PLAY_SHOW = "downloadPlayShow"
 
         /** The app's own token ([io.skjaere.usenet.app.download.DownloadToken]), which a resume and a play carry. */
         private const val EXTRA_DOWNLOAD_TOKEN = "downloadToken"
@@ -352,16 +356,27 @@ class MainActivity : ComponentActivity() {
          * Brings the app forward on the Downloads page (L380, C4), as a download notification's tap and its actions ask:
          * into the activity there is, closing what is over it (the player). [resume] lets the queue go on from there, the
          * visible app scheduling the host; [play] plays the finished download of that id; [choose] opens that download's
-         * list of releases. A resume or a play carries the app's own token: only the app's own PendingIntents have it.
+         * list of releases. A show's notification (L437, L445) names one of its downloads by its id: [show] opens that
+         * show's downloads, [playShow] plays its next downloaded episode there. A resume or a play carries the app's own
+         * token: only the app's own PendingIntents have it.
          */
-        fun openDownloads(context: Context, resume: Boolean = false, play: String? = null, choose: String? = null): Intent =
+        fun openDownloads(
+            context: Context,
+            resume: Boolean = false,
+            play: String? = null,
+            choose: String? = null,
+            show: String? = null,
+            playShow: String? = null,
+        ): Intent =
             Intent(context, MainActivity::class.java)
                 .putExtra(EXTRA_OPEN_DOWNLOADS, true)
                 .apply {
                     if (resume) putExtra(EXTRA_DOWNLOAD_RESUME, true)
                     play?.let { putExtra(EXTRA_DOWNLOAD_PLAY, it) }
                     choose?.let { putExtra(EXTRA_DOWNLOAD_CHOOSE, it) }
-                    if (resume || play != null) putExtra(EXTRA_DOWNLOAD_TOKEN, context.container.downloadToken.value)
+                    show?.let { putExtra(EXTRA_DOWNLOAD_SHOW, it) }
+                    playShow?.let { putExtra(EXTRA_DOWNLOAD_PLAY_SHOW, it) }
+                    if (resume || play != null || playShow != null) putExtra(EXTRA_DOWNLOAD_TOKEN, context.container.downloadToken.value)
                 }
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     }

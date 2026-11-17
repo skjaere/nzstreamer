@@ -169,6 +169,8 @@ class DownloadSeasonEndToEndDeviceTest {
             back { manager.cancel(row.id, DownloadNotifications.DONE_ID) }
             back { row.release?.let { container.library.forgetRelease(row.watchKey, it) } }
         }
+        // The show's finished episodes are said in its one notification (L437).
+        back { manager.cancel(DownloadNotice.showTag(SHOW), DownloadNotifications.DONE_ID) }
         if (since != null) {
             back { container.downloadStorage.packs.folder(pack).deleteRecursively() }
             back { container.downloadStorage.sweepPacks() }

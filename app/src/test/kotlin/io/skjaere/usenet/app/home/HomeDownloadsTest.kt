@@ -18,8 +18,9 @@ import kotlin.test.assertNull
 
 /**
  * Home's Downloads section (L384, DlPhoneHome's online section): shown only while something is queued or downloaded; at
- * most three rows, the one the queue is at first, then the latest; a show's finished episodes as one row; each row opening
- * what it names (the page, a show's downloads, a film played); the header saying what downloads hold. Invented titles.
+ * most three rows, the one the queue is at first, then the latest; a show's finished episodes as one row, and a show with
+ * episodes still to finish one row too, with how many are in its queue (L436); each row opening what it names (the page,
+ * a show's downloads, a film played); the header saying what downloads hold. Invented titles.
  */
 class HomeDownloadsTest {
     private val saved = Locale.getDefault()
@@ -83,16 +84,18 @@ class HomeDownloadsTest {
         // One held by a pause is where the queue is: first, though older than the rest.
         val paused = episode("hl-4", HL, "Harbor Lights", 2, 4, DownloadState.Paused, at = 1)
         assertEquals("Harbor Lights", HomeDownloads.of((listOf(crown, paused) + meridian).map(::item))?.rows?.first()?.title)
-        // Queued ones are rows of their own, by when they were added.
-        val queued = episode("hl-5", HL, "Harbor Lights", 2, 5, DownloadState.Queued, at = 60)
-        assertEquals(listOf("hl-4", "hl-5", "cc"), HomeDownloads.of(listOf(running, crown, queued).map(::item))?.rows?.map { it.key })
+        // A queued film is a row of its own, by when it was added; a show's queued episodes are its one row (L436).
+        val queued = film("lf-2", "Lantern Field", DownloadState.Queued, at = 60)
+        val next = episode("hl-5", HL, "Harbor Lights", 2, 5, DownloadState.Queued, at = 70)
+        assertEquals(listOf("show-$HL", "lf-2", "cc"), HomeDownloads.of(listOf(running, crown, queued, next).map(::item))?.rows?.map { it.key })
     }
 
     @Test
     fun `each row says what it is, as drawn, and opens what it names`() {
         val home = assertNotNull(HomeDownloads.of((listOf(crown) + meridian + running).map(::item)))
         val (hl, cc, qm) = home.rows
-        assertEquals(HomeDownloadRow("hl-4", "Harbor Lights", "S02E04 · downloading 42%", Tone.Accent, 0.42f, HomeDownloadOpen.Page), hl)
+        // A show with one episode still to finish: its row says that episode alone, as before (L436).
+        assertEquals(HomeDownloadRow("show-$HL", "Harbor Lights", "S02E04 · downloading 42%", Tone.Accent, 0.42f, HomeDownloadOpen.Page), hl)
         assertEquals(HomeDownloadRow("cc", "Copper Crown", "Downloaded · 5.5 GB", Tone.Muted, null, HomeDownloadOpen.Play(crown)), cc)
         assertEquals(HomeDownloadRow("show-$QM", "Quiet Meridian", "2 episodes · 3.6 GB", Tone.Muted, null, HomeDownloadOpen.Show(QM)), qm)
         // Not drawn: the other states, each by its words on the Show page's row, the page for each.
@@ -124,6 +127,82 @@ class HomeDownloadsTest {
         // Nothing with a file yet (queued, or failed): the section's name alone, never "0 KB".
         val failed = episode("hl-6", HL, "Harbor Lights", 2, 6, DownloadState.Failed)
         assertEquals("Downloads", assertNotNull(HomeDownloads.of(listOf(queued, failed).map(::item))).header)
+    }
+
+    /** Harbor Lights' season 2 queued (L436): S02E01 being written, 42 % of it, and four more queued after it. */
+    private val season = listOf(episode("hl-1", HL, "Harbor Lights", 2, 1, DownloadState.Running, size = 3_100_000_000, file = true, written = 1_302_000_000, at = 5)) +
+        (5..8).map { episode("hl-$it", HL, "Harbor Lights", 2, it, DownloadState.Queued, at = 5) }
+
+    @Test
+    fun `a show's episodes still to finish are one row, how many with the one written, then the first as its own row said it`() {
+        val home = assertNotNull(HomeDownloads.of((season + crown + meridian).map(::item)))
+        assertEquals(
+            listOf(
+                HomeDownloadRow("show-$HL", "Harbor Lights", "S02E01 · downloading 42%", Tone.Accent, 0.42f, HomeDownloadOpen.Page, queue = "5 in the queue"),
+                HomeDownloadRow("cc", "Copper Crown", "Downloaded · 5.5 GB", Tone.Muted, null, HomeDownloadOpen.Play(crown)),
+                HomeDownloadRow("show-$QM", "Quiet Meridian", "2 episodes · 3.6 GB", Tone.Muted, null, HomeDownloadOpen.Show(QM)),
+            ),
+            home.rows,
+        )
+        // Two shows queued: a row each, the one the queue is at first.
+        val other = listOf(3, 4).map { episode("qm-$it", QM, "Quiet Meridian", 1, it, DownloadState.Queued, at = 9) }
+        val both = assertNotNull(HomeDownloads.of((season + other).map(::item)))
+        assertEquals(listOf("show-$HL" to "5 in the queue", "show-$QM" to "2 in the queue"), both.rows.map { it.key to it.queue })
+        assertEquals("S01E03 · queued for download", both.rows[1].status)
+    }
+
+    @Test
+    fun `while another title is written, a show's row says its first episode queued`() {
+        val lantern = film("lf", "Lantern Field", DownloadState.Running, size = 2_000_000_000, at = 50).copy(size = 2_000_000_000, relativePath = "downloads/lf/v.mkv")
+        val queued = (5..6).map { episode("hl-$it", HL, "Harbor Lights", 2, it, DownloadState.Queued, at = 5) }
+        val home = assertNotNull(HomeDownloads.of((listOf(lantern) + queued).map(::item)))
+        assertEquals(listOf("lf", "show-$HL"), home.rows.map { it.key })
+        assertEquals(
+            HomeDownloadRow("show-$HL", "Harbor Lights", "S02E05 · queued for download", Tone.Muted, null, HomeDownloadOpen.Page, queue = "2 in the queue"),
+            home.rows[1],
+        )
+    }
+
+    @Test
+    fun `a show's finished episodes are in its row while its queue lasts, and its own row as before once it is empty`() {
+        val finished = listOf(1, 2).map { episode("hl-$it", HL, "Harbor Lights", 2, it, DownloadState.Done, at = 30 + it.toLong()) }
+        val left = listOf(
+            episode("hl-3", HL, "Harbor Lights", 2, 3, DownloadState.Running, size = 3_100_000_000, file = true, written = 1_302_000_000, at = 5),
+            episode("hl-4", HL, "Harbor Lights", 2, 4, DownloadState.Queued, at = 5),
+        )
+        val lasting = assertNotNull(HomeDownloads.of((finished + left + crown).map(::item)))
+        assertEquals(listOf("show-$HL", "cc"), lasting.rows.map { it.key })
+        assertEquals("2 in the queue", lasting.rows.first().queue)
+        assertEquals(HomeDownloadOpen.Page, lasting.rows.first().opens)
+        // Its last one written: the row is as it was, its episodes and their size, opening the show's downloads.
+        val done = finished + left.map { it.copy(state = DownloadState.Done, safeOffset = it.indexerSize, size = it.indexerSize, relativePath = "downloads/${it.id}/v.mkv", completedAt = 60) }
+        val empty = assertNotNull(HomeDownloads.of((done + crown).map(::item)))
+        assertEquals(
+            HomeDownloadRow("show-$HL", "Harbor Lights", "4 episodes · 8.5 GB", Tone.Muted, null, HomeDownloadOpen.Show(HL)),
+            empty.rows.first(),
+        )
+    }
+
+    @Test
+    fun `a failed episode keeps its own row beside its show's, and three rows at most`() {
+        val left = listOf(
+            episode("hl-7", HL, "Harbor Lights", 2, 7, DownloadState.Running, size = 1_400_000_000, file = true, written = 168_000_000, at = 5),
+            episode("hl-8", HL, "Harbor Lights", 2, 8, DownloadState.Queued, at = 5),
+        )
+        val failed = episode("hl-6", HL, "Harbor Lights", 2, 6, DownloadState.Failed, at = 60)
+        val home = assertNotNull(HomeDownloads.of((left + failed + crown + older).map(::item)))
+        assertEquals(
+            listOf(
+                HomeDownloadRow("show-$HL", "Harbor Lights", "S02E07 · downloading 12%", Tone.Accent, 0.12f, HomeDownloadOpen.Page, queue = "2 in the queue"),
+                HomeDownloadRow("hl-6", "Harbor Lights", "S02E06 · download failed", Tone.Warn, null, HomeDownloadOpen.Page),
+                HomeDownloadRow("cc", "Copper Crown", "Downloaded · 5.5 GB", Tone.Muted, null, HomeDownloadOpen.Play(crown)),
+            ),
+            home.rows,
+        )
+        // Its queue empty, the failed one still its own row, the finished ones the show's.
+        val after = assertNotNull(HomeDownloads.of((left.map { it.copy(state = DownloadState.Done, completedAt = 70) } + failed).map(::item)))
+        assertEquals(listOf("show-$HL" to null, "hl-6" to null), after.rows.map { it.key to it.queue })
+        assertEquals(HomeDownloadOpen.Show(HL), after.rows.first().opens)
     }
 
     private companion object {

@@ -55,6 +55,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.nio.channels.FileChannel
@@ -589,6 +590,21 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         } catch (e: Exception) {
             log.warn("Couldn't delete the downloads watched a day ago: {}", e::class.simpleName)
         }
+    }
+
+    /**
+     * Download [id] once this runner's state lists it, and its finished ones for the hook (L445): what a show's
+     * notification names, read as the page it opens is shown, which a process just started hasn't read yet. Null for one
+     * gone, or being removed; none on a TV.
+     */
+    suspend fun listed(id: String): Download? {
+        if (!runs) return null
+        val row = dao.get(id)?.takeIf { it.state != DownloadState.Deleting } ?: return null
+        withTimeoutOrNull(LISTED_MILLIS) {
+            state.first { items -> items.any { it.row.id == id } }
+            if (row.state == DownloadState.Done) done.first { it.isNotEmpty() }
+        }
+        return row
     }
 
     /** The finished downloads by watch key, the latest finished for each: what a play hook and the player ask (items 14, 15). */
@@ -1524,6 +1540,9 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
         /** The longest of Delete once watched's clock's waits, as the device's sleep stops it ([autoDeleteClock]). */
         private const val CLOCK_STEP_MILLIS = 60_000L
+
+        /** How long [listed] waits for this runner's state to list a download: Room's first answer, well past. */
+        private const val LISTED_MILLIS = 5_000L
 
         /** The releases a download keeps to try, in download order (L338). */
         const val MAX_CANDIDATES = 10

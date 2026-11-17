@@ -2,6 +2,7 @@ package io.skjaere.usenet.app.download
 
 import android.Manifest
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -20,7 +21,9 @@ import io.skjaere.usenet.app.download.DownloadNotice.Kind
 import io.skjaere.usenet.app.download.DownloadNotice.Progress
 import io.skjaere.usenet.app.download.DownloadNotice.Tap
 import io.skjaere.usenet.app.ui.AppColors
+import io.skjaere.usenet.core.formatSize
 import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -32,9 +35,10 @@ import org.slf4j.LoggerFactory
 /**
  * One of the downloads' notifications, as plain data (L358, L380, L387, C4; DlPhoneNotification): what
  * [DownloadNotifications] builds and posts, and what a JVM test reads. [rowId] is the download it is of, which its Cancel,
- * Play and Choose release act on; [title] the show and episode or the film, never the release; [text] its state's words
+ * Play and Choose release act on (a show's names its latest finished episode, from which its Play and tap read the show,
+ * L445); [title] the show and episode or the film, never the release; [text] its state's words
  * ([DownloadHostRules.words]); [subText] what else is queued; [progress] its bar, if it has one; [actions] in their order;
- * [tap] what a tap on it does.
+ * [tap] what a tap on it does; [show] the show a Finished one is of, whose one notification it is (L437).
  */
 data class DownloadNotice(
     val kind: Kind,
@@ -45,6 +49,7 @@ data class DownloadNotice(
     val progress: Progress? = null,
     val actions: List<Action> = emptyList(),
     val tap: Tap = Tap.Downloads,
+    val show: Int? = null,
 ) {
     /** Which of the notifications it is: its channel, how it behaves, its category and its small icon. */
     enum class Kind(val channel: String, val ongoing: Boolean, val autoCancel: Boolean, val category: String?, val icon: Icon) {
@@ -54,7 +59,7 @@ data class DownloadNotice(
         /** What a host's end leaves while work is left, under its own id: it can be swiped away, and goes as a host starts. */
         Status(DOWNLOADS_CHANNEL, ongoing = false, autoCancel = false, NotificationCompat.CATEGORY_STATUS, Icon.Download),
 
-        /** One for each download finished. */
+        /** One for each film finished, and one for each show, of its episodes finished (L437). */
         Finished(FINISHED_CHANNEL, ongoing = false, autoCancel = true, null, Icon.Downloaded),
 
         /** One for each that couldn't be downloaded. */
@@ -71,10 +76,16 @@ data class DownloadNotice(
         Cancel("Cancel"),
         Play("Play"),
         ChooseRelease("Choose release"),
+
+        /** A show's Play: its next downloaded episode, from its downloads (L437). */
+        PlayShow("Play"),
     }
 
-    /** What a tap on the notification does: open the Downloads page, or open it and resume (the service's ended wait). */
-    enum class Tap { Downloads, Resume }
+    /**
+     * What a tap on the notification does: open the Downloads page, or open it and resume (the service's ended wait), or
+     * open a show's downloads (a show's Finished one, L437).
+     */
+    enum class Tap { Downloads, Resume, Show }
 
     /** The drawn small icons (D7): the arrow into the tray, or the tick over it. */
     enum class Icon { Download, Downloaded }
@@ -84,6 +95,12 @@ data class DownloadNotice(
     val autoCancel: Boolean get() = kind.autoCancel
     val category: String? get() = kind.category
     val icon: Icon get() = kind.icon
+
+    /**
+     * What tells it from the app's others under its id: a show's Finished one is the show's (L437), and never logged; a
+     * finished film's and a failed one's are their download's id; the ongoing and the status one are the queue's alone.
+     */
+    val tag: String? get() = if (kind == Kind.Finished || kind == Kind.Failed) show?.let(::showTag) ?: rowId else null
 
     /** Only the first post of a notification sounds or buzzes, never its updates. */
     val onlyAlertOnce: Boolean get() = true
@@ -100,14 +117,17 @@ data class DownloadNotice(
 
         /** "Finished downloads": a finished one and a failed one, each with its own. */
         const val FINISHED_CHANNEL = "downloads_finished"
+
+        /** Show [showTmdbId]'s Finished notification's tag (L437). */
+        fun showTag(showTmdbId: Int): String = "show-$showTmdbId"
     }
 }
 
 /**
  * What each download notification says and offers (L358, L380, C4; DlPhoneNotification), from the runner's state
  * ([DownloadRunner.state]) and its rows, as plain rules: the ongoing one, the status one a host's end leaves, the
- * service's ended wait, Finished and Failed; the ongoing one's pace ([paced]); and which finished and failed ones to post
- * or take back as the rows change ([Watch]).
+ * service's ended wait, Finished and Failed, a show's one Finished ([show], L437); the ongoing one's pace ([paced]); and
+ * which finished and failed ones to post, say again or take back as the rows change ([Watch]).
  */
 object DownloadNotices {
     /** The least time between two posts of the ongoing notification: Android drops an app's updates past a few a second. */
@@ -156,7 +176,7 @@ object DownloadNotices {
         return DownloadNotice(Kind.Status, row.id, words.title, words.text, tap = Tap.Resume)
     }
 
-    /** [row] finished: "Downloaded · 1.2 GB", or with its parts missing, and Play, in "Finished downloads". */
+    /** [row] finished: "Downloaded · 1.2 GB", or with its parts missing, and Play, in "Finished downloads": a film's. */
     fun finished(row: Download): DownloadNotice {
         val words = checkNotNull(DownloadHostRules.words(row.copy(state = DownloadState.Done)))
         return DownloadNotice(Kind.Finished, row.id, words.title, words.text, actions = listOf(Action.Play))
@@ -181,43 +201,115 @@ object DownloadNotices {
 
     /** What [Watch] asks of the notifications as the rows change. */
     sealed interface Change {
-        /** Post [notice]: a download finished or failed just now. */
+        /** Post [notice]: a download finished or failed just now, or a show's episode finished (posted again, in place). */
         data class Post(val notice: DownloadNotice) : Change
 
-        /** Take back what was posted of the download [rowId]: it was tried again, removed or deleted. */
-        data class Withdraw(val rowId: String) : Change
+        /** Say [notice] again where it still shows: a show's episode left Done (removed, deleted). Swiped away, nothing. */
+        data class Update(val notice: DownloadNotice) : Change
+
+        /** Take back what was posted under [tag]: its download was tried again, removed or deleted, or the show's last finished one was. */
+        data class Withdraw(val tag: String) : Change
     }
 
     /**
      * Which Finished and Failed notifications the rows' changes ask for, one look at a time ([next]): a download seen
      * coming to Done or Failed is posted once; one that leaves either (tried again, removed, deleted) has what was said
-     * of it taken back. What a look finds first is what was there before, said already or not by an earlier process: it
-     * is never said again.
+     * of it taken back. An episode of a show is its show's (L437): one coming to Done posts the show's notification again,
+     * which Android updates in place where it still shows, with no sound; one leaving Done has it said again where it
+     * still shows, or taken back once none of the show's episodes is finished. A failed episode keeps its own. What a
+     * look finds first is what was there before, said already or not by an earlier process: it is never said again.
      */
     class Watch {
-        private var seen: Map<String, DownloadState>? = null
+        private var seen: Map<String, Seen>? = null
+
+        /** What a look saw of a download: its state, and the show it is of, whose notification it is said in. */
+        private data class Seen(val state: DownloadState, val show: Int?)
 
         fun next(rows: List<Download>): List<Change> {
             // A removed one is hidden at once (L379), as gone.
             val now = rows.filter { it.state != DownloadState.Deleting }.associateBy { it.id }
             val before = seen
-            seen = now.mapValues { it.value.state }
+            seen = now.mapValues { Seen(it.value.state, it.value.show) }
             if (before == null) return emptyList()
-            val came = now.values.mapNotNull { row ->
-                val was = before[row.id]
+            val changes = mutableListOf<Change>()
+            // The shows with an episode come to Done, and those with one that left it.
+            val came = mutableSetOf<Int>()
+            val left = mutableSetOf<Int>()
+            now.values.forEach { row ->
+                val was = before[row.id]?.state
+                if (was == null || was == row.state) return@forEach
+                val show = row.show
                 when {
-                    was == null || was == row.state -> null
-                    row.state == DownloadState.Done -> Change.Post(finished(row))
-                    row.state == DownloadState.Failed -> Change.Post(failed(row))
-                    was.said() -> Change.Withdraw(row.id)
-                    else -> null
+                    row.state == DownloadState.Done -> if (show != null) came += show else changes += Change.Post(finished(row))
+                    row.state == DownloadState.Failed -> changes += Change.Post(failed(row))
+                    // A show's finished episode was said in the show's notification, not under its own id.
+                    was == DownloadState.Failed || (was == DownloadState.Done && show == null) -> changes += Change.Withdraw(row.id)
+                }
+                if (was == DownloadState.Done && show != null) left += show
+            }
+            before.filter { (id, _) -> id !in now }.forEach { (id, was) ->
+                when {
+                    was.state == DownloadState.Done && was.show != null -> left += was.show
+                    was.state == DownloadState.Done || was.state == DownloadState.Failed -> changes += Change.Withdraw(id)
                 }
             }
-            val gone = before.filter { (id, was) -> id !in now && was.said() }.map { (id, _) -> Change.Withdraw(id) }
-            return came + gone
+            val all = now.values.toList()
+            came.forEach { id -> show(all, id)?.let { changes += Change.Post(it) } }
+            (left - came).forEach { id -> changes += show(all, id)?.let(Change::Update) ?: Change.Withdraw(DownloadNotice.showTag(id)) }
+            return changes
         }
+    }
 
-        private fun DownloadState.said() = this == DownloadState.Done || this == DownloadState.Failed
+    /**
+     * Show [showTmdbId]'s one Finished notification from the runner's [rows] (W120, L437), of its episodes queued since its
+     * queue was last empty (read from the rows' createdAt and completedAt, so a process's death changes nothing): those
+     * still to finish and those finished, never a failed one, which keeps its own. "Harbor Lights · 3 of 5 downloaded"
+     * over "S02E01, S02E05, S02E06 · 4.2 GB", past three "6 episodes · 8.4 GB"; one episode alone is said as a finished
+     * film is, "Harbor Lights · S02E04" over "Downloaded · 1.2 GB". Once none is left to finish, it says what the last post
+     * did. Its Play plays the show's next downloaded episode and a tap opens its downloads, both naming its latest
+     * finished download alone (L445). Null while none of its episodes is finished.
+     */
+    fun show(rows: List<Download>, showTmdbId: Int): DownloadNotice? {
+        val own = rows.filter { it.show == showTmdbId && (it.state == DownloadState.Done || it.state in LEFT) }
+        val latest = own.filter { it.state == DownloadState.Done }.maxByOrNull { it.until } ?: return null
+        val batch = batch(own, latest)
+        val done = batch.filter { it.state == DownloadState.Done }.sortedWith(compareBy({ it.season }, { it.episode }))
+        val (title, text) = if (batch.size == 1) {
+            checkNotNull(DownloadHostRules.words(latest)).let { it.title to it.text }
+        } else {
+            val labels = done.mapNotNull(DownloadsPage::label)
+            val which = if (labels.size == done.size && done.size <= LISTED) labels.joinToString(", ") else "${done.size} episode${if (done.size == 1) "" else "s"}"
+            "${latest.title} · ${done.size} of ${batch.size} downloaded" to "$which · ${formatSize(done.sumOf { it.size ?: it.indexerSize })}"
+        }
+        return DownloadNotice(Kind.Finished, latest.id, title, text, actions = listOf(Action.PlayShow), tap = Tap.Show, show = showTmdbId)
+    }
+
+    /** How many finished episodes a show's notification names, past which it counts them. */
+    private const val LISTED = 3
+
+    /** The show an episode's download is of, whose notification it is said in; none for a film. */
+    private val Download.show: Int? get() = showTmdbId.takeIf { kind == DownloadKind.Episode }
+
+    /** When a download stopped being in the queue: when it finished, or never yet. */
+    private val Download.until: Long get() = if (state == DownloadState.Done) completedAt ?: updatedAt else Long.MAX_VALUE
+
+    /**
+     * Of a show's [rows], finished and still to finish, the stretch queued together around [latest]: each counted from
+     * when it was queued until it finished (or now), and a stretch broken where the show's queue was empty.
+     */
+    private fun batch(rows: List<Download>, latest: Download): List<Download> {
+        val stretches = mutableListOf<MutableList<Download>>()
+        var end = Long.MIN_VALUE
+        rows.sortedBy { it.createdAt }.forEach { row ->
+            if (stretches.isEmpty() || row.createdAt > end) {
+                stretches += mutableListOf(row)
+                end = row.until
+            } else {
+                stretches.last() += row
+                end = maxOf(end, row.until)
+            }
+        }
+        return stretches.first { stretch -> stretch.any { it.id == latest.id } }
     }
 
     /** [item]'s notice of [kind], with [more] others still to download. */
@@ -306,7 +398,11 @@ class DownloadNotifications(private val context: Context, television: Boolean) {
         if (runs) post(DownloadNotices.tapToResume(row))
     }
 
-    /** Posts Finished and Failed as [state]'s downloads come to them, and takes them back as they leave, for as long as it is collected. */
+    /**
+     * Posts Finished and Failed as [state]'s downloads come to them, and takes them back as they leave, for as long as it is
+     * collected; a show's (L437) is posted as each of its episodes finishes, said again where it still shows as one
+     * leaves, and taken back once none is finished.
+     */
     suspend fun watch(state: Flow<List<DownloadRunner.Item>>) {
         if (!runs) return
         val watch = DownloadNotices.Watch()
@@ -314,7 +410,8 @@ class DownloadNotifications(private val context: Context, television: Boolean) {
             watch.next(items.map { it.row }).forEach { change ->
                 when (change) {
                     is DownloadNotices.Change.Post -> post(change.notice)
-                    is DownloadNotices.Change.Withdraw -> manager.cancel(change.rowId, DONE_ID)
+                    is DownloadNotices.Change.Update -> if (showing(change.notice)) post(change.notice)
+                    is DownloadNotices.Change.Withdraw -> manager.cancel(change.tag, DONE_ID)
                 }
             }
         }
@@ -330,7 +427,7 @@ class DownloadNotifications(private val context: Context, television: Boolean) {
             return
         }
         try {
-            manager.notify(tag(notice), id(notice.kind), build(notice))
+            manager.notify(notice.tag, id(notice.kind), build(notice))
         } catch (e: SecurityException) {
             // Taken back between the check and the post.
             log.info("download {}: its notification wasn't allowed ({})", notice.rowId, e::class.simpleName)
@@ -353,7 +450,7 @@ class DownloadNotifications(private val context: Context, television: Boolean) {
             .setVisibility(notice.visibility)
             // A wearable or another device has no download to show.
             .setLocalOnly(true)
-            .setContentIntent(tap(notice.tap))
+            .setContentIntent(tap(notice))
         // A failure's words are a sentence or two: whole once expanded.
         if (notice.kind == Kind.Failed) builder.setStyle(NotificationCompat.BigTextStyle().bigText(notice.text))
         notice.progress?.let { builder.setProgress(PROGRESS_MAX, it.permille, it.indeterminate) }
@@ -388,9 +485,15 @@ class DownloadNotifications(private val context: Context, television: Boolean) {
         channelsMade = true
     }
 
-    private fun tap(tap: Tap): PendingIntent = when (tap) {
+    /** Whether [notice] still shows, under its tag: one swiped away isn't posted again by an update, which would sound. */
+    private fun showing(notice: DownloadNotice): Boolean =
+        context.getSystemService(NotificationManager::class.java).activeNotifications.any { it.id == id(notice.kind) && it.tag == notice.tag }
+
+    /** A tap on [notice]: the Downloads page, resuming there, or a show's downloads, read from the download it names (L445). */
+    private fun tap(notice: DownloadNotice): PendingIntent = when (notice.tap) {
         Tap.Downloads -> activity(REQUEST_OPEN, MainActivity.openDownloads(context))
         Tap.Resume -> activity(REQUEST_RESUME, MainActivity.openDownloads(context, resume = true))
+        Tap.Show -> activity(REQUEST_OPEN_SHOW, MainActivity.openDownloads(context, show = notice.rowId).of(SHOW_TAP, notice.rowId))
     }
 
     /** [action]'s intent for the download [id]: the queue's Pause and a Cancel as broadcasts, the rest as the activity's. */
@@ -400,6 +503,7 @@ class DownloadNotifications(private val context: Context, television: Boolean) {
         Action.Resume -> activity(REQUEST_RESUME, MainActivity.openDownloads(context, resume = true))
         Action.Play -> activity(REQUEST_PLAY, MainActivity.openDownloads(context, play = id).of(action, id))
         Action.ChooseRelease -> activity(REQUEST_CHOOSE, MainActivity.openDownloads(context, choose = id).of(action, id))
+        Action.PlayShow -> activity(REQUEST_PLAY_SHOW, MainActivity.openDownloads(context, playShow = id).of(action, id))
     }
 
     private fun activity(request: Int, intent: Intent): PendingIntent =
@@ -410,13 +514,12 @@ class DownloadNotifications(private val context: Context, television: Boolean) {
 
     /**
      * This intent as the one for [action] on the download [id] alone: Android tells PendingIntents apart by their intents
-     * less the extras, so two finished downloads' Play would otherwise be one, the later's id in both. The download's id
-     * only, never what it is of.
+     * less the extras, so two finished downloads' Play would otherwise be one, the later's id in both, and two shows' the
+     * same. The download's id only, never what it is of (L445).
      */
-    private fun Intent.of(action: Action, id: String): Intent = setData(Uri.Builder().scheme(SCHEME).authority(action.name.lowercase()).appendPath(id).build())
+    private fun Intent.of(action: Action, id: String): Intent = of(action.name.lowercase(), id)
 
-    /** A finished or a failed one is the download's own, by its id; the ongoing and the status one are the queue's. */
-    private fun tag(notice: DownloadNotice): String? = notice.rowId.takeIf { notice.kind == Kind.Finished || notice.kind == Kind.Failed }
+    private fun Intent.of(what: String, id: String): Intent = setData(Uri.Builder().scheme(SCHEME).authority(what).appendPath(id).build())
 
     private fun id(kind: Kind): Int = when (kind) {
         Kind.Ongoing -> ONGOING_ID
@@ -447,6 +550,11 @@ class DownloadNotifications(private val context: Context, television: Boolean) {
         private const val REQUEST_CHOOSE = 4
         private const val REQUEST_PAUSE = 5
         private const val REQUEST_CANCEL = 6
+        private const val REQUEST_OPEN_SHOW = 7
+        private const val REQUEST_PLAY_SHOW = 8
+
+        /** A show's notification's tap, as its intent's data names it ([of]). */
+        private const val SHOW_TAP = "show"
 
         /** The small icon's circle, the app's accent, as drawn for the app. */
         private val ACCENT = AppColors().accent.toArgb()

@@ -460,7 +460,8 @@ internal fun UpNextRow.playsOn(target: PlayTarget?): PlayTarget? = when (target)
 
 /**
  * A row of Home's Downloads (DlPhoneHome), in the collection rows' halves: the title, and how the download is in its
- * colour, the one being written with a 2 dp bar under it. A tap opens what it names.
+ * colour, a show's queue over it, muted (L436), the two wrapping in their half; the one being written with a 2 dp bar
+ * under it. A tap opens what it names.
  */
 @Composable
 private fun DownloadRow(row: HomeDownloadRow, onClick: () -> Unit) {
@@ -471,7 +472,10 @@ private fun DownloadRow(row: HomeDownloadRow, onClick: () -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(row.title, style = AppType.body, color = colors.text, modifier = Modifier.weight(1f))
-            Text(row.status, style = AppType.secondary, color = row.tone.color(), modifier = Modifier.weight(1f, fill = false))
+            Column(Modifier.weight(1f, fill = false)) {
+                row.queue?.let { Text(it, style = AppType.secondary, color = colors.muted) }
+                Text(row.status, style = AppType.secondary, color = row.tone.color())
+            }
         }
         row.progress?.let { p ->
             LinearProgressIndicator(

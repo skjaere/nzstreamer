@@ -157,6 +157,8 @@ class DownloadEndToEndDeviceTest {
             back { manager.cancel(row.id, DownloadNotifications.DONE_ID) }
             back { row.release?.let { container.library.forgetRelease(row.watchKey, it) } }
         }
+        // The show's finished episodes are said in its one notification (L437).
+        back { manager.cancel(DownloadNotice.showTag(SHOW), DownloadNotifications.DONE_ID) }
         back { manager.cancel(DownloadNotifications.ONGOING_ID) }
         back { manager.cancel(DownloadNotifications.STATUS_ID) }
         back { container.library.markEpisodes(listOf(EpisodeRef(SHOW, 1, 1, WatchTitle.episode("Harbor Lights", 1, 1))), watched = false) }
@@ -208,9 +210,9 @@ class DownloadEndToEndDeviceTest {
             row?.takeIf { it.state == DownloadState.Done }
         }
         assertTrue("its file is there", container.downloadStorage.file(done)?.isFile == true)
-        // Its notification while it downloaded, then the finished one.
+        // Its notification while it downloaded, then the finished one: its show's (L437).
         assertTrue("no notification while it downloaded: ${notifications.keys}", notifications.keys.any { it.first == DownloadNotice.DOWNLOADS_CHANNEL })
-        waitFor("the finished notification") { activeNotifications().firstOrNull { it.tag == done.id && it.id == DownloadNotifications.DONE_ID } }
+        waitFor("the finished notification") { activeNotifications().firstOrNull { it.tag == DownloadNotice.showTag(SHOW) && it.id == DownloadNotifications.DONE_ID } }
 
         // Done on the Downloads page, as the show's row.
         compose.runOnIdle { nav.navigate(DownloadsRoute()) }

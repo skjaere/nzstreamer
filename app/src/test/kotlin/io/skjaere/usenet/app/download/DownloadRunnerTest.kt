@@ -35,9 +35,11 @@ import io.skjaere.usenet.releases.ReleaseKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -1981,6 +1983,29 @@ class DownloadRunnerTest {
         tv.hold(Any(), QUEUED)
         tv.holdOnly(Any(), QUEUED)
         assertEquals(emptySet(), tv.held.value)
+    }
+
+    /**
+     * L445: a show's notification names one of its downloads, and the page its tap or Play opens reads that row once the
+     * runner's state lists it, and its finished ones for the hook: a page opened as the process starts finds what it shows.
+     * One gone since, or being removed, is none; on a TV, none.
+     */
+    @Test
+    fun `a notification's download is read once the runner lists it, none once it is gone or removed, nor on a TV`() = test {
+        val a = fake("hl-a")
+        val done = row(A, 1, 0, a) { it.copy(state = DownloadState.Done, completedAt = NOW) }
+        row(B, 2, 1, a) { it.copy(state = DownloadState.Deleting) }
+        val runner = runner()
+        // Asked as the process starts, before the runner's state has said: answered once it lists the row.
+        val listed = async(start = CoroutineStart.UNDISPATCHED) { runner.listed(A) }
+        assertFalse(listed.isCompleted, "answered before the runner's state listed it")
+        runCurrent()
+        assertEquals(done, listed.await())
+        assertTrue(runner.state.value.any { it.row.id == A })
+        assertEquals(done, runner.done.value[done.watchKey])
+        assertNull(runner.listed(B), "being removed")
+        assertNull(runner.listed("dl-gone"))
+        assertNull(runner(television = true).listed(A))
     }
 
     /**

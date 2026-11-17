@@ -12,7 +12,9 @@ import io.skjaere.usenet.data.DownloadState
 
 /**
  * A row of Home's Downloads section (DlPhoneHome): its [title] and [status], each half the row as the collection's rows
- * are, the status in its [tone]; the one being written with how far it is ([progress]); and what a tap [opens].
+ * are, the status in its [tone]; the one being written with how far it is ([progress]); and what a tap [opens]. A show's
+ * row while two or more of its episodes are still to finish says how many over its status ([queue], "5 in the queue",
+ * L436).
  */
 data class HomeDownloadRow(
     val key: String,
@@ -21,6 +23,7 @@ data class HomeDownloadRow(
     val tone: Tone,
     val progress: Float?,
     val opens: HomeDownloadOpen,
+    val queue: String? = null,
 )
 
 /** What a row of Home's Downloads opens: what it names (DlPhoneHome). */
@@ -39,7 +42,8 @@ sealed interface HomeDownloadOpen {
  * Home's Downloads section (L384, DlPhoneHome's online section), between Up next and the collection: "Downloads · 23.4 GB"
  * (what downloads [held] on the device, the running one whole, as the Downloads page's strip counts them) with See all, and
  * at most three [rows]: the one the queue is at first, then the latest. A show's finished episodes are one row, as on the
- * Downloads page. Pure, so the JVM reads every case; Home only draws it.
+ * Downloads page; a show with episodes still to finish is one row too, its finished ones in it while its queue lasts, so a
+ * season queued leaves room for the rest (W120, L436). Pure, so the JVM reads every case; Home only draws it.
  */
 data class HomeDownloads(val held: Long, val rows: List<HomeDownloadRow>) {
     /** "Downloads · 23.4 GB"; "Downloads" alone while no download has its file yet (queued, or failed), never "0 KB". */
@@ -55,21 +59,45 @@ data class HomeDownloads(val held: Long, val rows: List<HomeDownloadRow>) {
             if (shown.isEmpty()) return null
             val active = shown.filter { it.row.state !in ENDED }
             // The one the queue is at: being found or written, else one held or waiting (the Downloads page's).
-            val current = active.firstOrNull { it.row.state == DownloadState.Running || it.row.state == DownloadState.Resolving }
-                ?: active.firstOrNull { it.row.state != DownloadState.Queued }
-            val (done, others) = shown.filter { it !== current }.partition { it.row.state == DownloadState.Done }
-            val shows = done.filter { it.row.kind == DownloadKind.Episode && it.row.showTmdbId != null }.groupBy { it.row.showTmdbId!! }
-            val films = done.filter { it !in shows.values.flatten() }
-            // Each with when it was last added or finished, the latest first.
-            val dated = others.map { it.row.at to row(it) } + films.map { it.row.at to film(it.row) } +
+            val current = at(active)
+            // A show with episodes still to finish is one row, with its finished ones while its queue lasts (L436).
+            val queues = active.filter { it.row.show != null }.groupBy { it.row.show!! }
+            val (failed, finished) = shown.filter { it.row.state in ENDED }.partition { it.row.state == DownloadState.Failed }
+            val done = finished.filter { it.row.show !in queues }
+            val shows = done.filter { it.row.show != null }.groupBy { it.row.show!! }
+            val films = done.filter { it.row.show == null }
+            // Each with when it was last added or finished, the latest first; a failed episode keeps its own row.
+            val dated = queues.map { (id, left) -> (left + finished.filter { it.row.show == id }).maxOf { it.row.at } to queue(id, left) } +
+                (active.filter { it.row.show == null } + failed).map { it.row.at to row(it) } + films.map { it.row.at to film(it.row) } +
                 shows.map { (id, episodes) -> episodes.maxOf { it.row.at } to show(id, episodes.map { it.row }) }
-            val rows = listOfNotNull(current?.let(::row)) + dated.sortedByDescending { it.first }.map { it.second }
+            val first = current?.row?.let { it.show?.let(::showKey) ?: it.id }
+            val (lead, rest) = dated.partition { it.second.key == first }
+            val rows = lead.map { it.second } + rest.sortedByDescending { it.first }.map { it.second }
             return HomeDownloads(shown.sumOf { DownloadsPage.held(it.row) }, rows.take(ROWS))
         }
 
         private val ENDED = setOf(DownloadState.Done, DownloadState.Failed)
 
         private val Download.at: Long get() = completedAt ?: createdAt
+
+        /** The show an episode's download is of, which its show's row gathers; none for a film. */
+        private val Download.show: Int? get() = showTmdbId.takeIf { kind == DownloadKind.Episode }
+
+        private fun showKey(showTmdbId: Int) = "show-$showTmdbId"
+
+        /** Of [items] still to finish, the one the queue is at: being found or written, else one held or waiting. */
+        private fun at(items: List<DownloadRunner.Item>): DownloadRunner.Item? =
+            items.firstOrNull { it.row.state == DownloadState.Running || it.row.state == DownloadState.Resolving }
+                ?: items.firstOrNull { it.row.state != DownloadState.Queued }
+
+        /**
+         * A show's episodes still to finish, [left], in the queue's order (L436): its first as its own row says it
+         * ("S02E01 · downloading 42%", or "S02E05 · queued for download" while another title is written), with its bar,
+         * under "5 in the queue", counting the one written as the Show page's line does; with one left, that one's row
+         * alone. The Downloads page opens, where the queue is.
+         */
+        private fun queue(showTmdbId: Int, left: List<DownloadRunner.Item>): HomeDownloadRow =
+            row(at(left) ?: left.first()).copy(key = showKey(showTmdbId), queue = left.size.takeIf { it > 1 }?.let { "$it in the queue" })
 
         /**
          * A download still to finish, or failed: "S02E04 · downloading 42%", its episode first, else its state alone as the
@@ -101,7 +129,7 @@ data class HomeDownloads(val held: Long, val rows: List<HomeDownloadRow>) {
         /** A show's finished episodes: "2 episodes · 3.6 GB"; its downloads open. */
         private fun show(showTmdbId: Int, episodes: List<Download>): HomeDownloadRow {
             val latest = episodes.maxBy { it.at }
-            return HomeDownloadRow("show-$showTmdbId", latest.title, DownloadsPage.showSub(episodes), Tone.Muted, null, HomeDownloadOpen.Show(showTmdbId))
+            return HomeDownloadRow(showKey(showTmdbId), latest.title, DownloadsPage.showSub(episodes), Tone.Muted, null, HomeDownloadOpen.Show(showTmdbId))
         }
     }
 }

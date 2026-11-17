@@ -1,6 +1,11 @@
 package io.skjaere.usenet.app.download
 
 import io.skjaere.usenet.app.ui.FormFactor
+import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadKind
+import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.data.WatchKey
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -12,9 +17,10 @@ import kotlin.test.assertTrue
 
 /**
  * MainActivity's download extras (item 11, L369, L380, C4): the activity is exported, so anything may send them. They are
- * read only where downloads show and never from Recents; Resume and Play act only with the app's own token, which only
- * its own notifications carry, and any other sender's ask only opens the page. The token is a random value in the app's
- * private files. The ids are invented.
+ * read only where downloads show and never from Recents; Resume, Play and a show's Play act only with the app's own token,
+ * which only its own notifications carry, and any other sender's ask only opens the page. A show's notification names one
+ * of its downloads, never the show (L445): the show is read from that row, and a row gone since opens the page. The token
+ * is a random value in the app's private files. The ids are invented.
  */
 class DownloadIntentsTest {
     @TempDir
@@ -55,10 +61,51 @@ class DownloadIntentsTest {
     }
 
     @Test
+    fun `a show's tap opens its downloads and its Play plays its next, the Play only with the app's token`() {
+        assertEquals(DownloadAsk.OpenShow(ID), ask(DownloadExtras(open = true, show = ID)))
+        assertEquals(DownloadAsk.PlayShow(ID), ask(DownloadExtras(open = true, playShow = ID, token = token)))
+        // Its tap only opens a page, as Choose release does: no token needed. Its Play without the app's token only opens the page.
+        listOf(null, "", "0f".repeat(31) + "0e").forEach { other ->
+            assertEquals(DownloadAsk.Open, ask(DownloadExtras(open = true, playShow = ID, token = other)), "$other")
+        }
+        assertEquals(DownloadAsk.Open, ask(DownloadExtras(playShow = ID)))
+        assertEquals(DownloadAsk.OpenShow(ID), ask(DownloadExtras(show = ID)))
+        listOf("", "../row", "a b", "x".repeat(65)).forEach { bad ->
+            assertEquals(DownloadAsk.Open, ask(DownloadExtras(open = true, show = bad)), bad)
+            assertEquals(DownloadAsk.Open, ask(DownloadExtras(open = true, playShow = bad, token = token)), bad)
+        }
+    }
+
+    @Test
+    fun `a show's asks read the show from the row they name, and a row gone since opens the Downloads page`() = runBlocking<Unit> {
+        val opened = mutableListOf<String>()
+        val pages = DownloadPages(
+            downloads = { opened += "downloads" },
+            show = { show -> opened += "show $show" },
+            playShow = { show -> opened += "play show $show" },
+        )
+        val rows = mapOf(ID to row(ID, SHOW), FILM to row(FILM, show = null))
+        val rowOf: suspend (String) -> Download? = { rows[it] }
+        pages.take(DownloadAsk.OpenShow(ID), rowOf) {}
+        pages.take(DownloadAsk.PlayShow(ID), rowOf) {}
+        assertEquals(listOf("show $SHOW", "play show $SHOW"), opened)
+        // A row id no row has: removed or deleted since the notification was posted. One that names no show: the same.
+        opened.clear()
+        pages.take(DownloadAsk.OpenShow(GONE), rowOf) {}
+        pages.take(DownloadAsk.PlayShow(GONE), rowOf) {}
+        pages.take(DownloadAsk.PlayShow(FILM), rowOf) {}
+        assertEquals(listOf("downloads", "downloads", "downloads"), opened)
+        // Where a show's ways in aren't there, the page.
+        opened.clear()
+        DownloadPages(downloads = { opened += "downloads" }).take(DownloadAsk.PlayShow(ID), rowOf) {}
+        assertEquals(listOf("downloads"), opened)
+    }
+
+    @Test
     fun `nothing is read where downloads don't show, nor when Recents starts the app with the intent`() {
         val asks = listOf(
             DownloadExtras(open = true), DownloadExtras(open = true, resume = true, token = token), DownloadExtras(open = true, play = ID, token = token),
-            DownloadExtras(open = true, choose = ID),
+            DownloadExtras(open = true, choose = ID), DownloadExtras(open = true, show = ID), DownloadExtras(open = true, playShow = ID, token = token),
         )
         asks.forEach { extras ->
             assertNull(ask(extras, shown = false), "$extras not shown")
@@ -71,7 +118,7 @@ class DownloadIntentsTest {
     }
 
     @Test
-    fun `each ask goes to the Downloads page's ways in, a resume resuming as well, and those not there yet open the page`() {
+    fun `each ask goes to the Downloads page's ways in, a resume resuming as well, and those not there yet open the page`() = runBlocking<Unit> {
         val opened = mutableListOf<String>()
         var resumed = 0
         val pages = DownloadPages(
@@ -106,7 +153,7 @@ class DownloadIntentsTest {
     }
 
     @Test
-    fun `where downloads show, the ways in open the Downloads page, at a download's releases or playing it, a show's downloads and its settings`() {
+    fun `where downloads show, the ways in open the Downloads page, at a download's releases or playing it, a show's downloads and its settings`() = runBlocking<Unit> {
         val opened = mutableListOf<Any>()
         val pages = downloadPages(shown = true, register = {}, open = { opened += it })
         pages.take(DownloadAsk.Open) {}
@@ -115,13 +162,21 @@ class DownloadIntentsTest {
         // Home's row for a show's finished episodes (L384).
         pages.show!!.invoke(SHOW)
         pages.settings!!.invoke()
+        // A show's notification: its tap, and its Play, which plays the show's next there (L437).
+        val rowOf: suspend (String) -> Download? = { row(it, SHOW) }
+        pages.take(DownloadAsk.OpenShow(ID), rowOf) {}
+        pages.take(DownloadAsk.PlayShow(ID), rowOf) {}
         assertEquals(
-            listOf(DownloadsRoute(), DownloadsRoute(choose = ID), DownloadsRoute(play = ID), DownloadsShowRoute(SHOW), DownloadSettingsRoute),
+            listOf(
+                DownloadsRoute(), DownloadsRoute(choose = ID), DownloadsRoute(play = ID), DownloadsShowRoute(SHOW), DownloadSettingsRoute, DownloadsShowRoute(SHOW),
+                DownloadsShowRoute(SHOW, play = true),
+            ),
             opened,
         )
         val hidden = downloadPages(shown = false, register = {}, open = { opened += it })
         assertNull(hidden.settings)
         assertNull(hidden.show)
+        assertNull(hidden.playShow)
     }
 
     @Test
@@ -145,8 +200,17 @@ class DownloadIntentsTest {
         assertEquals(value, File(dir, DownloadToken.FILE).readText())
     }
 
+    /** A finished download of id [id]: an episode of [show], or a film where [show] is null. */
+    private fun row(id: String, show: Int?) = Download(
+        id = id, watchKey = show?.let { WatchKey.episode(it, 2, 4) } ?: WatchKey.movie(900_003), kind = if (show != null) DownloadKind.Episode else DownloadKind.Movie,
+        title = if (show != null) "Harbor Lights" else "Copper Crown", showTmdbId = show, season = show?.let { 2 }, episode = show?.let { 4 },
+        movieTmdbId = if (show == null) 900_003 else null, state = DownloadState.Done, position = 0, createdAt = 1, completedAt = 2, updatedAt = 2,
+    )
+
     private companion object {
         const val ID = "c0ffee00-0000-4000-8000-000000000001"
+        const val GONE = "c0ffee00-0000-4000-8000-000000000002"
+        const val FILM = "c0ffee00-0000-4000-8000-000000000003"
         const val SHOW = 990_717
     }
 }

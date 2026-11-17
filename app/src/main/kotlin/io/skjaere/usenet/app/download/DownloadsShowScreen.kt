@@ -42,6 +42,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.skjaere.usenet.app.collection.SelectMark
 import io.skjaere.usenet.app.collection.TopPill
@@ -66,7 +67,7 @@ import io.skjaere.usenet.data.WatchState
  * Phones and tablets alone (W108, L369). Once every episode is gone, and no Undo waits or was taken, it closes.
  */
 @Composable
-fun DownloadsShowScreen(showTmdbId: Int, onBack: () -> Unit, onOpenShow: (showTmdbId: Int) -> Unit) {
+fun DownloadsShowScreen(showTmdbId: Int, onBack: () -> Unit, onOpenShow: (showTmdbId: Int) -> Unit, play: Boolean = false) {
     val context = LocalContext.current
     val container = context.container
     if (!DownloadPlaces.shown(LocalFormFactor.current, container.television)) {
@@ -74,13 +75,13 @@ fun DownloadsShowScreen(showTmdbId: Int, onBack: () -> Unit, onOpenShow: (showTm
         return
     }
     val deps = remember(container) { DownloadsDeps.of(container, context.applicationContext) }
-    DownloadsShowScreen(deps, showTmdbId, onBack, onOpenShow)
+    DownloadsShowScreen(deps, showTmdbId, onBack, onOpenShow, play)
 }
 
-/** The show's downloads over [deps]: the app's, or a test's seams. */
+/** The show's downloads over [deps]: the app's, or a test's seams; [play]: its next downloaded episode played, once (L437). */
 @Composable
-internal fun DownloadsShowScreen(deps: DownloadsDeps, showTmdbId: Int, onBack: () -> Unit, onOpenShow: (showTmdbId: Int) -> Unit) {
-    val vm: DownloadsShowViewModel = viewModel(key = "downloads-show-$showTmdbId") { DownloadsShowViewModel(deps, showTmdbId) }
+internal fun DownloadsShowScreen(deps: DownloadsDeps, showTmdbId: Int, onBack: () -> Unit, onOpenShow: (showTmdbId: Int) -> Unit, play: Boolean = false) {
+    val vm: DownloadsShowViewModel = viewModel(key = "downloads-show-$showTmdbId") { DownloadsShowViewModel(deps, showTmdbId, createSavedStateHandle(), play) }
     val episodes by vm.episodes.collectAsStateWithLifecycle()
     val states by vm.states.collectAsStateWithLifecycle()
     val deleting by vm.deleting.collectAsStateWithLifecycle()

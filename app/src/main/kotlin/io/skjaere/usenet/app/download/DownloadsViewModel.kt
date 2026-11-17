@@ -38,6 +38,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -362,8 +364,16 @@ class DownloadsViewModel(
     }
 }
 
-/** A show's downloads (L372): its finished episodes with their watch states, Resume's pick, select mode and Undo. */
-class DownloadsShowViewModel(private val deps: DownloadsDeps, val showTmdbId: Int) : ViewModel() {
+/**
+ * A show's downloads (L372): its finished episodes with their watch states, Resume's pick, select mode and Undo. Opened by
+ * the show's notification's Play ([play], L437), it plays what Resume at its top would, once, kept so in [saved].
+ */
+class DownloadsShowViewModel(
+    private val deps: DownloadsDeps,
+    val showTmdbId: Int,
+    private val saved: SavedStateHandle,
+    play: Boolean = false,
+) : ViewModel() {
     val edits = DownloadEdits(deps, viewModelScope)
 
     /** The show's finished episodes, by season and episode; null before the runner has said. */
@@ -386,10 +396,25 @@ class DownloadsShowViewModel(private val deps: DownloadsDeps, val showTmdbId: In
 
     val undoMillis: Long get() = deps.undoMillis
 
+    init {
+        if (play && saved.get<Boolean>(PLAYED) != true) {
+            saved[PLAYED] = true
+            // The rows as the runner has them, which the page asks before it opens (DownloadRunner.listed).
+            viewModelScope.launch {
+                val rows = episodes.filterNotNull().first()
+                DownloadsShow.next(rows, deps.episodeStates(showTmdbId).first())?.let { deps.play(it.row) }
+            }
+        }
+    }
+
     fun play(row: Download) = deps.play(row)
 
     fun mark(row: Download, watched: Boolean) {
         deps.work.launch { logged("mark a downloaded episode") { deps.mark(row, watched) } }
+    }
+
+    private companion object {
+        const val PLAYED = "played"
     }
 }
 

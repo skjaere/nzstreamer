@@ -152,6 +152,8 @@ class ServiceHostDeviceTest {
             back { runBlocking { container.downloadStorage.delete(id) } }
             back { manager.cancel(id, DownloadNotifications.DONE_ID) }
         }
+        // A show's finished episodes are said in its one notification (L437).
+        back { manager.cancel(DownloadNotice.showTag(SHOW), DownloadNotifications.DONE_ID) }
         back { manager.cancel(DownloadNotifications.ONGOING_ID) }
         back { manager.cancel(DownloadNotifications.STATUS_ID) }
         // With nothing of the test's left to run, the runner turns the receiver off.

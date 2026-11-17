@@ -15,6 +15,8 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadPrefs
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.data.WatchKind
+import io.skjaere.usenet.data.WatchState
 import io.skjaere.usenet.newznab.TvIds
 import io.skjaere.usenet.releases.StaticDeviceCapabilities
 import io.skjaere.usenet.data.PlaybackPrefs
@@ -129,7 +131,7 @@ class DownloadEditsTest {
         val done = episode("e1", 1, DownloadState.Done)
         fakes.items.value = listOf(DownloadRunner.Item(done, 0, null))
         val store = ViewModelStore()
-        val vm = ViewModelProvider(store, viewModelFactory { initializer { DownloadsShowViewModel(fakes.deps(backgroundScope), HL) } })[DownloadsShowViewModel::class.java]
+        val vm = ViewModelProvider(store, viewModelFactory { initializer { DownloadsShowViewModel(fakes.deps(backgroundScope), HL, SavedStateHandle()) } })[DownloadsShowViewModel::class.java]
         backgroundScope.launch { vm.gone.collect {} }
         runCurrent()
         assertFalse(vm.gone.value)
@@ -183,6 +185,41 @@ class DownloadEditsTest {
         stores.forEach { it.clear() }
     }
 
+    /**
+     * L437: a show's notification's Play opens the show's downloads, which play its next downloaded episode (as Resume at
+     * the page's top would) once, a page remade on the same state playing nothing more; opened by its tap, nothing plays.
+     */
+    @Test
+    fun `a show's notification's Play plays its next downloaded episode once, its tap nothing`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fakes = PageFakes()
+        fakes.items.value = (1..3).map { DownloadRunner.Item(episode("e$it", it, DownloadState.Done), 0, null) }
+        // S02E01 watched: S02E02 is next.
+        fakes.states = mapOf((2 to 1) to WatchState(WatchKey.episode(HL, 2, 1), WatchKind.Episode, showTmdbId = HL, season = 2, episode = 1, title = "Harbor Lights S02E01", watched = true, updatedAt = 1))
+        val saved = SavedStateHandle()
+        fun page(play: Boolean, state: SavedStateHandle = saved) = ViewModelProvider(
+            ViewModelStore().also { stores += it },
+            viewModelFactory { initializer { DownloadsShowViewModel(fakes.deps(backgroundScope), HL, state, play) } },
+        )[DownloadsShowViewModel::class.java]
+        page(play = true)
+        runCurrent()
+        assertEquals(listOf("play e2"), fakes.calls)
+        // A rotation remakes the page over its saved state: it has played already.
+        page(play = true)
+        runCurrent()
+        assertEquals(listOf("play e2"), fakes.calls)
+        // Opened by its tap, or from Home's row: nothing plays.
+        page(play = false, state = SavedStateHandle())
+        runCurrent()
+        assertEquals(listOf("play e2"), fakes.calls)
+        // Every downloaded episode watched: nothing to play.
+        fakes.states = (1..3).associate { (2 to it) to WatchState(WatchKey.episode(HL, 2, it), WatchKind.Episode, showTmdbId = HL, season = 2, episode = it, title = "Harbor Lights S02E0$it", watched = true, updatedAt = 1) }
+        page(play = true, state = SavedStateHandle())
+        runCurrent()
+        assertEquals(listOf("play e2"), fakes.calls)
+        stores.forEach { it.clear() }
+    }
+
     @Test
     fun `a notification's Choose release opens a download's list once, and none for a finished one`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
@@ -228,6 +265,9 @@ internal class PageFakes {
     val rows = mutableMapOf<String, Download>()
     val online = MutableStateFlow(true)
 
+    /** The show's episodes' watch states, by season and episode, as [DownloadsDeps.episodeStates] reads them. */
+    var states: Map<Pair<Int, Int>, WatchState> = emptyMap()
+
     /** Which download's own room each read of the space counted free ([DownloadsDeps.space]'s except). */
     val spaceFor = mutableListOf<String?>()
 
@@ -248,7 +288,7 @@ internal class PageFakes {
         network = MutableStateFlow(NetworkNow(usable = true, unmetered = true, wifi = true)),
         online = online,
         restricted = { false },
-        episodeStates = { flowOf(emptyMap()) },
+        episodeStates = { flowOf(states) },
         movieWatches = flowOf(emptyList()),
         showArtwork = flowOf(true),
         pause = {
