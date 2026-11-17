@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.HttpDataSource
 import io.skjaere.usenet.app.debrid.DebridGate
 import io.skjaere.usenet.app.debrid.DebridListingStore
 import io.skjaere.usenet.app.debrid.ServiceEndpoints
@@ -815,7 +816,9 @@ class ServiceDownloadWriter(
 /**
  * The app's reads for [ServiceDownloadWriter]: Media3's HTTP source under a ServiceDataSource of a factory made for that
  * read alone, metered nowhere (a download's bytes aren't a stream's, L471), the links its resolver gives; the total read
- * from the answer's `Content-Range`.
+ * from the answer's `Content-Range`. A 416 the source didn't take for the file's end (a file under the link that ends
+ * before the byte asked: another one) is no working link, as any other total is (L419), never an open that reached
+ * nothing.
  */
 @androidx.annotation.OptIn(UnstableApi::class)
 object ServiceFileReads : ServiceDownloadWriter.Reads {
@@ -824,7 +827,12 @@ object ServiceFileReads : ServiceDownloadWriter.Reads {
 
     private class SourceRead(private val source: ServiceDataSource, private val uri: String) : ServiceDownloadWriter.Read {
         override fun open(position: Long): ServiceDownloadWriter.Answer {
-            val length = source.open(DataSpec.Builder().setUri(Uri.parse(uri)).setPosition(position).build())
+            val length = try {
+                source.open(DataSpec.Builder().setUri(Uri.parse(uri)).setPosition(position).build())
+            } catch (e: HttpDataSource.InvalidResponseCodeException) {
+                if (e.responseCode == RANGE_NOT_SATISFIABLE) throw LinkUnavailable(LinkFailure.NoWorkingLink)
+                throw e
+            }
             val range = source.responseHeaders.entries.firstOrNull { entry ->
                 val key: String? = entry.key
                 key?.equals(CONTENT_RANGE, ignoreCase = true) == true
@@ -843,6 +851,7 @@ object ServiceFileReads : ServiceDownloadWriter.Reads {
     }
 
     private const val CONTENT_RANGE = "Content-Range"
+    private const val RANGE_NOT_SATISFIABLE = 416
 
     override fun toString() = "ServiceFileReads"
 }

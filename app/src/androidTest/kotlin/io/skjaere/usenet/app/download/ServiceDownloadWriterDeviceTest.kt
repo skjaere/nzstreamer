@@ -259,6 +259,21 @@ class ServiceDownloadWriterDeviceTest {
     }
 
     /**
+     * Another, shorter file under the fresh link at a resume (`short`: the CDN answers 416, naming its length) is no
+     * working link, counted (L419), so six reopens fail it: never the service out of reach for an hour.
+     */
+    @Test
+    fun aShorterFileUnderTheLinkAtAResumeIsNoWorkingLink() = runBlocking<Unit> {
+        faults("cut=$CUT&short=$WHOLE_CUT")
+        assertEquals(Outcome.Failed(DownloadHostRules.SERVICE_KEPT_FAILING), writer(firstBackoff = 100.milliseconds).wrote(listing()))
+        assertEquals(listOf(0L) + List(6) { CUT }, opens)
+        assertEquals(opens.size, links())
+        assertEquals(6, cdn(416))
+        assertEquals(CUT, records.last())
+        assertEquals("one body open at once", 1, counts().getInt("cdnOpenMax"))
+    }
+
+    /**
      * W123 (L471): the CDN at 800 kB/s; once 1.5 MB are written, the test opens a meter on the container's StreamTraffic,
      * as a play's or a cast's stream does. The writer stops, its body let go at once (the fake's body counted closed, no
      * other begun), and nothing is asked while the meter stays open; closed, a fresh link follows 10 s later, and the file

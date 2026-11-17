@@ -1066,6 +1066,28 @@ class FakeDebridServerTest {
     }
 
     /**
+     * `short=<bytes>`: another file under the links made after the switch, that many bytes long, as a CDN node serving
+     * another file may be: a ranged read from its end on is answered 416 naming that size, one before it as ever.
+     */
+    @Test
+    fun `a shorter file under a link answers a read from its end on with a 416 naming its size`() {
+        val size = video.length()
+        val before = freshLink()
+        control("cdn?short=1000")
+        val short = freshLink()
+        val past = cdn(short, "Range" to "bytes=1000-")
+        assertEquals(416, past.statusCode())
+        assertEquals("bytes */1000", past.headers().firstValue("Content-Range").get())
+        assertEquals(416, cdn(short, "Range" to "bytes=5000-").statusCode())
+        val from = cdn(short, "Range" to "bytes=0-")
+        assertEquals(206, from.statusCode())
+        assertEquals("bytes 0-${size - 1}/$size", from.headers().firstValue("Content-Range").get())
+        assertEquals(206, cdn(before, "Range" to "bytes=1000-").statusCode(), "made before")
+        control("cdn?short=${size + 1}")
+        assertEquals("bytes */$size", cdn(freshLink(), "Range" to "bytes=$size-").headers().firstValue("Content-Range").get(), "no longer than the file")
+    }
+
+    /**
      * L424's next account: `fade?hash=<hex>&service=torbox` takes a torrent from one service alone, out of its cache and
      * account, its links refused there as the first-link fade has them, while the other service still has it cached; with
      * no service named, from both. Links made before keep serving; a reset brings it back.

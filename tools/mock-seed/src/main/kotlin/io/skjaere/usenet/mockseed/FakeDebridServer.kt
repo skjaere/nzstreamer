@@ -34,7 +34,9 @@ import java.util.concurrent.Executors
  * reads (L419) the same switch takes `expireCuts=true` (a body whose link expires while it flows is closed there, as a
  * CDN ending a body at its link's expiry; without it a link's expiry is read as a request starts, and a body begun
  * flows on), `shift=<bytes>` (a ranged read answered with a 206 from that many bytes further on, or back, its
- * Content-Range naming the part sent) and `total=<bytes>` (a 206's Content-Range naming that total, not the file's).
+ * Content-Range naming the part sent), `total=<bytes>` (a 206's Content-Range naming that total, not the file's) and
+ * `short=<bytes>` (another file under the link, that many bytes long: a ranged read from its end on answered 416, its
+ * Content-Range naming that length).
  * `/control/cdn-expire` expires every link made so far, and `/control/cdn-gone` makes every link answer 404, the file
  * gone from the CDN. `/control/cdn-dip?silent=<ms>` makes the bodies flowing go silent that long, a CDN's hiccup
  * mid-play, then go on from where they were; one begun after it isn't held (item 27).
@@ -154,6 +156,8 @@ class FakeDebridServer(
         val shift: Long = 0,
         /** The total a 206's Content-Range names, in place of the file's. */
         val total: Long? = null,
+        /** The length of another file under the link: a ranged read from there on is out of its range. */
+        val short: Long? = null,
     )
 
     /**
@@ -507,7 +511,7 @@ class FakeDebridServer(
                     expireMs = query["expire"]?.toLongOrNull()?.let { it * 1_000 }, whole = query["whole"] == "true", page = query["page"] == "true",
                     cutAfter = query["cut"]?.toLongOrNull(), slowKBps = query["slow"]?.toLongOrNull()?.takeIf { it > 0 },
                     expireCuts = query["expireCuts"] == "true", shift = query["shift"]?.toLongOrNull() ?: 0,
-                    total = query["total"]?.toLongOrNull()?.takeIf { it >= 0 },
+                    total = query["total"]?.toLongOrNull()?.takeIf { it >= 0 }, short = query["short"]?.toLongOrNull()?.takeIf { it >= 0 },
                 )
                 // One service's links, the other's as they were; with none named, both.
                 val cdns = servicesOf(query) ?: return exchange.reply(NO_SUCH_SERVICE, "application/json", 400)
@@ -744,8 +748,10 @@ class FakeDebridServer(
         val type = if (validated) mimeOf(link.path) else "application/octet-stream"
         if (range == null || faults.whole || !sameFile) return exchange.cdnBody(200, 0, size, type, link)
         val asked = range.groupValues[1].toLong()
-        if (asked >= size) {
-            headers.add("Content-Range", "bytes */$size")
+        // Another, shorter file under the link (`short`) ends sooner.
+        val ends = faults.short?.coerceAtMost(size) ?: size
+        if (asked >= ends) {
+            headers.add("Content-Range", "bytes */$ends")
             return exchange.cdnAnswer(416, "text/plain", "Out of range.")
         }
         val end = range.groupValues[2].takeIf { it.isNotEmpty() }?.toLong()
