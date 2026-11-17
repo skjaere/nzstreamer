@@ -23,6 +23,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
+import io.skjaere.usenet.app.FakeTmdb
 import io.skjaere.usenet.app.ImmersiveHintSeen
 import io.skjaere.usenet.app.MainActivity
 import io.skjaere.usenet.app.PictureInPicturePlays
@@ -118,7 +119,8 @@ import kotlin.math.abs
  * in your first language moves with the line saying which the device will play.
  *
  * Over fakes alone (L143): the Cast group's devices and sessions (FakeRoutes, FakeConnector), and the device's side of a
- * cast play (FakeLauncher), whose load the test says the device plays or refuses; nothing of Google's starts. The films
+ * cast play (FakeLauncher), whose load the test says the device plays or refuses; nothing of Google's starts. A finished
+ * download's episode plays with TMDB's seams strict and its neighbouring episodes looked up nowhere. The films
  * are PictureInPicturePlays' (a server inside the test's process), and two of the test's own, whose tracks this phone's
  * probe reads as the coordinator's launch has them: ninety seconds of 160x90 test pattern with two seconds of sound,
  * made with ffmpeg 8.0.1 (libx264 0.165.3222) in `app/src/androidTest/fixtures`, reruns giving the same bytes.
@@ -163,6 +165,9 @@ class PlayerCastDeviceTest {
     /** A finished download's seeds, made by the case that plays one ([downloaded]). */
     private var seeds: DownloadsPageSeeds? = null
 
+    /** TMDB's seams in that case, strict: an invented show's episode is looked up nowhere. */
+    private var tmdb: FakeTmdb? = null
+
     @Before
     fun setUp() {
         // In touch mode, as a finger leaves a phone: where the focus goes back to differs for TalkBack and a keyboard.
@@ -181,6 +186,9 @@ class PlayerCastDeviceTest {
         CastIntroFocus.exploring = realExploring
         mainActivities(*ALIVE).forEach { activity -> onMainThread { activity.finish() } }
         await("the app's activities closed") { mainActivities(*ALIVE).isEmpty().takeIf { it } }
+        // Before the plays' own seams go back, as it took them over. What it was asked for fails the case, once all is
+        // put back.
+        val asked = runCatching { tmdb?.close() }.exceptionOrNull()
         plays.close()
         tv?.let {
             it.close()
@@ -201,6 +209,7 @@ class PlayerCastDeviceTest {
             saved?.let { container.settings.restore(it) }
             plays.forget()
         }
+        asked?.let { throw it }
     }
 
     /** The release an invented show's finished download came from, its file the device tests' chapters.mkv. */
@@ -656,6 +665,10 @@ class PlayerCastDeviceTest {
      */
     @Test
     fun aDownloadsPlayerHasTheButtonAndKitchenDisplaysRowMovesItsFileThere() {
+        tmdb = FakeTmdb(strict = true)
+        // The player's next and previous episodes, which TMDB would be asked for: none (the strict fake puts them back).
+        PlayerActivity.nextEpisode = { _, _ -> null }
+        PlayerActivity.previousEpisode = { _, _ -> null }
         val row = downloaded()
         val launch = checkNotNull(DownloadLaunch.of(row))
         launch(launch).use { scenario ->
