@@ -73,6 +73,18 @@ class DownloadedTitlesTest {
         assertEquals(emptyMap(), DownloadedTitles.of(emptyList()))
     }
 
+    /** L411: Up next's downloaded row draws its download's stored poster, found by its watch key among those that count. */
+    @Test
+    fun `each watch key with a finished download that plays names that download`() {
+        val plays = episode(1, 2, 1)
+        val noRelease = episode(1, 2, 2).copy(release = null)
+        val queued = episode(1, 2, 3, state = DownloadState.Queued)
+        val crown = film(10)
+        val done = listOf(plays, noRelease, queued, crown).associateBy { it.watchKey }
+        assertEquals(mapOf(plays.watchKey to plays.id, crown.watchKey to crown.id), DownloadedTitles.ids(done))
+        assertEquals(DownloadedTitles.keys(done), DownloadedTitles.ids(done).keys)
+    }
+
     /** The runner tells its map again on every finished row's write; the marks hear only a change in what they say. */
     @Test
     fun `told again only when what the marks say changes`() = runTest(UnconfinedTestDispatcher()) {

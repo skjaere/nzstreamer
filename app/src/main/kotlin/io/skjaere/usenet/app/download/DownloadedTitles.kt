@@ -33,6 +33,9 @@ object DownloadedTitles {
     /** The watch keys whose download plays from its file: what Up next's rows look for ([io.skjaere.usenet.app.home.UpNextRow.watchKey]). */
     fun keys(done: Map<String, Download>): Set<String> = done.values.filter(::counts).mapTo(HashSet()) { it.watchKey }
 
+    /** The same downloads' ids by watch key: whose stored poster Up next's rows draw (L411). */
+    fun ids(done: Map<String, Download>): Map<String, String> = done.values.filter(::counts).associate { it.watchKey to it.id }
+
     /** What TalkBack adds to a collection row's sentence: "3 episodes downloaded." for a show, "Downloaded." for a film. */
     fun spoken(downloaded: Downloaded, show: Boolean): String =
         if (show) "${downloaded.count} episode${if (downloaded.count == 1) "" else "s"} downloaded." else "Downloaded."

@@ -4,18 +4,12 @@ package io.skjaere.usenet.app.cast
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.graphics.Bitmap
 import android.os.Build
 import android.os.SystemClock
 import androidx.annotation.MainThread
 import androidx.annotation.VisibleForTesting
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
-import coil3.SingletonImageLoader
-import coil3.request.ImageRequest
-import coil3.request.SuccessResult
-import coil3.request.allowHardware
-import coil3.toBitmap
 import io.skjaere.usenet.app.AppContainer
 import io.skjaere.usenet.app.casting.CastEnd
 import io.skjaere.usenet.app.casting.CastEvent
@@ -39,6 +33,7 @@ import io.skjaere.usenet.app.casting.castTimings
 import io.skjaere.usenet.app.casting.counted
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.debrid.DebridAdds
+import io.skjaere.usenet.app.jpegOf
 import io.skjaere.usenet.app.link.TvArt
 import io.skjaere.usenet.app.link.TvPlayingDeps
 import io.skjaere.usenet.app.play.PlayerLaunch
@@ -74,7 +69,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
-import java.io.ByteArrayOutputStream
 import java.io.IOException
 
 /**
@@ -115,7 +109,7 @@ internal object Casting : CastLoader {
     /** A picture's bytes from its address, for the session's notification (L58): Coil's, its caches first, or a test's. */
     @VisibleForTesting
     @Volatile
-    var picture: suspend (Context, String) -> ByteArray? = ::fetch
+    var picture: suspend (Context, String) -> ByteArray? = ::jpegOf
 
     /** This loader for [context]'s app. */
     fun with(context: Context): Casting = apply { app = context.applicationContext }
@@ -449,13 +443,6 @@ internal object Casting : CastLoader {
         }
     }
 
-    /** The picture at [url] as JPEG bytes, through the app's image loader and its caches. */
-    private suspend fun fetch(context: Context, url: String): ByteArray? {
-        val result = SingletonImageLoader.get(context).execute(ImageRequest.Builder(context).data(url).allowHardware(false).build())
-        val bitmap = (result as? SuccessResult)?.image?.toBitmap() ?: return null
-        return withContext(Dispatchers.Default) { ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it) }.toByteArray() }
-    }
-
     /** The release's file isn't on this phone any longer: it was just prepared, so seldom. Words not drawn. */
     private const val CAST_NOT_HERE = "Couldn't open the release on this phone"
 
@@ -467,6 +454,4 @@ internal object Casting : CastLoader {
 
     /** The picture's wait, at most: the LOAD doesn't wait longer on TMDB. */
     private const val PICTURE_MS = 5_000L
-
-    private const val JPEG_QUALITY = 90
 }

@@ -80,6 +80,12 @@ internal object PlayerBranches {
     }
 
     /**
+     * The download whose stored still the next-episode card draws (L411): the next episode's finished one, by its watch
+     * [key] in [done], only while the card says it is downloaded ([prefetch]); none otherwise, its still then TMDB's.
+     */
+    fun storedStill(prefetch: Prefetch?, key: String, done: Map<String, Download>): String? = done[key]?.id?.takeIf { prefetch is Prefetch.Downloaded }
+
+    /**
      * Whether Previous plays the episode before, by its watch [key]: while [online] ([nextOnline]) as before, streamed or
      * from its file; offline only one with a finished download in [done], from its file, as no stream can start then.
      * Otherwise Previous starts the playing one again, as with no episode before.

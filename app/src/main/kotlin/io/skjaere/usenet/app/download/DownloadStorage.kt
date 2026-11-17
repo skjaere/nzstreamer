@@ -28,8 +28,9 @@ import java.nio.channels.FileChannel
  *   in `downloads/`. Its whole size is allocated before its first byte ([open]), so it can't run out of room part way.
  * - Each download's bookkeeping, in [filesDir]'s `downloads/<id>/`: the marker `.row`, made with the row ([add], a
  *   season's at once with [addAll]) and lasting as long as it; the NZB and its password, kept at Resolve (or with the
- *   row, for a file chosen by hand) and dropped once the file is complete, failed or cancelled. Neither place goes in a backup or a transfer, so a row whose marker is missing came from another device
- *   ([reconcile]).
+ *   row, for a file chosen by hand) and dropped once the file is complete, failed or cancelled; its poster and still,
+ *   kept as long as the row ([DownloadImages], L411). Neither place goes in a backup or a transfer, so a row whose
+ *   marker is missing came from another device ([reconcile]).
  * - A season pack's NZB and password, kept once for the season's downloads in filesDir's `downloads/.packs/` ([packs],
  *   L394) while one of them is still to finish.
  * - A delete goes in the crash-safe order: the row Deleting (hidden), the video, the bookkeeping, the row ([delete]).
@@ -47,7 +48,11 @@ class DownloadStorage(
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val afterDeleteStep: (DeleteStep) -> Unit = {},
 ) {
-    private val changes = Mutex()
+    /**
+     * Held while the rows and the folders change, one call at a time; a download's pictures are written and deleted under
+     * it too ([DownloadImages]), so none goes into a folder a delete is taking.
+     */
+    internal val changes = Mutex()
 
     /** The season packs' NZBs, each kept once for its season's downloads, in filesDir's `downloads/.packs/` (L394). */
     val packs = DownloadNzbs(File(filesDir, DownloadNzbs.PATH), io)
@@ -433,6 +438,9 @@ class DownloadStorage(
          * so it is never `.` or `..`, nor a name the folders hold beside the downloads (`.nomedia`).
          */
         private val ID = Regex("[A-Za-z0-9][A-Za-z0-9._~-]*")
+
+        /** Whether [id] is one a download's folder can be named by ([ID]). */
+        internal fun isId(id: String): Boolean = ID.matches(id)
 
         /** An extension the video's name keeps: as the cast server's path holds one. */
         private val EXTENSION = Regex("[a-z0-9]{1,8}")

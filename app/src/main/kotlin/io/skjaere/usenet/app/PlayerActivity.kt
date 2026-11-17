@@ -853,7 +853,7 @@ class PlayerActivity : ComponentActivity() {
                     nextCard?.let { c ->
                         NextEpisodeCard(
                             c.next, c.card, c.showStill, compact = controlsShown, takeFocus = c.takeFocus, onStop = ::stopCard, onPlayNow = { playNow(c) },
-                            playNow = cardPlayNow,
+                            playNow = cardPlayNow, stored = c.stored,
                         )
                     }
                 }
@@ -3161,7 +3161,12 @@ class PlayerActivity : ComponentActivity() {
             if (playable != (p.playNext != null)) p.playNext = if (playable) ({ switchTo(next) }) else null
             // Play now takes the focus once no burst's seek waits, as the skip button does, and not under a side panel,
             // which keeps it.
-            showCard(step.card?.takeIf { failure == null }?.let { NextCard(next, it, showStill, takeFocus = !p.seeking && panel == null) })
+            // Its still the download's own copy where it is downloaded (L411), drawn offline too.
+            showCard(
+                step.card?.takeIf { failure == null }?.let {
+                    NextCard(next, it, showStill, takeFocus = !p.seeking && panel == null, stored = PlayerBranches.storedStill(local, next.key, finishedDownloads()))
+                },
+            )
             if (step.advance) return switchTo(next)
             delay(if (step.card != null) CARD_TICK_MS else TICK_MS)
         }
@@ -4015,7 +4020,8 @@ class PlayerActivity : ComponentActivity() {
         }.build()
     }
 
-    private data class NextCard(val next: EpisodePlay, val card: AutoAdvance.Card, val showStill: Boolean, val takeFocus: Boolean)
+    /** The card for [next]; [stored]: its finished download, whose stored still it draws (L411). */
+    private data class NextCard(val next: EpisodePlay, val card: AutoAdvance.Card, val showStill: Boolean, val takeFocus: Boolean, val stored: String? = null)
 
     private data class PromptShown(val prompt: MissingParts.Prompt, val takeFocus: Boolean)
 

@@ -97,6 +97,9 @@ internal class DownloadsPageSeeds(private val context: Context, private val cont
         row
     }
 
+    /** [row], which the app made (a sheet's Download), counted as the test's own: shown on the page and deleted after. */
+    fun adopt(row: Download): Download = row.also { seeded += it.id }
+
     /** The test's own rows, from the table now, those being deleted with them. */
     fun mine(): List<Download> = runBlocking { dao.all().first().filter { it.id in seeded } }
 

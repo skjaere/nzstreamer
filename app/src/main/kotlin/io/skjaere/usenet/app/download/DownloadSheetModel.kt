@@ -226,9 +226,10 @@ data class DownloadSheetDeps(
         /**
          * The app's: the episode finder, the film's search and the season's over the Usenet indexers alone (L370), ranked
          * for downloading; the downloads' storage, rows and settings; the default network and the charger, as [context]
-         * reads it; the activity's notification [ask] (none outside MainActivity); the runner's queue, and its host
-         * scheduled from the visible app (L335). Choose file's grab is the coordinator's, as a download's Resolve grabs
-         * (its test seam), and its prepare the container's preparer, which keeps nothing in the NZB store.
+         * reads it; the activity's notification [ask] (none outside MainActivity); the runner's queue, each download queued
+         * with its pictures fetched (L411), and its host scheduled from the visible app (L335). Choose file's grab is the
+         * coordinator's, as a download's Resolve grabs (its test seam), and its prepare the container's preparer, which
+         * keeps nothing in the NZB store.
          */
         @SuppressLint("VisibleForTests") // The coordinator's grab, read as each grab is made, so a test serves both.
         fun of(container: AppContainer, ask: NotificationAsk?, context: Context) = DownloadSheetDeps(
@@ -242,11 +243,13 @@ data class DownloadSheetDeps(
             network = { container.defaultNetwork.now.value },
             charging = { pluggedIn(context) },
             askDue = { ask?.due() == true },
-            // One per title: a sheet restored after its Download, or a second tap, has the download already queued.
+            // One per title: a sheet restored after its Download, or a second tap, has the download already queued. Each one
+            // queued has its poster and still fetched now, from the visible app (L411).
             enqueue = { target, candidates, need, chosen ->
                 container.downloads.enqueue(target, candidates, need, onePerTitle = true, pick = chosen?.pick, grab = chosen?.grab)
+                    .also { row -> container.downloadImages.enqueued(listOfNotNull(row)) }
             },
-            enqueueAll = { items -> container.downloads.enqueueAll(items) },
+            enqueueAll = { items -> container.downloads.enqueueAll(items).also(container.downloadImages::enqueued) },
             beforeDownload = { ask?.beforeDownload() },
             schedule = { container.downloadHosts.schedule(ScheduleCause.Download) },
             outlive = container.appScope + Dispatchers.Main.immediate,

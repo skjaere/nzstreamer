@@ -146,6 +146,28 @@ class DownloadsPageTest {
         assertFalse(assertIs<DownloadsRow.Film>(DownloadsPage.of(rows.map(::item)).downloaded.single { it.key == "cc" }).deleting)
     }
 
+    /**
+     * L411: each row draws the stored poster of the download its poster is: its own, or for a show's row the latest finished
+     * episode with a poster, whose path the row shows; none where none of its downloads has one.
+     */
+    @Test
+    fun `each row draws the stored poster of the download its poster is`() {
+        val first = episode("e1", 1, DownloadState.Done, completedAt = 5).copy(posterPath = "/harbor-lights-poster.jpg")
+        val latest = episode("e2", 2, DownloadState.Done, completedAt = 7).copy(posterPath = "/harbor-lights-poster.jpg")
+        val bare = episode("e3", 3, DownloadState.Done, completedAt = 9)
+        val other = episode("qm1", 1, DownloadState.Done, show = QM, title = "Quiet Meridian", completedAt = 3)
+        val rows = listOf(first, latest, bare, other, film("cc", DownloadState.Done), episode("q4", 4, DownloadState.Queued), episode("f5", 5, DownloadState.Failed))
+        val page = DownloadsPage.of(rows.map(::item))
+
+        val show = page.downloaded.single { it.key == "show-$HL" }
+        assertEquals("/harbor-lights-poster.jpg", show.posterPath)
+        assertEquals("e2", show.posterRow?.id)
+        assertNull(page.downloaded.single { it.key == "show-$QM" }.posterRow)
+        assertEquals("cc", page.downloaded.single { it.key == "cc" }.posterRow?.id)
+        assertEquals("q4", page.downloading.single().posterRow.id)
+        assertEquals("f5", page.failed.single().posterRow.id)
+    }
+
     @Test
     fun `the strip says what downloads hold, the running one whole, and counts those removed free at once`() {
         val rows = listOf(

@@ -54,6 +54,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import io.skjaere.usenet.app.download.DownloadImages
+import io.skjaere.usenet.app.download.storedPicture
 import io.skjaere.usenet.app.ui.AppType
 import io.skjaere.usenet.app.ui.DownloadedIcon
 import io.skjaere.usenet.app.ui.colors
@@ -78,7 +80,8 @@ private val StillPlaceholder = Color(0xFF23384A)
  * doesn't while a burst of seeks waits, whose held key would then come to it, nor under a side
  * panel), and again only through [playNow], the player's way to give it back.
  *
- * Its surface takes its taps ([takesTaps]); its buttons have theirs.
+ * Its surface takes its taps ([takesTaps]); its buttons have theirs. For a downloaded next episode ([stored], its download)
+ * the still is the download's own copy while it has a fresh one (L411), so the card shows it offline too.
  *
  * [compact] (while the playback controls show) is one low row, the countdown, Stop and Play now,
  * that stays below the controls' centre buttons, also on a 360 dp tall screen with a gesture area
@@ -96,6 +99,7 @@ fun NextEpisodeCard(
     onPlayNow: () -> Unit,
     modifier: Modifier = Modifier,
     playNow: FocusRequester = remember { FocusRequester() },
+    stored: String? = null,
 ) {
     // Not again once it had it: a rewind tap on the controls with the card up keeps its focus as its seek runs. A
     // request nothing took (the card under a side panel) is made again as [takeFocus] next lets it.
@@ -111,8 +115,9 @@ fun NextEpisodeCard(
         if (!compact) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(96.dp, 54.dp).clip(RoundedCornerShape(8.dp)).background(StillPlaceholder)) {
-                    if (showStill && next.stillPath != null) {
-                        AsyncImage(TmdbImages.still(next.stillPath), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
+                    val still = if (showStill) storedPicture(stored, DownloadImages.Kind.Still, TmdbImages.still(next.stillPath)) else null
+                    if (still != null) {
+                        AsyncImage(still, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
                     }
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {

@@ -118,6 +118,17 @@ class PlayerBranchesTest {
         assertEquals(Prefetch.Downloaded(partsMissing = 2), PlayerBranches.nextStatus(next, online = false, gaps, emptyList()))
     }
 
+    /** L411: the card draws the stored still of the next episode's download only where it says it is downloaded. */
+    @Test
+    fun `the card's still is the next episode's download's while the card says it is downloaded`() {
+        val done = mapOf(next to row(6))
+        assertEquals("row-6", PlayerBranches.storedStill(Prefetch.Downloaded(partsMissing = 0), next, done))
+        assertEquals("row-6", PlayerBranches.storedStill(Prefetch.Downloaded(partsMissing = 2), next, done))
+        assertNull(PlayerBranches.storedStill(Prefetch.Downloaded(partsMissing = 0), WatchKey.episode(900002, 1, 7), done))
+        assertNull(PlayerBranches.storedStill(Prefetch.Searching, next, done))
+        assertNull(PlayerBranches.storedStill(null, next, done))
+    }
+
     @Test
     fun `offline, a next episode on its way says how much of it is written, and one not downloaded says so`() {
         val running = row(6, DownloadState.Running, size = 1_000_000_000)
@@ -212,6 +223,9 @@ class PlayerBranchesTest {
             "the next-track key only for what can play" to Regex("""cardHasNext = nextCard\?\.let \{ offersPlayNow\(it\.card\) \} == true"""),
             "Previous offline only to a download" to Regex("""if \(PlayerBranches\.previousPlays\(previous\.key, nextOnline\(\), finishedDownloads\(\)\)\) switchTo\(previous\)"""),
             "the offline lines a download's alone" to Regex("""PlayerBranches\.nextOnline\(playingDownload, online\(\)\)"""),
+            "the card's stored still by what the downloads say" to Regex(
+                """NextCard\(next, it, showStill, takeFocus = [^,]*, stored = PlayerBranches\.storedStill\(local, next\.key, finishedDownloads\(\)\)\)""",
+            ),
             "Stream instead's release by its failure" to Regex(
                 """val missingParts = failure\?\.missingParts == true\s*return streamInstead\(PlayerBranches\.streamLeavesOut\(missingParts, failure\?\.releaseAtFault == true\), missingParts\)""",
             ),

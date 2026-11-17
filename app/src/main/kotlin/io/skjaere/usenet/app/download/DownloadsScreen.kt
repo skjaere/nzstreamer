@@ -105,6 +105,7 @@ import io.skjaere.usenet.app.ui.TopBar
 import io.skjaere.usenet.app.ui.colors
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.metadata.TmdbImages
 
 /**
  * The Downloads page (item 19; L372, L379-L381), on phones and tablets alone (W108, L369): where downloads don't show it
@@ -395,8 +396,8 @@ internal fun MissingLine(missing: String, before: String = "${DownloadsPage.DOWN
 /**
  * A row in its section's card: in select mode one target with its mark, the row selected toggled by a tap; else a tap
  * does [onClick] (none: nothing, as for a download still to finish) and a long press starts select mode with it
- * ([onSelect]; none where there is no select mode). The poster through the image loader (L378), a plain tile while there
- * is none. [end]: its button and ⋮.
+ * ([onSelect]; none where there is no select mode). The poster through the image loader: the download's stored copy while
+ * it has a fresh one (L411), else TMDB's while Coil has it (L378), a plain tile while there is none. [end]: its button and ⋮.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -435,7 +436,8 @@ private fun RowFrame(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (selected != null) SelectMark(selected)
-            Poster(row.posterPath, artwork, 44, 66, imageWidth = 154)
+            // The download's own copy while it has one (L411), so the page shows it offline; TMDB's otherwise.
+            Poster(storedPicture(row.posterRow?.id, DownloadImages.Kind.Poster, TmdbImages.poster(row.posterPath, 154)), artwork, 44, 66)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(row.title, style = AppType.bodyStrong, color = colors.text)
                 lines()

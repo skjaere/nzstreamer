@@ -55,6 +55,9 @@ sealed interface DownloadsRow {
     val title: String
     val posterPath: String?
 
+    /** The download whose poster the row shows ([posterPath]'s), whose stored copy it draws while there is one (L411). */
+    val posterRow: Download?
+
     /** What deleting it gives back: what its files hold, each allocated whole; a queued one's, nothing yet. */
     val held: Long get() = downloads.sumOf(DownloadsPage::held)
 
@@ -76,6 +79,7 @@ sealed interface DownloadsRow {
         override val downloads: List<Download> get() = listOf(row)
         override val title: String get() = row.title
         override val posterPath: String? get() = row.posterPath
+        override val posterRow: Download get() = row
     }
 
     /** A download that failed, for Try again or another release. */
@@ -84,6 +88,7 @@ sealed interface DownloadsRow {
         override val downloads: List<Download> get() = listOf(row)
         override val title: String get() = row.title
         override val posterPath: String? get() = row.posterPath
+        override val posterRow: Download get() = row
     }
 
     /** A show's finished episodes, by season and episode, and what it plays [next]. */
@@ -96,6 +101,10 @@ sealed interface DownloadsRow {
     ) : DownloadsRow {
         override val key: String get() = "show-$showTmdbId"
         override val downloads: List<Download> get() = episodes
+
+        /** The latest finished episode with the row's poster, as [DownloadsPage.of] takes the path from. */
+        override val posterRow: Download?
+            get() = posterPath?.let { path -> episodes.filter { it.posterPath == path }.maxByOrNull { it.completedAt ?: it.createdAt } }
     }
 
     /**
@@ -107,6 +116,7 @@ sealed interface DownloadsRow {
         override val downloads: List<Download> get() = listOf(row)
         override val title: String get() = row.title
         override val posterPath: String? get() = row.posterPath
+        override val posterRow: Download get() = row
     }
 }
 

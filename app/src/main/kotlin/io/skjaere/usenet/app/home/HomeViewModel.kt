@@ -182,6 +182,10 @@ class HomeViewModel(private val container: AppContainer, private val collectionR
     val downloadedKeys: StateFlow<Set<String>> = container.downloads.done.map(DownloadedTitles::keys).distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
+    /** The same downloads by watch key, their ids: whose stored poster Up next's downloaded rows draw (L411). None on a TV. */
+    val downloadedIds: StateFlow<Map<String, String>> = container.downloads.done.map(DownloadedTitles::ids).distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
     /** A finished film's row in Home's Downloads: played here, from its file (L353), as the Downloads page plays it. */
     fun playDownload(row: Download) {
         DownloadsDeps.playHere(container, row)

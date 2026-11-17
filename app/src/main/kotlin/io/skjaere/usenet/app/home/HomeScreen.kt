@@ -57,10 +57,12 @@ import io.skjaere.usenet.app.collection.OfflineBar
 import io.skjaere.usenet.app.collection.OfflineBarState
 import io.skjaere.usenet.app.collection.rememberDpad
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.download.DownloadImages
 import io.skjaere.usenet.app.download.DownloadMark
 import io.skjaere.usenet.app.download.DownloadMarkLook
 import io.skjaere.usenet.app.download.color
 import io.skjaere.usenet.app.download.downloadsShown
+import io.skjaere.usenet.app.download.storedPicture
 import io.skjaere.usenet.app.link.CastButton
 import io.skjaere.usenet.app.link.PlayTarget
 import io.skjaere.usenet.app.link.deviceName
@@ -86,6 +88,7 @@ import io.skjaere.usenet.app.ui.rememberInitialFocus
 import io.skjaere.usenet.app.ui.tryFocus
 import io.skjaere.usenet.app.ui.tvFocusMemory
 import io.skjaere.usenet.data.RecentSearch
+import io.skjaere.usenet.metadata.TmdbImages
 
 /**
  * Home: the first-run screen until a provider and an indexer (or "Not now") are saved, then the
@@ -120,6 +123,7 @@ fun HomeScreen(
     val playOn by container.playOn.target.collectAsStateWithLifecycle()
     val downloads by vm.downloads.collectAsStateWithLifecycle()
     val downloadedKeys by vm.downloadedKeys.collectAsStateWithLifecycle()
+    val downloadedIds by vm.downloadedIds.collectAsStateWithLifecycle()
     val offline by container.offline.collectAsStateWithLifecycle()
     // Phones and tablets alone, in their layout (L369), and only where the page is there to see them all.
     val downloadsHere = downloadsShown() && onDownloads != null
@@ -142,6 +146,7 @@ fun HomeScreen(
             playOn = playOn.takeUnless { container.television }, onPlayOn = container.playOn::openSheet,
             downloads = downloads.takeIf { downloadsHere }, onDownloads = { onDownloads?.invoke() },
             downloadedKeys = if (downloadsHere) downloadedKeys else emptySet(),
+            downloadedIds = if (downloadsHere) downloadedIds else emptyMap(),
             offline = offline,
             onDownload = { row ->
                 when (val opens = row.opens) {
@@ -161,7 +166,8 @@ fun HomeScreen(
  * (W11), the Cast button before Settings opening the Play on sheet ([onPlayOn]); null for none (a TV). [downloads]: Home's
  * Downloads section (L384), between Up next and the collection, its See all opening the page ([onDownloads]) and each
  * row what it names ([onDownload]); null for none. [downloadedKeys]: the watch keys downloaded, whose Up next rows have
- * the Downloaded mark after their title (L409); none where downloads don't show. [offline] (L410): with a finished
+ * the Downloaded mark after their title (L409), and [downloadedIds] their downloads, whose stored posters those rows draw
+ * (L411); none where downloads don't show. [offline] (L410): with a finished
  * download, "Offline · showing downloads" under the recent searches, the Downloads section first, and Up next's rows that
  * can't play here greyed, a tap on one saying why in a bar at Home's foot ([OfflineHome]); otherwise Home is as online.
  */
@@ -187,6 +193,7 @@ fun HomeContent(
     onDownload: (HomeDownloadRow) -> Unit = {},
     downloadedKeys: Set<String> = emptySet(),
     offline: Boolean = false,
+    downloadedIds: Map<String, String> = emptyMap(),
 ) {
     val searchFocus = remember { FocusRequester() }
     // A touch screen has nothing focused: the request only takes with a D-pad.
@@ -256,7 +263,7 @@ fun HomeContent(
                                 val greyed = offlineHome != null && row.key in offlineHome.greyed
                                 UpNextRowView(
                                     row, artwork, primary = i == 0, tracked, Modifier.focusRequester(focus), playOn, downloaded = row.watchKey in downloadedKeys,
-                                    greyed = greyed,
+                                    greyed = greyed, stored = downloadedIds[row.watchKey],
                                 ) { if (greyed) offlineBar.show(OfflineHome.bar(row)) else onPlay(row) }
                             }
                         }
@@ -373,8 +380,9 @@ private fun RecentChip(recent: RecentSearch, onClick: () -> Unit) {
  * the same menu, at the ⋮; TalkBack has its items as the row's actions. [modifier] goes on the row's playing part. With a
  * TV chosen ([playOn]) Play says so, and greys while that TV's NZStreamer isn't open (PtPhoneWhere B). [downloaded]: its
  * title's file is downloaded (L409), marked by the 16 dp tray with its tick after the title, which TalkBack hears as
- * "Downloaded". [greyed] offline (L410): its poster and words dimmed and read as dimmed, its Play greyed; its tap
- * ([onPlay], Home's bar then) and its ⋮ as they are.
+ * "Downloaded"; its poster then that download's ([stored]) stored copy while fresh (L411), so it shows offline too.
+ * [greyed] offline (L410): its poster and words dimmed and read as dimmed, its Play greyed; its tap ([onPlay], Home's bar
+ * then) and its ⋮ as they are.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -387,6 +395,7 @@ private fun UpNextRowView(
     playOn: PlayTarget?,
     downloaded: Boolean,
     greyed: Boolean,
+    stored: String?,
     onPlay: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -404,7 +413,7 @@ private fun UpNextRowView(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Poster(row.posterPath, artwork, 44, 66, Modifier.alpha(dim))
+            Poster(storedPicture(stored, DownloadImages.Kind.Poster, TmdbImages.poster(row.posterPath, UP_NEXT_POSTER)), artwork, 44, 66, Modifier.alpha(dim))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(row.title, style = AppType.bodyStrong, color = colors.text.copy(alpha = dim), modifier = Modifier.weight(1f, fill = false))
@@ -445,6 +454,9 @@ private fun UpNextRowView(
 
 /** A greyed row's poster and title (Material's disabled text), and its second line, as drawn offline. */
 private const val GREYED = 0.38f
+
+/** Up next's posters' width at TMDB, as the rows have always asked ([Poster]'s). */
+private const val UP_NEXT_POSTER = 185
 private const val GREYED_LINE = 0.55f
 
 /**

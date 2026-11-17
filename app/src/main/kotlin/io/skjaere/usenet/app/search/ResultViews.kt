@@ -118,11 +118,26 @@ fun age(posted: Instant?): String? = posted?.let {
     }
 }
 
+/** TMDB's poster at [path], [imageWidth] wide; a plain tile while there is none or Show artwork is off. */
 @Composable
 fun Poster(path: String?, showArtwork: Boolean, width: Int, height: Int, modifier: Modifier = Modifier, imageWidth: Int = 185) {
+    PosterTile(TmdbImages.poster(path, imageWidth), showArtwork, width, height, modifier)
+}
+
+/**
+ * A poster from [model], what Coil loads: a download's stored copy while fresh, else its address (L411, the model
+ * [io.skjaere.usenet.app.download.storedPicture] gives). A plain tile while there is none or Show artwork is off.
+ */
+@Composable
+fun Poster(model: Any?, showArtwork: Boolean, width: Int, height: Int, modifier: Modifier = Modifier) {
+    PosterTile(model, showArtwork, width, height, modifier)
+}
+
+@Composable
+private fun PosterTile(model: Any?, showArtwork: Boolean, width: Int, height: Int, modifier: Modifier) {
     Box(modifier.size(width.dp, height.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xFF2E4A5C))) {
-        if (showArtwork && path != null) {
-            AsyncImage(TmdbImages.poster(path, imageWidth), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
+        if (showArtwork && model != null) {
+            AsyncImage(model, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
         }
     }
 }

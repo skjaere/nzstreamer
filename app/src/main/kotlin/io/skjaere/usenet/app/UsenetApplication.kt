@@ -38,6 +38,7 @@ import io.skjaere.usenet.app.download.DownloadDebug
 import io.skjaere.usenet.app.download.DownloadHostRules
 import io.skjaere.usenet.app.download.DownloadHosts
 import io.skjaere.usenet.app.download.DownloadHostsDeps
+import io.skjaere.usenet.app.download.DownloadImages
 import io.skjaere.usenet.app.download.DownloadNotifications
 import io.skjaere.usenet.app.download.DownloadPlayFiles
 import io.skjaere.usenet.app.download.DownloadRanking
@@ -45,6 +46,7 @@ import io.skjaere.usenet.app.download.DownloadRunner
 import io.skjaere.usenet.app.download.DownloadRunnerDeps
 import io.skjaere.usenet.app.download.DownloadStorage
 import io.skjaere.usenet.app.download.DownloadToken
+import io.skjaere.usenet.app.download.ImageFetch
 import io.skjaere.usenet.app.home.SetupState
 import io.skjaere.usenet.app.search.IndexerConfigs
 import io.skjaere.usenet.app.search.NamedAccount
@@ -306,6 +308,17 @@ class AppContainer(private val context: Context) {
 
     /** Where this device's downloads live, and how their files come and go (L346, L348). */
     val downloadStorage: DownloadStorage by lazy { DownloadStorage.of(context, data.downloads) }
+
+    /**
+     * Each download's poster and still, kept with it (L411): fetched through the app's image loader as JPEGs at enqueue and
+     * again while the app is in front and online, none while Show artwork is off, and drawn while under 180 days old.
+     */
+    val downloadImages: DownloadImages by lazy {
+        DownloadImages(
+            File(context.filesDir, DownloadStorage.DIR), settings.metadata.map { it.showArtwork }, ImageFetch { url -> jpegOf(context, url) }, appScope,
+            folders = downloadStorage.changes,
+        )
+    }
 
     /** The debug build's seams for the downloads' device tests (L336, L367): Off in every other build. */
     val downloadDebug: DownloadDebug by lazy { DownloadDebug.of(context.filesDir, BuildConfig.DEBUG) }
@@ -784,6 +797,12 @@ class AppContainer(private val context: Context) {
                     if (inFront.value.value) downloadHosts.schedule(DownloadHostRules.ScheduleCause.SwitchChanged)
                 }
             }
+        }
+        // The downloads' pictures (L411): those 180 days old deleted now, all of them as Show artwork is switched off, and a
+        // finished one's missing or 30 days old fetched again while the app is in front and online. None on a TV (L369).
+        appScope.launch {
+            if (!DownloadHostRules.runs(television)) return@launch
+            saveOrLog("keep the downloads' pictures") { downloadImages.follow(downloads.done.map { it.values.toList() }, foreground, offline.map { !it }) }
         }
         // What plays added to a TorBox account that an earlier process left goes a grace from now (L245), and the records
         // of an account signed out of, switched to keep its adds or given a new key go as it changes.
