@@ -80,6 +80,9 @@ class ServiceDownloadWriterDeviceTest {
         saved = before
         settings.restore(before.copy(services = before.services.map { it.copy(deleted = true) }))
         giveBack = DebridFakes.holdTheFake()
+        // A body the fake's last holder left flowing (its player let go a moment after its test) would count among this
+        // case's from the reset on: the counts start once it is closed.
+        waitUntil("the bodies the fake's last holder left closed", 20_000) { counts().getInt("cdnOpen") == 0 }
         DebridFakes.control("reset")
         pointBack = DebridFakes.pointServicesAtTheFake()
         val client = ServiceHttp.defaultHttpClient().also { http = it }
