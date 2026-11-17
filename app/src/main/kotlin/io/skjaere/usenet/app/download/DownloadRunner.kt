@@ -258,8 +258,9 @@ class DownloadRunnerDeps(
  * - Pause holds the whole queue: the running item stops at its safe offset, keeping its file and room; nothing else
  *   starts until Resume (L380). "Stopped by Android" holds it the same way (L359).
  * - The waits for the providers and for storage end the walk, so the host ends (L388); the other rows wait their turn.
- *   An indexer's limit with nothing else to try does too (L399): Resume queues it again at once, and the app's start once
- *   the limit has ended ([limitsEnded], L434).
+ *   An indexer's limit with nothing else to try holds that download alone (L399, L399b): it waits, and the walk goes on
+ *   to the next, the limited indexer kept out of the later turns (L443), ending once nothing more can run. Resume queues
+ *   it again at once, and the app's start once the limit has ended ([limitsEnded], L434).
  * - The NZB and its password go once the file is complete, the item fails or is cancelled (L346); a season pack's copy
  *   goes at the end of the last download of its season still to finish, whichever end it is, one removed counting as
  *   still to finish while its Undo can bring it back (L394, [Storage.sweepPacks]).
@@ -921,9 +922,10 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
     /**
      * Walks the queue under [host] while it lives: the next runnable download, one left running by a kill first, resolved
-     * then written, then the next. Returns once nothing can run (L388): all done or failed, the queue held, or a wait for
-     * the providers or for storage. The host ends then; cancelled by its host, the item under way stops at its safe offset,
-     * its row as a kill leaves it, for the next walk. [walking] says it is under way until it has found nothing more.
+     * then written, then the next. Returns once nothing can run (L388): all done, failed or waiting on an indexer's limit
+     * (L399b), the queue held, or a wait for the providers or for storage. The host ends then; cancelled by its host, the
+     * item under way stops at its safe offset, its row as a kill leaves it, for the next walk. [walking] says it is under
+     * way until it has found nothing more.
      * [taken] is called once, under the queue's lock, as the walk first looks at the queue: [walking] says from then on
      * whether it takes up what is queued, so the host stops counting itself ahead of its walk (the job, L335).
      */
@@ -1095,7 +1097,10 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                     log.info("download {}: failed", id)
                     return Walk.Next
                 }
-                is Resolution.Waiting -> return Walk.End
+                // An indexer's limit holds this download alone (L399b): the walk goes on to the next, which may need
+                // nothing of that indexer (its season's copy, an NZB kept for it) or take another's releases, the limited
+                // indexer kept out of its turn (L443). A wait for the providers or for storage holds every download alike.
+                is Resolution.Waiting -> return if (resolution.reason == DownloadHostRules.LIMIT_REACHED) Walk.Next else Walk.End
                 is Resolution.Unreachable -> {
                     val since = outOfReach ?: deps.timeSource.markNow().also { outOfReach = it }
                     if (since.elapsedNow() >= DownloadWriter.UNREACHABLE_FOR) {
@@ -1352,7 +1357,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         /** The waits for the providers and the indexers, which a provider saved or Resume queues again (L388). */
         private val PROVIDER_WAITS = setOf(DownloadHostRules.CHECK_PROVIDER, DownloadHostRules.CANT_REACH_PROVIDER, DownloadHostRules.CANT_REACH_INDEXER)
 
-        /** The waits that end the host, which Resume queues again (L388, L399). */
+        /** The waits Resume queues again: those that end the host (L388), and an indexer's limit, its download's alone (L399b). */
         private val ENDING_WAITS = PROVIDER_WAITS + DownloadHostRules.STORAGE_UNAVAILABLE + DownloadHostRules.LIMIT_REACHED
 
         /** Every download has a release to try, but one whose turn searches for its releases ([search], L392). */

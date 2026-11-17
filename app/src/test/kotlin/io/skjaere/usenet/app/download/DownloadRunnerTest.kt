@@ -1361,13 +1361,57 @@ class DownloadRunnerTest {
     }
 
     /**
-     * L399, L434: a download waiting on its indexer's limit ends the walk, and its host, the rest of the queue left queued.
-     * Resume queues it again at once, and forgets the walk's memory of the indexers' limits (L443), so its turn asks them
-     * again; a provider saved doesn't. The app's start queues it again once its limit's end is past, or, with no end said,
-     * 30 minutes after it began; not before. Nothing of it on a TV.
+     * L399b: a download waiting on its indexer's limit no longer ends the walk. Of a season's three rows, the first met the
+     * indexer's download limit at its grab: it waits as the limit, and the walk goes on to the next in order, which needs no
+     * request to that indexer (its season's copy serves it, as Resolve's cases show) and finishes; the third, with only the
+     * limited indexer's releases left, waits the same way. The host ends once nothing more can run, and nothing resolves
+     * them again until Resume or the app's start after the limit's end (L434). A wait for the providers still ends the walk
+     * (L388), the rest of the queue left queued.
      */
     @Test
-    fun `an indexer's limit ends the walk, Resume queues it again at once, and the app's start once its end is past`() = test {
+    fun `an indexer's limit makes its download wait and the walk goes on to the next, the host ending once nothing more can run`() = test {
+        val runner = runner()
+        val served = fake("hl-from-copy")
+        val queued = runner.enqueueAll(listOf(item(1, fake("hl-limited-first")), item(2, served), item(3, fake("hl-limited-third"))))
+        val (first, second, third) = queued.map { it.id }
+        resolver.answers[first] = Resolution.Waiting(DownloadHostRules.LIMIT_REACHED)
+        resolver.answers[third] = Resolution.Waiting(DownloadHostRules.LIMIT_REACHED)
+        val walk = host(runner)
+        advanceUntilIdle()
+        assertTrue(walk.isCompleted, "the walk ends once nothing more can run, and its host")
+        assertFalse(runner.walking.value)
+        assertEquals(listOf(first, second, third), resolver.calls)
+        listOf(first, third).forEach { id ->
+            assertEquals(DownloadState.Waiting, stored(id).state)
+            assertEquals(DownloadHostRules.LIMIT_REACHED, stored(id).reason)
+        }
+        assertEquals(DownloadState.Done, stored(second).state)
+        assertContentEquals(served.data, storage.video(second).readBytes())
+        assertEquals(emptyList(), runner.runnable(), "the limit's waits can't run")
+        // Once: nothing resolves them again until Resume or the app's start.
+        host(runner).join()
+        assertEquals(listOf(first, second, third), resolver.calls)
+
+        // A wait for the providers still ends the walk, the next left queued.
+        val refused = runner.add(4, fake("hl-provider"))
+        val next = runner.add(5, fake("hl-next"))
+        resolver.answers[refused] = Resolution.Waiting(DownloadHostRules.CHECK_PROVIDER)
+        val ended = host(runner)
+        advanceUntilIdle()
+        assertTrue(ended.isCompleted)
+        assertEquals(listOf(first, second, third, refused), resolver.calls)
+        assertEquals(DownloadState.Waiting, stored(refused).state)
+        assertEquals(DownloadState.Queued, stored(next).state)
+    }
+
+    /**
+     * L399, L399b, L434: a download waiting on its indexer's limit waits, the walk going on with the rest of the queue. Resume
+     * queues it again at once, and forgets the walk's memory of the indexers' limits (L443), so its turn asks them again; a
+     * provider saved doesn't. The app's start queues it again once its limit's end is past, or, with no end said, 30 minutes
+     * after it began; not before. Nothing of it on a TV.
+     */
+    @Test
+    fun `an indexer's limit makes its download wait, Resume queues it again at once, and the app's start once its end is past`() = test {
         val runner = runner()
         val first = runner.add(1, fake("hl-limit"))
         val second = runner.add(2, fake("hl-after-limit"))
@@ -1375,12 +1419,12 @@ class DownloadRunnerTest {
         resolver.answers[first] = Resolution.Waiting(DownloadHostRules.LIMIT_REACHED)
         val walk = host(runner)
         advanceUntilIdle()
-        assertTrue(walk.isCompleted, "the walk ends, and its host")
-        assertEquals(listOf(first), resolver.calls)
+        assertTrue(walk.isCompleted, "the walk ends once nothing more can run, and its host")
+        assertEquals(listOf(first, second), resolver.calls)
         assertEquals(DownloadState.Waiting, stored(first).state)
         assertEquals(DownloadHostRules.LIMIT_REACHED, stored(first).reason)
-        assertEquals(DownloadState.Queued, stored(second).state)
-        assertEquals(listOf(second), runner.runnable().map { it.id }, "the limit's wait can't run")
+        assertEquals(DownloadState.Done, stored(second).state)
+        assertEquals(emptyList(), runner.runnable().map { it.id }, "the limit's wait can't run")
 
         // A provider saved isn't the limit's end.
         runner.retryNow()
@@ -1389,14 +1433,15 @@ class DownloadRunnerTest {
         // Resume: queued again at once, the walk's memory of limits forgotten, and at the head of what runs.
         val indexer = IndexerConfig(INDEXER, "Indexer A", "https://a.indexer.invalid/api", "key-a")
         limits.answered(indexer, null, NOW)
+        val third = runner.add(3, fake("hl-after-resume"))
         runner.resume()
         assertEquals(DownloadState.Queued, stored(first).state)
         assertNull(stored(first).reason)
         assertEquals(emptyMap(), limits.keptOut(listOf(indexer), NOW))
-        assertEquals(listOf(first, second), runner.runnable().map { it.id })
+        assertEquals(listOf(first, third), runner.runnable().map { it.id })
         host(runner)
         advanceUntilIdle()
-        assertEquals(listOf(first, first), resolver.calls)
+        assertEquals(listOf(first, second, first, third), resolver.calls)
         assertEquals(DownloadState.Waiting, stored(first).state)
 
         // The app's start: not before 30 minutes after the limit began, none said when it ends.

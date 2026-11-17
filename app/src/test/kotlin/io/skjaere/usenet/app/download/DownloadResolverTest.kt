@@ -256,6 +256,12 @@ class DownloadResolverTest {
     /** The episodes the turn's search asked for, in order. */
     private val searched: MutableList<EpisodeRequest> = Collections.synchronizedList(mutableListOf())
 
+    /** The indexers each turn's search asked, by id, in order. */
+    private val searchedAt: MutableList<List<String>> = Collections.synchronizedList(mutableListOf())
+
+    /** The indexer that lists each of [finds], by guid, where it isn't the first ([indexer]). */
+    private val listedBy = mutableMapOf<String, String>()
+
     /** The release that played each episode last, by its watch key, as the library remembers it (L402). */
     private val lastPlayed = mutableMapOf<String, RememberedRelease>()
 
@@ -268,8 +274,8 @@ class DownloadResolverTest {
      * Resolve over these fakes, what is known of releases tried [tried], or, where [remembered] is given, the app's memory of
      * them as the app's Resolve reads it. Download size is [cap] GB an hour, none when null; a prepare held for a season's
      * copy is handed back as the app's Resolve hands it back ([PlayingPack.preparer]), over the same fake prepare. The turn's
-     * search finds [finds], each indexer saying [findReports], in the room the storage gives; the walk's memory of limits is
-     * [limits].
+     * search asks [searchIndexers] (those the walk keeps out left out) and finds [finds], each indexer saying [findReports],
+     * in the room the storage gives; the walk's memory of limits is [limits].
      */
     private fun resolver(
         attempts: Int = 10,
@@ -278,6 +284,7 @@ class DownloadResolverTest {
         remembered: MissingReleases? = null,
         cap: Int? = null,
         limits: DownloadSearch.Limits = DownloadSearch.Limits.None,
+        searchIndexers: List<IndexerConfig> = listOf(indexer),
     ) = DownloadResolver(
         downloads = dao,
         storage = storage,
@@ -295,14 +302,15 @@ class DownloadResolverTest {
         downloadContext = { context(cap) },
         search = DownloadSearch(
             downloads = dao,
-            find = { request, _, _ ->
+            find = { request, asked, _ ->
                 flow {
                     searched += request
+                    searchedAt += asked.map { it.id }
                     finds.forEach { fakes[it.guid] = it }
                     emit(FinderEvent.Finished(FindResult(request, finds.map(::foundOf), emptyList(), listOf(StageReport(SearchStage.Episode, findReports)))))
                 }
             },
-            indexers = { listOf(indexer) },
+            indexers = { searchIndexers },
             context = { context(cap) },
             space = { id -> storage.space(id) },
             limits = limits,
@@ -319,7 +327,7 @@ class DownloadResolverTest {
     private fun foundOf(fake: Fake): FoundRelease {
         val size = listed[fake.guid] ?: fake.size
         val item = NewznabItem(
-            indexerId = INDEXER, guid = fake.guid, title = fake.title, sizeBytes = size, publishedAt = null, postedAt = null, categories = emptyList(),
+            indexerId = listedBy[fake.guid] ?: INDEXER, guid = fake.guid, title = fake.title, sizeBytes = size, publishedAt = null, postedAt = null, categories = emptyList(),
             grabs = null, passworded = false, files = null, tvdbId = null, tmdbId = null, imdbId = null, tvmazeId = null, season = null, episode = null,
             coverUrl = null, mediaInfo = null, downloadTemplate = "http://indexer.invalid/api?t=get&id=${fake.guid}&apikey={apikey}", attributes = emptyMap(),
         )
@@ -1369,6 +1377,73 @@ class DownloadResolverTest {
     }
 
     /**
+     * L399b, L431, L443: a season's rows as one walk takes them in turn, the walk's one memory of the indexers' limits between
+     * them. S02E04, queued from its ⋮ with the indexer's single, has its grab refused for the indexer's download limit: it
+     * waits as the limit, nothing counted. S02E05, a season row, takes its season's copy of the pack that leads, with no
+     * request to that indexer, no search and nothing counted against the limit: it is Ready from the copy. S02E06, queued from
+     * its ⋮ with only the limited indexer's release, waits as the same limit, the indexer asked nothing.
+     */
+    @Test
+    fun `under one walk a limited indexer's download waits, the next its season's copy serves, and one needing only that indexer waits unasked`() = runBlocking<Unit> {
+        val memory = DownloadLimits()
+        val sixth = Fake("hl-s02e06-kestrel", "Harbor.Lights.S02E06.1080p.WEB.h264-KESTREL", listOf("e6.mkv" to 1_100_000_000L))
+        keptForSeason(pack)
+        row(single)
+        episode(E5, 5) { it.withFacts() }
+        episode(E6, 6, sixth)
+        refusing[INDEXER] = NewznabError.DownloadLimitReached("Download limit reached")
+        val limit = LimitWait(INDEXER, LimitWait.Kind.Download, NOW, null)
+
+        assertEquals(DownloadHostRules.LIMIT_REACHED, assertIs<DownloadResolver.Resolution.Waiting>(resolver(limits = memory).resolve(ID)).reason)
+        assertEquals(emptyList(), stored().tried)
+        assertEquals(limit, DownloadColumns.limitWait(stored()))
+        assertEquals(listOf(single.guid), asks)
+
+        val fromCopy = assertIs<DownloadResolver.Resolution.Ready>(resolver(limits = memory).resolve(E5))
+        assertEquals(pack.guid, fromCopy.row.release?.guid)
+        assertEquals("Harbor.Lights.S02E05.1080p.WEB.h264-GRP.mkv", fromCopy.file.name)
+        assertEquals(listOf(single.guid), asks, "the copy asks the indexer nothing")
+        assertEquals(emptyList(), searched)
+        assertEquals(listOf(key(pack)), stored(E5).tried)
+
+        assertEquals(DownloadHostRules.LIMIT_REACHED, assertIs<DownloadResolver.Resolution.Waiting>(resolver(limits = memory).resolve(E6)).reason)
+        assertEquals(DownloadState.Waiting, stored(E6).state)
+        assertEquals(emptyList(), stored(E6).tried)
+        assertEquals(limit, DownloadColumns.limitWait(stored(E6)), "the wait the refusal began")
+        assertEquals(listOf(single.guid), asks, "the limited indexer asked nothing more")
+        assertEquals(emptyList(), grabbed)
+    }
+
+    /**
+     * L399b, L443: a season row behind an indexer's search limit, met by an earlier row's turn, searches the other indexers
+     * alone and takes what they found, asking the limited one nothing; with nothing found there, it waits as that limit.
+     */
+    @Test
+    fun `a season row behind an indexer's search limit searches the others alone and takes theirs, asking the limited one nothing`() = runBlocking<Unit> {
+        val memory = DownloadLimits().apply { answered(indexer, null, NOW - 60_000) }
+        val elsewhere = Fake("hl-s02e04-other", "Harbor.Lights.S02E04.1080p.WEB.h264-WREN", listOf("o1.mkv" to 1_100_000_000L))
+        finds = listOf(elsewhere)
+        listedBy[elsewhere.guid] = OTHER_INDEXER
+        findReports = listOf(IndexerReport(other, "TVDB id"))
+        row { it.withFacts() }
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver(limits = memory, searchIndexers = listOf(indexer, other)).resolve(ID))
+        assertEquals(elsewhere.guid, ready.row.release?.guid)
+        assertEquals(listOf(listOf(OTHER_INDEXER)), searchedAt, "the limited indexer left out of the search")
+        assertEquals(listOf(elsewhere.guid), asks)
+        assertEquals(listOf(ReleaseKey.of(OTHER_INDEXER, elsewhere.guid)), stored().tried)
+
+        // Nothing found at the others: a wait for the limited indexer's search limit, its end the walk's guess.
+        reset()
+        findReports = listOf(IndexerReport(other, "TVDB id"))
+        row { it.withFacts() }
+        val waiting = assertIs<DownloadResolver.Resolution.Waiting>(resolver(limits = memory, searchIndexers = listOf(indexer, other)).resolve(ID))
+        assertEquals(DownloadHostRules.LIMIT_REACHED, waiting.reason)
+        assertEquals(listOf(listOf(OTHER_INDEXER)), searchedAt)
+        assertEquals(LimitWait(INDEXER, LimitWait.Kind.Search, NOW - 60_000, null), DownloadColumns.limitWait(stored()))
+        assertEquals(emptyList(), asks)
+    }
+
+    /**
      * A grab that never reached an indexer (one no longer set up) is no outage of it, whatever the grab before it met: its
      * release is counted, as a play counts it, while the one whose indexer was out isn't.
      */
@@ -1971,6 +2046,8 @@ class DownloadResolverTest {
         listed.clear()
         findReports = listOf(IndexerReport(indexer, "TVDB id"))
         searched.clear()
+        searchedAt.clear()
+        listedBy.clear()
         lastPlayed.clear()
         lastAsked.clear()
         dao.onUpdate = {}
@@ -2091,11 +2168,13 @@ class DownloadResolverTest {
     private companion object {
         const val ID = "0b6c1d2e-download"
 
-        /** A season's rows: its episodes 1 to 4, and an episode of another season and of another show. */
+        /** A season's rows: its episodes 1 to 6, and an episode of another season and of another show. */
         const val E1 = "0b6c1d2e-e1"
         const val E2 = "0b6c1d2e-e2"
         const val E3 = "0b6c1d2e-e3"
         const val E4 = "0b6c1d2e-e4"
+        const val E5 = "0b6c1d2e-e5"
+        const val E6 = "0b6c1d2e-e6"
         const val OTHER_SEASON = "0b6c1d2e-s3e1"
         const val OTHER_SHOW = "0b6c1d2e-other"
         const val INDEXER = "fake-indexer"

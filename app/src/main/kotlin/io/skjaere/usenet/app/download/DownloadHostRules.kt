@@ -59,8 +59,9 @@ object DownloadHostRules {
     const val CANT_REACH_INDEXER = "Can't reach your indexer"
 
     /**
-     * An indexer's limit reached with nothing found elsewhere (L399, L443): a wait that ends the host. The row's limit wait
-     * keeps which indexer and when it ends, for the page to say; these words, a notification's, name none.
+     * An indexer's limit reached with nothing found elsewhere (L399, L443): a wait of that download alone, the walk going on
+     * to the next (L399b), the host ending once nothing more can run. The row's limit wait keeps which indexer and when it
+     * ends, for the page to say; these words, a notification's, name none.
      */
     const val LIMIT_REACHED = "Your indexer's limit is reached"
 
@@ -148,7 +149,7 @@ object DownloadHostRules {
      * The rows that can run, in [rows]' order (L388): Queued; Waiting for a network or for charging, which the job's
      * constraints and the service's callbacks wait for; and Running or Resolving, as a kill left them. None while a row
      * is Paused or Stopped, which hold the whole queue (L380). The waits for the provider, for storage and for an indexer's
-     * limit end the host: Save or Resume makes them Queued again, a storage wait can run again at the app's start once its
+     * limit don't run: Save or Resume makes them Queued again, a storage wait can run again at the app's start once its
      * folder is there ([storageBack]), and the runner queues a limit's wait again at the app's start once the limit has
      * ended (L434).
      */

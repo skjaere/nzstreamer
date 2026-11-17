@@ -108,9 +108,9 @@ import kotlin.time.Duration.Companion.seconds
  * A grab refused for the indexer's download limit (L399), or for its API limit, which its searches meet too (L443), is no
  * answer about the release and counts no try, as an outage isn't: the indexer refuses its other releases alike, so the
  * other indexers' releases are tried, within the tries. Where the limit leaves releases untried and a try is left for
- * them, the download waits as the limit, its facts kept for the page ([LimitWait], L434), which ends the walk; Resume or
- * the app's start after its end asks again. A release whose NZB needs no request (the one kept for it, its season's copy)
- * is tried whatever limit its indexer is under.
+ * them, the download waits as the limit, its facts kept for the page ([LimitWait], L434), and the walk goes on to the next
+ * (L399b); Resume or the app's start after its end asks again. A release whose NZB needs no request (the one kept for it,
+ * its season's copy) is tried whatever limit its indexer is under.
  *
  * A download resolved before whose process died isn't grabbed again: its NZB is prepared again from its own copy and its
  * file found by name. One whose size no longer matches starts again from its first byte.
@@ -230,7 +230,10 @@ class DownloadResolver(
         /** Ended: the row is Failed, for [reason] in its words. */
         data class Failed(val reason: String) : Resolution
 
-        /** Can't go on until something changes: the row waits, for [reason] (the providers, storage), and the host may end (L388). */
+        /**
+         * Can't go on until something changes: the row waits, for [reason]. The providers or storage: the host may end
+         * (L388). An indexer's limit: that row alone, the walk going on to the next (L399b).
+         */
         data class Waiting(val reason: String) : Resolution
 
         /**
