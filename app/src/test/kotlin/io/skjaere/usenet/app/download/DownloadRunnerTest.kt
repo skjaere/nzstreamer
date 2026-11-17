@@ -2096,7 +2096,7 @@ class DownloadRunnerTest {
 
         assertEquals(listOf(A), runner.deleteWatched(NOW))
         assertTrue(gone(A), "the due one, row, file and bookkeeping")
-        assertEquals(listOf("delete $A"), storage.events.drop(before), "storage's delete alone, its crash-safe order")
+        assertEquals(listOf("delete $A", "sweep packs"), storage.events.drop(before), "storage's delete alone, its crash-safe order, then the copies' sweep")
         assertEquals(DownloadState.Done, stored(B).state)
         assertTrue(storage.video(B).isFile, "the one a play holds")
         assertEquals(DownloadState.Done, stored(C).state)
@@ -2423,6 +2423,149 @@ class DownloadRunnerTest {
         assertEquals(listOf(first, nothing, third), resolver.calls)
     }
 
+    /** File [index] of the imported NZB [IMPORT_SHA] (L423), as Import's sheet asks for it: its target, release and pick. */
+    private inner class ImportedFile(val index: Int) {
+        val fake = Fake("qm-$index", "Quiet.Meridian.S01E0$index.1080p.WEB.h264-WREN", indexer = IMPORTED).also { fakes[it.guid] = it }
+        val name get() = fake.fileName
+        val target get() = DownloadTarget.release(IMPORT_SHA, index, name, IMPORT_TITLE)
+        val candidate get() = DownloadCandidate(IMPORTED, IMPORT_SHA, IMPORT_TITLE, size = fake.size)
+        val pick get() = DownloadPick(index, name, fake.size, IMPORT_SHA)
+    }
+
+    private val importSource = DownloadStorage.Source(IMPORT_NZB, "typed-on-import")
+
+    private suspend fun DownloadRunner.import(file: ImportedFile) = enqueueImport(file.target, file.candidate, file.pick, importSource)
+
+    /**
+     * L423, L456: a file of an NZB opened on Import is queued as a Release row with no search: Import's release its one
+     * candidate, the file chosen as its pick, the file's exact size as what it needs. The NZB and the password typed for it
+     * are kept in `.packs/` under the candidate's key, written with the row in one storage call (its copy before its row,
+     * under storage's lock), never named by the NZB's title or the file. Its log lines name the row by its id alone.
+     */
+    @Test
+    fun `an imported file is queued with its NZB's copy in one storage call, nothing of its names or password logged`() = test {
+        val runner = runner()
+        val from = LogBuffer.snapshot().lastOrNull()?.seq ?: 0L
+        val file = ImportedFile(1)
+        val row = assertNotNull(runner.import(file))
+        assertEquals(DownloadKind.Release, row.kind)
+        assertEquals(WatchKey.release(IMPORT_SHA, 1), row.watchKey)
+        assertEquals(file.name to IMPORT_TITLE, row.title to row.subtitle)
+        assertEquals(listOf(file.candidate), row.candidates)
+        assertEquals(file.pick, DownloadColumns.pick(row))
+        assertEquals(file.fake.size, row.indexerSize)
+        assertNull(row.search)
+        assertEquals(DownloadState.Queued, stored(row.id).state)
+        val meta = DownloadNzbs.Meta.imported(file.candidate)
+        assertEquals(listOf<Pair<List<String>, DownloadNzbs.Meta?>>(listOf(row.id) to meta), storage.adds, "one call, the row with its copy")
+        val copy = assertNotNull(storage.packs.find(ReleaseKey.of(IMPORTED, IMPORT_SHA)))
+        assertEquals(meta, copy.meta)
+        assertContentEquals(IMPORT_NZB, copy.source.nzb)
+        assertEquals("typed-on-import", copy.source.password)
+        // Not a season's pack: no row of it reads "from the season pack".
+        runCurrent()
+        assertEquals(DownloadRunner.Packs(), runner.packs.value)
+
+        val lines = LogBuffer.snapshot().filter { it.seq > from }.map { it.message }
+        assertEquals(emptyList(), lines.filter { line -> listOf(IMPORT_TITLE, file.name, "Quiet", "typed-on-import").any { it in line } })
+        assertTrue(lines.any { row.id in it }, lines.toString())
+    }
+
+    /**
+     * L423: one row per watch key. The same file asked for again while its download is still to finish, or once it is done,
+     * keeps that one: nothing is queued or written. Another file of the same NZB is a row of its own, its copy the same.
+     */
+    @Test
+    fun `an imported file is queued once, and another file of its NZB beside it`() = test {
+        val runner = runner()
+        val first = ImportedFile(1)
+        val row = assertNotNull(runner.import(first))
+        assertEquals(row, runner.import(first))
+        assertEquals(1, storage.adds.size)
+        val second = assertNotNull(runner.import(ImportedFile(2)))
+        assertEquals(listOf(row.id, second.id), order())
+        host(runner)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Done, stored(row.id).state)
+        assertEquals(stored(row.id), runner.import(first), "downloaded: kept as it is")
+        assertEquals(2, storage.adds.size)
+        assertEquals(1, dao.rows.value.values.count { it.watchKey == row.watchKey })
+    }
+
+    /**
+     * L469: Download again on Import of a failed file puts that row back, never a second: its copy written again from the
+     * bytes Import holds (here its file was found gone after the copy went with its Done), its tries and reason cleared,
+     * queued at the end, in one storage call. Its turn then takes the copy.
+     */
+    @Test
+    fun `a failed imported file asked for again is put back with its copy written again, still one row`() = test {
+        val runner = runner()
+        val other = runner.add(4, fake("hl-a"))
+        val file = ImportedFile(1)
+        val row = assertNotNull(runner.import(file))
+        host(runner)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Done, stored(row.id).state)
+        // Done: its NZB's copy goes, as no row of it is left to finish.
+        assertNull(storage.packs.find(ReleaseKey.of(IMPORTED, IMPORT_SHA)))
+        dao.update(DownloadStorage.failedGone(stored(row.id), NOW).copy(tried = listOf(file.fake.key)))
+        val queued = runner.add(5, fake("hl-b").apply { hold = HOLD })
+
+        val back = assertNotNull(runner.import(file))
+        assertEquals(row.id, back.id)
+        assertEquals(DownloadState.Queued, stored(row.id).state)
+        assertNull(stored(row.id).reason)
+        assertEquals(emptyList(), stored(row.id).tried)
+        assertEquals(listOf(queued, row.id), order().filter { it != other }, "at the queue's end")
+        assertEquals(1, dao.rows.value.values.count { it.watchKey == row.watchKey })
+        assertEquals<Pair<List<String>, DownloadNzbs.Meta?>>(listOf(row.id) to DownloadNzbs.Meta.imported(file.candidate), storage.adds.last())
+        assertNotNull(storage.packs.find(ReleaseKey.of(IMPORTED, IMPORT_SHA)))
+    }
+
+    /**
+     * L423, L456: an imported NZB's copy no row of it holds goes at the sweep after Delete once watched deletes a row, and
+     * after a removed row's last hold ends, as at every other end; one a row of it still holds stays.
+     */
+    @Test
+    fun `an imported NZB's copy no row holds goes after Delete once watched and after a held removal ends`() = test {
+        val runner = runner()
+        val file = ImportedFile(1)
+        val watchedRow = finished(A, 1, completedAt = NOW - 3 * DAY)
+        // A copy of an NZB whose rows are all done or gone, as a sweep that failed would leave it.
+        storage.packs.write(DownloadNzbs.Meta.imported(file.candidate), IMPORT_NZB, "typed-on-import")
+        deleteOnceWatched(NOW - 4 * DAY)
+        watched.value = listOf(watchedAt(watchedRow, NOW - 2 * DAY))
+        runCurrent()
+        assertEquals(listOf(A), runner.deleteWatched(NOW))
+        assertNull(storage.packs.find(ReleaseKey.of(IMPORTED, IMPORT_SHA)), "after Delete once watched")
+
+        // A removed row a play holds is deleted as the hold ends, and a copy no row holds goes with that end.
+        val playing = finished(B, 2, completedAt = NOW - DAY)
+        runner.hold("player:lease", playing.id)
+        runner.remove(listOf(playing.id))
+        advanceTimeBy(DownloadRunner.UNDO_MILLIS + 1)
+        runCurrent()
+        storage.packs.write(DownloadNzbs.Meta.imported(file.candidate), IMPORT_NZB, "typed-on-import")
+        runner.release("player:lease")
+        runCurrent()
+        assertNull(dao.get(playing.id))
+        assertNull(storage.packs.find(ReleaseKey.of(IMPORTED, IMPORT_SHA)), "after the hold ended")
+
+        // One a queued row of it holds stays.
+        val queued = assertNotNull(runner.import(file))
+        assertEquals(DownloadState.Queued, stored(queued.id).state)
+        assertEquals(emptyList(), runner.deleteWatched(NOW + DAY))
+        assertNotNull(storage.packs.find(ReleaseKey.of(IMPORTED, IMPORT_SHA)))
+    }
+
+    /** L423: the season packs' words never take an imported NZB's copy for a season's: it leads none, and no row is from it. */
+    @Test
+    fun `the runner's packs leave an imported NZB's copy out`() {
+        val imported = DownloadNzbs.Meta.imported(DownloadCandidate(IMPORTED, IMPORT_SHA, IMPORT_TITLE, size = SIZE.toLong()))
+        assertEquals(DownloadRunner.Packs(mapOf((SHOW to 2) to setOf(PACK.key)), setOf(PACK.key)), DownloadRunner.Packs.of(listOf(PACK, imported)))
+        assertEquals(DownloadRunner.Packs(), DownloadRunner.Packs.of(listOf(imported)))
+    }
+
     /**
      * L406: the runner says which seasons a kept copy of their pack leads, and every copy's release key, for the Downloads
      * page's words: as the copies are written and as they are swept. None on a TV.
@@ -2492,7 +2635,8 @@ class DownloadRunnerTest {
                 dao.setState(id, DownloadState.Failed, DownloadResolver.NO_OTHER_RELEASE, clock.now())
                 return Resolution.Failed(DownloadResolver.NO_OTHER_RELEASE)
             }
-            val fake = fakes.getValue(candidate.guid)
+            // A file chosen in its NZB is found there by its name, as Resolve's picker finds it (an imported NZB's files share its release).
+            val fake = DownloadColumns.pick(row)?.let { pick -> fakes.values.firstOrNull { it.fileName == pick.name } } ?: fakes.getValue(candidate.guid)
             grabbed += fake.guid
             dao.setState(id, DownloadState.Resolving, DownloadHostRules.FINDING_RELEASES, clock.now())
             val counted = stored(id).copy(tried = row.tried + fake.key)
@@ -2602,15 +2746,23 @@ class DownloadRunnerTest {
             File(bookkeeping(id), DownloadStorage.MARKER).createNewFile()
         }
 
-        override suspend fun add(row: Download, grab: DownloadStorage.Grab?) {
+        /** Each add and addAll as it came: the rows it wrote, and the imported NZB's copy it wrote with them (none: null). */
+        val adds = mutableListOf<Pair<List<String>, DownloadNzbs.Meta?>>()
+
+        /** As DownloadStorage's: the marker, an imported NZB's copy, the grab, then the row. */
+        override suspend fun add(row: Download, grab: DownloadStorage.Grab?, copy: DownloadNzbs.Copy?) {
+            adds += listOf(row.id) to copy?.meta
             mark(row.id)
+            copy?.let { packs.write(it.meta, it.source.nzb, it.source.password) }
             grab?.let { keepGrab(row.id, it) }
             dao.insert(row)
         }
 
-        /** As DownloadStorage's: the folders and markers first, then the rows in one go; a failure takes the new folders back. */
-        override suspend fun addAll(rows: List<Download>, putBack: List<Download>) {
+        /** As DownloadStorage's: the folders and markers first, an imported NZB's copy, then the rows in one go; a failure takes the new folders back. */
+        override suspend fun addAll(rows: List<Download>, putBack: List<Download>, copy: DownloadNzbs.Copy?) {
+            adds += (rows + putBack).map { it.id } to copy?.meta
             rows.forEach { mark(it.id) }
+            copy?.let { packs.write(it.meta, it.source.nzb, it.source.password) }
             try {
                 dao.insertAll(rows, putBack)
             } catch (e: Exception) {
@@ -2763,5 +2915,10 @@ class DownloadRunnerTest {
 
         /** An imported NZB's id: the SHA-256 of its bytes. */
         const val NZB_SHA = "5b1c9d0e7f3a2b4c6d8e0f1a3b5c7d9e1f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c"
+
+        /** The NZB Import opened for [ImportedFile]: its id, its title and its bytes. */
+        const val IMPORT_SHA = "9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c"
+        const val IMPORT_TITLE = "Quiet.Meridian.S01.1080p.WEB.h264-WREN"
+        val IMPORT_NZB = "<nzb><!-- $IMPORT_TITLE --></nzb>".encodeToByteArray()
     }
 }

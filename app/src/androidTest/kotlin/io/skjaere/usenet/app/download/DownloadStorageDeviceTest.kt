@@ -6,6 +6,7 @@ import android.os.storage.StorageManager
 import android.system.Os
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadDao
@@ -40,8 +41,8 @@ import kotlin.random.Random
  * Where a download's files live and how they come and go (L346, L348, L350, C8), on this device's own storage: the video in
  * the app's folder on the primary volume, `.part` until it is renamed, beside a `.nomedia`; the bookkeeping in filesDir,
  * its marker made with the row, its NZB and password while it needs them; the whole size allocated before the first byte;
- * reconcile at start, which keeps the season packs' copies' folder and sweeps it; and a delete that a process dying part
- * way through leaves for the next start to finish.
+ * reconcile at start, which keeps the season packs' copies' folder and sweeps it, an imported NZB's copy with them; and a
+ * delete that a process dying part way through leaves for the next start to finish.
  *
  * The places are checked on the real folders, with ids of the test's own, deleted after. Reconcile and the deletes run over
  * folders of the test's own, so they never meet the app's own downloads. Files are 16 MB at most.
@@ -432,6 +433,49 @@ class DownloadStorageDeviceTest {
     }
 
     /**
+     * L423, L456: an imported NZB's copy, with the password typed for it, goes in with its row in one add (its copy before
+     * its row) and lives in the season packs' folder. Reconcile keeps it while a row of that NZB is queued, and deletes the
+     * copy of an NZB no row holds, with its password; once the queued row is done, the next reconcile takes its copy too.
+     */
+    @Test
+    fun reconcileKeepsAnImportCopyAQueuedRowHoldsAndDeletesOneNoRowHolds() = runBlocking<Unit> {
+        val seen = mutableListOf<Boolean>()
+        lateinit var storage: DownloadStorage
+        val watching = object : DownloadDao by downloads {
+            override suspend fun insert(download: Download) {
+                seen += storage.packs.find(ReleaseKey.of(IMPORTED, QM_NZB)) != null
+                downloads.insert(download)
+            }
+        }
+        storage = DownloadStorage(files, { volume }, watching, storageManager)
+        val held = DownloadNzbs.Meta.imported(DownloadCandidate(IMPORTED, QM_NZB, QM_TITLE, size = 1_300_000_000))
+        storage.add(imported("qm-e2", QM_NZB, 1), copy = DownloadNzbs.Copy(held, DownloadStorage.Source(NZB, "typed-on-import")))
+        assertEquals("the copy there before its row", listOf(true), seen)
+        // Another imported NZB's copy, whose row is gone: no row holds it.
+        val unheld = DownloadNzbs.Meta.imported(DownloadCandidate(IMPORTED, OTHER_NZB, "Copper.Crown.2019.1080p.WEB.h264-WREN", size = 4_100_000_000))
+        storage.packs.write(unheld, NZB, "typed-for-the-other")
+
+        storage.reconcile()
+
+        val copy = checkNotNull(storage.packs.find(held.key))
+        assertEquals(held, copy.meta)
+        assertEquals("typed-on-import", copy.source.password)
+        assertNull(storage.packs.find(unheld.key))
+        assertFalse(storage.packs.folder(unheld.key).exists())
+        assertEquals(setOf(storage.packs.folder(held.key).name), File(files, DownloadNzbs.PATH).list()!!.toSet())
+        assertTrue(File(files, "downloads/qm-e2/.row").isFile)
+
+        // Its download done, its file there: nothing holds the copy, nor the password typed for it.
+        storage.open("qm-e2", NAME, 4096).close()
+        storage.finish("qm-e2", NAME)
+        finished("qm-e2", storage)
+        storage.reconcile()
+        assertEquals(DownloadState.Done, downloads.get("qm-e2")?.state)
+        assertNull(storage.packs.find(held.key))
+        assertEquals(emptyList<String>(), File(files, DownloadNzbs.PATH).list()!!.toList())
+    }
+
+    /**
      * L413: a download removed or deleted while it plays is being deleted (hidden) and held: reconcile, after Delete all,
      * leaves its row, its file and its folders, where it finishes any other row being deleted. Once nothing holds it, the
      * next reconcile finishes it too.
@@ -582,11 +626,23 @@ class DownloadStorageDeviceTest {
         showTmdbId = 900002, season = 2, episode = 4, position = 0, indexerSize = 4096, createdAt = 10, updatedAt = 10,
     )
 
+    /** File [index] of the NZB [nzb] opened on Import (L423), queued: no TMDB ids, its file chosen in its pick. */
+    private fun imported(id: String, nzb: String, index: Int) = Download(
+        id = id, watchKey = WatchKey.release(nzb, index), kind = DownloadKind.Release, title = "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv",
+        subtitle = QM_TITLE, position = 0, candidates = listOf(DownloadCandidate(IMPORTED, nzb, QM_TITLE, size = 1_300_000_000)), indexerSize = 1_300_000_000,
+        pick = DownloadColumns.text(DownloadPick(index, "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv", 1_300_000_000, nzb)), createdAt = 10, updatedAt = 10,
+    )
+
     private class ProcessDied : RuntimeException("the process died here")
 
     private companion object {
         const val MIB = 1024L * 1024
         const val NAME = "Harbor.Lights.S02E04.1080p.WEB.h264-GRP.mkv"
         val NZB = "<nzb><!-- Harbor Lights S02E04 --></nzb>".toByteArray()
+
+        /** Two NZBs opened on Import: their ids (the SHA-256 of their bytes), one's title. */
+        const val QM_NZB = "5b1c9d0e7f3a2b4c6d8e0f1a3b5c7d9e1f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c"
+        const val OTHER_NZB = "9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c"
+        const val QM_TITLE = "Quiet.Meridian.S01.1080p.WEB.h264-WREN"
     }
 }

@@ -32,7 +32,8 @@ import java.nio.channels.FileChannel
  *   kept as long as the row ([DownloadImages], L411). Neither place goes in a backup or a transfer, so a row whose
  *   marker is missing came from another device ([reconcile]).
  * - A season pack's NZB and password, kept once for the season's downloads in filesDir's `downloads/.packs/` ([packs],
- *   L394) while one of them is still to finish.
+ *   L394) while one of them is still to finish; and an NZB opened on Import with the password typed for it, beside them,
+ *   for the downloads of its files (L423), written with the row that needs it.
  * - A delete goes in the crash-safe order: the row Deleting (hidden), the video, the bookkeeping, the row ([delete]).
  *
  * The rows and the folders change one call at a time, so reconcile never takes a folder [add] has just made for one with
@@ -54,14 +55,18 @@ class DownloadStorage(
      */
     internal val changes = Mutex()
 
-    /** The season packs' NZBs, each kept once for its season's downloads, in filesDir's `downloads/.packs/` (L394). */
-    val packs = DownloadNzbs(File(filesDir, DownloadNzbs.PATH), io)
+    /**
+     * The season packs' NZBs, each kept once for its season's downloads, and the NZBs opened on Import, each kept for its
+     * files' downloads, in filesDir's `downloads/.packs/` (L394, L423). An import's copy is written under [changes].
+     */
+    val packs = DownloadNzbs(File(filesDir, DownloadNzbs.PATH), io, changes)
 
     /**
-     * Drops the season packs' copies no download still to finish holds (L394), nor one of [removed], removed with its Undo
-     * still to come: at a download's end.
+     * Drops the copies no download holds (L394, L423), nor one of [removed], removed with its Undo still to come: at a
+     * download's end. The rows are read and the copies deleted under [changes], as an import writes its copy and its row
+     * (L456), so a sweep never takes a copy whose row came after its read.
      */
-    suspend fun sweepPacks(removed: Set<String> = emptySet()) = packs.sweep(downloads.all().first(), removed)
+    suspend fun sweepPacks(removed: Set<String> = emptySet()) = packs.sweepRows({ downloads.all().first() }, removed)
 
     /** The steps of a delete, in order, each one a process may die after. */
     enum class DeleteStep { Marked, VideoGone, BookkeepingGone }
@@ -106,14 +111,17 @@ class DownloadStorage(
 
     /**
      * Makes [row]'s bookkeeping folder with its marker, and [grab] beside them where it has one (the NZB of a file chosen by
-     * hand, L403, as [keepGrab] keeps it), then the row: never a row without its marker (L346, L350), nor a picked row
-     * that a walk could take up before its NZB is there.
+     * hand, L403, as [keepGrab] keeps it), or the [copy] of the NZB opened on Import in `.packs/` ([packs], L423), then
+     * the row: never a row without its marker (L346, L350), nor a picked row that a walk could take up before its NZB is
+     * there. All under [changes], which a sweep reads the rows and deletes under (L456). A copy left by a row that couldn't
+     * be inserted goes at the next sweep, unless another row of its NZB holds it.
      */
-    suspend fun add(row: Download, grab: Grab? = null): Unit = changes.withLock {
+    suspend fun add(row: Download, grab: Grab? = null, copy: DownloadNzbs.Copy? = null): Unit = changes.withLock {
         withContext(io) {
             val folder = bookkeeping(row.id)
             mark(folder)
             try {
+                copy?.let { packs.write(it.meta, it.source.nzb, it.source.password) }
                 grab?.let { writeGrab(folder, it.key, it.source.nzb, it.source.password) }
                 downloads.insert(row)
             } catch (e: Throwable) {
@@ -127,9 +135,10 @@ class DownloadStorage(
      * A season queued at once (L392, L396): every one of [rows]' bookkeeping folders and markers made first, then every row
      * inserted and the rows [putBack] written whole in one transaction ([DownloadDao.insertAll]). One that fails leaves none
      * of them, and their new folders go too; a process that dies between the two leaves folders with no row, which the next
-     * start's reconcile deletes.
+     * start's reconcile deletes. An imported file's failed row put back (L469) comes with its NZB's [copy], written again
+     * before it, as [add] writes one.
      */
-    suspend fun addAll(rows: List<Download>, putBack: List<Download> = emptyList()): Unit = changes.withLock {
+    suspend fun addAll(rows: List<Download>, putBack: List<Download> = emptyList(), copy: DownloadNzbs.Copy? = null): Unit = changes.withLock {
         withContext(io) {
             val folders = rows.map { bookkeeping(it.id) }
             var made = 0
@@ -138,6 +147,7 @@ class DownloadStorage(
                     made++
                     mark(folder)
                 }
+                copy?.let { packs.write(it.meta, it.source.nzb, it.source.password) }
                 downloads.insertAll(rows, putBack)
             } catch (e: Throwable) {
                 rows.zip(folders).take(made).forEach { (row, folder) -> dropUnlessRow(row.id, folder, e) }
@@ -301,8 +311,8 @@ class DownloadStorage(
      *   is dropped; a queued one has its marker from [add], before any NZB, and a finished one keeps it;
      * - a finished row whose file is gone fails, "The downloaded file is gone", holding no file and no progress;
      * - a folder no row has, in either place, is deleted: what a process left as it died; but for the season packs' copies
-     *   (`.packs`, a name no row's id can have), which are swept on their own: those no download still to finish holds,
-     *   and any copy half written, go ([DownloadNzbs.sweep]).
+     *   (`.packs`, a name no row's id can have), which are swept on their own, with the rows read here, as this holds
+     *   [changes]: those no download holds, and any copy half written, go ([DownloadNzbs.sweep]).
      *
      * Files beside the folders stay. While the volume isn't there, no row is taken for gone and its folders stay.
      */

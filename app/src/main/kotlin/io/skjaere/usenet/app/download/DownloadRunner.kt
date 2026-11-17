@@ -319,6 +319,8 @@ interface DownloadHolds {
  * - A season is queued at once, all or none, a failed episode's row put back rather than queued twice ([enqueueAll],
  *   L392, L396). Its rows' turns search for their releases and take a copy of their season's pack first (Resolve's);
  *   [packs] says which copies are kept, for the Downloads page's words (L406).
+ * - A file of an NZB opened on Import is queued with its NZB's copy, a failed one put back with it ([enqueueImport],
+ *   L423, L469); the copies no row holds go at each end, Delete once watched's and a held removal's too (L456).
  *
  * Nothing runs on a TV (L369): every call but [reconcile] returns at once there, and nothing is held. Its log lines name a
  * download by its id, with sizes and a cause's kind: never its title, release or a host.
@@ -328,15 +330,17 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     interface Storage {
         /**
          * Makes [row]'s bookkeeping folder and its marker, with [grab] beside them where it has one (the NZB of a file chosen
-         * by hand, L403), then the row (L346).
+         * by hand, L403), or the [copy] of the NZB opened on Import (L423), then the row (L346), under the lock the copies'
+         * sweeps take (L456).
          */
-        suspend fun add(row: Download, grab: DownloadStorage.Grab? = null)
+        suspend fun add(row: Download, grab: DownloadStorage.Grab? = null, copy: DownloadNzbs.Copy? = null)
 
         /**
-         * Makes each of [rows]' folders and markers, then inserts them and writes [putBack] whole in one transaction: all of
-         * them, or none (a season queued at once, L392).
+         * Makes each of [rows]' folders and markers, writes [copy] where there is one (an imported file's row put back,
+         * L469), then inserts them and writes [putBack] whole in one transaction: all of them, or none (a season queued at
+         * once, L392).
          */
-        suspend fun addAll(rows: List<Download>, putBack: List<Download>)
+        suspend fun addAll(rows: List<Download>, putBack: List<Download>, copy: DownloadNzbs.Copy? = null)
 
         /** Keeps [grab] for [id]'s attempt of its release, as Resolve keeps one it grabbed ([DownloadStorage.keepGrab]). */
         suspend fun keepGrab(id: String, grab: DownloadStorage.Grab)
@@ -376,8 +380,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
         companion object {
             fun of(storage: DownloadStorage): Storage = object : Storage {
-                override suspend fun add(row: Download, grab: DownloadStorage.Grab?) = storage.add(row, grab)
-                override suspend fun addAll(rows: List<Download>, putBack: List<Download>) = storage.addAll(rows, putBack)
+                override suspend fun add(row: Download, grab: DownloadStorage.Grab?, copy: DownloadNzbs.Copy?) = storage.add(row, grab, copy)
+                override suspend fun addAll(rows: List<Download>, putBack: List<Download>, copy: DownloadNzbs.Copy?) = storage.addAll(rows, putBack, copy)
 
                 override suspend fun keepGrab(id: String, grab: DownloadStorage.Grab) =
                     storage.keepGrab(id, grab.key, grab.source.nzb, grab.source.password)
@@ -423,14 +427,17 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /**
      * The season packs' copies kept now, as the Downloads page says them (L406): the keys of those that lead ([leading], by
      * show and season), which a queued season row of theirs takes first (L431), and every copy's release key ([keys]), by
-     * which a row written from one is told.
+     * which a row written from one is told. An NZB opened on Import is no season's pack (L423): no row is from it.
      */
     data class Packs(val leading: Map<Pair<Int, Int>, Set<String>> = emptyMap(), val keys: Set<String> = emptySet()) {
         companion object {
-            fun of(copies: List<DownloadNzbs.Meta>) = Packs(
-                copies.filter { it.leads }.groupBy({ it.show to it.season }, { it.key }).mapValues { (_, keys) -> keys.toSet() },
-                copies.mapTo(HashSet()) { it.key },
-            )
+            fun of(copies: List<DownloadNzbs.Meta>): Packs {
+                val seasons = copies.filter { it.nzb == null && it.show != null && it.season != null }
+                return Packs(
+                    seasons.filter { it.leads }.groupBy({ it.show!! to it.season!! }, { it.key }).mapValues { (_, keys) -> keys.toSet() },
+                    seasons.mapTo(HashSet()) { it.key },
+                )
+            }
         }
     }
 
@@ -596,7 +603,11 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                     }
                 }
             }
-            if (gone.isNotEmpty()) log.info("Downloads: {} deleted a day after they were watched: {}", gone.size, gone.joinToString())
+            if (gone.isNotEmpty()) {
+                log.info("Downloads: {} deleted a day after they were watched: {}", gone.size, gone.joinToString())
+                // The NZB copies no row holds now go, as at any other end (L456).
+                sweepPacks()
+            }
             gone
         }
     }
@@ -780,6 +791,52 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         }
     }
 
+    /**
+     * Queues the download of [target], a file of an NZB the user opened on Import (L423), from [candidate], Import's own
+     * release of that NZB ([IMPORTED], its guid the NZB's id), the file chosen in it as [pick], with the NZB and the archive
+     * password typed for it as [source]: nothing searched or grabbed. The NZB and the password are kept in `.packs/`, keyed
+     * by the candidate (so its turn takes them as its grab) and held by that NZB's rows, written with the row in one
+     * storage call: the copy, then the row, under the lock the sweeps take (L456). Until Resolve, the row counts the file's
+     * exact size. One row per watch key: one still to finish, or done, is returned as it is, and nothing is written; a
+     * failed one is put back (L469), never a second: its copy written again, its tries, reason and limit's wait gone,
+     * queued at the queue's end, its file and release kept as Try again keeps them. Its log lines name the row by its id:
+     * never the NZB's title, the file's name or the password. Scheduling its host is the visible app's. Null on a TV.
+     */
+    suspend fun enqueueImport(target: DownloadTarget, candidate: DownloadCandidate, pick: DownloadPick, source: DownloadStorage.Source): Download? {
+        if (!runs) return null
+        require(target.kind == DownloadKind.Release && candidate.indexerId == IMPORTED) { "Not a file opened on Import" }
+        require(candidate.guid == target.nzbId && pick.nzbId == target.nzbId && pick.index == target.fileIndex) { "A file of another NZB" }
+        val copy = DownloadNzbs.Copy(DownloadNzbs.Meta.imported(candidate), source)
+        return changes.withLock {
+            val rows = dao.all().first()
+            val own = rows.filter { it.watchKey == target.watchKey }
+            own.firstOrNull { it.state in GOING_ON || it.state == DownloadState.Done }?.let { kept ->
+                log.info("download {}: already {}", kept.id, if (kept.state == DownloadState.Done) "downloaded" else "queued")
+                return@withLock kept
+            }
+            val position = (rows.maxOfOrNull { it.position } ?: -1) + 1
+            val at = now()
+            val failed = own.filter { it.state == DownloadState.Failed }.maxByOrNull { it.createdAt }
+            if (failed == null) {
+                val row = newRow(target, listOf(candidate), pick.size, null, position, at).copy(pick = DownloadColumns.text(pick))
+                deps.storage.add(row, copy = copy)
+                log.info("download {}: queued at {} from an imported NZB", row.id, position)
+                row
+            } else {
+                val back = failed.copy(
+                    title = target.title, subtitle = target.subtitle, state = DownloadState.Queued, reason = null, position = position,
+                    candidates = listOf(candidate), tried = emptyList(), indexerSize = pick.size, pick = DownloadColumns.text(pick), limitWait = null,
+                    createdAt = at, updatedAt = at,
+                )
+                // As a season's put-back: an NZB left from the try it failed with goes first, so its turn opens the copy.
+                deps.storage.dropSource(failed.id)
+                deps.storage.addAll(emptyList(), listOf(back), copy)
+                log.info("download {}: put back at {} from an imported NZB", back.id, position)
+                back
+            }
+        }
+    }
+
     /** A new row of [target] at [position], as [enqueue] and [enqueueAll] make one. */
     private fun newRow(target: DownloadTarget, candidates: List<DownloadCandidate>, need: Long, search: SeasonSearch?, position: Long, at: Long) = Download(
         id = Download.newId(), watchKey = target.watchKey, kind = target.kind, title = target.title, subtitle = target.subtitle,
@@ -853,7 +910,10 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             val due = removals.withLock { ids.filter { it !in removed && !isHeld(it) } }
             val gone = due.filter { dao.get(it)?.state == DownloadState.Deleting }
             gone.forEach { delete(it) }
-            if (gone.isNotEmpty()) log.info("Downloads: {} deleted as their play ended: {}", gone.size, gone.joinToString())
+            if (gone.isNotEmpty()) {
+                log.info("Downloads: {} deleted as their play ended: {}", gone.size, gone.joinToString())
+                sweepPacks()
+            }
         }
         if (autoDeleting) deleteWatchedOrLog(now())
     }
