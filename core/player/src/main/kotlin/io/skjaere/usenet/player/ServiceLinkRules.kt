@@ -11,8 +11,10 @@ import androidx.media3.common.C
  * (401, 403, 404, 410, or a page in place of the file) gets one fresh link, and a second such answer is final: no working
  * link can be had. The source asks for the file from where the read starts itself (`Range: bytes=N-`, [range]), so a 200
  * to a read past the start, or a part other than the one asked, would mean reading and dropping every byte before the
- * place: final at once, never a silent download up to a seek (a fresh link wouldn't make a server honour ranges). Any
- * other failure is Media3's to retry (a CDN's 429 or 503); a read at the file's very end opens with nothing to read.
+ * place: final at once, never a silent download up to a seek (a fresh link wouldn't make a server honour ranges), as a
+ * server that won't resume ([LinkFailure.NoRanges], L419), which a download starts again from 0 for. A part that names
+ * no place is a broken answer, no working link. Any other failure is Media3's to retry (a CDN's 429 or 503); a read at
+ * the file's very end opens with nothing to read.
  */
 object ServiceLinkRules {
     /** How old a link may be before an open asks for a fresh one. */
@@ -69,6 +71,9 @@ object ServiceLinkRules {
         return when {
             status == 200 && position == 0L -> Answer.Opened
             status == 206 && start == position -> Answer.Opened
+            // The whole file to a read past its start, or a part from another byte: a server that won't resume.
+            status == 200 || (status == 206 && start != null) -> Answer.Fail(LinkFailure.NoRanges)
+            // A part with no Content-Range to say where it starts, or another success: a broken answer.
             else -> Answer.Fail(LinkFailure.NoWorkingLink)
         }
     }

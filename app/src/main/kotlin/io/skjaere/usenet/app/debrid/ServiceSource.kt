@@ -287,10 +287,11 @@ class ServiceSource(
 
         /**
          * What the player's source found of the link to a file the account by [route] gave ([failure], the service's own
-         * answer to a refresh, or no working link) fails a release as: as [failureOf] would the service's answer.
+         * answer to a refresh, or no working link) fails a release as: as [failureOf] would the service's answer. A
+         * server that won't resume ([LinkFailure.NoRanges], L419) is no working link to a play, as it always was.
          */
         fun linkFailureOf(failure: LinkFailure, route: String): AttemptFailure = when (failure) {
-            LinkFailure.NoWorkingLink -> AttemptFailure.NoWorkingLink
+            LinkFailure.NoWorkingLink, LinkFailure.NoRanges -> AttemptFailure.NoWorkingLink
             LinkFailure.NotCached -> AttemptFailure.NoLongerCached
             LinkFailure.Removed -> AttemptFailure.RemovedByService
             is LinkFailure.Limit -> AttemptFailure.ServiceLimit(failure.waitMs?.milliseconds, route)

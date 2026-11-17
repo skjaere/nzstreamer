@@ -10,8 +10,9 @@ import kotlin.test.assertTrue
 /**
  * What a debrid play's source makes of each answer to its open (L172, W81): a dead link (401, 403, 404, 410, or a page in
  * place of the file) gets one fresh link, and a second dead answer is final; a 200 to a ranged read, or a part of the file
- * other than the one asked, fails at once, as Media3 would otherwise read and drop every byte up to the place; anything
- * else is Media3's to retry. A link over 50 minutes old is replaced before an open. Invented addresses.
+ * other than the one asked, fails at once as a server that won't resume (L419), as Media3 would otherwise read and drop
+ * every byte up to the place, and a part that names no place fails as no working link; anything else is Media3's to
+ * retry. A link over 50 minutes old is replaced before an open. Invented addresses.
  */
 class ServiceLinkRulesTest {
     private fun answer(position: Long, status: Int, type: String? = MKV, range: String? = null, refreshed: Boolean = false) =
@@ -35,13 +36,25 @@ class ServiceLinkRulesTest {
     }
 
     @Test
-    fun a200ToARangedReadOrAnotherPartOfTheFileFailsAtOnce() {
-        assertEquals(Answer.Fail(LinkFailure.NoWorkingLink), answer(1_000_000, 200))
-        assertEquals(Answer.Fail(LinkFailure.NoWorkingLink), answer(1_000_000, 206, range = "bytes 0-4999999/5000000"))
+    fun a200ToARangedReadOrAnotherPartOfTheFileFailsAtOnceAsAServerThatWontResume() {
+        assertEquals(Answer.Fail(LinkFailure.NoRanges), answer(1_000_000, 200))
+        assertEquals(Answer.Fail(LinkFailure.NoRanges), answer(1_000_000, 206, range = "bytes 0-4999999/5000000"))
+        assertEquals(Answer.Fail(LinkFailure.NoRanges), answer(0, 206, range = "bytes 500-4999999/5000000"))
+        assertEquals(Answer.Fail(LinkFailure.NoRanges), answer(1_000_000, 206, range = "bytes 2000000-4999999/*"))
+        // Not refreshed for: a fresh link wouldn't make the server honour a range; a fresh link's 200 says the same.
+        assertEquals(Answer.Fail(LinkFailure.NoRanges), answer(1_000_000, 200, refreshed = false))
+        assertEquals(Answer.Fail(LinkFailure.NoRanges), answer(1_000_000, 200, refreshed = true))
+    }
+
+    /** A part that names no place is a broken answer, not a server that won't resume: no working link, as before. */
+    @Test
+    fun aPartThatNamesNoPlaceOrAnotherSuccessIsNoWorkingLink() {
         assertEquals(Answer.Fail(LinkFailure.NoWorkingLink), answer(1_000_000, 206, range = null), "no Content-Range to tell where it starts")
-        assertEquals(Answer.Fail(LinkFailure.NoWorkingLink), answer(0, 206, range = "bytes 500-4999999/5000000"))
-        // Not refreshed for: a fresh link wouldn't make the server honour a range.
-        assertEquals(Answer.Fail(LinkFailure.NoWorkingLink), answer(1_000_000, 200, refreshed = false))
+        assertEquals(Answer.Fail(LinkFailure.NoWorkingLink), answer(0, 206, range = null))
+        assertEquals(Answer.Fail(LinkFailure.NoWorkingLink), answer(1_000_000, 206, range = "bytes */5000000"), "a Content-Range with no part")
+        assertEquals(Answer.Fail(LinkFailure.NoWorkingLink), answer(1_000_000, 204))
+        // A second dead answer stays no working link too.
+        assertEquals(Answer.Fail(LinkFailure.NoWorkingLink), answer(1_000_000, 403, refreshed = true))
     }
 
     @Test

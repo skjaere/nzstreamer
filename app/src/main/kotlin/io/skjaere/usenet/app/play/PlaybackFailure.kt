@@ -112,10 +112,11 @@ internal data class PlaybackFailure(val reason: String, val releaseAtFault: Bool
         /**
          * A debrid play's file no longer to be had ([link], L204, W81), as DbPhoneFailures says it, once its source asked
          * the service for a fresh link and got none it could read: no words for "expired", which the source renews by
-         * itself. Only a refused key names the service, the account's own; only a removal is the release's fault.
+         * itself. Only a refused key names the service, the account's own; only a removal is the release's fault. A
+         * server that won't resume ([LinkFailure.NoRanges], L419) says what no working link says, as it always did.
          */
         fun of(link: LinkFailure): PlaybackFailure = when (link) {
-            LinkFailure.NoWorkingLink -> service("No longer available from the service.", "No longer available from the TV's debrid service.")
+            LinkFailure.NoWorkingLink, LinkFailure.NoRanges -> service("No longer available from the service.", "No longer available from the TV's debrid service.")
             LinkFailure.NotCached -> service("This release is no longer cached.", "This release is no longer cached on the TV's debrid service.")
             LinkFailure.Removed -> PlaybackFailure(
                 "The debrid service removed this release, so it can’t be played from there.", releaseAtFault = true,

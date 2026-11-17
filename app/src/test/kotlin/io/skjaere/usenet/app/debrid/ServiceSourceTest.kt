@@ -419,6 +419,25 @@ class ServiceSourceTest {
     }
 
     /**
+     * L419: a server that won't resume, found at the probe, fails a play as no working link always did: in its words,
+     * remembered an hour against the account, and the next account tried.
+     */
+    @Test
+    fun `a server that won't resume at the probe fails a play as no working link, remembered so`() = runBlocking<Unit> {
+        accounts[A] = FakeService(ServiceKind.TorBox, mapOf(HASH to film))
+        val links = ServiceLinks(store, { id -> accounts[id] }, now = { 0L }, httpsOnly = { true })
+        val misses = ServiceMisses(NothingTried)
+        val source = ServiceSource({ id -> accounts[id] }, store, misses = misses, links = links)
+        val candidate = torrent(HASH)
+        val exhausted = assertIs<PipelineEvent.Exhausted>(pipeline(source, LinkProbe(links) { LinkFailure.NoRanges }).play(listOf(candidate), FilePicker.Largest).toList().last())
+        assertEquals(AttemptFailure.NoWorkingLink, exhausted.failedAttempts.single().second)
+        assertEquals(AttemptFailure.NoWorkingLink, misses.known(candidate, A))
+        val mapped = ServiceSource.linkFailureOf(LinkFailure.NoRanges, "service:$A")
+        assertEquals(AttemptFailure.NoWorkingLink, mapped)
+        assertTrue(ServiceSource.triesNextAccount(mapped))
+    }
+
+    /**
      * DFH-1: the probe failing to read a torrent's file for anything but a link no longer to be had (the CDN's host not
      * found, its TLS refused, its 5xx past Media3's retries) says so by its kind alone, never in the exception's words, which
      * name the host: no working link from that account, remembered an hour against it, and a phone told it in the TV's

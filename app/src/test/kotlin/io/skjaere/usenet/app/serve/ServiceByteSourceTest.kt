@@ -264,6 +264,31 @@ class ServiceByteSourceTest {
         assertEquals(listOf(0L, 200_000L), reads.opens.toList())
     }
 
+    /**
+     * L419: a server that won't resume ([LinkFailure.NoRanges]) is passed on as the refusal it is, at the open and as
+     * the file is opened again after a cut, and kept as any refusal is: the relay says nothing new for it.
+     */
+    @Test
+    fun `a server that won't resume fails as a refusal, at the open and at the open after a cut, and is kept`() {
+        val bytes = source()
+        reads.refuse = LinkFailure.NoRanges
+        assertEquals(LinkFailure.NoRanges, assertFailsWith<LinkUnavailable> { bytes.open(1_000_000) {} }.failure)
+        reads.refuse = null
+        assertEquals(LinkFailure.NoRanges, assertFailsWith<LinkUnavailable> { bytes.open(0) {} }.failure)
+        assertEquals(listOf(1_000_000L), reads.opens.toList())
+
+        val again = FakeReads().apply {
+            cuts += listOf(200_000L)
+            refusing += listOf(null, LinkFailure.NoRanges)
+        }
+        val cut = source(again)
+        val (before, failure) = cut.open(0) {}.readToFailure()
+        assertContentEquals(data.copyOf(200_000), before)
+        assertEquals(LinkFailure.NoRanges, assertIs<LinkUnavailable>(failure).failure)
+        assertEquals(LinkFailure.NoRanges, assertFailsWith<LinkUnavailable> { cut.open(0) {} }.failure)
+        assertEquals(listOf(0L, 200_000L), again.opens.toList())
+    }
+
     @Test
     fun `a close during a waiting read ends it, and the download closes its source itself`() {
         // A body that flows slowly: each read comes back, but the server finds nothing queued for a moment.

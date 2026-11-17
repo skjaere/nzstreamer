@@ -27,8 +27,17 @@ data class HttpLink(val url: String, val madeAtMs: Long, val name: String? = nul
 
 /** Why no link to a file can be had (L172, L204), in buckets that name no service but a refused key's. */
 sealed interface LinkFailure {
-    /** A fresh link failed as the one before it did, a 200 came to a ranged read, or a refresh brought no link (W81). */
+    /**
+     * A fresh link failed as the one before it did, the file's answer named no part of it (a 206 with no
+     * `Content-Range`), or a refresh brought no link (W81).
+     */
     data object NoWorkingLink : LinkFailure
+
+    /**
+     * The file's server won't resume it (L419): it answered a read from past the start with the whole file (a 200), or
+     * with a part from another byte. A play takes it as [NoWorkingLink]; a download starts its file again from 0, once.
+     */
+    data object NoRanges : LinkFailure
 
     /** The service no longer has the release cached. */
     data object NotCached : LinkFailure

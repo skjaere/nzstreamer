@@ -100,8 +100,8 @@ class UsenetLoadErrorHandlingPolicyTest {
     @Test
     fun aDebridLinkNoLongerToBeHadIsNotRetried() {
         val final = listOf(
-            LinkFailure.NoWorkingLink, LinkFailure.NotCached, LinkFailure.Removed, LinkFailure.Limit(1_200_000), LinkFailure.KeyRefused("TorBox"),
-            LinkFailure.Down, LinkFailure.Refused(tooLarge = true),
+            LinkFailure.NoWorkingLink, LinkFailure.NoRanges, LinkFailure.NotCached, LinkFailure.Removed, LinkFailure.Limit(1_200_000),
+            LinkFailure.KeyRefused("TorBox"), LinkFailure.Down, LinkFailure.Refused(tooLarge = true),
         )
         for (failure in final) {
             assertEquals(C.TIME_UNSET, delayFor(LinkUnavailable(failure)), "$failure")

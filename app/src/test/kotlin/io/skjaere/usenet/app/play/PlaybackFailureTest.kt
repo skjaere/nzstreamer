@@ -213,6 +213,8 @@ class PlaybackFailureTest {
         fun failure(reason: String, remote: String, atFault: Boolean = false) = PlaybackFailure(reason, releaseAtFault = atFault, remote = remote)
         fun of(link: LinkFailure) = PlaybackFailure.of(link)
         assertEquals(failure("No longer available from the service.", "No longer available from the TV's debrid service."), of(LinkFailure.NoWorkingLink))
+        // A server that won't resume (L419) says what no working link says, as it did before it had a kind of its own.
+        assertEquals(failure("No longer available from the service.", "No longer available from the TV's debrid service."), of(LinkFailure.NoRanges))
         assertEquals(failure("This release is no longer cached.", "This release is no longer cached on the TV's debrid service."), of(LinkFailure.NotCached))
         assertEquals(
             failure("The debrid service removed this release, so it can’t be played from there.", "The TV's debrid service removed this release.", atFault = true),
@@ -236,7 +238,7 @@ class PlaybackFailureTest {
         )
         assertEquals(failure("Too large for your debrid plan.", "Too large for the TV's debrid plan."), of(LinkFailure.Refused(tooLarge = true)))
         assertEquals(failure("The debrid service won’t play this release.", "The TV's debrid service won't play this release."), of(LinkFailure.Refused()))
-        val unnamed = listOf(LinkFailure.NoWorkingLink, LinkFailure.NotCached, LinkFailure.Removed, LinkFailure.Limit(60_000), LinkFailure.Down, LinkFailure.Refused(true), LinkFailure.Refused())
+        val unnamed = listOf(LinkFailure.NoWorkingLink, LinkFailure.NoRanges, LinkFailure.NotCached, LinkFailure.Removed, LinkFailure.Limit(60_000), LinkFailure.Down, LinkFailure.Refused(true), LinkFailure.Refused())
         unnamed.forEach { link ->
             listOf("TorBox", "Premiumize").forEach { name -> assertFalse(name in of(link).reason || name in of(link).remote, "$name in $link's words") }
             assertEquals(link == LinkFailure.Removed, of(link).releaseAtFault, "$link")
@@ -247,6 +249,7 @@ class PlaybackFailureTest {
     @Test
     fun `the player's error is read for a debrid link's failure, else a Usenet one, else its code`() {
         assertEquals(PlaybackFailure.of(LinkFailure.NoWorkingLink), PlaybackFailure.of(IOException("load failed", LinkUnavailable(LinkFailure.NoWorkingLink)), io))
+        assertEquals(PlaybackFailure.of(LinkFailure.NoWorkingLink), PlaybackFailure.of(IOException("load failed", LinkUnavailable(LinkFailure.NoRanges)), io))
         assertEquals(PlaybackFailure.of(LinkFailure.KeyRefused("TorBox")), PlaybackFailure.of(LinkUnavailable(LinkFailure.KeyRefused("TorBox")), PlaybackException.ERROR_CODE_DECODING_FAILED))
         val missing = UsenetDataSourceException(UsenetError.MissingArticle("<a@b>"), null, PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND)
         assertEquals(PlaybackFailure.of(UsenetError.MissingArticle("<a@b>"), io), PlaybackFailure.of(IOException("load failed", missing), io))

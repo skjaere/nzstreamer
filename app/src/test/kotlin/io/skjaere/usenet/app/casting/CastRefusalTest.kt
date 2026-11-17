@@ -55,6 +55,8 @@ class CastRefusalTest {
     fun `each kind's words, a refused key naming its service from data, and the routes a refusal stops`() {
         val words = mapOf(
             LinkFailure.NoWorkingLink to "No longer available from the service",
+            // A server that won't resume (L419): no working link's words, as before it had a kind of its own.
+            LinkFailure.NoRanges to "No longer available from the service",
             LinkFailure.NotCached to "No longer cached",
             LinkFailure.Removed to "Removed by the debrid service",
             LinkFailure.Limit(20 * 60_000L) to "The debrid service’s limit was reached · try again in about 20 min",
@@ -85,8 +87,8 @@ class CastRefusalTest {
     @Test
     fun `no host, link, release or account in any word`() {
         val failures = listOf(
-            LinkFailure.NoWorkingLink, LinkFailure.NotCached, LinkFailure.Removed, LinkFailure.Limit(5 * 60_000L), LinkFailure.KeyRefused("TorBox"),
-            LinkFailure.Down, LinkFailure.Refused(tooLarge = true), LinkFailure.Refused(),
+            LinkFailure.NoWorkingLink, LinkFailure.NoRanges, LinkFailure.NotCached, LinkFailure.Removed, LinkFailure.Limit(5 * 60_000L),
+            LinkFailure.KeyRefused("TorBox"), LinkFailure.Down, LinkFailure.Refused(tooLarge = true), LinkFailure.Refused(),
         )
         for (failure in failures) {
             val said = card(failure).reason.orEmpty()

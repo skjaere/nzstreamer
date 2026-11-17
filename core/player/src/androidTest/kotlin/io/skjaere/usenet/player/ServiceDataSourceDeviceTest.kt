@@ -38,11 +38,12 @@ import kotlin.concurrent.thread
  * A debrid play's source ([ServiceDataSource], L172, W81) over Media3's own HTTP source, against a server of its own on
  * this device's loopback address that counts what it is asked and what it sends: it asks for the file from where the
  * read starts itself, Media3 adding no Range of its own; a dead link gets one fresh link and opens again at the same
- * byte, a second dead answer or a refresh the service refuses being final; a 200 to a ranged read fails at once, having
- * read nothing past the headers; a link over 50 minutes old is replaced at the next open; the probe and the player
- * opening together ask for one link; the player sees the placeholder URI, never the link; the bytes reach the
- * stream-cost meter; and a body cut midway is opened again by Media3 at its byte. On a device: the JVM's android.jar
- * can't make the [Uri] a [DataSpec] holds. Invented names; the media is the module's own synthetic fixture.
+ * byte, a second dead answer or a refresh the service refuses being final; a 200 to a ranged read fails at once as a
+ * server that won't resume (L419), having read nothing past the headers; a link over 50 minutes old is replaced at
+ * the next open; the probe and the player opening together ask for one link; the player sees the placeholder URI, never
+ * the link; the bytes reach the stream-cost meter; and a body cut midway is opened again by Media3 at its byte. On a
+ * device: the JVM's android.jar can't make the [Uri] a [DataSpec] holds. Invented names; the media is the module's own
+ * synthetic fixture.
  */
 @RunWith(AndroidJUnit4::class)
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -317,7 +318,7 @@ class ServiceDataSourceDeviceTest {
         val e = assertThrows(LinkUnavailable::class.java) { source.open(spec(1_000_000)) }
         val tookMs = (System.nanoTime() - started) / 1_000_000
         source.close()
-        assertEquals(LinkFailure.NoWorkingLink, e.failure)
+        assertEquals(LinkFailure.NoRanges, e.failure)
         assertTrue("failed at once, not after reading to the place: $tookMs ms", tookMs < 2_000)
         assertEquals("not refreshed for", 1, links.asked.size)
         // Settled once the server saw the reader go: no more than what it wrote before asking.
