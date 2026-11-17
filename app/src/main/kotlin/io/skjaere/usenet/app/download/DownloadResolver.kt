@@ -2,6 +2,7 @@ package io.skjaere.usenet.app.download
 
 import android.annotation.SuppressLint
 import io.skjaere.usenet.app.AppContainer
+import io.skjaere.usenet.app.debrid.DebridListingStore
 import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.IMPORT_GONE
 import io.skjaere.usenet.app.play.MissingReleases
@@ -209,6 +210,18 @@ class DownloadResolver(
         /** The season packs' copies kept for [show]'s [season] (L431). */
         suspend fun packs(show: Int, season: Int): List<DownloadNzbs.Copy>
 
+        /** Keeps [entry], the listing of the torrent [id] downloads, in its bookkeeping folder (L420), written whole. */
+        suspend fun keepListing(id: String, entry: DebridListingStore.Entry)
+
+        /** The listing [keepListing] kept for [id]; null when it has none. */
+        suspend fun listing(id: String): DebridListingStore.Entry?
+
+        /** Marks [id]'s file as started again from 0 once (L419), until its source is dropped. */
+        suspend fun markRestarted(id: String)
+
+        /** Whether [id]'s file was started again from 0 ([markRestarted]). */
+        suspend fun restarted(id: String): Boolean
+
         companion object {
             fun of(storage: DownloadStorage): Storage = object : Storage {
                 override suspend fun keepSource(id: String, nzb: ByteArray, password: String?) = storage.keepSource(id, nzb, password)
@@ -224,6 +237,10 @@ class DownloadResolver(
                 override fun heldPrepare() = storage.packs.held()
                 override fun holdPrepare(key: String, prepared: PreparedNzb) = storage.packs.hold(key, prepared)
                 override suspend fun packs(show: Int, season: Int) = storage.packs.forSeason(show, season)
+                override suspend fun keepListing(id: String, entry: DebridListingStore.Entry) = storage.keepListing(id, entry)
+                override suspend fun listing(id: String) = storage.listing(id)
+                override suspend fun markRestarted(id: String) = storage.markRestarted(id)
+                override suspend fun restarted(id: String) = storage.restarted(id)
             }
         }
     }

@@ -12,6 +12,7 @@ import io.skjaere.nzbstreamer.nzb.FilenameResolver
 import io.skjaere.nzbstreamer.nzb.NzbDocument
 import io.skjaere.nzbstreamer.nzb.NzbParser
 import io.skjaere.nzbstreamer.stream.StreamableFile
+import io.skjaere.usenet.app.debrid.DebridListingStore
 import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.IMPORT_GONE
 import io.skjaere.usenet.app.play.MissingReleases
@@ -2344,12 +2345,15 @@ class DownloadResolverTest {
     }
 
     /**
-     * The download's places: its own NZB copies, the NZB kept for an attempt, the room on the device, the videos deleted, and
-     * the season packs' copies ([packs]: the app's own, in the test's folder), which a test replaces with a new process's.
+     * The download's places: its own NZB copies, the NZB kept for an attempt, a torrent's listing copy and restart mark, the
+     * room on the device, the videos deleted, and the season packs' copies ([packs]: the app's own, in the test's folder),
+     * which a test replaces with a new process's.
      */
     private class FakeStorage(var packs: DownloadNzbs) : DownloadResolver.Storage {
         val sources = mutableMapOf<String, DownloadStorage.Source>()
         val grabs = mutableMapOf<String, DownloadStorage.Grab>()
+        val listings = mutableMapOf<String, DebridListingStore.Entry>()
+        val restarts = mutableSetOf<String>()
 
         /** What was asked of it, in order, with the test's own steps beside. */
         val events = mutableListOf<String>()
@@ -2367,7 +2371,22 @@ class DownloadResolverTest {
             events += "drop source $id"
             sources.remove(id)
             grabs.remove(id)
+            listings.remove(id)
+            restarts.remove(id)
         }
+
+        override suspend fun keepListing(id: String, entry: DebridListingStore.Entry) {
+            events += "keep listing $id"
+            listings[id] = entry
+        }
+
+        override suspend fun listing(id: String) = listings[id]
+
+        override suspend fun markRestarted(id: String) {
+            restarts += id
+        }
+
+        override suspend fun restarted(id: String) = id in restarts
 
         override suspend fun keepGrab(id: String, key: String, nzb: ByteArray, password: String?) {
             grabs[id] = DownloadStorage.Grab(key, DownloadStorage.Source(nzb, password))

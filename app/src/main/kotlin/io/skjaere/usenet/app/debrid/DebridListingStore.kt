@@ -175,5 +175,14 @@ class DebridListingStore(
          */
         fun idFor(account: String, hash: InfoHash): String =
             MessageDigest.getInstance("SHA-256").digest("$account:${hash.hex}".toByteArray()).joinToString("") { "%02x".format(it) }.take(32)
+
+        /**
+         * [entry] as a download's own copy of its listing keeps it (L420), JSON as [file] holds entries: the account's id,
+         * the release's name and what the service prepared. Never a link or a key: [Prepared] serialises none.
+         */
+        fun copyOf(entry: Entry): String = json.encodeToString(Entry.serializer(), entry)
+
+        /** The entry a download's copy ([copyOf]) holds; throws where [copy] doesn't read as one. */
+        fun entryOf(copy: String): Entry = json.decodeFromString(Entry.serializer(), copy)
     }
 }

@@ -2,11 +2,13 @@ package io.skjaere.usenet.app.download
 
 import android.content.Context
 import android.os.storage.StorageManager
+import io.skjaere.usenet.app.debrid.DebridListingStore
 import io.skjaere.usenet.core.ContainerTypes
 import io.skjaere.usenet.data.Clock
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadDao
 import io.skjaere.usenet.data.DownloadState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -28,9 +30,10 @@ import java.nio.channels.FileChannel
  *   in `downloads/`. Its whole size is allocated before its first byte ([open]), so it can't run out of room part way.
  * - Each download's bookkeeping, in [filesDir]'s `downloads/<id>/`: the marker `.row`, made with the row ([add], a
  *   season's at once with [addAll]) and lasting as long as it; the NZB and its password, kept at Resolve (or with the
- *   row, for a file chosen by hand) and dropped once the file is complete, failed or cancelled; its poster and still,
- *   kept as long as the row ([DownloadImages], L411). Neither place goes in a backup or a transfer, so a row whose
- *   marker is missing came from another device ([reconcile]).
+ *   row, for a file chosen by hand), or for a torrent its listing's copy and the mark of its restart from 0 (L420), each
+ *   dropped once the file is complete, failed or cancelled; its poster and still, kept as long as the row
+ *   ([DownloadImages], L411). Neither place goes in a backup or a transfer, so a row whose marker is missing came from
+ *   another device ([reconcile]).
  * - A season pack's NZB and password, kept once for the season's downloads in filesDir's `downloads/.packs/` ([packs],
  *   L394) while one of them is still to finish; and an NZB opened on Import with the password typed for it, beside them,
  *   for the downloads of its files (L423), written with the row that needs it.
@@ -246,16 +249,50 @@ class DownloadStorage(
     }
 
     /**
-     * Deletes [id]'s NZB and password, and any kept for an attempt ([keepGrab]), once its file is complete, failed or
-     * cancelled; its folder and marker stay.
+     * Deletes [id]'s NZB and password, and any kept for an attempt ([keepGrab]), or its torrent's listing and restart mark
+     * ([keepListing], [markRestarted]), once its file is complete, failed or cancelled; its folder and marker stay.
      */
     suspend fun dropSource(id: String): Unit = withContext(io) {
         val folder = bookkeeping(id)
-        listOf(NZB, PASSWORD, GRAB, GRAB_KEY, GRAB_PASSWORD).forEach { name ->
+        listOf(NZB, PASSWORD, GRAB, GRAB_KEY, GRAB_PASSWORD, LISTING, RESTARTED).forEach { name ->
             File(folder, name).delete()
             File(folder, name + TMP).delete()
         }
     }
+
+    /**
+     * Keeps [entry], the listing of the torrent [id] downloads as its service prepared it (L420), in its bookkeeping
+     * folder ([DebridListingStore.copyOf]: the account's id, the release's name, its files with the service's ids and its
+     * handle; never a link or a key), written whole, then renamed: before its row takes the release, and again where the
+     * torrent is added again or comes from another account. A reopen finds its file in it.
+     */
+    suspend fun keepListing(id: String, entry: DebridListingStore.Entry): Unit = withContext(io) {
+        writeWhole(File(bookkeeping(id), LISTING), DebridListingStore.copyOf(entry).toByteArray())
+    }
+
+    /** The listing [keepListing] kept for [id]; null when it has none, or one that doesn't read, which is then resolved again. */
+    suspend fun listing(id: String): DebridListingStore.Entry? = withContext(io) {
+        val copy = File(bookkeeping(id), LISTING).takeIf { it.isFile } ?: return@withContext null
+        try {
+            DebridListingStore.entryOf(copy.readText())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("Download {}: its listing's copy didn't read: {}", id, e.javaClass.simpleName)
+            null
+        }
+    }
+
+    /**
+     * Marks [id]'s file as started again from 0, its server having answered a resume with another part (L419): a second
+     * such answer, in this process or a later one, fails it. Dropped with its source ([dropSource]).
+     */
+    suspend fun markRestarted(id: String): Unit = withContext(io) {
+        writeWhole(File(bookkeeping(id), RESTARTED), ByteArray(0))
+    }
+
+    /** Whether [id]'s file was started again from 0 ([markRestarted]), its source not dropped since. */
+    suspend fun restarted(id: String): Boolean = withContext(io) { File(bookkeeping(id), RESTARTED).isFile }
 
     /**
      * Keeps the NZB grabbed for [id]'s release [key] as Resolve tries it, with its [password] (none: no file), until that
@@ -429,6 +466,10 @@ class DownloadStorage(
         const val GRAB = "grab"
         const val GRAB_PASSWORD = "grab-password"
         const val GRAB_KEY = "grab-key"
+
+        /** A torrent's listing, as its service prepared it ([keepListing]), and the mark of its file's restart from 0 ([markRestarted]). */
+        const val LISTING = "listing"
+        const val RESTARTED = "restarted"
         const val NOMEDIA = ".nomedia"
         const val PART = ".part"
         private const val TMP = ".tmp"

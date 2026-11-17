@@ -6,6 +6,7 @@ import io.skjaere.nzbstreamer.metadata.ExtractedMetadata
 import io.skjaere.nzbstreamer.metadata.NzbMetadataResponse
 import io.skjaere.nzbstreamer.nzb.NzbDocument
 import io.skjaere.nzbstreamer.stream.StreamableFile
+import io.skjaere.usenet.app.debrid.DebridListingStore
 import io.skjaere.usenet.app.download.DownloadResolver.Resolution
 import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.MissingReleases
@@ -2757,8 +2758,8 @@ class DownloadRunnerTest {
 
     /**
      * The downloads' places as DownloadStorage lays them out, in the test's folder: the bookkeeping (its marker, NZB and
-     * password) under `files/`, the video under `volume/downloads/<id>/`, `.part` until finished. What each call did, in
-     * order, goes in [events].
+     * password, or a torrent's listing copy and restart mark) under `files/`, the video under `volume/downloads/<id>/`,
+     * `.part` until finished. What each call did, in order, goes in [events].
      */
     private inner class FakeStorage : DownloadRunner.Storage {
         private val files = File(dir, "files")
@@ -2869,8 +2870,24 @@ class DownloadRunnerTest {
         override suspend fun dropSource(id: String) {
             beforeDropSource()
             events += "drop source $id"
-            listOf("nzb", "password", DownloadStorage.GRAB, DownloadStorage.GRAB_PASSWORD, DownloadStorage.GRAB_KEY).forEach { File(bookkeeping(id), it).delete() }
+            listOf("nzb", "password", DownloadStorage.GRAB, DownloadStorage.GRAB_PASSWORD, DownloadStorage.GRAB_KEY, DownloadStorage.LISTING, DownloadStorage.RESTARTED)
+                .forEach { File(bookkeeping(id), it).delete() }
         }
+
+        override suspend fun keepListing(id: String, entry: DebridListingStore.Entry) {
+            events += "keep listing $id"
+            File(bookkeeping(id), DownloadStorage.LISTING).writeText(DebridListingStore.copyOf(entry))
+        }
+
+        override suspend fun listing(id: String) =
+            File(bookkeeping(id), DownloadStorage.LISTING).takeIf { it.isFile }?.readText()?.let(DebridListingStore::entryOf)
+
+        override suspend fun markRestarted(id: String) {
+            events += "mark restarted $id"
+            File(bookkeeping(id), DownloadStorage.RESTARTED).createNewFile()
+        }
+
+        override suspend fun restarted(id: String) = File(bookkeeping(id), DownloadStorage.RESTARTED).isFile
 
         /** Called as a delete begins, before anything of it goes: a case's wait in the middle of a run's deletes. */
         var onDelete: suspend (id: String) -> Unit = {}

@@ -6,6 +6,7 @@ import android.os.storage.StorageManager
 import android.system.Os
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import io.skjaere.usenet.app.debrid.DebridListingStore
 import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
@@ -15,6 +16,10 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.LibraryDatabase
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.debrid.InfoHash
+import io.skjaere.usenet.debrid.Prepared
+import io.skjaere.usenet.debrid.ServiceFile
+import io.skjaere.usenet.debrid.ServiceListing
 import io.skjaere.usenet.releases.ReleaseKey
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
@@ -41,9 +46,10 @@ import kotlin.random.Random
 /**
  * Where a download's files live and how they come and go (L346, L348, L350, C8), on this device's own storage: the video in
  * the app's folder on the primary volume, `.part` until it is renamed, beside a `.nomedia`; the bookkeeping in filesDir,
- * its marker made with the row, its NZB and password while it needs them; the whole size allocated before the first byte;
- * reconcile at start, which keeps the season packs' copies' folder and sweeps it, an imported NZB's copy with them; and a
- * delete that a process dying part way through leaves for the next start to finish.
+ * its marker made with the row, its NZB and password (or a torrent's listing copy and restart mark) while it needs them;
+ * the whole size allocated before the first byte; reconcile at start, which keeps the season packs' copies' folder and
+ * sweeps it, an imported NZB's copy with them; and a delete that a process dying part way through leaves for the next
+ * start to finish.
  *
  * The places are checked on the real folders, with ids of the test's own, deleted after. Reconcile and the deletes run over
  * folders of the test's own, so they never meet the app's own downloads. Files are 16 MB at most.
@@ -642,6 +648,73 @@ class DownloadStorageDeviceTest {
         assertFalse(there.bookkeeping("done").exists())
     }
 
+    /**
+     * L420: a torrent's download keeps the listing its service prepared beside its marker, written whole, then renamed, so
+     * a copy half written (a process dying part way) is never read; and the mark of its restart from 0. Both read back as
+     * written, go with its source once it is done, failed or cancelled, and the folder and marker stay.
+     */
+    @Test
+    fun aTorrentsListingAndItsRestartMarkAreKeptBesideTheMarkerUntilDropped() = runBlocking<Unit> {
+        val storage = storage()
+        storage.add(row("torrent"))
+        assertNull(storage.listing("torrent"))
+        assertFalse(storage.restarted("torrent"))
+
+        storage.keepListing("torrent", LISTING)
+        assertEquals(LISTING, storage.listing("torrent"))
+        assertEquals(setOf(".row", "listing"), storage.bookkeeping("torrent").list()!!.toSet())
+        // Written again (the torrent added again, or from the next account): the newer one, whole.
+        storage.keepListing("torrent", READDED)
+        assertEquals(READDED, storage.listing("torrent"))
+        // A copy half written by a process that died beside it isn't read; one that doesn't read is none, resolved again.
+        File(storage.bookkeeping("torrent"), "listing.tmp").writeText("{\"id\":")
+        assertEquals(READDED, storage.listing("torrent"))
+
+        storage.markRestarted("torrent")
+        assertTrue(storage.restarted("torrent"))
+        storage.markRestarted("torrent")
+        assertTrue("marked again: still marked", storage.restarted("torrent"))
+        assertEquals(setOf(".row", "listing", "listing.tmp", "restarted"), storage.bookkeeping("torrent").list()!!.toSet())
+
+        storage.dropSource("torrent")
+        assertNull(storage.listing("torrent"))
+        assertFalse(storage.restarted("torrent"))
+        assertEquals(setOf(".row"), storage.bookkeeping("torrent").list()!!.toSet())
+
+        File(storage.bookkeeping("torrent"), "listing").writeText("not a listing")
+        assertNull(storage.listing("torrent"))
+    }
+
+    /**
+     * L420: reconcile leaves a torrent's listing copy and restart mark while its row is there, still to finish, as it
+     * leaves an NZB; a folder with no row goes with its listing; and the row deleted, they go with its folder.
+     */
+    @Test
+    fun reconcileLeavesATorrentsListingAndRestartMarkWhileItsRowIsThere() = runBlocking<Unit> {
+        val storage = storage()
+        val running = row("torrent").copy(state = DownloadState.Running).also { storage.add(it) }
+        storage.keepListing("torrent", LISTING)
+        storage.markRestarted("torrent")
+        storage.open("torrent", NAME, 4096).close()
+        // What a process left as it died before its row was there.
+        File(files, "downloads/left-over").mkdirs()
+        File(files, "downloads/left-over/listing").writeText(DebridListingStore.copyOf(LISTING))
+
+        storage.reconcile()
+
+        assertEquals(running, downloads.get("torrent"))
+        assertEquals(LISTING, storage.listing("torrent"))
+        assertTrue(storage.restarted("torrent"))
+        assertTrue(File(volume, "downloads/torrent/v.mkv.part").isFile)
+        assertFalse(File(files, "downloads/left-over").exists())
+
+        storage.delete("torrent")
+        assertNull(downloads.get("torrent"))
+        assertFalse(storage.bookkeeping("torrent").exists())
+        assertNull(storage.listing("torrent"))
+        assertFalse(storage.restarted("torrent"))
+    }
+
     /** [id]'s row as finished, its file at its place; what the row now is. */
     private suspend fun finished(id: String, storage: DownloadStorage): Download {
         val row = downloads.get(id)!!.copy(
@@ -675,5 +748,15 @@ class DownloadStorageDeviceTest {
         const val QM_NZB = "5b1c9d0e7f3a2b4c6d8e0f1a3b5c7d9e1f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c"
         const val OTHER_NZB = "9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8c"
         const val QM_TITLE = "Quiet.Meridian.S01.1080p.WEB.h264-WREN"
+
+        /** A torrent's listing as TorBox prepared it for an invented account, and the same torrent added again (L420). */
+        private val CROWN_HASH = InfoHash.of("c0ffee11c0ffee22c0ffee33c0ffee44c0ffee55")
+        private const val ACCOUNT = "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0"
+        private val CROWN_FILE = ServiceFile(0, "Copper.Crown.2019.1080p.WEB-DL.H.264-KESTREL.mkv", 1_400_000_000, "3")
+        val LISTING = DebridListingStore.Entry(
+            DebridListingStore.idFor(ACCOUNT, CROWN_HASH), ACCOUNT, "Copper Crown",
+            Prepared(CROWN_HASH, ServiceListing(listOf(CROWN_FILE)), CROWN_FILE, handle = "5021337"),
+        )
+        val READDED = LISTING.copy(prepared = Prepared(CROWN_HASH, ServiceListing(listOf(CROWN_FILE.copy(id = "8"))), CROWN_FILE.copy(id = "8"), handle = "5021338"))
     }
 }

@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteFullException
 import android.os.Build
 import io.skjaere.usenet.app.AppContainer
+import io.skjaere.usenet.app.debrid.DebridListingStore
 import io.skjaere.usenet.app.download.DownloadResolver.Resolution
 import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.MissingReleases
@@ -378,6 +379,18 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         /** The season packs' copies kept now ([DownloadNzbs.copies]). */
         val copies: StateFlow<List<DownloadNzbs.Meta>>
 
+        /** Keeps [entry], the listing of the torrent [id] downloads, in its bookkeeping folder (L420), written whole. */
+        suspend fun keepListing(id: String, entry: DebridListingStore.Entry)
+
+        /** The listing [keepListing] kept for [id]; null when it has none. */
+        suspend fun listing(id: String): DebridListingStore.Entry?
+
+        /** Marks [id]'s file as started again from 0 once (L419), until its source is dropped. */
+        suspend fun markRestarted(id: String)
+
+        /** Whether [id]'s file was started again from 0 ([markRestarted]). */
+        suspend fun restarted(id: String): Boolean
+
         companion object {
             fun of(storage: DownloadStorage): Storage = object : Storage {
                 override suspend fun add(row: Download, grab: DownloadStorage.Grab?, copy: DownloadNzbs.Copy?) = storage.add(row, grab, copy)
@@ -400,6 +413,10 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 override fun volumeThere() = storage.volumeThere()
                 override suspend fun sweepPacks(removed: Set<String>) = storage.sweepPacks(removed)
                 override val copies = storage.packs.copies
+                override suspend fun keepListing(id: String, entry: DebridListingStore.Entry) = storage.keepListing(id, entry)
+                override suspend fun listing(id: String) = storage.listing(id)
+                override suspend fun markRestarted(id: String) = storage.markRestarted(id)
+                override suspend fun restarted(id: String) = storage.restarted(id)
             }
         }
     }
