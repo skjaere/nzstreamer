@@ -47,9 +47,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.getAndUpdate
@@ -85,8 +83,8 @@ class LibraryWrites(private val library: LibraryRepository) : CollectionWrites {
 /**
  * What the collection screen reads and writes. [writeScope] outlives the screen (the app's scope), so
  * leaving it can't stop a removal or a mark halfway; [dispatcher] builds the list off the main thread.
- * [downloaded]: the finished downloads by title, for the Downloaded chip and the rows' marks (L408), telling nothing until
- * the runner has read them; none (null) unless downloads show where the screen is ([of]'s `shown`), so a TV's grid, which
+ * [downloaded]: the finished downloads by title, for the Downloaded chip and the rows' marks (L408), null until the runner
+ * has read them; none (a null flow) unless downloads show where the screen is ([of]'s `shown`), so a TV's grid, which
  * shares the model, has none.
  */
 class CollectionDeps(
@@ -103,7 +101,7 @@ class CollectionDeps(
     val writeScope: CoroutineScope,
     val clock: Clock,
     val dispatcher: CoroutineDispatcher = Dispatchers.Default,
-    val downloaded: Flow<Map<TitleKey, Downloaded>>? = null,
+    val downloaded: Flow<Map<TitleKey, Downloaded>?>? = null,
 ) {
     companion object {
         /** The app's, with its runner's finished downloads where they are [shown] (downloadsShown()). */
@@ -115,10 +113,10 @@ class CollectionDeps(
         )
 
         /**
-         * The app runner's finished downloads by title where they are [shown], once it has read them ([DownloadRunner.doneRead]);
-         * none elsewhere, as on a TV (L408).
+         * The app runner's finished downloads by title where they are [shown], null until it has read them
+         * ([DownloadRunner.doneRead]); none elsewhere, as on a TV (L408).
          */
-        fun downloaded(c: AppContainer, shown: Boolean): Flow<Map<TitleKey, Downloaded>>? =
+        fun downloaded(c: AppContainer, shown: Boolean): Flow<Map<TitleKey, Downloaded>?>? =
             if (shown) DownloadedTitles.flow(c.downloads.doneRead) else null
     }
 }
@@ -269,15 +267,12 @@ class CollectionViewModel(private val deps: CollectionDeps, private val saved: S
     }
 
     /**
-     * The finished downloads by title: null until they are read, so the list shows at once and a saved Downloaded isn't
-     * judged by the runner's empty start; always null where none are given (L408).
+     * The finished downloads by title: null until the runner has read them, so the list shows at once and a saved
+     * Downloaded isn't judged by the runner's empty start; always null where none are given (L408). The null is the
+     * runner's own, so only a process just started shows it: the list built again (the screen back after five seconds)
+     * is told the downloads at once.
      */
-    private val downloadedRead: Flow<Map<TitleKey, Downloaded>?> = deps.downloaded?.let { given ->
-        flow {
-            emit(null)
-            emitAll(given.distinctUntilChanged())
-        }
-    } ?: flowOf(null)
+    private val downloadedRead: Flow<Map<TitleKey, Downloaded>?> = deps.downloaded?.distinctUntilChanged() ?: flowOf(null)
 
     /** Null until the saved view and the side's rows are known: no default sort or empty list flashes up first. */
     val ui: StateFlow<CollectionUi?> = combine(

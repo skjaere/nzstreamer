@@ -626,8 +626,12 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         return row
     }
 
-    /** The finished downloads by watch key as the library last said them: null until it first has. */
-    private val finished: StateFlow<Map<String, Download>?> = if (!runs) {
+    /**
+     * The finished downloads by watch key as the library last said them, null until it first has: so a reader tells none
+     * from not read yet, as [done] starts empty either way (L408's Downloaded filter), and one reading them again is told
+     * them at once. Empty on a TV.
+     */
+    val doneRead: StateFlow<Map<String, Download>?> = if (!runs) {
         MutableStateFlow(emptyMap())
     } else {
         dao.done().map { rows -> rows.associateBy { it.watchKey } }.stateIn(scope, SharingStarted.Eagerly, null)
@@ -637,14 +641,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     val done: StateFlow<Map<String, Download>> = if (!runs) {
         MutableStateFlow(emptyMap())
     } else {
-        finished.filterNotNull().stateIn(scope, SharingStarted.Eagerly, emptyMap())
+        doneRead.filterNotNull().stateIn(scope, SharingStarted.Eagerly, emptyMap())
     }
-
-    /**
-     * [done] as the library says it, nothing told before it first has: so a reader tells none from not read yet, as [done]
-     * starts empty either way (L408's Downloaded filter). None on a TV.
-     */
-    val doneRead: Flow<Map<String, Download>> = finished.filterNotNull()
 
     init {
         // The boot and update receiver follows the rows (L375): on while the host is the service and something can run.

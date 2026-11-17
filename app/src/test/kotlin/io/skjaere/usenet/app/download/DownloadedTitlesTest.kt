@@ -89,14 +89,26 @@ class DownloadedTitlesTest {
     @Test
     fun `told again only when what the marks say changes`() = runTest(UnconfinedTestDispatcher()) {
         val done = MutableStateFlow(mapOf("a" to episode(1, 2, 1)))
-        val told = mutableListOf<Map<TitleKey, Downloaded>>()
+        val told = mutableListOf<Map<TitleKey, Downloaded>?>()
         val job = launch { DownloadedTitles.flow(done).toList(told) }
         // A row the hook doesn't take, and the same row written again with another time: the marks say the same.
         done.value = done.value + ("b" to episode(1, 2, 2).copy(release = null))
         done.value = done.value + ("a" to episode(1, 2, 1).copy(updatedAt = 9))
         done.value = done.value + ("c" to episode(1, 2, 3))
         job.cancel()
-        assertEquals(listOf(mapOf(TitleKey.show(1) to Downloaded(1, 1_300_000_000)), mapOf(TitleKey.show(1) to Downloaded(2, 2_600_000_000))), told)
+        assertEquals(listOf<Map<TitleKey, Downloaded>?>(mapOf(TitleKey.show(1) to Downloaded(1, 1_300_000_000)), mapOf(TitleKey.show(1) to Downloaded(2, 2_600_000_000))), told)
+    }
+
+    /** The runner not having read its finished downloads yet is told apart from its having none (L408's saved filter). */
+    @Test
+    fun `nothing read yet is told apart from no download`() = runTest(UnconfinedTestDispatcher()) {
+        val done = MutableStateFlow<Map<String, Download>?>(null)
+        val told = mutableListOf<Map<TitleKey, Downloaded>?>()
+        val job = launch { DownloadedTitles.flow(done).toList(told) }
+        done.value = emptyMap()
+        done.value = mapOf("a" to episode(1, 2, 1))
+        job.cancel()
+        assertEquals(listOf(null, emptyMap(), mapOf(TitleKey.show(1) to Downloaded(1, 1_300_000_000))), told)
     }
 
     /** What TalkBack adds to a collection row's sentence: a show's count of episodes, a film's word alone. */

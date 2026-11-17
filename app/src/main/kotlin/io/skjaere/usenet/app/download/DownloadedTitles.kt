@@ -24,11 +24,12 @@ object DownloadedTitles {
         .mapValues { (_, rows) -> rows.distinctBy { it.watchKey }.let { Downloaded(it.size, it.sumOf { row -> row.size ?: row.indexerSize }) } }
 
     /**
-     * [done] (the runner's, by watch key) as the Collection reads it: told only when what the marks say changes, as the
-     * runner tells its map again whenever a finished row is written, so the Collection's thousands of rows aren't viewed
-     * again for nothing.
+     * [done] (the runner's, by watch key, null until it has read them: [DownloadRunner.doneRead]) as the Collection reads
+     * it: told only when what the marks say changes, as the runner tells its map again whenever a finished row is written,
+     * so the Collection's thousands of rows aren't viewed again for nothing.
      */
-    fun flow(done: Flow<Map<String, Download>>): Flow<Map<TitleKey, Downloaded>> = done.map { of(it.values) }.distinctUntilChanged()
+    fun flow(done: Flow<Map<String, Download>?>): Flow<Map<TitleKey, Downloaded>?> =
+        done.map { read -> read?.let { of(it.values) } }.distinctUntilChanged()
 
     /** The watch keys whose download plays from its file: what Up next's rows look for ([io.skjaere.usenet.app.home.UpNextRow.watchKey]). */
     fun keys(done: Map<String, Download>): Set<String> = done.values.filter(::counts).mapTo(HashSet()) { it.watchKey }

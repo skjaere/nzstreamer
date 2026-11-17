@@ -36,11 +36,11 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
@@ -90,7 +90,7 @@ class CollectionViewModelTest {
 
     /**
      * [downloads]: the finished downloads by title, as a phone's runner tells them ([downloaded]: null until the runner has
-     * read them, when nothing is told); none given, as a TV's deps have.
+     * read them); none given, as a TV's deps have.
      */
     private inner class Fixture(scope: TestScope, prefs: Flow<CollectionViewPrefs>? = null, downloads: Boolean = true) {
         val dispatcher = StandardTestDispatcher(scope.testScheduler)
@@ -110,7 +110,7 @@ class CollectionViewModelTest {
                 prefs = prefs ?: stored,
                 savePrefs = { change -> holdSave?.await(); stored.value = change(stored.value).also { saved += it } },
                 hasKey = MutableStateFlow(true), showArtwork = MutableStateFlow(true), today = MutableStateFlow(today),
-                writeScope = writeScope, clock = SchedulerClock(scope.testScheduler), dispatcher = dispatcher, downloaded = downloaded.filterNotNull(),
+                writeScope = writeScope, clock = SchedulerClock(scope.testScheduler), dispatcher = dispatcher, downloaded = downloaded,
             )
         } else {
             // As a TV's are built: no downloads given, the default.
@@ -620,6 +620,36 @@ class CollectionViewModelTest {
         runCurrent()
         assertEquals("All", vm.ui.value?.filterName)
         assertEquals(3, vm.ui.value?.view?.rows?.size)
+    }
+
+    /**
+     * L408: the screen subscribing again once the downloads are read (back on the tab after more than five seconds, or from
+     * the player) is told them at once: no list goes by with a saved Downloaded read as All or without its chip.
+     */
+    @Test
+    fun `a screen subscribing again after the downloads are read never sees its Downloaded filter as All`() = runTest {
+        val f = Fixture(this)
+        f.stored.value = CollectionViewPrefs(showFilter = "Downloaded")
+        f.downloaded.value = mapOf(harbor.key to Downloaded(3, 4_100_000_000))
+        f.shows.value = listOf(harbor, orbit, copper)
+        val vm = f.vm()
+        val first = subscribed(vm)
+        assertEquals("Downloaded", vm.ui.value?.filterName)
+        first.cancel()
+        // Past the five seconds the list is kept for with no screen: built again from what it reads.
+        advanceTimeBy(6_000)
+        runCurrent()
+
+        val seen = mutableListOf<CollectionUi>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.ui.collect { ui -> ui?.let(seen::add) } }
+        runCurrent()
+        // A download since: the list built again follows it.
+        f.downloaded.value = mapOf(harbor.key to Downloaded(3, 4_100_000_000), orbit.key to Downloaded(1, 1))
+        runCurrent()
+        assertEquals(listOf("Harbor Lights", "The Quiet Orbit"), seen.last().view.rows.map { it.text.name }.sorted())
+        assertEquals(emptyList(), seen.filter { it.filterName != "Downloaded" }.map { it.filterName }, "a list told with its filter as All")
+        assertTrue(seen.all { ui -> ui.view.chips.any { it.name == "Downloaded" } }, "a list told without the Downloaded chip")
+        assertEquals(emptyList(), f.saved)
     }
 
     /** A TV's view model, with no downloads (L408): a saved Downloaded reads as All, with no chip, and is never saved over. */

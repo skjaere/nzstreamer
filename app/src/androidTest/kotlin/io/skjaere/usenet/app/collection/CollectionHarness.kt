@@ -49,7 +49,7 @@ class CollectionHarness(
     prefs: CollectionViewPrefs = CollectionViewPrefs(),
     hasKey: Boolean = true,
     posters: Boolean = false,
-    downloaded: Flow<Map<TitleKey, Downloaded>>? = null,
+    downloaded: Flow<Map<TitleKey, Downloaded>?>? = null,
 ) : AutoCloseable {
     val clock: Clock = Clock.fixed(Instant.parse("2026-10-14T12:00:00Z"), ZoneOffset.UTC)
     val fixture = ScaleFixture(LocalDate.now(clock), clock.millis(), shows, movies, posters)
