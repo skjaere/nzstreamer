@@ -139,6 +139,8 @@ class HomeOfflineDeviceTest {
     fun setUp() {
         assertFalse("a phone", container.television)
         runBlocking {
+            // The debug build's start saves its dev settings: before the test reads or takes any.
+            withTimeout(SEEDING_MILLIS) { container.devSettingsSaved.await() }
             saved = container.settings.settings.first()
             container.settings.indexers.first().filter { it.enabled }.forEach { container.settings.setIndexerEnabled(it.id, false) }
         }
@@ -451,6 +453,7 @@ class HomeOfflineDeviceTest {
         const val POSITION_MS = 120_000L
 
         const val LAUNCH_MILLIS = 15_000L
+        const val SEEDING_MILLIS = 60_000L
         const val READY_MILLIS = 30_000L
     }
 }

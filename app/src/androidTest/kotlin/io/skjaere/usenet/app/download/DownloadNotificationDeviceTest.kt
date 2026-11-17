@@ -48,6 +48,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -393,6 +394,8 @@ class DownloadNotificationDeviceTest {
      * counting), TMDB's seams a strict fake knowing only [PLAYED], and the player's lookups none.
      */
     private suspend fun quiet() {
+        // The debug build's start saves its dev settings: before the test reads or takes any.
+        withTimeout(SEEDING_MILLIS) { container.devSettingsSaved.await() }
         saved = container.settings.settings.first()
         container.settings.indexers.first().filter { it.enabled }.forEach { container.settings.setIndexerEnabled(it.id, false) }
         tmdb = FakeTmdb(
@@ -521,5 +524,6 @@ class DownloadNotificationDeviceTest {
         /** The device tests' film with chapters: six minutes at 10 fps, 0.7 MB. */
         const val MEDIA = "chapters.mkv"
         const val READY_MILLIS = 30_000L
+        const val SEEDING_MILLIS = 60_000L
     }
 }
