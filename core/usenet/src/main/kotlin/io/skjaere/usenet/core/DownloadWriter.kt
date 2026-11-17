@@ -20,8 +20,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
-import java.io.IOException
-import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration
@@ -40,11 +38,12 @@ import kotlin.time.TimeSource
  * filled with zeros asked for once more. One write at a time; it blocks on the file in place, so it is called on a
  * dispatcher that may block.
  *
- * **The record.** Every [recordBytes] (32 MiB) or [recordEvery] (10 s), at each failure and at the end, the file is forced
- * to storage, then the caller records the safe offset (every byte before it written and forced) with the stretches missing
- * so far. A stream says each stretch it fills before its zeros come ([OpenedStream.gaps]), so the record that passes one
- * names it. A power cut can lose the last record, never put it ahead of the data. A cancelled write (a pause, a cancel,
- * the host ending) records what it forced before it ends: a caller that changes the row after a cancel joins it first.
+ * **The record** is the file's ([RecordedFile]): every [recordBytes] (32 MiB) or [recordEvery] (10 s), at each failure and
+ * at the end, the file is forced to storage, then the caller records the safe offset (every byte before it written and
+ * forced) with the stretches missing so far. A stream says each stretch it fills before its zeros come
+ * ([OpenedStream.gaps]), so the record that passes one names it. A power cut can lose the last record, never put it ahead
+ * of the data. A cancelled write (a pause, a cancel, the host ending) records what it forced before it ends: a caller that
+ * changes the row after a cancel joins it first.
  *
  * **Failures** are sorted by what ended the stream ([ByteReadChannel.closedCause][io.ktor.utils.io.ByteReadChannel.closedCause],
  * or the open's failure; C11, L382):
@@ -167,21 +166,21 @@ class DownloadWriter(
         check(writing.compareAndSet(false, true)) { "One write at a time" }
         val run = Run(id, nzb, file, out, from, gaps, record)
         try {
-            rate = run.rate
+            rate = run.out.rate
             _live.value = Live(id, from, unreachable = false)
             log.info("download {}: writing from byte {} of {}, {} stretch{} missing so far", id, from, file.size, gaps.size, plural(gaps.size, "es"))
             return try {
                 wakes.watching { transfer(run, onOpen) ?: finish(run) }
-            } catch (e: StorageFailure) {
+            } catch (e: RecordedFile.StorageFailure) {
                 // What is written in front of it stays, as far as storage keeps it: Try again goes on from there.
                 log.warn(
                     "download {}: writing at {} of {} bytes failed: {}", id, run.written, run.size, if (e.full) "storage full" else e.cause::class.simpleName,
                 )
-                run.saveQuietly()
-                Outcome.Failed(if (e.full) STORAGE_FULL else WRITE_FAILED)
+                run.out.saveQuietly()
+                Outcome.Failed(e.reason)
             }
         } catch (e: CancellationException) {
-            withContext(NonCancellable) { run.saveQuietly() }
+            withContext(NonCancellable) { run.out.saveQuietly() }
             log.info("download {}: stopped at {} of {} bytes", id, run.written, run.size)
             throw e
         } finally {
@@ -228,7 +227,7 @@ class DownloadWriter(
                     // engine has checked that provider again. Only an hour of it gives the release up.
                     askedAgain = stretch
                     run.goBack(stretch)
-                    run.save()
+                    run.out.save()
                     log.info(
                         "download {}: {} bytes or more missing in a row with a provider left out: asking for them again from byte {} in {} s",
                         run.id, longGapBytes, run.written, wait.inWholeSeconds,
@@ -250,7 +249,7 @@ class DownloadWriter(
                 outOfReach = null
             }
             // What came is kept: a reopen starts there.
-            run.save()
+            run.out.save()
             if (ended.cause == null) {
                 // Ended short again where the stream before it did, with nothing between: the release can't give the bytes
                 // past it (its layout only guesses the file's size, its last articles not in the NZB), and no reopen will.
@@ -295,8 +294,8 @@ class DownloadWriter(
                 }
                 Into.Again -> Unit
             }
-            run.unreachable = sorted.into == Into.Unreachable
-            run.said()
+            run.out.unreachable = sorted.into == Into.Unreachable
+            run.out.said()
             log.info(
                 "download {}: its stream ended at {} of {} bytes ({}{}); opening it again in {} s",
                 run.id, run.written, run.size, sorted.kind, if (misses > 0) ", $misses of $MAX_NO_PROGRESS with no progress" else "", wait.inWholeSeconds,
@@ -344,7 +343,7 @@ class DownloadWriter(
                 }
                 if (longGap.get()) return Ended.LongGap
                 if (n < 0) break
-                run.took(n)
+                run.out.took(n)
                 pace?.took(n)
             }
             return when {
@@ -365,7 +364,7 @@ class DownloadWriter(
      * end to ask once the wait is over.
      */
     private suspend fun finish(run: Run): Outcome {
-        run.save()
+        run.out.save()
         val missing = run.known.all()
         if (missing.isNotEmpty()) {
             val left = mutableListOf<LongRange>()
@@ -374,7 +373,7 @@ class DownloadWriter(
                     is Asked.Answered -> left += asked.missing
                     is Asked.Stopped -> {
                         run.known = StreamGaps().apply { (left + asked.missing + missing.drop(i + 1)).forEach(::add) }
-                        run.save()
+                        run.out.save()
                         log.info("download {}: written, {} of {} missing stretch{} asked for again before it waits", run.id, i, missing.size, plural(missing.size, "es"))
                         return asked.outcome
                     }
@@ -383,7 +382,7 @@ class DownloadWriter(
             val whole = missing.count { gap -> left.none { it.first >= gap.first && it.last <= gap.last } }
             log.info("download {}: {} of {} missing stretch{} came whole when asked for again", run.id, whole, missing.size, plural(missing.size, "es"))
             run.known = StreamGaps().apply { left.forEach(::add) }
-            run.save()
+            run.out.save()
         }
         val gaps = run.known.all()
         log.info("download {}: written, {} bytes, {} stretch{} missing", run.id, run.size, gaps.size, plural(gaps.size, "es"))
@@ -434,8 +433,8 @@ class DownloadWriter(
                 Into.Offline -> outOfReach = null
                 Into.Again -> Unit
             }
-            run.unreachable = sorted.into == Into.Unreachable
-            run.said()
+            run.out.unreachable = sorted.into == Into.Unreachable
+            run.out.said()
             log.info(
                 "download {}: asking for the {} missing bytes at {} again failed ({}); asking again in {} s",
                 run.id, rest.last - rest.first + 1, rest.first, sorted.kind, wait.inWholeSeconds,
@@ -481,7 +480,7 @@ class DownloadWriter(
                     failure = opened.channel.closedCause
                     break
                 }
-                run.writeAt(at, n, advance = false)
+                run.out.writeAt(at, n, advance = false)
                 at += n
                 pace?.took(n)
             }
@@ -550,33 +549,35 @@ class DownloadWriter(
         class Failed(val cause: Throwable?) : Ended
     }
 
-    /** One write's state: its file, how far it is written and recorded, what is missing, its rate. */
+    /**
+     * One write's state: its file of the release and what is missing, over the download's own file ([out]), which is how
+     * far it is written and recorded, and its rate.
+     */
     private inner class Run(
         val id: String,
         val nzb: PreparedNzb,
         val file: FileCandidate,
-        private val out: FileChannel,
+        channel: FileChannel,
         from: Long,
         gaps: List<LongRange>,
-        private val record: suspend (Long, List<LongRange>) -> Unit,
+        record: suspend (Long, List<LongRange>) -> Unit,
     ) {
         val size = file.size
-        val buffer = ByteArray(CHUNK)
-        val rate = TransferRate(timeSource)
-
-        /** Every byte before this is written. */
-        @Volatile
-        var written = from
 
         /** The stretches missing, from the record before and each stream: merged, safe from any thread. */
         @Volatile
         var known = StreamGaps().apply { gaps.forEach(::add) }
 
-        var unreachable = false
+        /** The download's file: written, forced and recorded with [known] at each record. */
+        val out = RecordedFile(
+            id, channel, size, from, gaps = { known.all() }, live = { _live.value = it }, record = record,
+            timeSource = timeSource, recordBytes = recordBytes, recordEvery = recordEvery,
+        )
 
-        private var recorded = from
-        private var recordedGaps = known.all()
-        private var since = timeSource.markNow()
+        /** Every byte before this is written. */
+        val written get() = out.written
+
+        val buffer get() = out.buffer
 
         /** The stretch missing in a row that made the last long gap. */
         @Volatile
@@ -592,67 +593,8 @@ class DownloadWriter(
 
         /** Back to [stretch]'s first byte: what lies from there, the stretch with it, is asked for again, so none of it is missing yet. */
         fun goBack(stretch: LongRange) {
-            written = minOf(written, stretch.first)
+            out.rewind(stretch.first)
             known = StreamGaps().apply { known.all().filter { it.last < stretch.first }.forEach(::add) }
-        }
-
-        /** [n] bytes of [buffer] came: written at [written], and recorded when the cadence says. */
-        suspend fun took(n: Int) {
-            writeAt(written, n, advance = true)
-            rate.add(n.toLong())
-            // Bytes come: the provider is in reach.
-            unreachable = false
-            said()
-            if (written - recorded >= recordBytes || since.elapsedNow() >= recordEvery) save()
-        }
-
-        /** Says where the write is ([live]). */
-        fun said() {
-            _live.value = Live(id, written, unreachable)
-        }
-
-        /** Writes [n] bytes of [buffer] at [position]; with [advance], [written] goes on with each part written. */
-        fun writeAt(position: Long, n: Int, advance: Boolean) {
-            val bytes = ByteBuffer.wrap(buffer, 0, n)
-            var at = position
-            while (bytes.hasRemaining()) {
-                at += try {
-                    out.write(bytes, at)
-                } catch (e: IOException) {
-                    throw StorageFailure(e)
-                }
-                if (advance) written = at
-            }
-        }
-
-        /** Forces the file, then records [written] with what is missing: nothing when neither changed. */
-        suspend fun save() {
-            val at = written
-            if (at == recorded && known.all() == recordedGaps) return
-            try {
-                out.force(false)
-            } catch (e: IOException) {
-                throw StorageFailure(e)
-            }
-            // Every stretch before [at] was added before its zeros came, so before they were written.
-            val gaps = known.all()
-            record(at, gaps)
-            recorded = at
-            recordedGaps = gaps
-            since = timeSource.markNow()
-        }
-
-        /** [save], storage refusing it meaning only that the record stays where it was. */
-        suspend fun saveQuietly() {
-            try {
-                save()
-            } catch (e: StorageFailure) {
-                log.warn("download {}: couldn't record {} of {} bytes: {}", id, written, size, if (e.full) "storage full" else e.cause::class.simpleName)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                log.warn("download {}: couldn't record {} of {} bytes: {}", id, written, size, e::class.simpleName)
-            }
         }
     }
 
@@ -668,20 +610,15 @@ class DownloadWriter(
         }
     }
 
-    /** A write or force of the download's file failed: [full] when for want of room (ENOSPC, EFBIG). */
-    private class StorageFailure(override val cause: IOException) : RuntimeException(cause) {
-        val full = cause.causeChain().any { c -> c.message?.let { message -> STORAGE_FULL_WORDS.any { it in message } } == true }
-    }
-
     companion object {
         /** A stretch missing in a row of this many bytes or more gives the release up (L342): about 64 articles. A guess. */
         const val LONG_GAP_BYTES = 48L * 1024 * 1024
 
-        /** The record at least this often in bytes (L345; M5 measures it). */
-        const val RECORD_BYTES = 32L * 1024 * 1024
+        /** The record at least this often in bytes (L345; M5 measures it): the file's ([RecordedFile]). */
+        const val RECORD_BYTES = RecordedFile.RECORD_BYTES
 
         /** The record at least this often in time. */
-        val RECORD_EVERY = 10.seconds
+        val RECORD_EVERY = RecordedFile.RECORD_EVERY
 
         /** The first wait before a reopen, doubling each time to [MAX_BACKOFF]. */
         val FIRST_BACKOFF = 2.seconds
@@ -697,22 +634,16 @@ class DownloadWriter(
         val RATE_WINDOW = 5.seconds
 
         /** The failed download's words: the volume has no room for it (L382). */
-        const val STORAGE_FULL = "Storage is full"
+        const val STORAGE_FULL = RecordedFile.STORAGE_FULL
 
         /** The failed download's words: six reopens got nothing. */
         const val NO_PROGRESS = "Your Usenet provider kept failing"
 
         /** The failed download's words: its file can't be written, for want of anything but room. */
-        const val WRITE_FAILED = "Couldn't write the file"
-
-        /** What a stream is read in at most. */
-        private const val CHUNK = 256 * 1024
+        const val WRITE_FAILED = RecordedFile.WRITE_FAILED
 
         /** How ktor-nntp-client's pool fails a fetch it was closed under. */
         private const val POOL_CLOSED = "Pool closed"
-
-        /** How the JVM and Android say ENOSPC and EFBIG. */
-        private val STORAGE_FULL_WORDS = listOf("ENOSPC", "No space left on device", "EFBIG", "File too large")
 
         private const val NANOS_A_SECOND = 1_000_000_000.0
 
