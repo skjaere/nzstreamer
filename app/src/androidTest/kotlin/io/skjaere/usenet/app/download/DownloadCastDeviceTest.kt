@@ -114,8 +114,8 @@ import java.util.concurrent.atomic.AtomicInteger
  *   picture the stored still, and the LOAD's picture TMDB's address for it.
  * - A row Delete once watched has taken: its hold refused, "The downloaded file is gone", nothing sent.
  * - The player's Cast row (W121 c): a download playing here moves there, served byte for byte, and the player closes.
- * - A download with recorded gaps: the cast counts them as the device is served them, and its prompt offers Stream instead
- *   only while online (L449).
+ * - A download with recorded gaps: the cast counts them as the device is sent past them, none before, and its prompt
+ *   offers Stream instead only while online (L449).
  * - A title's Play with Kitchen display connected (the router's, as the Show page's button plays it): the file is cast,
  *   "Starting on Kitchen display", nothing grabbed, with no provider or service usable (L446, L447).
  * - Offline, a file the device can't fully play asks the pre-check over it, the file held past the hook's 30 s by the
@@ -417,10 +417,11 @@ class DownloadCastDeviceTest {
     }
 
     /**
-     * L449, L94: a download whose file has parts its download had no article for, cast: the server tells the cast those it
-     * serves, which it counts as the player counts its own, three within ten minutes of film asking; the prompt offers
-     * Stream instead while online, and the count alone offline, never another release. The device paused, so the prompt's
-     * time doesn't run while the test reads it.
+     * L449, L94: a download whose file has parts its download had no article for, cast: its file tells every recorded gap
+     * as it opens (L417), and the cast counts those the device was sent past, as the player counts a download's as its play
+     * goes past them (L354): none while the device has been sent nothing, then three within ten minutes of film ask. The
+     * prompt offers Stream instead while online, and the count alone offline, never another release. The device paused,
+     * so the prompt's time doesn't run while the test reads it.
      */
     @Test
     fun aDownloadsRecordedGapsAreCountedThereAndItsPromptOffersStreamInsteadOnlyOnline() = runBlocking<Unit> {
@@ -428,11 +429,16 @@ class DownloadCastDeviceTest {
         val row = finished(2, gaps)
         val (moving, item) = castToTheLoad(row)
         standIn(item)
-        (receiver.ask(0) ?: throw AssertionError("the head's request unanswered")).read(SEEK_READ)
         plays(item)
         assertEquals(MoveOutcome.Moved, withTimeout(LOAD_MILLIS) { moving.await() })
         tell(CastPlayerState.Paused, item.mediaId, 0)
         val casting = checkNotNull(container.castPlaying) { "no cast followed" }
+        // Every gap told as the head opened, none sent: the cast's ticks pass over them meanwhile.
+        waitFor("the gaps told", LOAD_MILLIS) { Casting.feed.value?.takeIf { it.gaps.size == gaps.size && it.passed.isEmpty() } }
+        delay(SETTLE_MILLIS)
+        assertEquals("a prompt before the device was sent past a gap", null, casting.missing.value)
+        // The device reads the file through them.
+        (receiver.ask(0) ?: throw AssertionError("the head's request unanswered")).toEnd()
         val online = waitFor("the prompt", LOAD_MILLIS) { casting.missing.value }
         assertEquals(CastPrompt(3, tryAnother = true, stuck = false, device = kitchen.name, streamInstead = true), online)
         container.offlineOverride.value = true

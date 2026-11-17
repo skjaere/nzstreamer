@@ -155,6 +155,33 @@ class CastMissingPartsTest {
         assertEquals(0, h.asked, "the coordinator asked for another release")
     }
 
+    /**
+     * L417, L94, L354: a download's file tells every gap its download recorded as it opens, the whole file's before the
+     * device is sent a byte of them; the cast counts those the device was sent past, as the player counts a download's as
+     * its play goes past them: none while the device is short of them, then three within ten minutes of film ask. A
+     * stream's gaps are told as it reads them, just ahead of what it sends, and count as they are told, as before.
+     */
+    @Test
+    fun `a download's gaps told as its file opens count only once the device was sent past them`() = runTest {
+        val f = Fixture(this)
+        val downloaded = launch.copy(uri = PlayUris.download("3f2c9e1a-7b4d-4c2e-9a10-5e6f7a8b9c0d"))
+        val three = listOf(gapAt(1_950_000), gapAt(2_000_000), gapAt(2_050_000))
+        f.device(CastPlayerState.Playing, 1_900_000, gaps = three, passed = emptyList(), played = downloaded)
+        f.pass(1_000)
+        assertNull(f.prompt, "none sent past yet")
+        f.device(CastPlayerState.Playing, 1_901_000, gaps = three, passed = three.take(2), played = downloaded)
+        f.pass(1_000)
+        assertNull(f.prompt, "two so far")
+        f.device(CastPlayerState.Playing, 1_902_000, gaps = three, passed = three, played = downloaded)
+        f.pass(1_000)
+        assertEquals(CastPrompt(3, tryAnother = true, stuck = false, device = "Kitchen display", streamInstead = true), f.prompt)
+
+        val g = Fixture(this)
+        g.device(CastPlayerState.Playing, 1_900_000, gaps = three, passed = emptyList())
+        g.pass(1_000)
+        assertEquals(3, g.prompt?.count, "a stream's, as they are told")
+    }
+
     @Test
     fun `with no other release it is the count alone, gone after 5 s of playing`() = runTest {
         val f = Fixture(this)

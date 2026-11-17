@@ -575,11 +575,17 @@ class CastPlaying(private val scope: CoroutineScope, private val deps: CastPlayi
         }
     }
 
-    /** The stretches of zeros [feed] says were sent and [p] hasn't counted, each at its place by the file's share (L94). */
+    /**
+     * The stretches of zeros [feed] says were sent and [p] hasn't counted, each at its place by the file's share (L94). A
+     * stream tells each as it reads it, just ahead of what it sends; a download's file tells every gap its download
+     * recorded as it opens (L417), so a download's count is of those the device was sent past ([CastFeed.passed]), as the
+     * player counts a download's as its play goes past them (L354).
+     */
     private fun count(p: Parts, feed: CastFeed) {
         val length = feed.durationMs ?: feed.launch.video?.durationMs ?: return
         val size = feed.size?.takeIf { it > 0 } ?: return
-        for (gap in feed.gaps) {
+        val sent = if (CastSource.of(feed.launch.uri) == CastSource.Download) feed.passed else feed.gaps
+        for (gap in sent) {
             if (!p.counted.add(gap)) continue
             val at = CastGapWatch.placed(gap, size, length).first
             // A spot of its own, not one it grew from: said as the play gets there.
