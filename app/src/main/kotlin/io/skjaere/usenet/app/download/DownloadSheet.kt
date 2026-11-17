@@ -160,6 +160,7 @@ internal fun DownloadSheetContent(request: DownloadRequest, model: DownloadSheet
             is DownloadSheetState.WontFit -> WontFit(s, onChoose = onChoose, onStorage = { openStorageSettings(context) }, onCancel = onClose)
             is DownloadSheetState.NoRelease -> NoRelease(s, onClose = onClose)
             is DownloadSheetState.Chosen -> Chosen(s, downloading, onDownload = model::download, onChoose = onChoose, onCancel = onClose)
+            is DownloadSheetState.Weighing -> ImportedFileWeighing(s, onCancel = onClose)
             is DownloadSheetState.File -> ImportedFile(s, downloading, onDownload = model::download, onCancel = onClose)
             is DownloadSheetState.FileWontFit -> ImportedFileWontFit(s, onStorage = { openStorageSettings(context) }, onCancel = onClose)
         }
@@ -276,6 +277,16 @@ private fun ImportedFileWontFit(s: DownloadSheetState.FileWontFit, onStorage: ()
             SecondaryButton("Cancel", onCancel, Modifier.weight(1f))
         }
     }
+}
+
+/**
+ * A file of an NZB opened on Import (L455) while the room for it is read, a moment: its card alone, and Cancel. Nothing is
+ * searched, so nothing says so (L454).
+ */
+@Composable
+private fun ImportedFileWeighing(s: DownloadSheetState.Weighing, onCancel: () -> Unit) {
+    ImportedFileCard(s.file)
+    Buttons { SecondaryButton("Cancel", onCancel, Modifier.fillMaxWidth()) }
 }
 
 /**

@@ -483,6 +483,25 @@ class DownloadSheetTest {
         assertEquals("5d41402abc4b2a76b9719d911017c592", imported(name = "5d41402abc4b2a76b9719d911017c592.mkv").subtitle)
     }
 
+    /**
+     * L455, L454: an imported file's sheet searches nowhere, so it never says it does: from its first frame, while the room
+     * is read, it shows the file's card alone, never "Finding releases…" with the indexers' note; then the room as weighed.
+     * Back from Android's storage page before the room was read, it weighs nothing twice.
+     */
+    @Test
+    fun `an imported file's sheet shows its card while the room is read, never saying it searches`() = runTest {
+        val fakes = SheetFakes().unsearched()
+        val sheet = DownloadSheetModel(QM_E02_FILE, fakes.deps(this), backgroundScope)
+        assertEquals(DownloadSheetState.Weighing(QM_E02_FILE), sheet.state.value)
+        sheet.shown()
+        runCurrent()
+        assertEquals(DownloadSheetState.Weighing(QM_E02_FILE), sheet.state.value, "weighed before the sheet began")
+        sheet.start()
+        runCurrent()
+        assertEquals(QM_E02_FILE, assertIs<DownloadSheetState.File>(sheet.state.value).file)
+        assertEquals(emptyList(), fakes.contexts, "nothing searched")
+    }
+
     /** L455: the space free, read with where the size comes from (the file's), when it starts and the ask's line, as a pick's. */
     @Test
     fun `an imported file's sheet says the space free, when it starts, and that Android asks next`() = runTest {

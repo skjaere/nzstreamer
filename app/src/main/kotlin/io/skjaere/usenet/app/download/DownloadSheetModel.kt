@@ -171,7 +171,7 @@ sealed interface DownloadStart {
 
 /**
  * What the Download sheet shows: [Finding] while it searches, then [Pick], [WontFit] or [NoRelease]; for a file opened on
- * Import, [File] or [FileWontFit], with no search.
+ * Import, [Weighing] while the room is read, then [File] or [FileWontFit], with no search.
  */
 sealed interface DownloadSheetState {
     /** Searching and ranking, as Choose release does: nothing is grabbed until Download (L338). */
@@ -227,6 +227,12 @@ sealed interface DownloadSheetState {
         val start: DownloadStart,
         val asks: Boolean,
     ) : DownloadSheetState
+
+    /**
+     * A file of an NZB opened on Import (L455), [file], while the room for it is read: nothing is searched, so the sheet says
+     * nothing of a search (L454), only what the file is.
+     */
+    data class Weighing(val file: DownloadRequest.File) : DownloadSheetState
 
     /**
      * A file of an NZB opened on Import (L455), [file], whose exact size fits what is [free] for a new download: when it
@@ -358,8 +364,9 @@ data class DownloadSheetDeps(
  * where it is due, then the host's schedule. A file chosen in a pack goes with it: the pack first, the file's size its
  * need, the pack's NZB kept with the download. The search runs in [scope], the sheet's, and goes with it.
  *
- * A file of an NZB opened on Import (L455) is searched for nowhere: the sheet weighs its exact size against the room now
- * ([DownloadSheetState.File], [DownloadSheetState.FileWontFit]), and [download] queues it with the NZB and its password.
+ * A file of an NZB opened on Import (L455) is searched for nowhere: the sheet shows its card while it weighs its exact size
+ * against the room now ([DownloadSheetState.Weighing]), then whether it fits ([DownloadSheetState.File],
+ * [DownloadSheetState.FileWontFit]), and [download] queues it with the NZB and its password.
  *
  * The list's Choose file ([chooseFile], an episode's alone) opens a pack's files ([choice]) in [scope] too. A file chosen
  * there comes back to the sheet as its Chosen file; where the list replaces download [replacing]'s releases (the Downloads
@@ -442,7 +449,8 @@ class DownloadSheetModel(
     /** What the search said of its indexers, for [DownloadSheetState.NoRelease]: the last of it, set before its releases. */
     private var said = DownloadSheetState.NoRelease(emptyList())
 
-    private val _state = MutableStateFlow<DownloadSheetState>(DownloadSheetState.Finding)
+    // A file opened on Import is searched for nowhere: from its first frame, its card, never Finding's search (L454).
+    private val _state = MutableStateFlow(if (request is DownloadRequest.File) DownloadSheetState.Weighing(request) else DownloadSheetState.Finding)
     val state: StateFlow<DownloadSheetState> = _state.asStateFlow()
 
     private val _downloading = MutableStateFlow(false)
@@ -490,7 +498,7 @@ class DownloadSheetModel(
      */
     fun shown() {
         if (request is DownloadRequest.File) {
-            if (_downloading.value || _closed.value || _state.value == DownloadSheetState.Finding) return
+            if (_downloading.value || _closed.value || _state.value is DownloadSheetState.Weighing) return
             scope.launch {
                 val now = weigh(request)
                 if (!_downloading.value && !_closed.value) _state.value = now
