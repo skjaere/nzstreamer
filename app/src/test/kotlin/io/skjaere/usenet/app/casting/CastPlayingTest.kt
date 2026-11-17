@@ -46,6 +46,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
+import java.io.File
 import java.time.LocalDate
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -675,5 +676,21 @@ class CastPlayingTest {
         assertNull(f.now, "the bar goes")
         assertEquals(emptyList(), f.sent, "no Stop casting: the session, and the device chosen, live on")
         assertEquals(CastLink.Connected, f.link.value?.link)
+    }
+
+    /**
+     * L449: the app's own deps give a download's missing-parts prompt its Stream instead, the coordinator's from where it
+     * plays, on the same device, the download's release left out as the player's prompt leaves it, and whether it is
+     * offered by the app's one offline signal (L438). CastPlayingDeps.of takes the app's container, which no JVM test
+     * builds: its source is read.
+     */
+    @Test
+    fun `the app's deps stream a download's title instead from the prompt, by the app's offline signal`() {
+        val source = File("src/main/kotlin/io/skjaere/usenet/app/casting/CastPlaying.kt").readText()
+        val at = source.indexOf("fun of(c: AppContainer")
+        assertTrue(at >= 0, "no CastPlayingDeps.of")
+        val of = source.substring(at).substringBefore("\n        )\n")
+        assertTrue("streamInstead = { launch, at -> c.playback.streamInstead(launch, at, leaveOut = true, missingParts = true) }" in of, of)
+        assertTrue("online = { !c.offline.value }" in of, of)
     }
 }

@@ -131,7 +131,8 @@ fun MissingPartsPrompt(
 /**
  * The player's prompt for missing parts during a cast (W37, L94, L104; CsPhoneMissingParts): the count, the cast's line
  * under it ([CastPrompt.line]: the device may show glitches, or is stuck at one), the question, then Keep watching and Try
- * another release; with no other release, the count and the line alone, which hide by themselves. Over the remote's
+ * another release, or for a download's file Stream instead and its question ([CastPrompt.streamInstead], L449); with no
+ * other release, the count and the line alone, which hide by themselves. Over the remote's
  * picture on the player's surface, which grows to hold it whole, or above the bar on the app's other screens on
  * [background] (the chip's colour there), [withinHeight]: there it has a height it mustn't pass, and at a large font its
  * words scroll and its buttons stay whole, as the player's do. A polite live region, read once as it appears; the count as
@@ -160,15 +161,16 @@ fun CastMissingPartsPrompt(
         Column(surface.padding(horizontal = 12.dp, vertical = 10.dp).then(scrolls), verticalArrangement = Arrangement.spacedBy(2.dp)) { words() }
         return
     }
+    val (question, another) = missingPartsWords(prompt.streamInstead)
     Column(surface.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         // Within a height, weighted, so the buttons are measured first and the words get what is left, as the player's.
         Column(if (withinHeight) Modifier.weight(1f, fill = false).then(scrolls) else Modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
             words()
-            Text(MISSING_PARTS_QUESTION, style = AppType.bodyStrong.copy(fontSize = 14.sp), color = colors.text)
+            Text(question, style = AppType.bodyStrong.copy(fontSize = 14.sp), color = colors.text)
         }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             CardButton("Keep watching", onKeepWatching, Modifier, filled = false, horizontalPadding = 16.dp)
-            CardButton("Try another release", onTryAnother, Modifier, filled = true, horizontalPadding = 16.dp)
+            CardButton(another, onTryAnother, Modifier, filled = true, horizontalPadding = 16.dp)
         }
     }
 }

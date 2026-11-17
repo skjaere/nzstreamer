@@ -320,7 +320,7 @@ internal object Casting : CastLoader {
     private fun gone() = CastLoadOutcome.Failed(CastLoadFailure(CastFailKind.CannotReach, sessionEnded = true))
 
     /** A download's load whose file is gone, or going (L417): failed before anything is sent, in the player's source's words. */
-    private fun fileGone() = CastLoadOutcome.Failed(CastLoadFailure(CastFailKind.CouldNotPlay, DownloadStorage.FILE_GONE))
+    private fun fileGone() = CastLoadOutcome.Failed(CastLoadFailure(CastFailKind.CouldNotPlay, DownloadStorage.FILE_GONE, fileUnreadable = true))
 
     /**
      * One play on its device, from its LOAD ([loadedAt]) until it ends there ([CastingRules]): the device's events, a tick

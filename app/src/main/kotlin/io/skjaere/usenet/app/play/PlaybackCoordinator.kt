@@ -1168,8 +1168,9 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
     }
 
     /**
-     * "Stream instead" on a finished download's player (L354): [launch]'s title plays by its stream path, past the download
-     * hooks, which would play the file again, as Play on its page streams a title with no download: an episode looked up on
+     * "Stream instead" on a finished download's player (L354), or on its cast's failure or missing-parts prompt, to the same
+     * device ([origin], L449): [launch]'s title plays by its stream path, past the download hooks, which would play the file
+     * again, as Play on its page streams a title with no download: an episode looked up on
      * TMDB and searched for, a film by its remembered release while stored, else its search, its ids looked up on TMDB
      * first (its year and length from its download where TMDB doesn't answer). From [positionMs], where the player was
      * (null: where its place was saved), as Try another release starts where the release stopped: its place saved past
@@ -1768,7 +1769,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
     private suspend fun onDevice(handed: Handed) {
         val outcome = handed.load.outcome()
         val millis = (System.nanoTime() - handed.since) / 1_000_000
-        val after = CastStart.after(outcome, handed.launch, handed.sent, millis, canTryAnother(handed.launch))
+        val after = CastStart.after(outcome, handed.launch, handed.sent, millis, canTryAnother(handed.launch), online = !container.offline.value)
         if (after is PlayState.Failed) throw EndedOnDevice(after)
         _state.value = after
     }
@@ -1989,6 +1990,8 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         when (action) {
             is CastAction.TryAnother -> if (stillCasts(action.launch)) tryAnother(action.launch, action.positionMs, action.forget) else dismiss()
             is CastAction.CastAgain -> if (stillCasts(action.launch)) castAgain(action.launch) else dismiss()
+            is CastAction.StreamInstead ->
+                if (stillCasts(action.launch)) streamInstead(action.launch, action.positionMs, action.leaveOut, missingParts = false) else dismiss()
             is CastAction.PlayHere -> playHere(action.launch)
             is CastAction.CastAnyway -> if (CastStart.live(action.device, container.playOn.target.value)) play(action.request, PlayOrigin(cast = action.device)) else dismiss()
             CastAction.BackToList, CastAction.Close -> dismiss()

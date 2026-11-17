@@ -1,11 +1,23 @@
 package io.skjaere.usenet.app.download
 
+import android.app.Activity
 import android.os.SystemClock
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.ui.PlayerView
+import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import io.skjaere.usenet.app.FakeTmdb
+import io.skjaere.usenet.app.ImmersiveHintSeen
+import io.skjaere.usenet.app.MainActivity
+import io.skjaere.usenet.app.PlayerActivity
 import io.skjaere.usenet.app.cast.CastFakes
 import io.skjaere.usenet.app.cast.CastItems
 import io.skjaere.usenet.app.cast.CastLoader
@@ -24,17 +36,23 @@ import io.skjaere.usenet.app.casting.CastFailKind
 import io.skjaere.usenet.app.casting.CastIdleReason
 import io.skjaere.usenet.app.casting.CastLink
 import io.skjaere.usenet.app.casting.CastPlayerState
+import io.skjaere.usenet.app.casting.CastPrompt
 import io.skjaere.usenet.app.casting.MoveOutcome
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.everyStep
+import io.skjaere.usenet.app.link.CastButtonLook
 import io.skjaere.usenet.app.link.PlayChoice
 import io.skjaere.usenet.app.link.PlayTarget
 import io.skjaere.usenet.app.onMainThread
+import io.skjaere.usenet.app.overlayNodes
 import io.skjaere.usenet.app.play.CastTo
+import io.skjaere.usenet.app.read
 import io.skjaere.usenet.app.shell
+import io.skjaere.usenet.app.views
 import io.skjaere.usenet.app.waitFor
 import io.skjaere.usenet.data.AppSettings
 import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.EpisodeRef
@@ -42,6 +60,7 @@ import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchTitle
 import io.skjaere.usenet.metadata.TmdbImages
+import io.skjaere.usenet.player.PlayUris
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -54,6 +73,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeFalse
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -73,13 +93,21 @@ import java.util.concurrent.CopyOnWriteArrayList
  * - Offline (the container's own override, L438): the LOAD goes within a second with no TMDB lookup, the session's
  *   picture the stored still, and the LOAD's picture TMDB's address for it.
  * - A row Delete once watched has taken: its hold refused, "The downloaded file is gone", nothing sent.
+ * - The player's Cast row (W121 c): a download playing here moves there, served byte for byte, and the player closes.
+ * - A download with recorded gaps: the cast counts them as the device is served them, and its prompt offers Stream instead
+ *   only while online (L449).
  *
  * Put back after each, whatever happened: the rows and their files, the downloads' jobs, the offline override, the cast
- * seams and Play on (This phone), the settings and the marks. The show, its releases and the device are invented.
+ * seams and Play on (This phone), the app's screens, the settings and the marks. The show, its releases and the device
+ * are invented.
  */
 @RunWith(AndroidJUnit4::class)
 @androidx.annotation.OptIn(UnstableApi::class)
 class DownloadCastDeviceTest {
+    /** The player hides the system bars: Android's hint about that would take its keys. */
+    @get:Rule
+    val immersiveHint = ImmersiveHintSeen()
+
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context = instrumentation.targetContext
     private val container = context.container
@@ -140,6 +168,8 @@ class DownloadCastDeviceTest {
             { receiver.close() },
             { container.offlineOverride.value = null },
             { onMainThread { container.playback.cancel() } },
+            { alive().forEach { activity -> onMainThread { activity.finish() } } },
+            { waitFor("the app's screens closed", 30_000) { Unit.takeIf { alive().isEmpty() } } },
             { container.playOn.choose(PlayChoice.Phone) },
             { CastFakes.reset() },
             { seeds.after() },
@@ -310,13 +340,74 @@ class DownloadCastDeviceTest {
         assertEquals("nothing sent", loads, remote!!.loads.size)
     }
 
+    /**
+     * W121 (c), L417: a download playing in the player moves to Kitchen display by the player's Cast row, its session
+     * connected already: the LOAD's address serves the file byte for byte, and once the device plays it the player
+     * closes, as any film's move closes it.
+     */
+    @Test
+    fun thePlayersCastRowMovesAPlayingDownloadThereByteForByteAndThePlayerCloses() = runBlocking<Unit> {
+        // The player's next and previous episodes, which TMDB would be asked for: none (the strict fake puts them back).
+        PlayerActivity.nextEpisode = { _, _ -> null }
+        PlayerActivity.previousEpisode = { _, _ -> null }
+        // Kitchen display in the list as Google's discovery finds it, its session connected already.
+        routes.found(kitchen)
+        val row = finished(2)
+        val loads = remote!!.loads.size
+        ActivityScenario.launch<PlayerActivity>(PlayerActivity.intent(context, checkNotNull(DownloadLaunch.of(row)))).use { scenario ->
+            waitFor("the download to play here", LOAD_MILLIS) { scenario.read { a -> a.player?.takeIf { it.isPlaying } } }
+            tapRow(scenario, kitchen.name)
+            val item = waitFor("the LOAD", LOAD_MILLIS) { remote!!.loads.drop(loads).lastOrNull() }
+            standIn(item)
+            val head = receiver.ask(0) ?: throw AssertionError("the head's request unanswered")
+            assertEquals(206, head.status)
+            assertEquals("bytes 0-${film.size - 1}/${film.size}", head.header("content-range"))
+            head.toEnd()
+            val middle = receiver.ask(MIDDLE) ?: throw AssertionError("a middle byte's request unanswered")
+            assertEquals(206, middle.status)
+            middle.read(SEEK_READ)
+            receiver.cut(middle)
+            plays(item)
+            waitFor("the player closed", LOAD_MILLIS) { Unit.takeIf { players().all { it.isFinishing || it.isDestroyed } } }
+            assertEquals("the download's file there", PlayUris.download(row.id), Casting.feed.value?.launch?.uri)
+            end(item)
+        }
+    }
+
+    /**
+     * L449, L94: a download whose file has parts its download had no article for, cast: the server tells the cast those it
+     * serves, which it counts as the player counts its own, three within ten minutes of film asking; the prompt offers
+     * Stream instead while online, and the count alone offline, never another release. The device paused, so the prompt's
+     * time doesn't run while the test reads it.
+     */
+    @Test
+    fun aDownloadsRecordedGapsAreCountedThereAndItsPromptOffersStreamInsteadOnlyOnline() = runBlocking<Unit> {
+        val gaps = listOf(GAP_AT, GAP_AT + 100_000, GAP_AT + 200_000).map { DownloadGap(it, it + GAP - 1) }
+        val row = finished(2, gaps)
+        val (moving, item) = castToTheLoad(row)
+        standIn(item)
+        (receiver.ask(0) ?: throw AssertionError("the head's request unanswered")).read(SEEK_READ)
+        plays(item)
+        assertEquals(MoveOutcome.Moved, withTimeout(LOAD_MILLIS) { moving.await() })
+        tell(CastPlayerState.Paused, item.mediaId, 0)
+        val casting = checkNotNull(container.castPlaying) { "no cast followed" }
+        val online = waitFor("the prompt", LOAD_MILLIS) { casting.missing.value }
+        assertEquals(CastPrompt(3, tryAnother = true, stuck = false, device = kitchen.name, streamInstead = true), online)
+        container.offlineOverride.value = true
+        val offline = waitFor("the count alone offline", LOAD_MILLIS) { casting.missing.value?.takeIf { !it.tryAnother } }
+        assertEquals(CastPrompt(3, tryAnother = false, stuck = false, device = kitchen.name), offline)
+        container.offlineOverride.value = false
+        waitFor("Stream instead with the network back", LOAD_MILLIS) { casting.missing.value?.takeIf { it.tryAnother && it.streamInstead } }
+        end(item)
+    }
+
     // The download, the cast and the device.
 
     /**
      * Episode [number] of Quiet Meridian as a finished download is left: its row with its marker (as DownloadsPageSeeds
      * seeds one), then the device tests' chapters.mkv as its file, where storage keeps it.
      */
-    private fun finished(number: Int): Download {
+    private fun finished(number: Int, gaps: List<DownloadGap> = emptyList()): Download {
         val id = Download.newId()
         val name = "Quiet.Meridian.S01E0$number.720p.WEB.h264-KESTREL.mkv"
         val size = film.size.toLong()
@@ -325,8 +416,8 @@ class DownloadCastDeviceTest {
             showTmdbId = SHOW, season = 1, episode = number, seasonEpisodes = EPISODES, episodeName = NAMES[number - 1], posterPath = POSTER,
             stillPath = STILL, state = DownloadState.Done, position = -1_000L + number,
             release = RememberedRelease(INDEXER, "qm-s01e0$number", name.removeSuffix(".mkv"), null, 0, "nzb-qm-$number", name, size),
-            fileName = name, size = size, indexerSize = size, safeOffset = size, relativePath = "downloads/$id/v.mkv", createdAt = 1, completedAt = 2,
-            updatedAt = 2,
+            fileName = name, size = size, indexerSize = size, safeOffset = size, gaps = gaps, relativePath = "downloads/$id/v.mkv", createdAt = 1,
+            completedAt = 2, updatedAt = 2,
         )
         seeds.seed(row)
         made += row
@@ -389,6 +480,34 @@ class DownloadCastDeviceTest {
     private fun tell(state: CastPlayerState, id: String, positionMs: Long, idle: CastIdleReason? = null) =
         onMainThread { events.tell(CastEvent.Status(state, idle, id, positionMs, SystemClock.elapsedRealtime())) }
 
+    /** The Cast device [name]'s row tapped in the player's list, opened from its button with the controls up. */
+    private suspend fun tapRow(scenario: ActivityScenario<PlayerActivity>, name: String) {
+        scenario.onActivity { a ->
+            playerView(a).controllerShowTimeoutMs = 0
+            playerView(a).showController()
+        }
+        waitFor("the controls") { scenario.read { a -> playerView(a).isControllerFullyVisible.takeIf { it } } }
+        waitFor("the Cast button") { scenario.read { a -> castNode(a) } }
+        scenario.onActivity { a -> castNode(a)!!.config[SemanticsActions.OnClick].action!!.invoke() }
+        waitFor("$name's row") { scenario.read { a -> castRow(a, name) } }
+        scenario.onActivity { a -> castRow(a, name)!!.config[SemanticsActions.OnClick].action!!.invoke() }
+    }
+
+    private fun castNode(activity: Activity): SemanticsNode? = overlayNodes(activity).firstOrNull { it.config.getOrNull(CastButtonLook) != null }
+
+    private fun castRow(activity: Activity, name: String): SemanticsNode? = overlayNodes(activity).firstOrNull { n ->
+        n.config.getOrNull(SemanticsActions.OnClick) != null && n.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty().any { it.startsWith("$name, Cast device") }
+    }
+
+    private fun playerView(activity: Activity) = views(activity.window.decorView).filterIsInstance<PlayerView>().single()
+
+    private fun players(): List<PlayerActivity> = alive().filterIsInstance<PlayerActivity>()
+
+    /** The app's players and MainActivity instances alive: a move's close opens the remote in the app. */
+    private fun alive(): List<Activity> = onMainThread {
+        ALIVE.flatMap { ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(it) }.filter { it is PlayerActivity || it is MainActivity }.distinct()
+    }
+
     /** Kitchen display connected and chosen in Play on, with no cast service left over. */
     private suspend fun connectKitchen() {
         CastFakes.connected(kitchen, connector)
@@ -422,6 +541,12 @@ class DownloadCastDeviceTest {
         const val MIDDLE = 327_680L
         const val SEEK_READ = 64L * 1024
         const val TAIL = 96L * 1024
+
+        /** Three recorded gaps a minute or so into the film, 1000 bytes each. */
+        const val GAP_AT = 120_000L
+        const val GAP = 1_000L
+
+        val ALIVE = arrayOf(Stage.PRE_ON_CREATE, Stage.CREATED, Stage.STARTED, Stage.RESUMED, Stage.PAUSED, Stage.STOPPED, Stage.RESTARTED)
 
         const val SEEDING_MILLIS = 60_000L
         const val LOAD_MILLIS = 60_000L

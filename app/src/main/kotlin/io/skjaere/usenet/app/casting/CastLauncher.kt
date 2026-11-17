@@ -71,6 +71,8 @@ enum class CastFailKind {
  * so Try another release forgets it as the release Resume plays, as for a release that failed here. [sessionEnded]: the
  * Cast session ended with it (L60), so the device is no longer chosen (W36) and neither Try again nor Try another
  * release is offered. [releases]: how many releases the verdict found the device can't fully play ([CastFailKind.NotFully]).
+ * [fileUnreadable]: a download's file on this phone couldn't be read as it was cast, or was gone (L448): Play on this
+ * phone, which would read the same file, isn't offered (L449).
  */
 data class CastLoadFailure(
     val kind: CastFailKind,
@@ -79,4 +81,5 @@ data class CastLoadFailure(
     val providers: Boolean = false,
     val sessionEnded: Boolean = false,
     val releases: Int = 0,
+    val fileUnreadable: Boolean = false,
 )

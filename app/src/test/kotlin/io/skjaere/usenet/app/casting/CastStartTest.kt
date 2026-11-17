@@ -21,10 +21,12 @@ import io.skjaere.usenet.core.UsenetUris
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.newznab.NewznabItem
+import io.skjaere.usenet.player.PlayUris
 import io.skjaere.usenet.releases.RankedRelease
 import io.skjaere.usenet.releases.ReleaseFacts
 import io.skjaere.usenet.releases.ReleaseParser
 import io.skjaere.usenet.search.RankedItem
+import io.skjaere.usenet.serve.ServeCounters
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -446,6 +448,72 @@ class CastStartTest {
         assertEquals(listOf(CastButton.TryAnother, CastButton.PlayHere, CastButton.Close), CastStart.buttons(c))
         assertEquals(CastAction.TryAnother(cast, 1_930_000, forget = false), CastStart.press(CastButton.TryAnother, c))
         assertEquals(CastAction.PlayHere(here), CastStart.press(CastButton.PlayHere, c))
+    }
+
+    /** A finished download's launch cast there (L417), as the player moves one or a title's Play casts its file. */
+    private val downloaded = cast.copy(uri = PlayUris.download("3f2c9e1a-7b4d-4c2e-9a10-5e6f7a8b9c0d"), requestId = null)
+
+    private fun downloadFailed(failure: CastLoadFailure, online: Boolean) = assertIs<PlayState.Failed>(
+        CastStart.after(CastLoadOutcome.Failed(failure), downloaded, CastStart.loading(running), 30_000, canTryAnother = true, online = online),
+    ).castFailed()
+
+    /**
+     * L449: a download's cast that the device couldn't play offers Stream instead in Try another release's place while
+     * online, the title streamed to the same device from where it was to start, past the download hooks, as the player
+     * offers it; offline nothing, as no stream can start. Never Try another release, which has no request behind a
+     * download, would forget its release, or record it missing on providers it was never asked of. Its release is left
+     * out of the stream where the device couldn't play its file, which the stream's would meet too; not where the
+     * device lost the stream, which says nothing of the release. A stream's cast as before.
+     */
+    @Test
+    fun `a download's cast failure offers Stream instead online and nothing offline, never another release`() {
+        val online = downloadFailed(CastLoadFailure(CastFailKind.CouldNotPlay, DECODE, format = true), online = true)
+        assertEquals(CastFailed.Another.StreamInstead, online.another)
+        assertEquals(listOf(CastButton.StreamInstead, CastButton.PlayHere, CastButton.Close), CastStart.buttons(online))
+        assertEquals(listOf("Stream instead", "Play on this phone", "Close"), CastStart.buttons(online).map { it.words })
+        assertEquals(CastAction.StreamInstead(downloaded, 1_930_000, leaveOut = true), CastStart.press(CastButton.StreamInstead, online))
+        assertEquals(CastAction.PlayHere(downloaded.copy(cast = null)), CastStart.press(CastButton.PlayHere, online), "this phone plays the file")
+        val lost = downloadFailed(CastLoadFailure(CastFailKind.CouldNotPlay, LOST), online = true)
+        assertEquals(CastAction.StreamInstead(downloaded, 1_930_000, leaveOut = false), CastStart.press(CastButton.StreamInstead, lost))
+        // As the device refused it as it opened (L102): its file's type, so the stream leaves the release out.
+        val refused = downloadFailed(CastLoadFailure(CastFailKind.FileType, "MOV file. Kitchen display refused it as it opened."), online = true)
+        assertEquals(listOf(CastButton.StreamInstead, CastButton.PlayHere, CastButton.Close), CastStart.buttons(refused))
+        assertEquals(CastAction.StreamInstead(downloaded, 1_930_000, leaveOut = true), CastStart.press(CastButton.StreamInstead, refused))
+
+        val offline = downloadFailed(CastLoadFailure(CastFailKind.CouldNotPlay, DECODE, format = true), online = false)
+        assertEquals(CastFailed.Another.None, offline.another)
+        assertEquals(listOf(CastButton.PlayHere, CastButton.Close), CastStart.buttons(offline))
+        // Can't reach: Try again loads the file again, online or not.
+        assertEquals(listOf(CastButton.TryAgain, CastButton.PlayHere, CastButton.Close), CastStart.buttons(downloadFailed(CastLoadFailure(CastFailKind.CannotReach), online = false)))
+        // Gone with its session: this phone alone.
+        assertEquals(listOf(CastButton.PlayHere, CastButton.Close), CastStart.buttons(online, live = false))
+
+        // A stream's cast offers another release, online or not, as before.
+        val stream = assertIs<PlayState.Failed>(
+            CastStart.after(CastLoadOutcome.Failed(CastLoadFailure(CastFailKind.CouldNotPlay, DECODE)), cast, CastStart.loading(running), 30_000, canTryAnother = true, online = false),
+        ).castFailed()
+        assertEquals(CastFailed.Another.Again, stream.another)
+        assertEquals(listOf(CastButton.TryAnother, CastButton.PlayHere, CastButton.Close), CastStart.buttons(stream))
+    }
+
+    /**
+     * L448, L449: a download's file that couldn't be read as it was cast, or was gone, says so under "Kitchen display
+     * couldn't play this release", and offers Stream instead online and Close alone offline: never Play on this phone,
+     * which would read the same file.
+     */
+    @Test
+    fun `a download's file that couldn't be read offers Stream instead online, Close alone offline, and never this phone`() {
+        val read = CastOutcomes.vanished(ServeCounters(requests = 2, partials = 2, upstreamFailures = 1, firstRequestAt = 10), kitchen.name, CastFile("mkv", video = true, source = CastSource.Download))
+        assertEquals(CAST_DOWNLOAD, read.reason)
+        val online = downloadFailed(read, online = true)
+        assertEquals(CastFailedWords(headline = "Kitchen display couldn't play this release", cards = true), CastStart.words(online))
+        assertEquals(listOf(CastButton.StreamInstead, CastButton.Close), CastStart.buttons(online))
+        assertEquals(listOf("Stream instead", "Close"), CastStart.buttons(online).map { it.words })
+        assertEquals(listOf(CastButton.Close), CastStart.buttons(downloadFailed(read, online = false)))
+        // Its file gone before anything was sent: the same.
+        val gone = CastLoadFailure(CastFailKind.CouldNotPlay, "The downloaded file is gone", fileUnreadable = true)
+        assertEquals(listOf(CastButton.StreamInstead, CastButton.Close), CastStart.buttons(downloadFailed(gone, online = true)))
+        assertEquals(listOf(CastButton.Close), CastStart.buttons(downloadFailed(gone, online = false)))
     }
 
     @Test

@@ -3,6 +3,7 @@ package io.skjaere.usenet.app.download
 import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.datasource.DataSourceException
+import io.skjaere.usenet.app.play.PlayerCast
 import io.skjaere.usenet.app.play.Prefetch
 import io.skjaere.usenet.app.play.STREAM_INSTEAD
 import io.skjaere.usenet.app.play.STREAM_INSTEAD_QUESTION
@@ -31,8 +32,8 @@ import kotlin.test.assertTrue
  * L354, L377: what the player does otherwise for a finished download's file, the plain decisions its branches take
  * ([PlayerBranches]), keyed on the launch's URI naming one. A file on this device is no stream: the CPU kept awake without
  * a Wi-Fi lock, no slow-stream watch, no stream-cost line, nothing remembered as missing on the providers; Stream instead
- * in Try another release's place only while the network is validated, TheIntroDB asked only then; no Cast button. And the
- * next-episode card's line from the downloads, with no search. Names and ids are invented.
+ * in Try another release's place only while the network is validated, TheIntroDB asked only then; its Cast button as any
+ * play's (W121 c). And the next-episode card's line from the downloads, with no search. Names and ids are invented.
  */
 class PlayerBranchesTest {
     private val download = PlayUris.download("3f2c9e1a-7b4d-4c2e-9a10-5e6f7a8b9c0d")
@@ -75,12 +76,14 @@ class PlayerBranchesTest {
         assertTrue(PlayerBranches.remembersMissing(download = false))
     }
 
+    /**
+     * W121 (c): the Cast button is back while a download plays, as a cast serves its file now (L417): on a phone or a
+     * tablet whatever plays, and never on a TV, which has no downloads (W108). The player asks nothing of the play for it.
+     */
     @Test
-    fun `the Cast button hides while a download plays, and a TV has none either way`() {
-        assertFalse(PlayerBranches.castShown(television = false, download = true))
-        assertTrue(PlayerBranches.castShown(television = false, download = false))
-        assertFalse(PlayerBranches.castShown(television = true, download = false))
-        assertFalse(PlayerBranches.castShown(television = true, download = true))
+    fun `the Cast button shows on a phone while a download plays as while a stream does, and a TV has none`() {
+        assertTrue(PlayerCast.shows(television = false))
+        assertFalse(PlayerCast.shows(television = true))
     }
 
     @Test
@@ -217,7 +220,7 @@ class PlayerBranchesTest {
                 Regex("""if \(usenet is UsenetError\.MissingArticle && PlayerBranches\.remembersMissing\(download\)\) \{\s*launch\?\.let \{ container\.playback\.rememberMissing\("""),
             "no dip watch for a download" to Regex("""if \(PlayerBranches\.watchesDips\(download\)\) \{\s*dipJob = lifecycleScope\.launch \{ watchDips\("""),
             "no stream-cost line for a download" to Regex("""container\.streamCost\.playing\(awake && PlayerBranches\.logsStreamCost\(playingDownload\)\)"""),
-            "the Cast button by the play" to Regex("""PlayerBranches\.castShown\(container\.television, playingDownload\)"""),
+            "the Cast button on any play, a download's too" to Regex("""private fun castShown\(\): Boolean = PlayerCast\.shows\(container\.television\)"""),
             "TheIntroDB only online for a download" to Regex("""PlayerBranches\.asksIntroDb\(download, online = download && online\(\)\)"""),
             "Play now only for what can play" to Regex("""private fun playNow\(card: NextCard\) \{\s*if \(offersPlayNow\(card\.card\) && """),
             "the next-track key only for what can play" to Regex("""cardHasNext = nextCard\?\.let \{ offersPlayNow\(it\.card\) \} == true"""),

@@ -121,11 +121,12 @@ class CastOutcomesTest {
     /**
      * L448: a download's file is read on this phone, so each path that blames the reading of the file says the downloaded
      * file couldn't be read, under the sheet's "couldn't play this release", and the release isn't at fault: Resume keeps
-     * it (providers false). What isn't the reading's fault keeps its words, and Usenet's and debrid's are as they were.
+     * it (providers false). The file is (L449): this phone, which would read it the same, isn't offered. What isn't the
+     * reading's fault keeps its words, and Usenet's and debrid's are as they were.
      */
     @Test
     fun `a download's file that couldn't be read says so, never the providers, and keeps its release`() {
-        val read = CastLoadFailure(CastFailKind.CouldNotPlay, "Couldn't read the downloaded file")
+        val read = CastLoadFailure(CastFailKind.CouldNotPlay, "Couldn't read the downloaded file", fileUnreadable = true)
         val file = CastFile("mkv", video = true, source = CastSource.Download)
         val mp4 = CastFile("mp4", video = true, source = CastSource.Download)
         val head = upstream.copy(headFailures = 1)

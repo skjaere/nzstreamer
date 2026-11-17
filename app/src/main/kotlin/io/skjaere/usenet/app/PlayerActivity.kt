@@ -360,8 +360,9 @@ import kotlin.math.roundToInt
  * name ([SessionMetadata]). A media key nothing in the player takes goes no further.
  *
  * A finished download's file (`download://<id>`, L354) plays as a stream does, but for what it isn't ([PlayerBranches]):
- * the CPU kept awake with no Wi-Fi lock, no slow-stream banner or stream-cost line, nothing remembered as missing on the
- * providers, and no Cast button (L377). A part its download had no article for is skipped and counted as a stream's is.
+ * the CPU kept awake with no Wi-Fi lock, no slow-stream banner or stream-cost line, and nothing remembered as missing on
+ * the providers; its Cast button moves the file to the device (W121 c, L417). A part its download had no article for is
+ * skipped and counted as a stream's is.
  * Its failures say so in its words ("The downloaded file is gone"), and in Try another release's place, on "Playback
  * stopped" and the missing-parts prompt, it offers Stream instead while the network is validated, which plays the title by
  * its stream path ([streamInstead]); offline nothing. The next-episode card says what the downloads say of the next
@@ -1114,8 +1115,8 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
-    /** Whether the top bar's Cast button shows for the play now: not while a download plays (L377), whose file isn't cast in DN1. */
-    private fun castShown(): Boolean = PlayerBranches.castShown(container.television, playingDownload)
+    /** Whether the top bar's Cast button shows: on a phone or a tablet for any play, a download's file too (W121 c), never on a TV. */
+    private fun castShown(): Boolean = PlayerCast.shows(container.television)
 
     /** The Cast button, where the player has one, shown or gone for the play now ([castShown]): gone, the titles take its room. */
     private fun showCast() {

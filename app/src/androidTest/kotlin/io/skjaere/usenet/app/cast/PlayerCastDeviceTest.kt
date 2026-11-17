@@ -39,6 +39,9 @@ import io.skjaere.usenet.app.casting.CastPrecheck
 import io.skjaere.usenet.app.casting.CastStart
 import io.skjaere.usenet.app.casting.CastTimings
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.download.DownloadFixtures
+import io.skjaere.usenet.app.download.DownloadLaunch
+import io.skjaere.usenet.app.download.DownloadsPageSeeds
 import io.skjaere.usenet.app.link.ADD_TV_TITLE
 import io.skjaere.usenet.app.link.ButtonFace
 import io.skjaere.usenet.app.link.CastButtonLook
@@ -67,6 +70,14 @@ import io.skjaere.usenet.core.PlayCandidate
 import io.skjaere.usenet.core.ProbeResult
 import io.skjaere.usenet.core.UsenetTarget
 import io.skjaere.usenet.data.AppSettings
+import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadKind
+import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.data.EpisodeRef
+import io.skjaere.usenet.data.RememberedRelease
+import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.data.WatchTitle
+import io.skjaere.usenet.player.PlayUris
 import io.skjaere.usenet.search.RankedItem
 import io.skjaere.usenet.serve.ServeCounters
 import kotlinx.coroutines.CoroutineScope
@@ -87,6 +98,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.abs
 
@@ -148,6 +160,9 @@ class PlayerCastDeviceTest {
     private var saved: AppSettings? = null
     private var tv: FakeTv? = null
 
+    /** A finished download's seeds, made by the case that plays one ([downloaded]). */
+    private var seeds: DownloadsPageSeeds? = null
+
     @Before
     fun setUp() {
         // In touch mode, as a finger leaves a phone: where the focus goes back to differs for TalkBack and a keyboard.
@@ -172,12 +187,49 @@ class PlayerCastDeviceTest {
             runBlocking { link.forgetTv(it.key.id) }
         }
         container.playOn.choose(PlayChoice.Phone)
+        seeds?.let { downloads ->
+            downloads.after()
+            runBlocking {
+                // Unwatched again, the release its play kept for it forgotten.
+                container.library.markEpisodes(listOf(EpisodeRef(DOWNLOADED_SHOW, 1, 2, WatchTitle.episode(DOWNLOADED_NAME, 1, 2))), watched = false)
+                container.library.forgetRelease(WatchKey.episode(DOWNLOADED_SHOW, 1, 2), downloadedRelease)
+            }
+        }
         // Last: the settings as they were before CastFakes chose to look for Cast devices.
         CastFakes.reset()
         runBlocking {
             saved?.let { container.settings.restore(it) }
             plays.forget()
         }
+    }
+
+    /** The release an invented show's finished download came from, its file the device tests' chapters.mkv. */
+    private val downloadedRelease by lazy {
+        val size = DownloadFixtures.media(DOWNLOADED_MEDIA).size.toLong()
+        RememberedRelease(INDEXER, "dl-s01e02", DOWNLOADED_FILE.removeSuffix(".mkv"), null, 0, "nzb-dl-s01e02", DOWNLOADED_FILE, size)
+    }
+
+    /**
+     * Episode 2 of an invented show as a finished download is left: its row with its marker, as the Downloads page's tests
+     * seed one, then chapters.mkv as its file, where storage keeps it.
+     */
+    private fun downloaded(): Download {
+        val downloads = DownloadsPageSeeds(context, container).also { seeds = it }
+        downloads.before()
+        val film = DownloadFixtures.media(DOWNLOADED_MEDIA)
+        val id = Download.newId()
+        val size = film.size.toLong()
+        val row = Download(
+            id = id, watchKey = WatchKey.episode(DOWNLOADED_SHOW, 1, 2), kind = DownloadKind.Episode, title = DOWNLOADED_NAME, subtitle = "S01E02 · Pilot Boat",
+            showTmdbId = DOWNLOADED_SHOW, season = 1, episode = 2, seasonEpisodes = 4, episodeName = "Pilot Boat", state = DownloadState.Done, position = -1_000L,
+            release = downloadedRelease, fileName = DOWNLOADED_FILE, size = size, indexerSize = size, safeOffset = size, relativePath = "downloads/$id/v.mkv",
+            createdAt = 1, completedAt = 2, updatedAt = 2,
+        )
+        downloads.seed(row)
+        val folder = checkNotNull(container.downloadStorage.videoFolder(id)) { "no primary volume" }
+        folder.mkdirs()
+        File(folder, "v.mkv").writeBytes(film)
+        return row
     }
 
     private fun launch(launch: PlayerLaunch): ActivityScenario<PlayerActivity> = ActivityScenario.launch(PlayerActivity.intent(context, launch))
@@ -598,6 +650,41 @@ class PlayerCastDeviceTest {
     }
 
     /**
+     * W121 (c), L417: a finished download's player has the Cast button as any play's, at rest for this phone, last
+     * right of ⓘ; Kitchen display's row moves the download there as any film moves, its own launch loaded on the device
+     * from where it paused, nothing searched, and the player closes once the device plays it.
+     */
+    @Test
+    fun aDownloadsPlayerHasTheButtonAndKitchenDisplaysRowMovesItsFileThere() {
+        val row = downloaded()
+        val launch = checkNotNull(DownloadLaunch.of(row))
+        launch(launch).use { scenario ->
+            playing(scenario)
+            controlsUp(scenario)
+            await("the Cast button") { scenario.read { a -> castNode(a) } }
+            scenario.read { a ->
+                val node = castNode(a)!!
+                assertEquals(listOf("Play on: this phone"), node.config.getOrNull(SemanticsProperties.ContentDescription))
+                assertEquals("Google's Cast icon at rest", ButtonFace.Look.Rest, node.config[CastButtonLook])
+                val details = views(a.window.decorView).single { it.contentDescription == "File details" }
+                val bar = details.parent as ViewGroup
+                assertEquals("last in the top bar, right of ⓘ", bar.indexOfChild(details) + 1, bar.childCount - 1)
+            }
+            tapRow(scenario, kitchen)
+            await("the download paused, moving") { scenario.read { a -> moment(a)?.takeIf { it == "Moving to Kitchen display…" && a.player?.playWhenReady == false } } }
+            connector.started(kitchen)
+            val loaded = await("the download loaded on the device") { launcher.loads.firstOrNull() }
+            assertEquals("the download's own launch there", launch.copy(cast = CastTo(kitchen.id, kitchen.name, kitchen.deviceId, kitchen.model), startPositionMs = loaded.startPositionMs), loaded)
+            assertEquals(PlayUris.download(row.id), loaded.uri)
+            onMainThread { Casting.follows(CastFeed("player-cast-download", loaded, CastPlayerState.Playing, loaded.startPositionMs ?: 0L, 60_000)) }
+            await("the remote's play") { container.remotePlaying.now.value }
+            launcher.plays()
+            await("the player closed") { players().all { it.isFinishing || it.isDestroyed }.takeIf { it } }
+        }
+        assertEquals("nothing stopped", 0, launcher.stops.get())
+    }
+
+    /**
      * L124 step 3, W51 (item 44): a film whose first sound track, the one a Cast device plays, is German, English wanted
      * first, asks nothing; its move's line says Kitchen display will play the German audio, read so by TalkBack.
      */
@@ -927,6 +1014,12 @@ class PlayerCastDeviceTest {
 
     private companion object {
         const val INDEXER = "player-cast-device-test"
+
+        /** An invented show nothing real or fake knows, whose episode is downloaded, and the device tests' film as its file. */
+        const val DOWNLOADED_SHOW = 900_273
+        const val DOWNLOADED_NAME = "Quiet Meridian"
+        const val DOWNLOADED_FILE = "Quiet.Meridian.S01E02.720p.WEB.h264-KESTREL.mkv"
+        const val DOWNLOADED_MEDIA = "chapters.mkv"
         const val DTS_REMUX = "Copper.Tide.2026.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-FERRY"
         const val GERMAN_DL = "Copper.Tide.2026.German.DL.1080p.BluRay.x264-WATTWURM"
         const val NO_SOUND = "No sound on Kitchen display"

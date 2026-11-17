@@ -7,9 +7,10 @@ import io.skjaere.usenet.app.collection.mmss
 
 /**
  * The missing-parts prompt for a cast as it shows: [count] parts so far, whether another release can be tried (else the
- * count alone, [tryAnother]), and whether the device is stuck at one ([stuck], L104), on [device].
+ * count alone, [tryAnother]), and whether the device is stuck at one ([stuck], L104), on [device]. [streamInstead]: for a
+ * download's file, what it offers in another release's place is its title's stream (L449), in the player's words.
  */
-data class CastPrompt(val count: Int, val tryAnother: Boolean, val stuck: Boolean, val device: String) {
+data class CastPrompt(val count: Int, val tryAnother: Boolean, val stuck: Boolean, val device: String, val streamInstead: Boolean = false) {
     /** Under the count: what the missing parts do on the device. */
     val line: String get() = if (stuck) stuckAtAMissingPart(device) else mayShowGlitches(device)
 }

@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.casting
 
+import io.skjaere.usenet.app.download.PlayerBranches
 import io.skjaere.usenet.app.link.PlayTarget
 import io.skjaere.usenet.app.play.CastTo
 import io.skjaere.usenet.app.play.PlayOutcome
@@ -7,6 +8,8 @@ import io.skjaere.usenet.app.play.PlayRequest
 import io.skjaere.usenet.app.play.PlayState
 import io.skjaere.usenet.app.play.PlayerLaunch
 import io.skjaere.usenet.app.play.RetryPlan
+import io.skjaere.usenet.app.play.STREAM_INSTEAD
+import io.skjaere.usenet.app.play.TRY_ANOTHER
 import io.skjaere.usenet.core.AttemptFailure
 import io.skjaere.usenet.core.PlayCandidate
 import io.skjaere.usenet.core.StepStatus
@@ -65,7 +68,10 @@ fun lostTheStream(name: String) = "$name lost the stream from this phone"
 
 /** A failure's buttons, in their order: the first is the sheet's main one. */
 enum class CastButton(val words: String) {
-    TryAnother("Try another release"),
+    TryAnother(TRY_ANOTHER),
+
+    /** A download's in Try another release's place (L449): its title streamed to the device, as the player offers it (L354). */
+    StreamInstead(STREAM_INSTEAD),
     TryAgain("Try again"),
     PlayHere("Play on this phone"),
     CastAnyway("Cast anyway"),
@@ -80,6 +86,13 @@ sealed interface CastAction {
      * this phone plays it.
      */
     data class TryAnother(val launch: PlayerLaunch, val positionMs: Long?, val forget: Boolean) : CastAction
+
+    /**
+     * Stream instead, for a download's cast (L449): [launch]'s title streamed to the same device by its stream path, past
+     * the download hooks, from where it was to start ([positionMs]); [leaveOut]: the download's release left out of the
+     * stream, where the device couldn't play its file, as the stream's would meet the same.
+     */
+    data class StreamInstead(val launch: PlayerLaunch, val positionMs: Long?, val leaveOut: Boolean) : CastAction
 
     /** The sheet closes onto the release list the release was chosen on, which says why it didn't play. */
     data object BackToList : CastAction
@@ -121,8 +134,11 @@ data class CastFailed(
 ) {
     val kind: CastFailKind get() = failure.kind
 
-    /** What Try another release does: plays the request's next release, goes back to the release list, or isn't offered. */
-    enum class Another { Again, BackToList, None }
+    /**
+     * What Try another release does: plays the request's next release, goes back to the release list, or isn't offered;
+     * for a download's file, Stream instead in its place ([StreamInstead], L449).
+     */
+    enum class Another { Again, BackToList, StreamInstead, None }
 }
 
 /**
@@ -211,17 +227,24 @@ object CastStart {
     /**
      * The sheet once [launch]'s load came out ([outcome]), [millis] after it was handed over: closed as the device plays;
      * else its failure, over [running]. Try another release is offered for a failure on the device while the play has
-     * another release to try ([canTryAnother]).
+     * another release to try ([canTryAnother]). A download's file has none: its title's stream is offered in its place
+     * while the app is [online], as the player offers it ([PlayerBranches.other], L449), and nothing offline; this phone,
+     * which would read the same file, isn't offered after the file couldn't be read.
      */
-    fun after(outcome: CastLoadOutcome, launch: PlayerLaunch, running: PlayState.Running, millis: Long, canTryAnother: Boolean): PlayState {
+    fun after(outcome: CastLoadOutcome, launch: PlayerLaunch, running: PlayState.Running, millis: Long, canTryAnother: Boolean, online: Boolean = true): PlayState {
         val failure = (outcome as? CastLoadOutcome.Failed)?.failure ?: return PlayState.Idle
         val device = launch.cast ?: return PlayState.Idle
         // Can't reach has no card: the release list and its step say what happened, as the sheet does.
         val reason = failure.reason ?: cannotReach(device.name)
         val step = StepStatus.Failed(millis, AttemptFailure.Elsewhere(if (failure.kind == CastFailKind.CannotReach) CAST_NO_REQUEST else reason))
+        val another = when (PlayerBranches.other(PlayerBranches.isDownload(launch.uri), online, canTryAnother)) {
+            PlayerBranches.Other.TryAnother -> CastFailed.Another.Again
+            PlayerBranches.Other.StreamInstead -> CastFailed.Another.StreamInstead
+            PlayerBranches.Other.None -> CastFailed.Another.None
+        }
         return PlayState.Failed(
             running.title, running.subtitle, listOf(running.release to reason), notTried = 0,
-            cast = CastFailed(device, failure, running.copy(castStep = step), launch, if (canTryAnother) CastFailed.Another.Again else CastFailed.Another.None),
+            cast = CastFailed(device, failure, running.copy(castStep = step), launch, another, here = !failure.fileUnreadable),
         )
     }
 
@@ -302,7 +325,11 @@ object CastStart {
         if (failed.failure.sessionEnded || !live) return here
         return when (failed.kind) {
             CastFailKind.CannotReach -> if (failed.launch != null) listOf(CastButton.TryAgain) + here else here
-            CastFailKind.CouldNotPlay, CastFailKind.FileType -> if (failed.another != CastFailed.Another.None) listOf(CastButton.TryAnother) + here else here
+            CastFailKind.CouldNotPlay, CastFailKind.FileType -> when (failed.another) {
+                CastFailed.Another.None -> here
+                CastFailed.Another.StreamInstead -> listOf(CastButton.StreamInstead) + here
+                CastFailed.Another.Again, CastFailed.Another.BackToList -> listOf(CastButton.TryAnother) + here
+            }
             CastFailKind.NotStarted -> here
             // This phone first: the device can't fully play any of them (L149).
             CastFailKind.NotFully -> if (failed.anyway != null) listOfNotNull(CastButton.PlayHere.takeIf { failed.here }, CastButton.CastAnyway, CastButton.Close) else here
@@ -318,6 +345,10 @@ object CastStart {
                 failed.another == CastFailed.Another.BackToList -> CastAction.BackToList
                 else -> CastAction.Close
             }
+            // The device couldn't play the file itself, or refused its type: the stream leaves its release out (L354).
+            CastButton.StreamInstead -> launch?.let {
+                CastAction.StreamInstead(it, it.startPositionMs, PlayerBranches.streamLeavesOut(missingParts = false, releaseAtFault = failed.failure.format || failed.kind == CastFailKind.FileType))
+            } ?: CastAction.Close
             CastButton.TryAgain -> launch?.let(CastAction::CastAgain) ?: CastAction.Close
             CastButton.PlayHere -> CastAction.PlayHere(launch?.copy(cast = null))
             CastButton.CastAnyway -> failed.anyway?.let { CastAction.CastAnyway(it, failed.device) } ?: CastAction.Close

@@ -98,7 +98,7 @@ import kotlin.math.abs
 
 /**
  * L354, L377: the player's branches for a finished download's file, on this phone, end to end. A recorded gap is skipped
- * as it plays, with the notice, and no Cast button shows. Offline, the next-episode card for an episode not downloaded
+ * as it plays, with the notice, and the Cast button shows as for any play (W121 c). Offline, the next-episode card for an episode not downloaded
  * says so, with Close alone. A downloaded next episode counts down and plays from its file through the coordinator's
  * hook, with no search. Online, the next episode not downloaded is the next even with a later one downloaded, and it is
  * searched for and streamed (the mock and the fake indexer). File details say where the file came from in the providers'
@@ -213,10 +213,11 @@ class DownloadPlayerDeviceTest {
 
     /**
      * A part no provider had, recorded with the download just after a cluster's start a minute in: the play goes on past it
-     * to the next cue, the notice says so, nothing stops; and the top bar has no Cast button while the download plays.
+     * to the next cue, the notice says so, nothing stops; and the top bar has its Cast button while the download plays, as
+     * a cast serves its file (W121 c).
      */
     @Test
-    fun aRecordedGapIsSkippedWithTheNoticeAndNoCastButtonShows() = runBlocking<Unit> {
+    fun aRecordedGapIsSkippedWithTheNoticeAndTheCastButtonShows() = runBlocking<Unit> {
         val mkv = DownloadFixtures.media(MEDIA)
         val at = clusters(mkv)[13] + 100
         val gap = at until at + PART
@@ -243,10 +244,11 @@ class DownloadPlayerDeviceTest {
             assertFalse("the stream-cost line runs for a download's play", container.streamCost.running)
             assertTrue("\"${PlayerActivity.MISSING_PART_SKIPPED}\" never showed", notice)
             assertEquals(listOf(gap.first..gap.last), scenario.read { a -> a.jumps.map(PlayGaps.Jump::bytes) })
-            // The top bar with the controls: its buttons, but no Cast (L377).
+            // The top bar with the controls: its buttons, Cast last among them (W121 c).
             scenario.onActivity { a -> playerView(a).showController() }
             waitFor("the top bar") { scenario.read { a -> button(a, DETAILS).takeIf { it.isShown } } }
-            assertTrue("a Cast button shows", scenario.read { a -> overlayNodes(a).none { it.config.getOrNull(CastButtonLook) != null } })
+            val cast = waitFor("the Cast button") { scenario.read { a -> overlayNodes(a).firstOrNull { it.config.getOrNull(CastButtonLook) != null } } }
+            assertEquals("Play goes to this phone", listOf("Play on: this phone"), cast.config.getOrNull(SemanticsProperties.ContentDescription))
         }
     }
 

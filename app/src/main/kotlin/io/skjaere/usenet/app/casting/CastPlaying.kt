@@ -8,6 +8,7 @@ import android.view.accessibility.AccessibilityManager
 import androidx.annotation.VisibleForTesting
 import io.skjaere.usenet.app.AppContainer
 import io.skjaere.usenet.app.CastExtras
+import io.skjaere.usenet.app.download.PlayerBranches
 import io.skjaere.usenet.app.home.UpNextPlay
 import io.skjaere.usenet.app.link.RemoteBar
 import io.skjaere.usenet.app.link.RemoteKind
@@ -125,6 +126,13 @@ class CastPlayingDeps(
      * bitrate; the coordinator's trySmaller, on the same device. On the main thread.
      */
     val trySmaller: (PlayerLaunch, Long, Long, Long) -> Unit = { _, _, _, _ -> },
+    /** Whether the app reads as online (its one offline signal, L438): a download's file offers its stream only then (L449). */
+    val online: () -> Boolean = { true },
+    /**
+     * Stream instead from the missing-parts prompt of a download's file (L449): the launch playing there, from where it
+     * is; the coordinator's streamInstead, on the same device. On the main thread.
+     */
+    val streamInstead: (PlayerLaunch, Long) -> Unit = { _, _ -> },
 ) {
     companion object {
         fun of(c: AppContainer, extras: CastExtras, context: Context) = CastPlayingDeps(
@@ -145,6 +153,9 @@ class CastPlayingDeps(
             playbackPrefs = { c.settings.playback.first() },
             canTrySmaller = { launch, measured, playing -> c.playback.canTrySmaller(launch, measured, playing) },
             trySmaller = { launch, at, measured, playing -> c.playback.trySmaller(launch, at, measured, playing) },
+            online = { !c.offline.value },
+            // Its parts missing: the download's release left out, as the player's prompt leaves it (L354).
+            streamInstead = { launch, at -> c.playback.streamInstead(launch, at, leaveOut = true, missingParts = true) },
         )
 
         /** [block] on the main thread, the device's player's: at once there, else posted to it. */
@@ -181,7 +192,9 @@ class CastPlayingDeps(
  * [PARTS_TICK_MS]: the prompt ([missing]; W37, CsPhoneMissingParts) asks as the player's does, its time waiting while the
  * app isn't in front, and at once, saying the device is stuck, when the gap watch's seeks didn't get it past one; one
  * part is said for a moment as the play gets to it ([notice]). Keep watching and Try another release answer it, the
- * latter from where it plays, on the same device.
+ * latter from where it plays, on the same device. A download's file has no other release: its title's stream is offered
+ * in its place while the app is online, and nothing offline (L449), never another release, which would record the
+ * download's release missing on providers it was never asked of.
  *
  * And it judges whether the stream keeps up there ([CastDip], from what Casting counts each second; W52, L134): falling
  * behind, the slow-stream banner ([slow]; CsPhoneSlowCast) says what reached the device against what the film needs,
@@ -434,13 +447,23 @@ class CastPlaying(private val scope: CoroutineScope, private val deps: CastPlayi
 
     /**
      * Try another release (L94): the next release starts on the same device from where this one plays, which goes on there
-     * until that one loads (L84); the prompt hides, and asks again at the next count if none plays.
+     * until that one loads (L84); the prompt hides, and asks again at the next count if none plays. A download's file's
+     * prompt says Stream instead in its place (L449): the title streams there from where it plays.
      */
     fun tryAnother() {
         val feed = deps.feed.value?.takeIf { it.end == null } ?: return
         val at = _now.value?.takeIf { it.load == feed.load }?.let(::position) ?: feed.positionMs
         keepWatching()
-        deps.tryAnother(feed.launch, at)
+        if (PlayerBranches.isDownload(feed.launch.uri)) deps.streamInstead(feed.launch, at) else deps.tryAnother(feed.launch, at)
+    }
+
+    /**
+     * What the prompt offers beside Keep watching for [launch]'s play: another release while there is one; for a download's
+     * file its title's stream, only while online, the coordinator never asked for another (L449).
+     */
+    private fun other(launch: PlayerLaunch): PlayerBranches.Other {
+        val download = PlayerBranches.isDownload(launch.uri)
+        return PlayerBranches.other(download, deps.online(), !download && deps.canTryAnother(launch))
     }
 
     /**
@@ -488,7 +511,8 @@ class CastPlaying(private val scope: CoroutineScope, private val deps: CastPlayi
         val connected = link?.link == CastLink.Connected && link.route == feed.launch.cast?.route
         val name = link?.name ?: feed.launch.cast?.name.orEmpty()
         val position = _now.value?.takeIf { it.load == feed.load }?.let(::position) ?: feed.positionMs
-        val another = deps.canTryAnother(feed.launch)
+        val other = other(feed.launch)
+        val another = other != PlayerBranches.Other.None
         val front = deps.inFront.value
         var seek: Long? = null
         var notice = false
@@ -517,7 +541,7 @@ class CastPlaying(private val scope: CoroutineScope, private val deps: CastPlayi
             val shown = p.missing.update(position, waiting = !front, tryAnother = another)
             if (shown.prompt == null) p.stuck = false
             notice = shown.notice
-            _missing.value = shown.prompt?.let { CastPrompt(it.count, it.tryAnother, p.stuck, name) }
+            _missing.value = shown.prompt?.let { CastPrompt(it.count, it.tryAnother, p.stuck, name, streamInstead = it.tryAnother && other == PlayerBranches.Other.StreamInstead) }
             // The slow-stream banner (L134): judged under the prompt too, and shown once the slot is its (W37).
             val slow = p.dip.heard(feed, connected, covered = shown.prompt != null || !front)
             if (slow !== p.slowFor) {

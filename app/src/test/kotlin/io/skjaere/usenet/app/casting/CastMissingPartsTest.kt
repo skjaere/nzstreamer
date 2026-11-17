@@ -5,10 +5,12 @@ import io.skjaere.usenet.app.play.PlayerLaunch
 import io.skjaere.usenet.app.play.SavedRelease
 import io.skjaere.usenet.app.play.VideoTiming
 import io.skjaere.usenet.app.play.WatchTarget
+import io.skjaere.usenet.app.play.missingPartsWords
 import io.skjaere.usenet.core.UsenetUris
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.data.WatchTitle
+import io.skjaere.usenet.player.PlayUris
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
@@ -49,7 +51,9 @@ class CastMissingPartsTest {
         val front = MutableStateFlow(true)
         val sent = mutableListOf<String>()
         val tried = mutableListOf<Pair<PlayerLaunch, Long>>()
+        val streamed = mutableListOf<Pair<PlayerLaunch, Long>>()
         var another = true
+        var online = true
 
         /** How often the coordinator was asked whether there is another release: once a tick. */
         var asked = 0
@@ -59,15 +63,22 @@ class CastMissingPartsTest {
                 feed = feed, link = link, pause = { sent += "pause" }, resume = { sent += "play" }, seekTo = { sent += "seek to $it" },
                 stop = { sent += "stop casting" }, clock = { test.testScheduler.currentTime }, inFront = front,
                 tryAnother = { launch, at -> tried += launch to at }, canTryAnother = { asked++; another },
+                online = { online }, streamInstead = { launch, at -> streamed += launch to at },
             ),
         )
 
         val prompt: CastPrompt? get() = playing.missing.value
 
-        /** The device's player says [state] at [positionMs] now, the server having sent [gaps] and gone on past [passed] of them. */
-        fun device(state: CastPlayerState, positionMs: Long, gaps: List<LongRange> = emptyList(), passed: List<LongRange> = gaps, reported: Long = positionMs) {
+        /**
+         * The device's player says [state] at [positionMs] now, the server having sent [gaps] and gone on past [passed] of
+         * them, of [played] (the episode's stream, else a download's file).
+         */
+        fun device(
+            state: CastPlayerState, positionMs: Long, gaps: List<LongRange> = emptyList(), passed: List<LongRange> = gaps, reported: Long = positionMs,
+            played: PlayerLaunch = launch,
+        ) {
             val now = test.testScheduler.currentTime
-            feed.value = CastFeed("load-1", launch, state, positionMs, length, reported = reported, reportedAt = now, size = size, gaps = gaps, passed = passed)
+            feed.value = CastFeed("load-1", played, state, positionMs, length, reported = reported, reportedAt = now, size = size, gaps = gaps, passed = passed)
             test.runCurrent()
         }
 
@@ -100,6 +111,39 @@ class CastMissingPartsTest {
         f.playing.tryAnother()
         assertEquals(listOf(launch to 1_904_000L), f.tried)
         assertNull(f.prompt)
+    }
+
+    /**
+     * L449: a finished download's file cast with parts its download had no article for asks as a stream's does, but offers
+     * Stream instead in Try another release's place while online: the title streamed to the same device from where it
+     * plays, never another release, so nothing is recorded missing on the providers in use, and the coordinator isn't asked
+     * for another. Offline it is the count alone, which hides by itself, as no stream can start.
+     */
+    @Test
+    fun `a download's file asks to stream instead while online, never for another release, and offline is the count alone`() = runTest {
+        val f = Fixture(this)
+        val downloaded = launch.copy(uri = PlayUris.download("3f2c9e1a-7b4d-4c2e-9a10-5e6f7a8b9c0d"))
+        val three = listOf(gapAt(1_950_000), gapAt(2_000_000), gapAt(2_050_000))
+        f.device(CastPlayerState.Playing, 1_900_000, gaps = three, played = downloaded)
+        f.pass(500)
+        val prompt = assertNotNull(f.prompt)
+        assertEquals(CastPrompt(3, tryAnother = true, stuck = false, device = "Kitchen display", streamInstead = true), prompt)
+        assertEquals("Stream instead? It starts where you are." to "Stream instead", missingPartsWords(prompt.streamInstead))
+        f.playing.tryAnother()
+        assertEquals(listOf(downloaded to 1_900_500L), f.streamed, "streamed instead, from where it plays")
+        assertEquals(emptyList(), f.tried, "another release tried")
+        assertEquals(0, f.asked, "the coordinator asked for another release")
+        assertNull(f.prompt)
+
+        // Offline: the count alone, gone after 5 s of playing.
+        val g = Fixture(this)
+        g.online = false
+        g.device(CastPlayerState.Playing, 1_900_000, gaps = three, played = downloaded)
+        g.pass(500)
+        assertEquals(CastPrompt(3, tryAnother = false, stuck = false, device = "Kitchen display"), g.prompt)
+        g.pass(6_000)
+        assertNull(g.prompt, "5 s of playing")
+        assertEquals(emptyList(), g.streamed + g.tried)
     }
 
     @Test

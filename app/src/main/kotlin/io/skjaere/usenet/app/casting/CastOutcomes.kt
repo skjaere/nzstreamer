@@ -145,11 +145,11 @@ object CastOutcomes {
     /**
      * The reading of the [file] failed, not the device: said of where the phone reads it from. From the providers or the
      * debrid service, the release's fault, which Try another release forgets as the release Resume plays; from a download's
-     * file on this phone, the file's, so the release stays (L448).
+     * file on this phone, the file's, so the release stays (L448), and this phone, which reads the same file, isn't offered.
      */
     private fun providers(file: CastFile) = when (file.source) {
         CastSource.Providers -> CastLoadFailure(CastFailKind.CouldNotPlay, CAST_PROVIDERS, providers = true)
         CastSource.Service -> CastLoadFailure(CastFailKind.CouldNotPlay, CAST_SERVICE, providers = true)
-        CastSource.Download -> CastLoadFailure(CastFailKind.CouldNotPlay, CAST_DOWNLOAD)
+        CastSource.Download -> CastLoadFailure(CastFailKind.CouldNotPlay, CAST_DOWNLOAD, fileUnreadable = true)
     }
 }
