@@ -326,6 +326,9 @@ class ServiceDownloadWriterTest {
         assertEquals(listOf("record 500000", "mark", "record 0", "record 700000"), events)
         // The restart opens again at once; each cut waits 2 s.
         assertEquals(4_000, currentTime)
+        // One connection through the restart too: each read let go before the next is made.
+        assertEquals(1, reads.mostOpen, "never two reads open at once")
+        assertTrue(reads.made.all { it.closed.get() })
         assertContentEquals(data.copyOf(700_000), path.readBytes().copyOf(700_000))
     }
 

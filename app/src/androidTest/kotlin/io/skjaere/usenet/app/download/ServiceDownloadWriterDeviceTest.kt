@@ -207,12 +207,15 @@ class ServiceDownloadWriterDeviceTest {
      * A CDN that answers every read with the whole file (`whole=true`), each body cut after 2 MB: the first body from 0 is
      * taken, the resume at 2 MB answered whole is a server that won't resume, so the file starts again from 0 once, its
      * mark written; the second whole answer to a resume fails it. The bodies aborted at their headers count open at the
-     * fake until its next write to them fails, so the most open at once isn't read here.
+     * fake until its next write to them fails, so the most open at once isn't read there: the app's own reads say each
+     * was let go before the next opened, the restart's among them.
      */
     @Test
     fun aServerThatAnswersAResumeWithTheWholeFileStartsItAgainOnceThenFailsIt() = runBlocking<Unit> {
         faults("whole=true&cut=$WHOLE_CUT")
-        assertEquals(Outcome.Failed(DownloadHostRules.CANT_RESUME), writer().wrote(listing()))
+        val timed = Timed()
+        assertEquals(Outcome.Failed(DownloadHostRules.CANT_RESUME), writer(timed).wrote(listing()))
+        assertEquals("one read open at once", List(4) { listOf("opening", "close") }.flatten(), timed.order("opening", "close"))
         assertEquals(listOf(0L, WHOLE_CUT, 0L, WHOLE_CUT), opens)
         assertEquals(setOf(ID), folder.marked)
         assertEquals(listOf(WHOLE_CUT, 0L, WHOLE_CUT), records)
@@ -345,11 +348,14 @@ class ServiceDownloadWriterDeviceTest {
         waitFor(what, timeoutMs) { true.takeIf { probe() } }
     }
 
-    /** The app's reads, each one's events timed (elapsed real time): its open, its first byte, its abort and its close. */
+    /** The app's reads, each one's events timed (elapsed real time): its open asked and made, its first byte, its abort and its close. */
     private class Timed : ServiceDownloadWriter.Reads {
         private val events = CopyOnWriteArrayList<Pair<String, Long>>()
 
         fun last(what: String): Long? = events.lastOrNull { it.first == what }?.second
+
+        /** The events among [what], in the order they came. */
+        fun order(vararg what: String): List<String> = events.map { it.first }.filter { it in what }
 
         fun firstAfter(what: String, at: Long): Long? = events.firstOrNull { it.first == what && it.second >= at }?.second
 
@@ -362,7 +368,10 @@ class ServiceDownloadWriterDeviceTest {
             return object : ServiceDownloadWriter.Read {
                 private var first = true
 
-                override fun open(position: Long) = read.open(position).also { said("open") }
+                override fun open(position: Long): ServiceDownloadWriter.Answer {
+                    said("opening")
+                    return read.open(position).also { said("open") }
+                }
 
                 override fun read(buffer: ByteArray, offset: Int, length: Int): Int = read.read(buffer, offset, length).also { n ->
                     if (n > 0 && first) {
