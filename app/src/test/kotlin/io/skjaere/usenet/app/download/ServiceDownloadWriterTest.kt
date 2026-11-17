@@ -223,6 +223,25 @@ class ServiceDownloadWriterTest {
         assertNull(writer.live.value)
     }
 
+    /**
+     * A file written whole already (its last record at its end, and its rename or its Done not reached: a volume gone, a
+     * kill) is done at once: nothing is asked of its account and nothing read, while something streams too.
+     */
+    @Test
+    fun `a write from the file's end is done at once, with no lookup, link or read`() = runTest(timeout = 60.seconds) {
+        path.writeBytes(data)
+        assertEquals(Outcome.Done, writer().wrote(from = size))
+        assertTrue(lookups.isEmpty() && a.links.isEmpty() && reads.made.isEmpty() && opens.isEmpty(), "$lookups ${a.links} $opens")
+        assertTrue(records.isEmpty(), "already recorded at its end: $records")
+        assertContentEquals(data, path.readBytes())
+        // Something streaming holds nothing: there is nothing to read.
+        val meter = traffic.open()
+        assertEquals(Outcome.Done, writer().wrote(from = size))
+        meter.close()
+        assertTrue(lookups.isEmpty() && reads.made.isEmpty())
+        assertEquals(0, currentTime)
+    }
+
     @Test
     fun `one read made and one link asked per open, each made once the one before it is let go`() = runTest(timeout = 60.seconds) {
         reads.script(Script(cutAt = 100_000), Script(cutAt = 100_000), Script(refuse = LinkFailure.NoWorkingLink))

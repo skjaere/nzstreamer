@@ -308,6 +308,12 @@ class ServiceDownloadWriter(
         var reopen = false
         // Since when the service has been out of reach on a validated network, reopen after reopen.
         var outOfReach: TimeMark? = null
+        // Written whole already, its record at its end (its rename or its Done not reached): nothing to ask or read.
+        if (run.written >= run.size) {
+            run.out.save()
+            log.info("download {}: written already, {} bytes", run.id, run.size)
+            return Outcome.Done
+        }
         while (true) {
             // Nothing opens while something streams, nor before 10 s after a stream that started since the last body,
             // however short (one that came and went during a wait or a prepare): its stop is kept until its wait is over.
