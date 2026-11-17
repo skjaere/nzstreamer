@@ -51,6 +51,7 @@ import io.skjaere.usenet.app.ui.colors
 import io.skjaere.usenet.app.ui.focusOutline
 import io.skjaere.usenet.core.formatSize
 import io.skjaere.usenet.metadata.TmdbImages
+import io.skjaere.usenet.releases.ParsedRelease
 import io.skjaere.usenet.releases.RankedRelease
 import io.skjaere.usenet.releases.ReleaseReason
 import io.skjaere.usenet.releases.Severity
@@ -66,14 +67,14 @@ fun sourceLabel(s: Source?): String? = when (s) {
 }
 
 /** A release's quality as its name says it: "1080p", "WEB-DL", and HEVC or AV1 (with 10-bit) where it is one of those. */
-fun qualityParts(item: RankedItem): List<String> {
-    val p = item.parsed
-    return listOfNotNull(
-        p.resolution?.let { "${it}p" },
-        sourceLabel(p.source),
-        p.videoCodec?.takeIf { it.name == "Hevc" || it.name == "Av1" }?.let { it.label + if (p.tenBit) " 10-bit" else "" },
-    )
-}
+fun qualityParts(item: RankedItem): List<String> = qualityParts(item.parsed)
+
+/** A name's quality as [p], its parse, says it: a release's, or a file's of an NZB opened on Import. */
+fun qualityParts(p: ParsedRelease): List<String> = listOfNotNull(
+    p.resolution?.let { "${it}p" },
+    sourceLabel(p.source),
+    p.videoCodec?.takeIf { it.name == "Hevc" || it.name == "Av1" }?.let { it.label + if (p.tenBit) " 10-bit" else "" },
+)
 
 /** The short chips for a release: "1080p · WEB-DL · 2.1 GB · ≈ 8.0 Mbps". */
 fun summaryChips(item: RankedItem): List<String> =

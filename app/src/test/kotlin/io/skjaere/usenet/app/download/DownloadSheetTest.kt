@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.download
 
+import io.skjaere.nzbstreamer.stream.StreamableFile
 import io.skjaere.usenet.app.NetworkNow
 import io.skjaere.usenet.app.download.SheetFixtures.DOWNLOADING
 import io.skjaere.usenet.app.download.SheetFixtures.ETHERNET
@@ -12,10 +13,13 @@ import io.skjaere.usenet.app.download.SheetFixtures.inOrder
 import io.skjaere.usenet.app.download.SheetFixtures.nzb
 import io.skjaere.usenet.app.download.SheetFixtures.ranked
 import io.skjaere.usenet.app.play.EpisodePlay
+import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.search.IndexerStatus
 import io.skjaere.usenet.app.search.MovieFind
 import io.skjaere.usenet.app.search.forEpisode
+import io.skjaere.usenet.core.FileCandidate
+import io.skjaere.usenet.core.PreparedNzb
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadKind
@@ -48,6 +52,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.time.LocalDate
 import java.util.Locale
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -446,6 +451,138 @@ class DownloadSheetTest {
         assertEquals(emptyList<IndexerConfig>(), DownloadSheetDeps.usenetOnly(listOf(torrents)))
     }
 
+    /** An imported file's sheet asks no search (L455): each of these fails the test if a sheet asks it. */
+    private fun SheetFakes.unsearched() = apply {
+        finder = { _, _ -> throw AssertionError("an episode's search asked") }
+        films = { _, _ -> throw AssertionError("a film's search asked") }
+        seasons = { _, _ -> throw AssertionError("a season's search asked") }
+    }
+
+    /**
+     * L455: a file of an NZB opened on Import is the release. Its sheet asks no finder and ranks nothing: "This file", its
+     * quality with its exact size (no "about"), the NZB's name, and over the file's name, where the NZB holds more than one
+     * video, that only it is downloaded. The sheet's second line names it as Up next names a release played without TMDB.
+     */
+    @Test
+    fun `an imported file's sheet asks no finder and says This file with its exact size, its NZB and that only it is downloaded`() = runTest {
+        val fakes = SheetFakes().unsearched()
+        val file = assertIs<DownloadSheetState.File>(open(QM_E02_FILE, fakes).state.value)
+        assertEquals(QM_E02_FILE, file.file)
+        assertEquals(emptyList(), fakes.contexts, "nothing searched or ranked")
+        assertEquals(emptyList(), fakes.calls, "nothing queued before Download")
+        assertEquals("Quiet Meridian · S01E02", QM_E02_FILE.subtitle)
+        assertEquals("Quiet Meridian", QM_E02_FILE.title)
+        assertEquals("This file", DownloadSheetModel.THIS_FILE)
+        assertEquals("1080p · WEB-DL · 1.3 GB", DownloadSheetModel.fileQuality(file.file))
+        assertEquals("Season pack · only this file is downloaded:", DownloadSheetModel.onlyThisFile(file.file))
+        // An NZB of one video says nothing of it; one of several named for no season, without its kind.
+        assertNull(DownloadSheetModel.onlyThisFile(imported(videos = 1)))
+        assertEquals("Only this file is downloaded:", DownloadSheetModel.onlyThisFile(imported(nzbTitle = "Quiet.Meridian.Extras.1080p.WEB-DL.H264", videos = 3)))
+        // A file named for nothing: its quality as its NZB's name says it.
+        assertEquals("1080p · WEB-DL · 1.3 GB", DownloadSheetModel.fileQuality(imported(name = "5d41402abc4b2a76b9719d911017c592.mkv")))
+        assertEquals("5d41402abc4b2a76b9719d911017c592", imported(name = "5d41402abc4b2a76b9719d911017c592.mkv").subtitle)
+    }
+
+    /** L455: the space free, read with where the size comes from (the file's), when it starts and the ask's line, as a pick's. */
+    @Test
+    fun `an imported file's sheet says the space free, when it starts, and that Android asks next`() = runTest {
+        val fakes = SheetFakes().unsearched().apply {
+            // 1.0 GB kept free and 2.2 GB a queued download still needs: 14.0 GB left of 17.2.
+            space = DownloadSpace(available = 17_200_000_000, used = 3 * GB, queued = 2_200_000_000, queuedDownloads = 1)
+            rows = listOf(row("q", DownloadState.Queued))
+        }
+        val file = assertIs<DownloadSheetState.File>(open(QM_E02_FILE, fakes).state.value)
+        assertEquals(14 * GB, file.free)
+        assertEquals("14.0 GB free on this device", DownloadSheetModel.free(file.free))
+        assertEquals("The size is the file's, read from the release.", DownloadSheetModel.FILES_SIZE)
+        assertEquals(DownloadStart.AfterQueue(1), file.start)
+        assertFalse(file.asks, "no ask outside the app's activity")
+        assertEquals(DownloadStart.OnWifi, assertIs<DownloadSheetState.File>(open(QM_E02_FILE, SheetFakes().unsearched().apply { network = MOBILE }).state.value).start)
+
+        var asked = false
+        val asking = SheetFakes().unsearched().apply {
+            ask = NotificationAsk(sdk = 33, shown = { true }, granted = { false }, asked = { asked }, markAsked = { asked = true }, launch = { ask?.answered() })
+        }
+        assertTrue(assertIs<DownloadSheetState.File>(open(QM_E02_FILE, asking).state.value).asks)
+    }
+
+    /**
+     * L455: a file that won't fit says what it needs, exactly (no "about": it is the file's own size), and why less is free;
+     * its note keeps Storage settings alone. No Download, and nothing to choose from: no Choose release.
+     */
+    @Test
+    fun `an imported file that won't fit says what it needs exactly, with no Download and no Choose release`() = runTest {
+        // 900 MB free, after the 1.0 GB kept free: the file's 1.4 GB doesn't fit. Sizes as the app says them everywhere.
+        val fakes = SheetFakes().unsearched().apply { space = DownloadSpace(available = 1_900_000_000, used = 0, queued = 0) }
+        val e01 = imported(name = QM_E01, size = 1_400_000_000, index = 0)
+        val sheet = open(e01, fakes)
+        val wontFit = assertIs<DownloadSheetState.FileWontFit>(sheet.state.value)
+        assertEquals(e01, wontFit.file)
+        assertEquals("Needs 1.4 GB · 900 MB free on this device", DownloadSheetModel.needsExactly(wontFit.file.size, wontFit.free))
+        assertEquals("That is after the 1.0 GB kept free for the phone.", DownloadSheetModel.after(wontFit.queued, wontFit.queuedDownloads))
+        assertEquals("Storage settings opens Android's page for making room.", DownloadSheetModel.STORAGE_NOTE)
+        assertEquals("Choose release shows which releases fit. ${DownloadSheetModel.STORAGE_NOTE}", DownloadSheetModel.WONT_FIT_NOTE)
+        sheet.download()
+        advanceUntilIdle()
+        assertEquals(emptyList(), fakes.calls, "no Download for a file that won't fit")
+        assertFalse(sheet.closed.value)
+    }
+
+    /** Back from Android's storage page an imported file is weighed again against the room as it is now, with no search. */
+    @Test
+    fun `back from Android's storage page an imported file is weighed again`() = runTest {
+        val fakes = SheetFakes().unsearched().apply { space = DownloadSpace(available = 1_900_000_000, used = 0, queued = 0) }
+        val sheet = open(imported(name = QM_E01, size = 1_400_000_000, index = 0), fakes)
+        assertIs<DownloadSheetState.FileWontFit>(sheet.state.value)
+        fakes.space = DownloadSpace(available = 15 * GB, used = 0, queued = 0)
+        sheet.shown()
+        runCurrent()
+        assertEquals(14 * GB, assertIs<DownloadSheetState.File>(sheet.state.value).free)
+        // Room taken again meanwhile.
+        fakes.space = DownloadSpace(available = 1_900_000_000, used = 0, queued = 0)
+        sheet.shown()
+        runCurrent()
+        assertIs<DownloadSheetState.FileWontFit>(sheet.state.value)
+        assertEquals(emptyList(), fakes.contexts, "nothing searched")
+    }
+
+    /**
+     * L455, L423: Download queues the file once, through the runner's import: its target, Import's own release of the NZB
+     * at the file's exact size, the file as its pick, and the NZB's bytes with the password typed for it, which the
+     * download keeps; then Android's ask and the host's schedule, and the sheet closes. On a TV the runner queues nothing:
+     * nothing is asked or scheduled.
+     */
+    @Test
+    fun `Download queues an imported file once, with its NZB and the password typed, then asks, schedules and closes`() = runTest {
+        val fakes = SheetFakes().unsearched()
+        val sheet = open(QM_E02_FILE, fakes)
+        sheet.download()
+        sheet.download()
+        advanceUntilIdle()
+        val queued = fakes.imported.single()
+        assertEquals(DownloadTarget.release(QM_ID, 1, QM_E02, QM_NZB), queued.target)
+        assertEquals(DownloadCandidate(IMPORTED, QM_ID, QM_NZB, size = QM_E02_SIZE), queued.candidate)
+        assertEquals(DownloadPick(1, QM_E02, QM_E02_SIZE, QM_ID), queued.pick)
+        assertContentEquals(QM_BYTES, queued.source.nzb)
+        assertEquals(TYPED, queued.source.password)
+        assertEquals(listOf("enqueueImport", "ask", "schedule"), fakes.calls)
+        assertTrue(sheet.closed.value)
+
+        val tv = SheetFakes().unsearched().apply { queues = false }
+        val none = open(QM_E02_FILE, tv)
+        none.download()
+        advanceUntilIdle()
+        assertEquals(listOf("enqueueImport"), tv.calls)
+        assertTrue(none.closed.value)
+    }
+
+    /** The request is held by the sheet and Import: its names and the password are never in a log line or a trace. */
+    @Test
+    fun `an imported file's request names no file, NZB or password in its toString`() {
+        val text = QM_E02_FILE.toString()
+        listOf(QM_E02, QM_NZB, TYPED, "Quiet", "Meridian").forEach { assertFalse(it in text, text) }
+    }
+
     @Test
     fun `an episode's row keeps the show, the episode and its name, and the season's count`() {
         val target = EPISODE.target
@@ -488,6 +625,21 @@ class DownloadSheetTest {
         const val COPPER_BLURAY = "Copper.Crown.2022.1080p.BluRay.x264-DRIFTWOOD"
         const val COPPER_720 = "Copper.Crown.2022.720p.WEB-DL.DDP5.1.H.264-KESTREL"
         const val COPPER_REMUX = "Copper.Crown.2022.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-FERRY"
+
+        /** An NZB opened on Import (L455): Quiet Meridian's first season, its bytes, its id and the password typed for it. */
+        const val QM_NZB = "Quiet.Meridian.S01.1080p.WEB-DL.H264"
+        const val QM_E01 = "Quiet.Meridian.S01E01.1080p.WEB-DL.H264.mkv"
+        const val QM_E02 = "Quiet.Meridian.S01E02.1080p.WEB-DL.H264.mkv"
+        const val QM_E02_SIZE = 1_312_345_678L
+        const val TYPED = "typed-on-import"
+        val QM_BYTES = "<nzb>Quiet Meridian season 1</nzb>".toByteArray()
+        val QM_ID = PreparedNzb.idFor(QM_BYTES)
+
+        /** File [name] at [index] of [size] bytes, of an NZB titled [nzbTitle] that holds [videos] videos, as Import asks for it. */
+        fun imported(name: String = QM_E02, size: Long = QM_E02_SIZE, index: Int = 1, videos: Int = 6, nzbTitle: String = QM_NZB) =
+            DownloadRequest.File(QM_ID, FileCandidate(index, StreamableFile(name, size, index, 0, 0, 0)), nzbTitle, videos, DownloadStorage.Source(QM_BYTES, TYPED))
+
+        val QM_E02_FILE = imported()
 
         /** A film's group of [ranked] releases. */
         fun film(ranked: List<RankedItem>) = ResultGroup("copper crown|2022", GroupKind.Movie, null, emptyList(), null, 2022, ranked, emptyList())

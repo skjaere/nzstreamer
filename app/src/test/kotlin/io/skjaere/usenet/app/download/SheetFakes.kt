@@ -71,6 +71,12 @@ internal class SheetFakes {
     /** The file chosen in a pack that each download queued came with (Choose file, L403): none for any other. */
     val chosen = mutableListOf<ChosenFile?>()
 
+    /** A file of an NZB opened on Import as its Download queued it (L455): what the runner was handed. */
+    class Imported(val target: DownloadTarget, val candidate: DownloadCandidate, val pick: DownloadPick, val source: DownloadStorage.Source)
+
+    /** Each imported file queued, in order. */
+    val imported = mutableListOf<Imported>()
+
     /** Choose file's grab of a pack's NZB, by its release: by default none is there to grab. */
     var nzbs: suspend (RankedItem) -> FetchedNzb = { throw FetchException("Indexer no longer set up") }
 
@@ -119,6 +125,11 @@ internal class SheetFakes {
             calls += "enqueueAll"
             enqueuedAll += items
             if (queues) items.map { queued(it.target, it.candidates) } else emptyList()
+        },
+        enqueueImport = { target, candidate, pick, source ->
+            calls += "enqueueImport"
+            imported += Imported(target, candidate, pick, source)
+            queued(target, listOf(candidate)).takeIf { queues }
         },
         beforeDownload = {
             calls += "ask"

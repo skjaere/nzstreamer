@@ -645,6 +645,8 @@ private fun ChoiceList(choice: DownloadChoice.State.Choosing, onBack: () -> Unit
         is DownloadSheetState.WontFit -> ReleaseList(s.group, choice.row.title, onBack = onBack, failed = failed, mode = s.mode)
         // Never here: a file chosen on this page replaces the download's release at once.
         is DownloadSheetState.Chosen -> ReleaseList(s.group, choice.row.title, onBack = onBack, failed = failed, mode = s.mode)
+        // Never here: Choose release opens nothing for a file opened on Import (DownloadChoice.open), which has no releases.
+        is DownloadSheetState.File, is DownloadSheetState.FileWontFit -> TopBar(DownloadsPage.choosing(choice.row), onBack)
         is DownloadSheetState.NoRelease -> Column(Modifier.fillMaxSize()) {
             TopBar(DownloadsPage.choosing(choice.row), onBack)
             Text(

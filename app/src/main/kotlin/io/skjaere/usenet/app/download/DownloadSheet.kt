@@ -76,7 +76,8 @@ import io.skjaere.usenet.search.ResultGroup
  * Download has queued the download and asked for its host. Choose release opens the release list ranked for downloading
  * over the page; a tap there downloads that release and ends both, and Back comes back to the sheet. A pack's Choose file
  * there opens its files in a sheet over the list (L403, L435); a file chosen comes back to this sheet as its Chosen file,
- * and Close does too, while Cancel and Try another release go back to the list.
+ * and Close does too, while Cancel and Try another release go back to the list. A file of an NZB opened on Import is its
+ * own release (L455): its sheet says it, with no search and no Choose release.
  *
  * Phones and tablets alone (W108, L369): where downloads don't show, it ends at once and shows nothing.
  */
@@ -141,9 +142,10 @@ internal fun DownloadSheet(request: DownloadRequest, onClose: () -> Unit, deps: 
 }
 
 /**
- * What the sheet shows of [model] for [request]: its title, then Finding, the pick, Won't fit or no release, scrolling at
- * large font sizes; [onChoose] opens Choose release's list, [onClose] ends it. A composable of its own, as the sheet's
- * window lays it out at the system's font size whatever a page's own says: a test lays this out at twice the size itself.
+ * What the sheet shows of [model] for [request]: its title, then Finding, the pick, Won't fit or no release, or a file
+ * opened on Import and whether it fits, scrolling at large font sizes; [onChoose] opens Choose release's list, [onClose]
+ * ends it. A composable of its own, as the sheet's window lays it out at the system's font size whatever a page's own
+ * says: a test lays this out at twice the size itself.
  */
 @Composable
 internal fun DownloadSheetContent(request: DownloadRequest, model: DownloadSheetModel, onChoose: () -> Unit, onClose: () -> Unit) {
@@ -158,6 +160,8 @@ internal fun DownloadSheetContent(request: DownloadRequest, model: DownloadSheet
             is DownloadSheetState.WontFit -> WontFit(s, onChoose = onChoose, onStorage = { openStorageSettings(context) }, onCancel = onClose)
             is DownloadSheetState.NoRelease -> NoRelease(s, onClose = onClose)
             is DownloadSheetState.Chosen -> Chosen(s, downloading, onDownload = model::download, onChoose = onChoose, onCancel = onClose)
+            is DownloadSheetState.File -> ImportedFile(s, downloading, onDownload = model::download, onCancel = onClose)
+            is DownloadSheetState.FileWontFit -> ImportedFileWontFit(s, onStorage = { openStorageSettings(context) }, onCancel = onClose)
         }
     }
 }
@@ -224,6 +228,72 @@ private fun Chosen(s: DownloadSheetState.Chosen, busy: Boolean, onDownload: () -
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             SecondaryButton(DownloadSheetModel.CHOOSE_RELEASE, onChoose, Modifier.weight(1f), enabled = !busy)
             SecondaryButton("Cancel", onCancel, Modifier.weight(1f))
+        }
+    }
+}
+
+/**
+ * A file of an NZB opened on Import (L455), in the pick's place: its card ([ImportedFileCard]); the space free with where
+ * the size comes from, when it starts, where downloads stay, and on the first Download on Android 13 and later what Android
+ * asks next (L358). Download, which waits while one is under way ([busy]), and Cancel: no Choose release, as there is
+ * nothing to choose from.
+ */
+@Composable
+private fun ImportedFile(s: DownloadSheetState.File, busy: Boolean, onDownload: () -> Unit, onCancel: () -> Unit) {
+    ImportedFileCard(s.file)
+    GroupCard {
+        Line(DownloadSheetModel.free(s.free), sub = DownloadSheetModel.FILES_SIZE)
+        InsetDivider()
+        StartLine(s.start)
+    }
+    SheetNote(DownloadSheetModel.STAYS)
+    if (s.asks) AskLine()
+    Buttons {
+        PrimaryButton(
+            DownloadSheetModel.TITLE, onDownload, Modifier.fillMaxWidth(), enabled = !busy,
+            leading = { Icon(DownloadIcon, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(22.dp)) },
+        )
+        SecondaryButton("Cancel", onCancel, Modifier.fillMaxWidth())
+    }
+}
+
+/**
+ * A file of an NZB opened on Import that doesn't fit (L455): no Download; what it needs, exactly, and why less is free;
+ * Android's storage page and Cancel, with no Choose release.
+ */
+@Composable
+private fun ImportedFileWontFit(s: DownloadSheetState.FileWontFit, onStorage: () -> Unit, onCancel: () -> Unit) {
+    ImportedFileCard(s.file)
+    GroupCard {
+        Line(DownloadSheetModel.WONT_FIT, colors.warnStrong, lead = { Text("✕", style = AppType.bodyStrong, color = colors.warnStrong) }, strong = true)
+        InsetDivider()
+        Line(DownloadSheetModel.needsExactly(s.file.size, s.free), sub = DownloadSheetModel.after(s.queued, s.queuedDownloads))
+    }
+    SheetNote(DownloadSheetModel.STORAGE_NOTE)
+    Buttons {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            SecondaryButton(DownloadSheetModel.STORAGE_SETTINGS, onStorage, Modifier.weight(1f))
+            SecondaryButton("Cancel", onCancel, Modifier.weight(1f))
+        }
+    }
+}
+
+/**
+ * An imported [file] in the Chosen file's look, in Best match's place: "This file", its quality with its exact size, the
+ * NZB's name, and, where the NZB holds more than one video, the file's name under the line that only it is downloaded. No
+ * chips and no source tag: nothing ranked it.
+ */
+@Composable
+private fun ImportedFileCard(file: DownloadRequest.File) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(DownloadSheetModel.THIS_FILE, style = AppType.small.copy(fontWeight = FontWeight.SemiBold), color = colors.accent)
+        Text(DownloadSheetModel.fileQuality(file), style = AppType.cardTitle, color = colors.text)
+        Text(file.nzbTitle, style = AppType.release, color = colors.chipText)
+        DownloadSheetModel.onlyThisFile(file)?.let { only ->
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(only, style = AppType.secondary, color = colors.textSecondary)
+                Text(file.file.name, style = AppType.release, color = colors.chipText)
+            }
         }
     }
 }

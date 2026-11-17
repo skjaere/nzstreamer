@@ -606,6 +606,7 @@ class DownloadsPageTest {
                 row
             },
             enqueueAll = { error("No season queued from Choose release") },
+            enqueueImport = { _, _, _, _ -> error("No imported file queued from Choose release") },
             beforeDownload = {},
             schedule = { calls += "schedule" },
             outlive = scope,

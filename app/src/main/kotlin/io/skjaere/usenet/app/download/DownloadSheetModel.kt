@@ -10,8 +10,10 @@ import io.skjaere.usenet.app.collection.ReleaseChooser
 import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
 import io.skjaere.usenet.app.play.EpisodePlay
 import io.skjaere.usenet.app.play.FileChoice
+import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.play.PlaybackCoordinator
+import io.skjaere.usenet.app.play.ReleaseName
 import io.skjaere.usenet.app.play.indexerGrab
 import io.skjaere.usenet.app.play.movieNoReleaseNote
 import io.skjaere.usenet.app.play.noRelease
@@ -23,8 +25,11 @@ import io.skjaere.usenet.app.search.forEpisode
 import io.skjaere.usenet.app.search.qualityParts
 import io.skjaere.usenet.app.search.rankedAgain
 import io.skjaere.usenet.core.FetchedNzb
+import io.skjaere.usenet.core.FileCandidate
 import io.skjaere.usenet.core.FilePicker
 import io.skjaere.usenet.core.PrepareOutcome
+import io.skjaere.usenet.core.PreparedNzb
+import io.skjaere.usenet.core.discCopy
 import io.skjaere.usenet.core.formatSize
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
@@ -32,7 +37,9 @@ import io.skjaere.usenet.data.DownloadPrefs
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.newznab.IndexerConfig
 import io.skjaere.usenet.newznab.IndexerKind
+import io.skjaere.usenet.releases.ParsedRelease
 import io.skjaere.usenet.releases.RankingContext
+import io.skjaere.usenet.releases.ReleaseParser
 import io.skjaere.usenet.search.EpisodeRequest
 import io.skjaere.usenet.search.FinderEvent
 import io.skjaere.usenet.search.GroupKind
@@ -60,7 +67,8 @@ import kotlin.coroutines.CoroutineContext
 
 /**
  * What a Download sheet is for (L338): an episode, searched as Choose release searches it, or a film, searched as its page
- * searches it; with the names its download's row keeps, so the Downloads page works offline (L368).
+ * searches it; or a file of an NZB opened on Import, which is its own release, searched for nowhere (L455); with the names
+ * its download's row keeps, so the Downloads page works offline (L368).
  */
 sealed interface DownloadRequest {
     /** The download as its row keeps it: its kind and names, and for an episode its season's count of episodes. */
@@ -96,6 +104,43 @@ sealed interface DownloadRequest {
         override val subtitle: String get() = listOfNotNull(movie.title, movie.subtitle).joinToString(" · ")
         override val seasonEpisodes: Int? get() = null
     }
+
+    /**
+     * [file] of the NZB [nzbId] the user opened on Import, titled [nzbTitle] (L455): nothing searched or ranked, the file is
+     * the release. [videos]: how many videos the NZB holds, by which the sheet says only this file is downloaded. [source]:
+     * the NZB's bytes and the archive password it was opened with, which its download keeps (L423). Named as Up next names a
+     * release played without TMDB: "Quiet Meridian · S01E02".
+     */
+    data class File(val nzbId: String, val file: FileCandidate, val nzbTitle: String, val videos: Int, val source: DownloadStorage.Source) : DownloadRequest {
+        override val target: DownloadTarget get() = DownloadTarget.release(nzbId, file.index, file.name, nzbTitle)
+        override val title: String get() = ReleaseName(file.name).title
+        override val subtitle: String get() = ReleaseName(file.name).let { listOfNotNull(it.title, it.tag) }.joinToString(" · ")
+        override val seasonEpisodes: Int? get() = null
+
+        /** The file's exact size: what it needs on this device. */
+        val size: Long get() = file.size
+
+        /** Import's own release of the NZB, its download's one candidate, at the file's exact size. */
+        val candidate: DownloadCandidate get() = DownloadCandidate(IMPORTED, nzbId, nzbTitle, size = file.size)
+
+        /** The file chosen in the NZB, which Resolve picks by its name and size (L457). */
+        val pick: DownloadPick get() = DownloadPick(file.index, file.name, file.size, nzbId)
+
+        // The file's and the NZB's names and the password are never in a log line or a trace.
+        override fun toString() = "DownloadRequest.File(${file.index}, ${file.size} bytes)"
+
+        companion object {
+            /**
+             * [file] of [nzb], prepared on Import from [bytes], as its Download asks for it, with the password it was opened
+             * with (what prepare unlocked it with, kept in the prepared NZB); null where Import offers no Download: a file that
+             * isn't a video, or any file of a copy of a disc, which plays as no single video (L455).
+             */
+            fun of(nzb: PreparedNzb, file: FileCandidate, bytes: ByteArray): File? {
+                if (!file.isVideo || nzb.discCopy() != null) return null
+                return File(nzb.id, file, nzb.title, nzb.files.count { it.isVideo }, DownloadStorage.Source(bytes, nzb.metadata.orderedArchiveNzb.password))
+            }
+        }
+    }
 }
 
 /**
@@ -121,7 +166,10 @@ sealed interface DownloadStart {
     data class AfterQueue(val ahead: Int) : DownloadStart
 }
 
-/** What the Download sheet shows: [Finding] while it searches, then [Pick], [WontFit] or [NoRelease]. */
+/**
+ * What the Download sheet shows: [Finding] while it searches, then [Pick], [WontFit] or [NoRelease]; for a file opened on
+ * Import, [File] or [FileWontFit], with no search.
+ */
 sealed interface DownloadSheetState {
     /** Searching and ranking, as Choose release does: nothing is grabbed until Download (L338). */
     data object Finding : DownloadSheetState
@@ -176,15 +224,29 @@ sealed interface DownloadSheetState {
         val start: DownloadStart,
         val asks: Boolean,
     ) : DownloadSheetState
+
+    /**
+     * A file of an NZB opened on Import (L455), [file], whose exact size fits what is [free] for a new download: when it
+     * would [start], and whether the sheet says that Android asks about notifications next ([asks], L358).
+     */
+    data class File(val file: DownloadRequest.File, val free: Long, val start: DownloadStart, val asks: Boolean) : DownloadSheetState
+
+    /**
+     * The file doesn't fit: its exact size is more than is [free], which is after the [queued] bytes the [queuedDownloads]
+     * queued downloads still need and what is kept free for the phone (L348). No Download, and no Choose release: the file
+     * is the one release there is (L455).
+     */
+    data class FileWontFit(val file: DownloadRequest.File, val free: Long, val queued: Long, val queuedDownloads: Int) : DownloadSheetState
 }
 
 /**
  * What a Download sheet reads and asks, one title's or a season's: the app's ([of]), or a test's fakes. [findEpisode],
  * [findMovie] and [findSeason] are the searches, by the ranking [context] given; [space], [rows], [prefs], [network] and
  * [charging] what the sheet says of the device; [askDue] and [beforeDownload] Android's notification ask (L358);
- * [enqueue] (one title, with a file chosen in a pack where one was) or [enqueueAll] (a season's episodes) and [schedule]
- * the download, counted at what the sheet reckoned its pick needs until it is resolved, and its host. What Download starts
- * runs in [outlive], on the main thread, so the sheet's close never cuts it short. [grab] and [prepare] are Choose file's.
+ * [enqueue] (one title, with a file chosen in a pack where one was), [enqueueAll] (a season's episodes) or [enqueueImport]
+ * (a file opened on Import) and [schedule] the download, counted at what the sheet reckoned its pick needs until it is
+ * resolved, and its host. What Download starts runs in [outlive], on the main thread, so the sheet's close never cuts it
+ * short. [grab] and [prepare] are Choose file's.
  */
 data class DownloadSheetDeps(
     val findEpisode: (request: EpisodeRequest, context: RankingContext) -> Flow<FinderEvent>,
@@ -206,6 +268,11 @@ data class DownloadSheetDeps(
     val enqueue: suspend (target: DownloadTarget, candidates: List<DownloadCandidate>, need: Long, chosen: ChosenFile?) -> Download?,
     /** A season's episodes queued at once, in episode order ([DownloadRunner.enqueueAll]): the rows queued, none on a TV. */
     val enqueueAll: suspend (items: List<DownloadRunner.QueueItem>) -> List<Download>,
+    /**
+     * A file of an NZB opened on Import queued with the NZB and its password kept for it ([DownloadRunner.enqueueImport],
+     * L423): the row, none on a TV.
+     */
+    val enqueueImport: suspend (target: DownloadTarget, candidate: DownloadCandidate, pick: DownloadPick, source: DownloadStorage.Source) -> Download?,
     val beforeDownload: suspend () -> Unit,
     val schedule: suspend () -> Unit,
     val outlive: CoroutineScope,
@@ -250,6 +317,7 @@ data class DownloadSheetDeps(
                     .also { row -> container.downloadImages.enqueued(listOfNotNull(row)) }
             },
             enqueueAll = { items -> container.downloads.enqueueAll(items).also(container.downloadImages::enqueued) },
+            enqueueImport = { target, candidate, pick, source -> container.downloads.enqueueImport(target, candidate, pick, source) },
             beforeDownload = { ask?.beforeDownload() },
             schedule = { container.downloadHosts.schedule(ScheduleCause.Download) },
             outlive = container.appScope + Dispatchers.Main.immediate,
@@ -286,6 +354,9 @@ data class DownloadSheetDeps(
  * releases that fit, in download order, the one chosen first, and the sheet is [closed]; then Android's notification ask
  * where it is due, then the host's schedule. A file chosen in a pack goes with it: the pack first, the file's size its
  * need, the pack's NZB kept with the download. The search runs in [scope], the sheet's, and goes with it.
+ *
+ * A file of an NZB opened on Import (L455) is searched for nowhere: the sheet weighs its exact size against the room now
+ * ([DownloadSheetState.File], [DownloadSheetState.FileWontFit]), and [download] queues it with the NZB and its password.
  *
  * The list's Choose file ([chooseFile], an episode's alone) opens a pack's files ([choice]) in [scope] too. A file chosen
  * there comes back to the sheet as its Chosen file; where the list replaces download [replacing]'s releases (the Downloads
@@ -389,10 +460,14 @@ class DownloadSheetModel(
     /** What the search found last, which [shown] weighs again. */
     private var found: ResultGroup? = null
 
-    /** Searches, once. */
+    /** Searches, once; a file opened on Import is weighed alone, with no search (L455). */
     fun start() {
         if (started) return
         started = true
+        if (request is DownloadRequest.File) {
+            scope.launch { _state.value = weigh(request) }
+            return
+        }
         chooser.chooseAsFound(request) { search() }
         scope.launch {
             chooser.state.collectLatest { chosen ->
@@ -411,6 +486,14 @@ class DownloadSheetModel(
      * weighed again against the space as it is now, with no new search, so room made there offers Download.
      */
     fun shown() {
+        if (request is DownloadRequest.File) {
+            if (_downloading.value || _closed.value || _state.value == DownloadSheetState.Finding) return
+            scope.launch {
+                val now = weigh(request)
+                if (!_downloading.value && !_closed.value) _state.value = now
+            }
+            return
+        }
         val group = found ?: return
         if (_downloading.value || _closed.value) return
         // A file chosen in a pack stays chosen; the space, the network and when it starts are read again, and its list's.
@@ -428,11 +511,15 @@ class DownloadSheetModel(
         }
     }
 
-    /** The sheet's Download: the pick, with the other releases that fit after it; a file chosen in a pack, the pack first. */
+    /**
+     * The sheet's Download: the pick, with the other releases that fit after it; a file chosen in a pack, the pack first; a
+     * file opened on Import, with its NZB and the password typed for it (L455).
+     */
     fun download() {
         when (val s = _state.value) {
             is DownloadSheetState.Pick -> download(s.best, s.group, s.mode)
             is DownloadSheetState.Chosen -> download(s.item, s.group, s.mode, s.file.sizeBytes, s.chosen)
+            is DownloadSheetState.File -> queue { deps.enqueueImport(s.file.target, s.file.candidate, s.file.pick, s.file.source) }
             else -> Unit
         }
     }
@@ -443,15 +530,23 @@ class DownloadSheetModel(
      * Once. Where the runner queues nothing (a TV's), nothing is asked or scheduled. With a [file] chosen in the pack
      * [chosen] (L403), the download keeps it and the pack's NZB, and counts its exact size as its [need].
      */
-    private fun download(chosen: RankedItem, group: ResultGroup, mode: ReleaseListMode.Download, need: Long = mode.need(chosen), file: ChosenFile? = null) {
+    private fun download(chosen: RankedItem, group: ResultGroup, mode: ReleaseListMode.Download, need: Long = mode.need(chosen), file: ChosenFile? = null) =
+        queue {
+            // Counted at what it needs here, a season pack's share of its episode, not the pack's whole size; a file chosen
+            // in it, at that file's own size.
+            deps.enqueue(request.target, candidates(chosen, group, mode), need, file)
+        }
+
+    /**
+     * Queues the download [enqueue] makes, closes the sheet, then asks Android about notifications where that is due and
+     * schedules the host (L358). Once; where the runner queues nothing (a TV's), nothing is asked or scheduled.
+     */
+    private fun queue(enqueue: suspend () -> Download?) {
         if (_downloading.value || _closed.value) return
         _downloading.value = true
         deps.outlive.launch {
             try {
-                val candidates = candidates(chosen, group, mode)
-                // Counted at what it needs here, a season pack's share of its episode, not the pack's whole size; a file
-                // chosen in it, at that file's own size.
-                deps.enqueue(request.target, candidates, need, file) ?: return@launch
+                enqueue() ?: return@launch
                 _closed.value = true
                 deps.beforeDownload()
                 deps.schedule()
@@ -490,6 +585,8 @@ class DownloadSheetModel(
                     emit(found)
                     shown = true
                 }
+                // Never searched for: [start] weighs it alone.
+                is DownloadRequest.File -> Unit
             }
         } catch (e: CancellationException) {
             throw e
@@ -525,6 +622,17 @@ class DownloadSheetModel(
         return mode
     }
 
+    /**
+     * What the sheet shows for [file], opened on Import (L455): whether its exact size fits the room now, when it would
+     * start, and the ask's line.
+     */
+    private suspend fun weigh(file: DownloadRequest.File): DownloadSheetState {
+        val space = deps.space()
+        val free = space?.free ?: 0
+        if (file.size > free) return DownloadSheetState.FileWontFit(file, free, space?.queued ?: 0, space?.queuedDownloads ?: 0)
+        return DownloadSheetState.File(file, free, startOf(deps.rows(), deps.prefs(), deps.network(), deps.charging), deps.askDue())
+    }
+
     /** [chosen] with its file kept, read again as the sheet is in front again: the space free, when it starts, its list. */
     private suspend fun again(chosen: DownloadSheetState.Chosen): DownloadSheetState.Chosen {
         val free = deps.space()?.free ?: 0
@@ -544,7 +652,13 @@ class DownloadSheetModel(
         const val STAYS = "Downloads stay in NZStreamer's own storage on this device, and are deleted if you uninstall the app."
         const val ASKS = "Android asks next whether NZStreamer may show notifications. They show how the download is going, with Pause and Cancel."
         const val WONT_FIT = "Won't fit on this device"
-        const val WONT_FIT_NOTE = "Choose release shows which releases fit. Storage settings opens Android's page for making room."
+
+        /** Won't fit's note for a file opened on Import, which has no release to choose from (L455): the storage page's line alone. */
+        const val STORAGE_NOTE = "Storage settings opens Android's page for making room."
+        const val WONT_FIT_NOTE = "Choose release shows which releases fit. $STORAGE_NOTE"
+
+        /** A file opened on Import's card, in Best match's place (L455). */
+        const val THIS_FILE = "This file"
         const val NO_RELEASE = "No playable release found"
         const val CHOOSE_RELEASE = "Choose release"
         const val STORAGE_SETTINGS = "Storage settings"
@@ -602,7 +716,19 @@ class DownloadSheetModel(
         fun chosenQuality(chosen: DownloadSheetState.Chosen): String = (qualityParts(chosen.item) + formatSize(chosen.file.sizeBytes)).joinToString(" · ")
 
         /** Over the chosen file's name: "Season pack · only this file is downloaded:"; a release of several episodes, without its kind. */
-        fun onlyThisFile(item: RankedItem): String = if (item.parsed.isSeasonPack) "Season pack · only this file is downloaded:" else "Only this file is downloaded:"
+        fun onlyThisFile(item: RankedItem): String = onlyThisFile(item.parsed)
+
+        private fun onlyThisFile(parsed: ParsedRelease): String = if (parsed.isSeasonPack) "Season pack · only this file is downloaded:" else "Only this file is downloaded:"
+
+        /**
+         * "1080p · WEB-DL · 1.3 GB": a file opened on Import's quality as its name says it, else as its NZB's does, and its
+         * exact size (L455).
+         */
+        fun fileQuality(file: DownloadRequest.File): String =
+            (qualityParts(ReleaseParser.parse(file.file.name)).ifEmpty { qualityParts(ReleaseParser.parse(file.nzbTitle)) } + formatSize(file.size)).joinToString(" · ")
+
+        /** Over a file opened on Import's name, where its NZB holds more than one video; null where it is the one. */
+        fun onlyThisFile(file: DownloadRequest.File): String? = if (file.videos > 1) onlyThisFile(ReleaseParser.parse(file.nzbTitle)) else null
 
         /** "14.0 GB free on this device". */
         fun free(free: Long): String = "${formatSize(free)} free on this device"
@@ -627,6 +753,9 @@ class DownloadSheetModel(
 
         /** "Needs about 4.3 GB · 3.0 GB free on this device". */
         fun needs(need: Long, free: Long): String = "Needs about ${formatSize(need)} · ${free(free)}"
+
+        /** "Needs 1.4 GB · 900 MB free on this device": a file opened on Import's exact size, with no "about" (L455). */
+        fun needsExactly(need: Long, free: Long): String = "Needs ${formatSize(need)} · ${free(free)}"
 
         /**
          * Why less is free than Android's own page says: "That is after the 1.2 GB the queued download still needs, and the

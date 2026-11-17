@@ -14,7 +14,8 @@ import kotlinx.coroutines.launch
 /**
  * The import screen's work: reads a picked file, prepares it with [prepare] and unlocks it with a
  * password, or prepares it again once a provider is set up. One file at a time: picking another
- * drops the one still being read or prepared.
+ * drops the one still being read or prepared. The file shown Ready keeps its bytes for its
+ * downloads ([readyBytes], L455) until a reset or another file.
  */
 class NzbImporter(
     private val scope: CoroutineScope,
@@ -29,6 +30,12 @@ class NzbImporter(
      * [retry] prepare again.
      */
     private var locked: Pair<ByteArray, String>? = null
+
+    /**
+     * The file shown Ready: its NZB's id and its bytes, which a download of its files keeps with the archive password
+     * (L455). The NZB store keeps 11 and Stored data clears it, so they are kept here while it is shown.
+     */
+    private var ready: Pair<String, ByteArray>? = null
 
     /** Opens the file [read] returns (its bytes and title). */
     fun open(read: suspend () -> Pair<ByteArray, String>) = start(ImportUi.Working(null)) {
@@ -68,10 +75,14 @@ class NzbImporter(
         start(ImportUi.Working(title)) { prepareAndShow(bytes, title, null) }
     }
 
+    /** The bytes of the file shown Ready while it is the NZB [nzbId]; null for any other, or none shown. */
+    fun readyBytes(nzbId: String): ByteArray? = ready?.takeIf { it.first == nzbId }?.second
+
     fun reset() {
         job?.cancel()
         job = null
         locked = null
+        ready = null
         _state.value = ImportUi.Idle
     }
 
@@ -79,6 +90,7 @@ class NzbImporter(
     private fun start(working: ImportUi.Working, block: suspend CoroutineScope.() -> Unit) {
         job?.cancel()
         locked = null
+        ready = null
         _state.value = working
         job = scope.launch(block = block)
     }
@@ -87,6 +99,7 @@ class NzbImporter(
         val next = prepare(bytes, title, password)
         currentCoroutineContext().ensureActive()
         locked = (bytes to title).takeIf { next is ImportUi.NeedsPassword || next is ImportUi.NeedsProvider }
+        ready = (next as? ImportUi.Ready)?.let { it.nzb.id to bytes }
         _state.value = next
     }
 }

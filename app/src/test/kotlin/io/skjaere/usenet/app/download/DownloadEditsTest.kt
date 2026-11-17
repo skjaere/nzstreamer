@@ -346,6 +346,7 @@ internal class PageFakes {
             askDue = { false },
             enqueue = { _, _, _, _ -> null },
             enqueueAll = { error("No season queued from the Downloads page") },
+            enqueueImport = { _, _, _, _ -> error("No imported file queued from the Downloads page") },
             beforeDownload = {},
             schedule = {},
             outlive = outlive,
