@@ -459,7 +459,7 @@ class ShowScreenDeviceTest {
      * L409: under the watched bar the show's line, from the page's own downloads: how many episodes are downloaded and their
      * size, then how many are still in the queue; none until one is downloaded, and one whose release wasn't kept (the play
      * hook has no launch for it) isn't counted. A link to the show's downloads, with the 16 dp mark before its words, heard as
-     * a button by them.
+     * a button by them, once: the "›" drawn after them is no text of the button's.
      */
     @Test
     fun theShowsLineCountsItsDownloadsAndOpensTheShowsDownloads() {
@@ -477,7 +477,10 @@ class ShowScreenDeviceTest {
         compose.waitUntil(10_000) { exists(hasContentDescription(words)) }
         val line = compose.onNode(hasContentDescription(words)).fetchSemanticsNode()
         assertEquals(Role.Button, line.config.getOrNull(SemanticsProperties.Role))
-        assertTrue(hasText("$words\u00A0›").matches(line))
+        // Its words heard once, as its own: no text of its children's said after them.
+        assertEquals(listOf(words), line.config.getOrNull(SemanticsProperties.ContentDescription))
+        assertEquals("heard once", null, line.config.getOrNull(SemanticsProperties.Text))
+        assertTrue("drawn with its ›", compose.onAllNodes(hasText("$words\u00A0›"), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
         // Under the watched bar, before Play.
         val watched = compose.onNode(hasText("0 of 5 watched")).fetchSemanticsNode().boundsInRoot
         val play = compose.onNode(hasText("Play S01E01", substring = true)).fetchSemanticsNode().boundsInRoot

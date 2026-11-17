@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -601,7 +602,7 @@ private fun ShowHeader(
 /**
  * The show's line under its watched bar (L409): the 16 dp tray with its tick, then "3 downloaded · 4.1 GB · 5 in the
  * queue". With the show's downloads to open ([onClick]) it is a link in the accent, "›" after it, heard as a button by its
- * words; without, muted. The words wrap whole at large sizes, the mark beside their first line.
+ * words once; without, muted. The words wrap whole at large sizes, the mark beside their first line.
  */
 @Composable
 private fun ShowDownloadLine(line: String, onClick: (() -> Unit)?) {
@@ -611,11 +612,13 @@ private fun ShowDownloadLine(line: String, onClick: (() -> Unit)?) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = 40.dp)
             .then(
+                // Its words alone, in its children's place: TalkBack would say a merged label and then the text drawn ("›" and
+                // all) again.
                 if (onClick != null) {
                     Modifier.focusOutline(RoundedCornerShape(8.dp), fill = false).clickable(role = Role.Button, onClick = onClick)
-                        .semantics(mergeDescendants = true) { contentDescription = line }
+                        .clearAndSetSemantics { contentDescription = line }
                 } else {
-                    Modifier.semantics(mergeDescendants = true) { contentDescription = line }
+                    Modifier.clearAndSetSemantics { contentDescription = line }
                 },
             )
             .padding(vertical = 10.dp),
