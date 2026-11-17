@@ -559,8 +559,9 @@ class CastPlaying(private val scope: CoroutineScope, private val deps: CastPlayi
 
     /**
      * Makes [slow]'s banner for [p]'s play on [name]: the hint by the maximums set (W52, W64), the slow source said by where
-     * the phone reads the play (the debrid service for a play from one, L220; the Wi-Fi alone for a download's file, L448),
-     * and Try a smaller release where the play has one (W2); shown while it is still the dip there and the slot is its.
+     * the phone reads the play (the debrid service for a play from one, L220; the Wi-Fi alone for a download's file, with
+     * no hint, L448), and Try a smaller release where the play has one (W2); shown while it is still the dip there and the
+     * slot is its.
      */
     private fun banner(p: Parts, slow: CastDip.Slow, launch: PlayerLaunch, name: String) {
         scope.launch {

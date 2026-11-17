@@ -106,7 +106,8 @@ internal object SlowStream {
 /**
  * What the slow-stream banner says during a cast (W52, W64, L134; CsPhoneSlowCast): [SlowStream]'s headline and numbers
  * (what reached the device against the file's bitrate), which part is slow ([cause]), then a hint about Maximum bitrate
- * when casting ([hint]); for a release above a maximum, only that it is (a hand pick, or one tried last).
+ * when casting ([hint]); for a release above a maximum, only that it is (a hand pick, or one tried last). For a download's
+ * file, which part is slow alone (L448).
  */
 internal object CastSlowStream {
     /**
@@ -149,7 +150,9 @@ internal object CastSlowStream {
 
     /**
      * The banner's words for [slow] on [device], with the maximums set (null: not set), for a play read from [source];
-     * TalkBack's once, the numbers in words.
+     * TalkBack's once, the numbers in words. A download's file says which part is slow and nothing more (L448): it was
+     * ranked for downloading with no maximum, so it may well be above one, and its title's next Play casts the same file,
+     * so neither the maximum nor smaller releases next time say anything of it.
      */
     fun shown(
         slow: CastDip.Slow, device: String, max: Int?, castMax: Int?, choices: List<Int> = PlaybackPrefs.MAX_BITRATES_MBPS, source: CastSource = CastSource.Providers,
@@ -157,8 +160,11 @@ internal object CastSlowStream {
         val dip = slow.dip
         val cause = cause(slow.cause, device, source)
         // Above a maximum, that alone: which part is slow says nothing a release the user let through needs.
-        val said = above(dip.bitrateBps, max, castMax)?.let(::listOf)
-            ?: listOfNotNull(SlowStream.Hint(cause, cause), hint(dip.rateBps, dip.bitrateBps, max, castMax, choices))
+        val said = if (source == CastSource.Download) {
+            listOf(SlowStream.Hint(cause, cause))
+        } else {
+            above(dip.bitrateBps, max, castMax)?.let(::listOf) ?: listOfNotNull(SlowStream.Hint(cause, cause), hint(dip.rateBps, dip.bitrateBps, max, castMax, choices))
+        }
         val spoken = (listOf(SlowStream.HEADLINE, SlowStream.spokenNumbers(dip.rateBps, dip.bitrateBps)) + said.map { it.spoken.removeSuffix(".") })
             .joinToString(". ") + "."
         return SlowStream.Shown(SlowStream.numbers(dip.rateBps, dip.bitrateBps), said.joinToString(" ") { it.text }, spoken)

@@ -149,14 +149,15 @@ class CastPlayingSlowTest {
 
     /**
      * L448: a download's cast reads the file on this phone, so its dip names the Wi-Fi to the device, though the server's
-     * answers waited more on the file than on the device: there are no providers to name.
+     * answers waited more on the file than on the device: there are no providers to name, and no Maximum bitrate when
+     * casting picks anything else for a file already downloaded.
      */
     @Test
-    fun `a download's cast slow at its source says the Wi-Fi is the slow part`() = runTest {
+    fun `a download's cast slow at its source says the Wi-Fi is the slow part, and that alone`() = runTest {
         val f = Fixture(this, fromDownload)
         f.counts(17)
         val banner = assertNotNull(f.banner)
-        assertTrue(banner.shown.hint.orEmpty().startsWith("The Wi-Fi to Kitchen display is the slow part."), banner.shown.hint)
+        assertEquals("The Wi-Fi to Kitchen display is the slow part.", banner.shown.hint, "the Wi-Fi alone, no Maximum bitrate")
         assertFalse("providers" in banner.shown.spoken, banner.shown.spoken)
     }
 

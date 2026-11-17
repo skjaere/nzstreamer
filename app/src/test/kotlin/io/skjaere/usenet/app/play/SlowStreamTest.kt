@@ -220,22 +220,30 @@ class SlowStreamTest {
 
     /**
      * L448: a download's file is read on this phone, so a cast of it is slow on the Wi-Fi alone: whichever part the dip
-     * found waiting more, the banner names the Wi-Fi to the device, never the providers or a service.
+     * found waiting more, the banner names the Wi-Fi to the device, never the providers or a service. It says that alone:
+     * a download is ranked with no maximum, so its file may be above one, and its title's next Play casts the same file,
+     * so neither a maximum nor smaller releases next time say anything of it.
      */
     @Test
-    fun `during a download's cast the Wi-Fi is the slow part, whichever part waited more`() {
+    fun `during a download's cast the Wi-Fi is the slow part alone, whichever part waited more`() {
         assertEquals("The Wi-Fi to Kitchen display is the slow part.", CastSlowStream.cause(CastDip.Cause.Providers, "Kitchen display", CastSource.Download))
         assertEquals("The Wi-Fi to Kitchen display is the slow part.", CastSlowStream.cause(CastDip.Cause.WiFi, "Kitchen display", CastSource.Download))
         val download = CastSlowStream.shown(
             CastDip.Slow(DipDetector.Dip(mbps(13.0), mbps(31.0)), CastDip.Cause.Providers), "Kitchen display", max = null, castMax = 40, choices = choices,
             source = CastSource.Download,
         )
-        assertEquals(
-            "The Wi-Fi to Kitchen display is the slow part. Lowering Maximum bitrate when casting to 10 Mbps (Settings › Quality and languages) picks smaller " +
-                "releases next time.",
-            download.hint,
+        assertEquals("13 of 31 Mbps", download.numbers)
+        assertEquals("The Wi-Fi to Kitchen display is the slow part.", download.hint)
+        assertEquals("Streaming is slower than this video needs. 13 of 31 megabits per second. The Wi-Fi to Kitchen display is the slow part.", download.spoken)
+        // A file above the maximum when casting: the Wi-Fi all the same, never the maximum.
+        val above = CastSlowStream.shown(
+            CastDip.Slow(DipDetector.Dip(mbps(19.0), mbps(40.0)), CastDip.Cause.WiFi), "Kitchen display", max = 30, castMax = 20, choices = choices,
+            source = CastSource.Download,
         )
-        listOf(download.hint.orEmpty(), download.spoken).forEach { assertFalse("providers" in it || "debrid" in it, it) }
+        assertEquals("The Wi-Fi to Kitchen display is the slow part.", above.hint)
+        listOf(download.hint.orEmpty(), download.spoken, above.hint.orEmpty(), above.spoken).forEach {
+            assertFalse("providers" in it || "debrid" in it || "Maximum" in it || "above" in it, it)
+        }
     }
 
     /** What the banner shows of a dip, and what TalkBack reads once as it appears (QlPhoneTalkBack). */
