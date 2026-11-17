@@ -260,6 +260,28 @@ class ServiceDownloadWriterTest {
         assertTrue(reads.made.all { it.uri == PlayUris.service(entry.id, 1) })
     }
 
+    /**
+     * One link per open (L419): a fresh link that answers as a dead one does (a 403, a page) gets no other within its
+     * open, where a play's source would ask one; it is no working link from a fresh link, a counted reopen after its wait,
+     * and six in a row fail it.
+     */
+    @Test
+    fun `a fresh link that answers as a dead one gets no other within its open, a counted reopen`() = runTest(timeout = 60.seconds) {
+        reads.script(Script(dead = 1))
+        assertEquals(Outcome.Done, writer().wrote())
+        assertEquals(listOf(0L, 0L), opens)
+        assertEquals(2, a.links.size, "one link per open")
+        assertEquals(listOf(1, 1), reads.made.map { it.gets.get() }, "the dead link's open not made again")
+        assertEquals(2_000, currentTime)
+
+        reset()
+        reads.script(*Array(7) { Script(dead = 1) })
+        assertEquals(Outcome.Failed(DownloadHostRules.SERVICE_KEPT_FAILING), writer().wrote())
+        assertEquals(7, opens.size)
+        assertEquals(7, a.links.size)
+        assertTrue(reads.made.all { it.gets.get() == 1 })
+    }
+
     @Test
     fun `an answer of another length or another total is no working link, as is a byte past the size where it says neither`() = runTest(timeout = 60.seconds) {
         reads.script(
@@ -889,7 +911,9 @@ class ServiceDownloadWriterTest {
      * else with [length] and [total], then its body from the byte asked: cut after [cutAt] bytes (an IOException), ended
      * early after [endAt], waiting on the CDN after [blockAt] until aborted (then as [afterAbort] says), or meeting a broken
      * state after [breakAt] (an IllegalStateException); [past] bytes more after the file's end. [openBreaks] throws such
-     * a state at the open. [opened] hears it open; [onRead], each read of every body, counted together.
+     * a state at the open. [dead] answers the open's link gives as a dead link does (a 403), each asking the resolver for
+     * a fresh one and opening again with it, as a ServiceDataSource does, a second being final. [opened] hears it open;
+     * [onRead], each read of every body, counted together.
      */
     private inner class Script(
         val refuse: LinkFailure? = null,
@@ -902,6 +926,7 @@ class ServiceDownloadWriterTest {
         val afterAbort: AfterAbort = AfterAbort.Throws,
         val breakAt: Long? = null,
         val openBreaks: Boolean = false,
+        val dead: Int = 0,
         val past: Int = 0,
         val opened: () -> Unit = {},
         val onRead: (Int) -> Unit = {},
@@ -953,6 +978,9 @@ class ServiceDownloadWriterTest {
 
         inner class Read(private val resolver: LinkResolver, val uri: String, private val script: Script) : ServiceDownloadWriter.Read {
             @Volatile var link: HttpLink? = null
+
+            /** The GETs its open made: one per link it opened with. */
+            val gets = AtomicInteger()
             val aborted = AtomicBoolean()
 
             /** Whether an abort came while a read was under way: from another thread, in its buffers. */
@@ -967,7 +995,16 @@ class ServiceDownloadWriterTest {
 
             override fun open(position: Long): ServiceDownloadWriter.Answer {
                 if (aborted.get()) throw InterruptedIOException("aborted")
-                link = resolver.link(PlayUris.parse(uri) as PlayUris.Target.Service, null)
+                val target = PlayUris.parse(uri) as PlayUris.Target.Service
+                var link = resolver.link(target, null)
+                gets.incrementAndGet()
+                for (answered in 1..script.dead) {
+                    // A dead link's answer: one fresh link asked and the GET made again with it; a second such answer is final.
+                    if (answered > 1) throw LinkUnavailable(LinkFailure.NoWorkingLink)
+                    link = resolver.link(target, link)
+                    gets.incrementAndGet()
+                }
+                this.link = link
                 script.opened()
                 script.refuse?.let { throw LinkUnavailable(it) }
                 if (script.unreached) throw ConnectException("Connection refused")

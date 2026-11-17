@@ -38,7 +38,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -59,10 +58,10 @@ import kotlin.time.TimeSource
  * Writes a debrid download's file (L419, L424, L471): the file the row's own copy of its listing names (its
  * [DebridListingStore.Entry], L420), from the safe offset to its end, into the download's own file ([RecordedFile]), over
  * one connection. One read is open at a time, the next made only once the last is closed; each is a ranged GET from the
- * byte reached with a fresh link from the row's own account ([accounts], L422's gated lookup), through a read of its own
- * ([reads]: the app's makes a new ServiceDataSource.Factory each, metered nowhere, so no link a factory held is read
- * again). A link that isn't HTTPS is never read, but where the endpoints point at the fakes ([httpsOnly]). One write at a
- * time; it blocks on its reads and its file on [dispatcher].
+ * byte reached with a fresh link from the row's own account ([accounts], L422's gated lookup), one link per open, through
+ * a read of its own ([reads]: the app's makes a new ServiceDataSource.Factory each, metered nowhere, so no link a factory
+ * held is read again). A link that isn't HTTPS is never read, but where the endpoints point at the fakes ([httpsOnly]).
+ * One write at a time; it blocks on its reads and its file on [dispatcher].
  *
  * **An answer** must be the rest of the file: its length the size less the byte asked from, and the total its
  * `Content-Range` names, where it names one, the size. Any other is no working link. One that says neither is read to the
@@ -450,7 +449,7 @@ class ServiceDownloadWriter(
         } catch (e: LinkUnavailable) {
             return Ended.Refused(e.failure)
         }
-        val read = reads.make(resolver(run, service, link), PlayUris.service(run.entry.id, run.file.index))
+        val read = reads.make(resolver(link), PlayUris.service(run.entry.id, run.file.index))
         // Seen by a stream's start from here on; and the start before this is seen below.
         run.current = read
         var whole = false
@@ -540,18 +539,13 @@ class ServiceDownloadWriter(
     }
 
     /**
-     * The links one read opens with: [first] first, the one asked for it; then, for a dead link's refresh within the same
-     * open, a fresh one from [service], as a play's source asks.
+     * The link one read opens with: [first], the fresh one asked for it, alone. A dead answer to it (401, 403, 404, 410, a
+     * page) gets no other within the open, where a play's source would ask one: it is no working link from a fresh link,
+     * a counted reopen after its wait (L419), so each open asks one link.
      */
-    private fun resolver(run: Run, service: DebridService, first: HttpLink): LinkResolver {
+    private fun resolver(first: HttpLink): LinkResolver {
         val unused = AtomicReference<HttpLink?>(first)
-        return LinkResolver { _, _ ->
-            unused.getAndSet(null) ?: try {
-                runBlocking { link(run, service) }
-            } catch (e: ServiceException) {
-                throw LinkUnavailable(ServiceLinks.failureOf(e.error, service.kind))
-            }
-        }
+        return LinkResolver { _, _ -> unused.getAndSet(null) ?: throw LinkUnavailable(LinkFailure.NoWorkingLink) }
     }
 
     /**

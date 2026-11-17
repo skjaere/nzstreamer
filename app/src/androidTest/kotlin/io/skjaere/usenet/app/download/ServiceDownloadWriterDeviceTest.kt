@@ -233,6 +233,21 @@ class ServiceDownloadWriterDeviceTest {
         assertEquals("one body open at once", 1, counts().getInt("cdnOpenMax"))
     }
 
+    /**
+     * One link per open (L419): a link whose CDN answers with a page in place of the file (a dead link's answer) gets no
+     * other within its open, where a play's source would ask one: no working link, a counted reopen, each with its own.
+     */
+    @Test
+    fun aLinkAnsweredWithAPageGetsNoOtherWithinItsOpen() = runBlocking<Unit> {
+        faults("page=true")
+        assertEquals(Outcome.Failed(DownloadHostRules.SERVICE_KEPT_FAILING), writer(firstBackoff = 100.milliseconds).wrote(listing()))
+        assertEquals(List(7) { 0L }, opens)
+        assertEquals("one link per open", opens.size, links())
+        assertEquals("one GET per open", opens.size, cdn(200))
+        assertTrue(records.all { it == 0L })
+        report(M_REOPEN, "a page in place of the file: ${opens.size} opens, ${links()} links asked")
+    }
+
     @Test
     fun aContentRangeOfAnotherTotalIsNoWorkingLink() = runBlocking<Unit> {
         faults("total=999")
