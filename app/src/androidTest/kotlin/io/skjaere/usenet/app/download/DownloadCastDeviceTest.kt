@@ -32,6 +32,7 @@ import io.skjaere.usenet.app.cast.FakeRoutes
 import io.skjaere.usenet.app.cast.GoogleCast
 import io.skjaere.usenet.app.cast.StandInReceiver
 import io.skjaere.usenet.app.cast.castRoute
+import io.skjaere.usenet.app.casting.CAST_DOWNLOAD
 import io.skjaere.usenet.app.casting.CastEvent
 import io.skjaere.usenet.app.casting.CastEventHub
 import io.skjaere.usenet.app.casting.CastFailKind
@@ -110,7 +111,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * - The LOAD's address serves the file byte for byte, from its head and from a middle byte, and the device plays it.
  * - Nothing in the LOAD or in the answers' headers names the file, its path, the release or the download.
  * - A Remove during the cast keeps the file while the cast plays, and it goes as the cast ends; Delete all the same.
- * - The file deleted from outside first: "The downloaded file is gone", nothing sent, and the row Failed.
+ * - The file deleted from outside first, or cut short: "The downloaded file is gone", nothing sent, and the row Failed.
+ * - The file cut short once the cast began: "Couldn't read the downloaded file", nothing put on the release.
  * - Offline (the container's own override, L438): the LOAD goes within a second with no TMDB lookup, the session's
  *   picture the stored still, and the LOAD's picture TMDB's address for it.
  * - A row Delete once watched has taken: its hold refused, "The downloaded file is gone", nothing sent.
@@ -354,6 +356,31 @@ class DownloadCastDeviceTest {
         assertEquals("nothing sent", loads, remote!!.loads.size)
         val after = waitFor("the row failed") { runBlocking { dao.get(row.id) }?.takeIf { it.state == DownloadState.Failed } }
         assertEquals(DownloadStorage.FILE_GONE, after.reason)
+    }
+
+    /**
+     * L448: a download's file that can't be read once the cast has begun (cut short as the device seeks) is the file's
+     * fault, never the release's: the device's network error fails the cast in "Couldn't read the downloaded file", with
+     * nothing of it put on the release, so Resume keeps it, and with no Play on this phone, which reads the same file.
+     */
+    @Test
+    fun aFileThatCantBeReadOnceTheCastBeganFailsInTheDownloadedFilesWords() = runBlocking<Unit> {
+        val row = finished(2)
+        val (moving, item) = castToTheLoad(row)
+        standIn(item)
+        val head = receiver.ask(0) ?: throw AssertionError("the head's request unanswered")
+        assertEquals(206, head.status)
+        head.read(SEEK_READ)
+        RandomAccessFile(checkNotNull(storage.file(row)), "rw").use { it.setLength(MIDDLE) }
+        val seek = receiver.ask(MIDDLE) ?: throw AssertionError("the seek's request unanswered")
+        assertTrue("the seek's read failed", seek.endsHere())
+        // The device gives up on what it couldn't read (a network error), before it played.
+        onMainThread { events.tell(CastEvent.MediaError(MEDIA_NETWORK)) }
+        val failed = withTimeout(LOAD_MILLIS) { moving.await() } as? MoveOutcome.Failed ?: throw AssertionError("the cast didn't fail")
+        assertEquals(CastFailKind.CouldNotPlay, failed.failure.kind)
+        assertEquals(CAST_DOWNLOAD, failed.failure.reason)
+        assertFalse("put on the release", failed.failure.providers)
+        assertTrue("this phone offered, which reads the same file", failed.failure.fileUnreadable)
     }
 
     /**
@@ -902,6 +929,9 @@ class DownloadCastDeviceTest {
         val SILENT = ProbedTracks(
             listOf(ProbedTrack(MimeTypes.VIDEO_H264, "H.264", width = 1280, height = 720, bitDepth = 8)), listOf(ProbedTrack(MimeTypes.AUDIO_DTS, "DTS", "en", channels = 6)),
         )
+
+        /** The receiver's detailed code for a network error (MEDIA_NETWORK). */
+        const val MEDIA_NETWORK = 103
 
         /** Three recorded gaps a minute or so into the film, 1000 bytes each. */
         const val GAP_AT = 120_000L
