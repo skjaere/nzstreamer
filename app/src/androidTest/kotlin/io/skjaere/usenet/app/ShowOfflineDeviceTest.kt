@@ -23,6 +23,13 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
+import io.skjaere.usenet.app.cast.CastFakes
+import io.skjaere.usenet.app.cast.CastSeams
+import io.skjaere.usenet.app.cast.FakeConnector
+import io.skjaere.usenet.app.cast.FakeLauncher
+import io.skjaere.usenet.app.cast.FakeRoutes
+import io.skjaere.usenet.app.cast.castRoute
+import io.skjaere.usenet.app.casting.CastLink
 import io.skjaere.usenet.app.collection.ShowScreen
 import io.skjaere.usenet.app.download.DownloadFixtures
 import io.skjaere.usenet.app.download.DownloadJobService
@@ -30,6 +37,8 @@ import io.skjaere.usenet.app.download.DownloadNotifications
 import io.skjaere.usenet.app.download.DownloadsPageSeeds
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.assertWhole
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.show
+import io.skjaere.usenet.app.link.PlayChoice
+import io.skjaere.usenet.app.link.PlayTarget
 import io.skjaere.usenet.app.play.PlayState
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.play.PlayerLaunch
@@ -82,11 +91,13 @@ import java.util.concurrent.atomic.AtomicInteger
  * and Download; the header's Play greys once the next episode isn't downloaded; a downloaded episode plays its file
  * through the coordinator's hook; the show's line opens its downloads. With no page from TMDB (its seam refusing), the
  * show's downloads come under the error and open its downloads, online too. At twice the text size the line and the bar
- * are whole.
+ * are whole. With Kitchen display chosen (Cast's fakes, L73), offline greys as with This phone (L450): what isn't
+ * downloaded is greyed and says why, the downloaded episodes and the header's Play live.
  *
  * TMDB's seam answers for the show; the app's indexers are off while a case runs, so nothing could be searched for.
  * Put back after each, whatever happened: the offline override, the player finished, the rows and their files deleted,
- * the downloads' jobs cancelled, the library's marks and the settings as they were.
+ * the downloads' jobs cancelled, the library's marks and the settings as they were, and Play on (This phone) and Cast's
+ * seams where a case chose Kitchen display.
  */
 @RunWith(AndroidJUnit4::class)
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -113,6 +124,11 @@ class ShowOfflineDeviceTest {
     private val opened = CopyOnWriteArrayList<Int>()
     private val today = LocalDate.now()
     private var saved: AppSettings? = null
+
+    // Cast's, where a case chose Kitchen display: put back after.
+    private val launcher = FakeLauncher()
+    private val kitchen = castRoute("Kitchen display")
+    private var cast = false
 
     private val names = listOf("Brine", "The Breakwater", "Fog Signal", "Low Water", "The Long Tide", "Salt and Iron", "Slack Water", "Undertow")
 
@@ -165,6 +181,10 @@ class ShowOfflineDeviceTest {
         }
         container.offlineOverride.value = null
         back { finishPlayers() }
+        if (cast) {
+            back { container.playOn.choose(PlayChoice.Phone) }
+            back { CastFakes.reset() }
+        }
         try {
             tmdb?.close()
         } catch (e: AssertionError) {
@@ -308,6 +328,28 @@ class ShowOfflineDeviceTest {
         }
     }
 
+    /**
+     * L450: offline with Kitchen display chosen, as with This phone: the episodes not downloaded
+     * are greyed, read as dimmed, a tap on one saying why and starting nothing; the downloaded ones are live, and so is
+     * the header's Play of the next, downloaded one, which casts its file.
+     */
+    @Test
+    fun offlineWithKitchenDisplayChosenWhatIsntDownloadedIsGreyedAndTheDownloadedLive() {
+        connectKitchen()
+        showPage()
+        listOf(1, 5, 6, 7, 8).forEach { n -> assertTrue("S01E0$n dimmed", dimmed(n)) }
+        listOf(2, 3, 4).forEach { n -> assertFalse("S01E0$n dimmed", dimmed(n)) }
+        compose.onNode(play("Play S01E04")).assertIsEnabled()
+        watchingStates { states ->
+            scrollTo(row(names[4]))
+            compose.onNode(row(names[4])).performClick()
+            compose.waitUntil(5_000) { exists(hasText("Harbor Lights S01E05 isn't downloaded. It plays once you're online.")) }
+            assertTrue("the play sheet showed $states", states.all { it == PlayState.Idle })
+        }
+        assertEquals("nothing started on Kitchen display", 0, launcher.started.size)
+        assertEquals("indexer grabs", 0, grabs.get())
+    }
+
     @Test
     fun atTwiceTheTextSizeTheLineAndTheBarAreWhole() {
         showPage(fontScale = 2f)
@@ -319,6 +361,17 @@ class ShowOfflineDeviceTest {
         val words = "Harbor Lights S01E05 isn't downloaded. It plays once you're online."
         compose.waitUntil(5_000) { exists(hasText(words)) }
         compose.assertWhole(words, width)
+    }
+
+    /** Kitchen display's session connected (Cast's fakes) and the device chosen in Play on, its plays handed to [launcher]. */
+    private fun connectKitchen() {
+        cast = true
+        val connector = FakeConnector()
+        CastFakes.started(FakeRoutes(), connector, CopyOnWriteArrayList())
+        CastSeams.launcher = { launcher }
+        CastFakes.connected(kitchen, connector)
+        container.playOn.choose(PlayChoice.Cast(kitchen.id, kitchen.name))
+        await("Kitchen display connected") { Unit.takeIf { container.playOn.target.value == PlayTarget.Cast(kitchen.id, kitchen.name, CastLink.Connected, kitchen.facts) } }
     }
 
     /** An episode's row (its playing part, not its ⋮), by its name. */

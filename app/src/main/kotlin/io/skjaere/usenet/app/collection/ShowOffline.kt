@@ -23,12 +23,13 @@ import kotlinx.coroutines.flow.map
  */
 internal data class ShowOffline(val offline: Boolean, val playOn: PlayTarget) {
     /**
-     * Whether an episode with [download] (the page's, its latest) is greyed: offline, its play would go here, and it has no
-     * finished download its file plays from ([TitleDownload.plays], as the play hook takes it). A TV chosen searches for an
-     * episode itself and a Cast device plays what the phone serves, as Home's [io.skjaere.usenet.app.home.playsOn] says
-     * of an episode of a show TMDB knows: neither is here.
+     * Whether an episode with [download] (the page's, its latest) is greyed: offline, it has no finished download its file
+     * plays from ([TitleDownload.plays], as the play hook takes it), and no TV is chosen, which searches for an episode
+     * itself, as Home's [io.skjaere.usenet.app.home.playsOn] says of an episode of a show TMDB knows. A Cast device chosen
+     * plays what the phone serves (L450): a downloaded episode casts its file, one not downloaded the phone would have to
+     * stream, and can't, so it greys as with This phone.
      */
-    fun greyed(download: TitleDownload?): Boolean = offline && playOn == PlayTarget.Phone && download?.plays != true
+    fun greyed(download: TitleDownload?): Boolean = offline && playOn !is PlayTarget.Tv && download?.plays != true
 
     /** Whether the header's Play or Resume of [next] greys, as its episode's row does, by the page's [downloads]. */
     fun playGreyed(next: NextUp, downloads: Map<Pair<Int, Int>, TitleDownload>): Boolean =

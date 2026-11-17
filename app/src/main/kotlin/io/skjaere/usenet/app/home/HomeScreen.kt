@@ -169,7 +169,8 @@ fun HomeScreen(
  * the Downloaded mark after their title (L409), and [downloadedIds] their downloads, whose stored posters those rows draw
  * (L411); none where downloads don't show. [offline] (L410): with a finished
  * download, "Offline · showing downloads" under the recent searches, the Downloads section first, and Up next's rows that
- * can't play here greyed, a tap on one saying why in a bar at Home's foot ([OfflineHome]); otherwise Home is as online.
+ * that can't play offline greyed (with This phone or a Cast device chosen, those not downloaded, L450), a tap on one saying
+ * why in a bar at Home's foot ([OfflineHome]); otherwise Home is as online.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

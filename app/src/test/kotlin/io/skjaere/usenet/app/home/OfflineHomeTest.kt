@@ -18,10 +18,11 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 /**
- * L410: Home offline, with no network, on a phone or tablet with a finished download. The line "Offline ·
- * showing downloads", Downloads before Up next, and Up next's rows greyed but for those downloaded, each only where its
- * play would go here (a TV or a Cast device chosen in Play on plays it there); a greyed row's tap says why in a bar.
- * Otherwise (online, on a TV, or with nothing downloaded) Home is as it was. Invented titles.
+ * L410, L450: Home offline, with no network, on a phone or tablet with a finished download. The line "Offline ·
+ * showing downloads", Downloads before Up next, and Up next's rows greyed but for those downloaded, unless a TV chosen in
+ * Play on plays them there; a Cast device chosen greys them as This phone does, as the phone would stream what isn't
+ * downloaded for it; a greyed row's tap says why in a bar. Otherwise (online, on a TV, or with nothing downloaded) Home is
+ * as it was. Invented titles.
  */
 class OfflineHomeTest {
     private fun episode(show: Int, name: String, s: Int, e: Int) = WatchState(
@@ -85,11 +86,16 @@ class OfflineHomeTest {
     }
 
     @Test
-    fun `a row is greyed only where it would play here`() {
+    fun `a TV chosen greys only what plays here, and a Cast device chosen greys what isn't downloaded as This phone does`() {
         // A TV chosen plays what it can search for itself; a release without TMDB still plays here, so it greys.
         assertEquals(setOf(lantern.key), assertNotNull(OfflineHome.of(upNext, downloads, downloaded, offline = true, playOn = tv)).greyed)
-        // A Cast device plays every row: none greys.
-        assertEquals(emptySet(), assertNotNull(OfflineHome.of(upNext, downloads, downloaded, offline = true, playOn = cast)).greyed)
+        // A Cast device plays what the phone serves: what isn't downloaded the phone would stream, so it greys; the
+        // downloaded ones cast their files (L450). Connecting, the same.
+        listOf(cast, cast.copy(link = CastLink.Connecting)).forEach { device ->
+            assertEquals(setOf(meridian.key, lantern.key), assertNotNull(OfflineHome.of(upNext, downloads, downloaded, offline = true, playOn = device)).greyed)
+        }
+        // Online, nothing of it, whatever is chosen.
+        listOf(PlayTarget.Phone, tv, cast).forEach { assertNull(OfflineHome.of(upNext, downloads, downloaded, offline = false, playOn = it), "online with $it") }
     }
 
     @Test

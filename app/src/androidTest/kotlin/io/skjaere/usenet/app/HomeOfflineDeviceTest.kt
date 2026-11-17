@@ -33,6 +33,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
+import io.skjaere.usenet.app.casting.CastLink
 import io.skjaere.usenet.app.download.DownloadFixtures
 import io.skjaere.usenet.app.download.DownloadJobService
 import io.skjaere.usenet.app.download.DownloadNotifications
@@ -45,6 +46,7 @@ import io.skjaere.usenet.app.home.OfflineHome
 import io.skjaere.usenet.app.home.REMOVE_FROM_UP_NEXT
 import io.skjaere.usenet.app.home.UpNextPlay
 import io.skjaere.usenet.app.home.UpNextRow
+import io.skjaere.usenet.app.link.PlayTarget
 import io.skjaere.usenet.app.play.PlayState
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.play.PlayerLaunch
@@ -98,7 +100,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * downloads" under the recent searches, the Downloads section before Up next, and the rows not downloaded greyed: read as
  * dimmed, their Play greyed, a tap saying why in a bar at Home's foot that goes by itself, their ⋮ as it was. The
  * downloaded row plays its file through the coordinator's hook, as Up next's Play does, with nothing searched or grabbed.
- * Online, Home is as it was. At twice the text size the line and the bar are whole.
+ * Online, Home is as it was. At twice the text size the line and the bar are whole. With a Cast device chosen (a fake
+ * target given to Home), offline greys as with This phone (L450): the rows not downloaded greyed, the downloaded one live.
  *
  * The titles and ids are invented; TMDB's seam answers for them. Nothing is searched for: the app's indexers are off
  * while a case runs, and only the downloaded row's Play goes to the coordinator (a greyed row's that slipped through is
@@ -213,8 +216,11 @@ class HomeOfflineDeviceTest {
         failures.firstOrNull()?.let { first -> failures.drop(1).forEach(first::addSuppressed); throw first }
     }
 
-    /** Home's content on [home] at [fontScale], offline as [offline] says; Up next's Play goes where Home's does. */
-    private fun showHome(fontScale: Float = 1f) {
+    /**
+     * Home's content on [home] at [fontScale], offline as [offline] says, Play on's choice [playOn] (none: This phone); Up
+     * next's Play goes where Home's does, but with a device given, where it is only recorded.
+     */
+    private fun showHome(fontScale: Float = 1f, playOn: PlayTarget? = null) {
         compose.setContent {
             val scaled = context.createConfigurationContext(Configuration(context.resources.configuration).apply { this.fontScale = fontScale })
             CompositionLocalProvider(LocalDensity provides Density(scaled)) {
@@ -224,9 +230,9 @@ class HomeOfflineDeviceTest {
                         onPlay = { row ->
                             played += row
                             // As Home's Play, for the downloaded row alone: nothing else is to be searched for.
-                            if (row.watchKey in downloadedKeys) container.playRouter.upNext(row.play)
+                            if (playOn == null && row.watchKey in downloadedKeys) container.playRouter.upNext(row.play)
                         },
-                        onShow = {}, onCollection = {}, onMetadata = {}, onImport = {}, edits = edits.edits(),
+                        onShow = {}, onCollection = {}, onMetadata = {}, onImport = {}, edits = edits.edits(), playOn = playOn,
                         downloads = downloads, downloadedKeys = downloadedKeys, offline = offline,
                     )
                 }
@@ -293,6 +299,29 @@ class HomeOfflineDeviceTest {
         val launch = launched(row) { compose.onNode(row("Harbor Lights")).performClick() }
         assertEquals(WatchKey.episode(HL, 2, 1), launch.watchKey)
         playsTheFile(launch)
+    }
+
+    /**
+     * L450: offline with Kitchen display chosen, as with This phone: the rows not downloaded are
+     * greyed, read as dimmed, their Play greyed (read with the device's name), a tap on one saying why; the downloaded
+     * one is live, its Play read "on Kitchen display", and its tap goes to Home's Play.
+     */
+    @Test
+    fun offlineWithKitchenDisplayChosenWhatIsntDownloadedIsGreyedAndTheDownloadedRowIsLive() {
+        showHome(playOn = PlayTarget.Cast("route-kitchen", "Kitchen display", CastLink.Connected))
+        compose.waitUntil(5_000) { exists(hasText(OfflineHome.LINE)) }
+        assertTrue(dimmed("Quiet Meridian"))
+        assertTrue(dimmed("Copper Crown"))
+        assertFalse(dimmed("Harbor Lights"))
+        play("Resume Quiet Meridian S01E03 on Kitchen display").assertIsNotEnabled()
+        play("Resume Copper Crown on Kitchen display").assertIsNotEnabled()
+        play("Resume Harbor Lights S02E01 on Kitchen display").assertIsEnabled()
+        compose.onNode(row("Quiet Meridian")).performClick()
+        compose.waitUntil(5_000) { exists(hasText("Quiet Meridian S01E03 isn't downloaded. It plays once you're online.")) }
+        assertEquals("nothing played", emptyList<UpNextRow>(), played.toList())
+        compose.onNode(row("Harbor Lights")).performClick()
+        compose.waitUntil(5_000) { played.isNotEmpty() }
+        assertEquals(listOf("Harbor Lights"), played.map { it.title })
     }
 
     @Test

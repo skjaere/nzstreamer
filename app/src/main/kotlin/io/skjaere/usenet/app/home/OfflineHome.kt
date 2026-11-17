@@ -8,8 +8,9 @@ import io.skjaere.usenet.metadata.EpisodeRef
 
 /**
  * Home offline (L410): the line [LINE] under the recent searches, the Downloads section
- * before Up next, and Up next's rows [greyed] (by their keys) where they can't play: not downloaded, and played here. A
- * greyed row's tap says why in a bar ([bar]); its ⋮ is as it was. Pure, so the JVM reads every case; Home only draws it.
+ * before Up next, and Up next's rows [greyed] (by their keys) where they can't play: not downloaded, and not played by a
+ * TV chosen, which searches for itself. A greyed row's tap says why in a bar ([bar]); its ⋮ is as it was. Pure, so the
+ * JVM reads every case; Home only draws it.
  */
 data class OfflineHome(val greyed: Set<String>) {
     companion object {
@@ -20,11 +21,13 @@ data class OfflineHome(val greyed: Set<String>) {
          * Home offline for [upNext] with [downloads], Home's section, and the watch keys finished and playing from their
          * file ([downloadedKeys], Up next's marks'); null, Home as it was, unless [offline], on a phone or tablet (a TV,
          * and a phone's layout on one, are given no section and no keys) and with a finished download that plays. A row
-         * is greyed only where its play would go here ([playOn], [playsOn]): a TV or a Cast device chosen plays it there.
+         * not downloaded is greyed unless a TV chosen plays it there ([playOn], [playsOn]), as it searches for itself. A
+         * Cast device chosen plays what this phone serves (L450): a downloaded row casts its file, but one not downloaded
+         * the phone would have to stream, and can't, so it greys as with This phone.
          */
         fun of(upNext: List<UpNextRow>, downloads: HomeDownloads?, downloadedKeys: Set<String>, offline: Boolean, playOn: PlayTarget?): OfflineHome? {
             if (!offline || downloads == null || downloadedKeys.isEmpty()) return null
-            return OfflineHome(upNext.filter { it.watchKey !in downloadedKeys && it.playsOn(playOn) == null }.mapTo(HashSet()) { it.key })
+            return OfflineHome(upNext.filter { it.watchKey !in downloadedKeys && it.playsOn(playOn) !is PlayTarget.Tv }.mapTo(HashSet()) { it.key })
         }
 
         /**

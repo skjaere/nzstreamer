@@ -35,9 +35,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * L439: the Show page offline. An episode is greyed where it can't play: not downloaded (a finished
- * download its file plays from, as the play hook takes it), and played here (a TV or a Cast device chosen plays it
- * there); its tap says why in a bar. The header's Play greys as the rows do; the season's Download greys, as its sheet
+ * L439, L450: the Show page offline. An episode is greyed where it can't play: not downloaded (a finished
+ * download its file plays from, as the play hook takes it), and not played by a TV chosen, which searches for it itself;
+ * a Cast device chosen greys it as This phone does, as the phone would stream it; its tap says why in a bar. The header's Play greys as the rows do; the season's Download greys, as its sheet
  * searches the indexers first; an episode's ⋮ keeps Mark watched and its download's own entries, and greys what searches
  * (Choose release, Download). With no page from TMDB, the show's finished downloads are a row of their own, as the
  * Downloads page draws it. Online, nothing of it. Invented titles.
@@ -60,10 +60,25 @@ class ShowOfflineTest {
         assertTrue(phone.greyed(queued), "only queued")
         assertTrue(phone.greyed(keptNoRelease), "finished, but not a file the hook plays")
         assertFalse(phone.greyed(plays), "its file plays")
-        // A TV searches for it itself, and a Cast device plays what the phone serves: neither is here.
+        // A TV searches for it itself, as DN2a has it.
         assertFalse(ShowOffline(offline = true, playOn = tv).greyed(null))
-        assertFalse(ShowOffline(offline = true, playOn = cast).greyed(null))
         assertFalse(online.greyed(null), "online")
+    }
+
+    /** L450: offline with a Cast device chosen, as with This phone: the file casts, the rest would stream. */
+    @Test
+    fun `offline with a Cast device chosen an episode not downloaded greys and a downloaded one doesn't, online neither`() {
+        for (device in listOf(cast, cast.copy(link = CastLink.Connecting))) {
+            val page = ShowOffline(offline = true, playOn = device)
+            assertTrue(page.greyed(null), "nothing downloaded")
+            assertTrue(page.greyed(queued), "only queued")
+            assertTrue(page.greyed(keptNoRelease), "finished, but not a file the hook plays")
+            assertFalse(page.greyed(plays), "its file casts")
+            val downloads = mapOf((2 to 4) to plays, (2 to 5) to queued)
+            assertFalse(page.playGreyed(NextUp.Play(EpisodeRef(2, 4), firstEpisode = false), downloads), "the next one downloaded")
+            assertTrue(page.playGreyed(NextUp.Play(EpisodeRef(2, 5), firstEpisode = false), downloads), "the next one only queued")
+            assertFalse(ShowOffline(offline = false, playOn = device).greyed(null), "online")
+        }
     }
 
     @Test
