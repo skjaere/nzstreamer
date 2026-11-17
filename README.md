@@ -54,7 +54,8 @@ offline. It comes with no providers, indexers or content of its own.
 
 ### Offline (phones and tablets)
 - Saves a release to the app's own storage on the device, to play without a network: one at a time, in the background,
-  going on after a dropped connection or a restart. Not on TVs.
+  going on after a dropped connection or a restart. A season can be queued at once, each episode searched when its turn
+  comes, and a setting deletes a download a day after it is marked watched. Not on TVs.
 
 ### Phones and TVs together
 - Play on TV: pair your phone with your TV on your home network by matching numbers, start plays on the TV from the
