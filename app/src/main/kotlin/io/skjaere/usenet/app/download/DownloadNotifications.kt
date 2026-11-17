@@ -216,8 +216,9 @@ object DownloadNotices {
      * coming to Done or Failed is posted once; one that leaves either (tried again, removed, deleted) has what was said
      * of it taken back. An episode of a show is its show's (L437): one coming to Done posts the show's notification again,
      * which Android updates in place where it still shows, with no sound; one leaving Done has it said again where it
-     * still shows, or taken back once none of the show's episodes is finished. A failed episode keeps its own. What a
-     * look finds first is what was there before, said already or not by an earlier process: it is never said again.
+     * still shows, or taken back once none of the show's episodes is finished, and one brought back by its Undo has it
+     * said again where it still shows. A failed episode keeps its own. What a look finds first is what was there before,
+     * said already or not by an earlier process: it is never said again.
      */
     class Watch {
         private var seen: Map<String, Seen>? = null
@@ -226,10 +227,10 @@ object DownloadNotices {
         private data class Seen(val state: DownloadState, val show: Int?)
 
         fun next(rows: List<Download>): List<Change> {
-            // A removed one is hidden at once (L379), as gone.
+            // A removed one is hidden at once (L379), as gone; still seen as removed, so its Undo is heard.
             val now = rows.filter { it.state != DownloadState.Deleting }.associateBy { it.id }
             val before = seen
-            seen = now.mapValues { Seen(it.value.state, it.value.show) }
+            seen = rows.associate { it.id to Seen(it.state, it.show) }
             if (before == null) return emptyList()
             val changes = mutableListOf<Change>()
             // The shows with an episode come to Done, and those with one that left it.
@@ -239,6 +240,12 @@ object DownloadNotices {
                 val was = before[row.id]?.state
                 if (was == null || was == row.state) return@forEach
                 val show = row.show
+                if (was == DownloadState.Deleting) {
+                    // Brought back by its Undo: a show's finished episode is counted again where its notification still
+                    // shows, never posted anew with a sound; anything else was taken back as it was removed and stays so.
+                    if (row.state == DownloadState.Done && show != null) left += show
+                    return@forEach
+                }
                 when {
                     row.state == DownloadState.Done -> if (show != null) came += show else changes += Change.Post(finished(row))
                     row.state == DownloadState.Failed -> changes += Change.Post(failed(row))
@@ -247,6 +254,7 @@ object DownloadNotices {
                 }
                 if (was == DownloadState.Done && show != null) left += show
             }
+            // Gone, or removed: what was said of it goes (one already removed was gone then).
             before.filter { (id, _) -> id !in now }.forEach { (id, was) ->
                 when {
                     was.state == DownloadState.Done && was.show != null -> left += was.show

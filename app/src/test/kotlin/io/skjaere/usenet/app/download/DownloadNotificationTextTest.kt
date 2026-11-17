@@ -393,6 +393,43 @@ class DownloadNotificationTextTest {
         assertEquals(emptyList(), watch.next(none))
     }
 
+    /**
+     * L437: an episode removed, then brought back by its Undo, is counted again in the show's notification, said where it
+     * still shows and never posted anew; one that was the show's last finished brings back nothing (its notification was
+     * taken back, as a film's is). A film's or a failed episode's Undo says nothing again.
+     */
+    @Test
+    fun `an episode brought back by its Undo is counted again in the show's notification, never posted anew`() {
+        val watch = DownloadNotices.Watch()
+        watch.next(season(1 to DownloadState.Running, 5 to DownloadState.Queued, 6 to DownloadState.Queued))
+        watch.next(season(1 to DownloadState.Done, 5 to DownloadState.Running, 6 to DownloadState.Queued))
+        watch.next(season(1 to DownloadState.Done, 5 to DownloadState.Done, 6 to DownloadState.Running))
+        val removed = assertIs<DownloadNotices.Change.Update>(watch.next(season(1 to DownloadState.Done, 5 to DownloadState.Deleting, 6 to DownloadState.Running)).single()).notice
+        assertEquals("Harbor Lights · 1 of 2 downloaded", removed.title)
+        // Its Undo: counted again, as before it was removed.
+        val back = assertIs<DownloadNotices.Change.Update>(watch.next(season(1 to DownloadState.Done, 5 to DownloadState.Done, 6 to DownloadState.Running)).single()).notice
+        assertEquals("Harbor Lights · 2 of 3 downloaded", back.title)
+        assertEquals("S02E01, S02E05 · 2.7 GB", back.text)
+        assertEquals(DownloadNotice.showTag(SHOW), back.tag)
+        // The show's only finished one removed, then brought back: said again where it shows, which it no longer does.
+        assertEquals(
+            listOf(DownloadNotices.Change.Withdraw(DownloadNotice.showTag(SHOW))),
+            watch.next(season(1 to DownloadState.Deleting, 5 to DownloadState.Deleting, 6 to DownloadState.Running)),
+        )
+        val again = assertIs<DownloadNotices.Change.Update>(watch.next(season(1 to DownloadState.Done, 5 to DownloadState.Deleting, 6 to DownloadState.Running)).single()).notice
+        assertEquals("Harbor Lights · 1 of 2 downloaded", again.title)
+
+        // A film's and a failed episode's Undo: nothing said again.
+        val other = DownloadNotices.Watch()
+        val failed = episode(DownloadState.Failed, id = "b", reason = DownloadResolver.INCOMPLETE, tried = 3)
+        other.next(listOf(film(DownloadState.Done), failed))
+        assertEquals(
+            setOf(DownloadNotices.Change.Withdraw("a"), DownloadNotices.Change.Withdraw("b")),
+            other.next(listOf(film(DownloadState.Deleting), failed.copy(state = DownloadState.Deleting))).toSet(),
+        )
+        assertEquals(emptyList(), other.next(listOf(film(DownloadState.Done), failed)))
+    }
+
     private fun ongoing(vararg items: DownloadRunner.Item): DownloadNotice = assertNotNull(DownloadNotices.ongoing(items.toList()))
 
     /** Copper Crown, a film, 1.2 GB, as [episode] has it otherwise. */
