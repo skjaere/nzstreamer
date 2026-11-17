@@ -192,10 +192,12 @@ internal object Casting : CastLoader {
         }
         val said = CastMetadata.of(launch, container.appName, art, showArtwork)
         // The device is told TMDB's address all the same; the session's picture is a download's stored copy while it is
-        // fresh, which needs no network (L411, L451).
+        // fresh, which needs no network (L411, L451). With none, offline, there is no picture: the image host can't be
+        // reached, and asking it would hold the LOAD for the picture's whole wait, as the lookup L451 left out would.
         val model = said.imageUrl?.let { url ->
             val kind = if (art?.poster == true) DownloadImages.Kind.Poster else DownloadImages.Kind.Still
-            file.download?.let { row -> container.downloadImages.model(row.id, kind, url) } ?: url
+            val row = file.download ?: return@let url
+            container.downloadImages.model(row.id, kind, url)?.takeUnless { it == url && container.offline.value }
         }
         val still = model?.let { withTimeoutOrNull(PICTURE_MS) { picture(app, it) } }
         still?.let { bytes -> withContext(Dispatchers.Default) { serving.artwork(bytes) } }

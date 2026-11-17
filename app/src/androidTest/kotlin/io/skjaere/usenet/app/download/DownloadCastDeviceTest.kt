@@ -382,6 +382,29 @@ class DownloadCastDeviceTest {
     }
 
     /**
+     * L451: offline, a download whose still isn't stored on this phone (Show artwork switched on after it finished, a fetch
+     * that failed, or a copy gone at 180 days) waits on no picture either: the image host can't be reached, so none is
+     * asked for, the session has none, and the LOAD goes within a second, still naming TMDB's address for the device.
+     */
+    @Test
+    fun offlineWithNoStoredStillTheLoadGoesWithinASecondAndNoPictureIsFetched() = runBlocking<Unit> {
+        val row = finished(2)
+        assertFalse("a still stored", File(storage.bookkeeping(row.id), DownloadImages.Kind.Still.file).exists())
+        container.offlineOverride.value = true
+        waitFor("offline") { Unit.takeIf { container.offline.value } }
+        val loads = remote!!.loads.size
+        cast(row)
+        val item = loadSoon(loads)
+        val took = SystemClock.elapsedRealtime() - begun.last()
+        assertTrue("the LOAD went $took ms after its load began", took < LOAD_WITHIN_MILLIS)
+        assertEquals("a picture asked of the image host offline", emptyList<Any>(), pictures.toList())
+        assertEquals("the session's picture", null, item.mediaMetadata.artworkData)
+        assertEquals("TMDB asked", 0, tmdb!!.lookups.get())
+        val image = onMainThread { CastItems.toMediaQueueItem(item).media?.metadata?.images?.singleOrNull()?.url?.toString() }
+        assertEquals("the LOAD's picture, TMDB's", TmdbImages.still(STILL), image)
+    }
+
+    /**
      * L413, L417: a row Delete once watched has taken can't be held: the cast fails as for a file gone, and nothing is sent.
      * The row and its file are put back under the same id after the run deleted them, so the file is there to serve: only
      * the refused hold keeps it from the device, and the row isn't failed as one whose file is gone.
