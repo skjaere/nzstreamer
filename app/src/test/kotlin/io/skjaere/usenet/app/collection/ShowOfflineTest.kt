@@ -18,6 +18,7 @@ import io.skjaere.usenet.link.KeyId
 import io.skjaere.usenet.metadata.Episode
 import io.skjaere.usenet.metadata.EpisodeRef
 import io.skjaere.usenet.metadata.NextUp
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -136,6 +137,7 @@ class ShowOfflineTest {
      * The no-page section reads the show's finished downloads alone, told again only as they change: the runner tells the
      * show's rows with each chunk the writer writes (about 30 times a second), which the section has no use for.
      */
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun `the no-page section hears the show's finished downloads alone, and only as they change`() = runTest(UnconfinedTestDispatcher()) {
         val e1 = item(episode(HL, 2, 1, DownloadState.Done))
