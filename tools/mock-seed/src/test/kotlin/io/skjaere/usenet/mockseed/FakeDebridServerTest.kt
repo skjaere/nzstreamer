@@ -964,29 +964,29 @@ class FakeDebridServerTest {
      */
     @Test
     fun `a body whose link expires while it flows is closed there with expireCuts, and flows on without it`() {
-        // Paced (10 kB a tenth of a second), so the links expire while their bodies flow.
-        control("cdn?expire=60&slow=100&expireCuts=true")
+        // Paced, so the links expire while their bodies flow, seconds before their ends.
+        control("cdn?expire=60&slow=$PACED&expireCuts=true")
         val cuts = freshLink()
-        control("cdn?expire=60&slow=100")
+        control("cdn?expire=60&slow=$PACED")
         val flows = freshLink()
         val cut = body(cuts)
         val whole = body(flows)
-        readFirst(cut, 20_000)
-        readFirst(whole, 20_000)
+        readFirst(cut, FIRST)
+        readFirst(whole, FIRST)
         skew.addAndGet(60_000)
         val (cutRest, closedShort) = drain(cut)
         assertTrue(closedShort, "closed short of its length")
-        assertTrue(20_000 + cutRest < video.length(), "the body ended at ${20_000 + cutRest} of ${video.length()} bytes")
-        assertEquals(video.length().toInt() to false, drain(whole).let { (rest, short) -> 20_000 + rest to short }, "flowed on past its link's expiry")
+        assertTrue(FIRST + cutRest < video.length(), "the body ended at ${FIRST + cutRest} of ${video.length()} bytes")
+        assertEquals(video.length().toInt() to false, drain(whole).let { (rest, short) -> FIRST + rest to short }, "flowed on past its link's expiry")
         listOf(cuts, flows).forEach { assertEquals(403, cdn(it, "Range" to "bytes=0-").statusCode(), "expired, asked again") }
 
         // Every link made so far expired at once (cdn-expire): a body flowing on one made with expireCuts is closed there too.
-        control("cdn?slow=100&expireCuts=true")
+        control("cdn?slow=$PACED&expireCuts=true")
         val flowing = body(freshLink())
-        readFirst(flowing, 20_000)
+        readFirst(flowing, FIRST)
         control("cdn-expire")
         val (rest, short) = drain(flowing)
-        assertTrue(short && 20_000 + rest < video.length(), "closed at cdn-expire: ${20_000 + rest} bytes, short $short")
+        assertTrue(short && FIRST + rest < video.length(), "closed at cdn-expire: ${FIRST + rest} bytes, short $short")
     }
 
     /**
@@ -1012,13 +1012,13 @@ class FakeDebridServerTest {
         assertEquals(0 to 1, count("cdnOpen") to count("cdnOpenMax"), "a body cut short is closed; a page and a refusal are none")
 
         // Two flowing at once.
-        control("cdn?slow=100")
+        control("cdn?slow=$PACED")
         val first = body(freshLink())
         val second = body(freshLink())
-        readFirst(first, 10_000)
-        readFirst(second, 10_000)
+        readFirst(first, FIRST)
+        readFirst(second, FIRST)
         assertEquals(2 to 2, count("cdnOpen") to count("cdnOpenMax"))
-        listOf(first, second).forEach { assertEquals(video.length().toInt() - 10_000 to false, drain(it)) }
+        listOf(first, second).forEach { assertEquals(video.length().toInt() - FIRST to false, drain(it)) }
         assertEquals(0 to 2, count("cdnOpen") to count("cdnOpenMax"))
 
         // A reset starts the most from what is open then: none here.
@@ -1142,10 +1142,10 @@ class FakeDebridServerTest {
         assertEquals(200, control("take?by=pair&ms=${12 * 60_000}").statusCode())
         skew.addAndGet(5 * 60_000L + 1)
         assertEquals(409, control("take?by=other").statusCode(), "held past the lease a test takes")
-        // A second short of its end (the real clock goes on too), then past it.
-        skew.addAndGet(7 * 60_000L - 1_001)
+        // A minute short of its end (the real clock goes on too), then past it.
+        skew.addAndGet(7 * 60_000L - 60_001)
         assertEquals(409, control("take?by=other").statusCode())
-        skew.addAndGet(1_000)
+        skew.addAndGet(60_000)
         assertEquals(200, control("take?by=other").statusCode(), "its hold ran out")
 
         assertEquals(200, control("take?by=other&ms=${30 * 60_000}").statusCode(), "its holder takes it again, for longer")
@@ -1165,6 +1165,15 @@ class FakeDebridServerTest {
     private companion object {
         const val TORBOX_KEY = "tb-fake-key-0001"
         const val PREMIUMIZE_KEY = "pm-fake-key-0002"
+
+        /**
+         * The pace of a body a case needs still flowing after its next steps, in kB/s: the sample's 123 KB take about 6 s,
+         * seconds more than those steps on a loaded machine.
+         */
+        const val PACED = 20
+
+        /** What a case reads of a paced body before its next step: its first chunk. */
+        const val FIRST = 2_000
 
         /** An invented alternative hash, as a v2 torrent's truncated one would be. */
         const val ALTERNATIVE = "5eed5eed5eed5eed5eed5eed5eed5eed5eed5eed"
