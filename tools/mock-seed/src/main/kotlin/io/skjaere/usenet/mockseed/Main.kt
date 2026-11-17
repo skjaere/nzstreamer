@@ -307,8 +307,8 @@ internal fun debrid(options: Map<String, String>, log: (String) -> Unit = ::prin
     log(
         "Fake debrid services on http://127.0.0.1:${server.port} (emulator: http://10.0.2.2:${server.port}): TorBox-shaped at " +
             "/torbox/v1/api, Premiumize-shaped at /premiumize/api, their links' Range CDN at /cdn, faults and counts at /control " +
-            "(refuse-keys, limit, down, slow, hold-check, cdn, cdn-expire, cdn-gone, cdn-dip, fail, deleted-links, plant, reset, counts; take and " +
-            "give-back, a device test's turn). Cached: GOOD_S01E02, PROPER_S01E01, PACK_S01, CROWN_WEB, CROWN_RAR (RAR volumes alone), " +
+            "(refuse-keys, limit, down, slow, hold-check, cdn, cdn-expire, cdn-gone, cdn-dip, fail, deleted-links, plant, fade, media, reset, " +
+            "counts; take and give-back, a device test's turn). Cached: GOOD_S01E02, PROPER_S01E01, PACK_S01, CROWN_WEB, CROWN_RAR (RAR volumes alone), " +
             "CROWN_FADES (gone after its first link). Ctrl+C to stop.",
     )
     return server

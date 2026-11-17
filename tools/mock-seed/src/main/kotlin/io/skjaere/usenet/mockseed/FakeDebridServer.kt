@@ -7,6 +7,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.URLDecoder
 import java.net.URLEncoder
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.time.Instant
 import java.util.concurrent.ExecutorService
@@ -29,10 +30,14 @@ import java.util.concurrent.Executors
  * (`/control/cdn?expire=<s>&whole=true&page=true&cut=<bytes>&slow=<kB/s>`: expired after that many seconds, then 403; a
  * 200 and the whole file to a ranged read; a page in place of the file; a body cut after that many bytes; served at that
  * pace), so a fresh link can be healthy where the one before failed; with `service=torbox` or `service=premiumize`, for
- * that service's links alone, the other's as they were (DEP-6: one service's CDN failing). `/control/cdn-expire` expires
- * every link made so far, and `/control/cdn-gone` makes every link answer 404, the file gone from the CDN. `/control/cdn-dip?silent=<ms>`
- * makes the bodies flowing go silent that long, a CDN's hiccup mid-play, then go on from where they were; one begun after
- * it isn't held (item 27).
+ * that service's links alone, the other's as they were (DEP-6: one service's CDN failing). For a debrid download's
+ * reads (L419) the same switch takes `expireCuts=true` (a body whose link expires while it flows is closed there, as a
+ * CDN ending a body at its link's expiry; without it a link's expiry is read as a request starts, and a body begun
+ * flows on), `shift=<bytes>` (a ranged read answered with a 206 from that many bytes further on, or back, its
+ * Content-Range naming the part sent) and `total=<bytes>` (a 206's Content-Range naming that total, not the file's).
+ * `/control/cdn-expire` expires every link made so far, and `/control/cdn-gone` makes every link answer 404, the file
+ * gone from the CDN. `/control/cdn-dip?silent=<ms>` makes the bodies flowing go silent that long, a CDN's hiccup
+ * mid-play, then go on from where they were; one begun after it isn't held (item 27).
  *
  * The TorBox account holds one entry per torrent, as the live check found it (D2's L232): an add of a hash it holds, as
  * an entry's hash or among its `alternative_hashes`, answers that entry and adds none. `controltorrent` deletes one entry
@@ -47,8 +52,12 @@ import java.util.concurrent.Executors
  *
  * Cached, in both services: [FakeTorrents.GOOD_S01E02], [FakeTorrents.PROPER_S01E01], the three-episode pack
  * [FakeTorrents.PACK_S01], the film [FakeTorrents.CROWN_WEB], [FakeTorrents.CROWN_RAR] (RAR volumes alone) and
- * [FakeTorrents.CROWN_FADES], which goes away once its first link is given. Every other torrent isn't. Every video file
- * is [media]'s `sample.mkv`, so its size is that file's.
+ * [FakeTorrents.CROWN_FADES], which goes away once its first link is given. Every other torrent isn't.
+ * `/control/fade?hash=<hex>&service=torbox` takes a torrent from one service alone (L424: a download goes on from the
+ * next account that has it), out of its cache and its account, its files no longer linked there, while the other
+ * service still has it; with no service named, from both. Links made before keep serving, as after the first-link fade.
+ * Every video file is [media]'s `sample.mkv`, so its size is that file's; `/control/media` says its size and SHA-256, for
+ * a test to tell a downloaded file whole.
  *
  * Faults are switched at `/control/…` (refused keys, a limit with or without a wait, down, slow, cache checks held until
  * let go; one call of one service answering HTTP 500, `fail?service=torbox&call=requestdl`, a call named as the counts
@@ -56,12 +65,16 @@ import java.util.concurrent.Executors
  * `/control/counts` says how often each call was made (the whole list's reads, `mylist` without an id, apart as well:
  * `torbox mylist, whole`) and how often a request carried what the app must never send (a
  * magnet with more than its hash, a key in Premiumize's query, TorBox's permalink, a delete naming `all`, ...), how many
- * entries adds made in the account (`adds`) and deletes took out (`removals`), and the CDN's answers by status and its
- * bodies by the byte each began at (`cdnFrom`); `reset` clears them, the account and what was deleted from it (#317).
+ * entries adds made in the account (`adds`) and deletes took out (`removals`), the CDN's answers by status and its
+ * bodies by the byte each began at (`cdnFrom`), and its bodies open now (`cdnOpen`) and the most open at once
+ * (`cdnOpenMax`, L419's one connection): a body counts from its answer until its last bytes go, or until it stops
+ * short; `reset` clears them (the most open starting again from those open then), the account and what was deleted
+ * from it (backlog 317).
  * Those are one set for every emulator reaching the fake, so a device test holds it while it runs (`take?by=<its id>`,
  * `give-back?by=`): another is refused (409) until it is given back or [leaseMs] after it was taken, so a run sharded
- * over two emulators takes turns and a test process that died lets go. It listens on the loopback address alone, and no
- * line it logs holds a key or a link's token. Development only.
+ * over two emulators takes turns and a test process that died lets go; `take?by=<id>&ms=<n>` holds it n milliseconds
+ * instead, half an hour at most, for a pair whose Start and Check are minutes apart (L476). It listens on the loopback
+ * address alone, and no line it logs holds a key or a link's token. Development only.
  */
 class FakeDebridServer(
     private val torboxKey: String,
@@ -70,6 +83,8 @@ class FakeDebridServer(
     port: Int,
     private val log: (String) -> Unit = {},
     private val leaseMs: Long = LEASE_MS,
+    /** Milliseconds on a clock that only goes forward: a link's age and a holder's lease are read on it. A test's seam. */
+    private val now: () -> Long = { System.nanoTime() / 1_000_000 },
 ) : AutoCloseable {
     /** A cached torrent's files as the services list them: path and size. */
     private class Cached(val torrent: FakeTorrent, val files: List<Pair<String, Long>>) {
@@ -102,7 +117,10 @@ class FakeDebridServer(
     private val lock = Any()
     private val calls = LinkedHashMap<String, Int>()
     private val problems = LinkedHashMap<String, Int>()
+    /** The torrents gone from both services: [FakeTorrents.CROWN_FADES], after its first link. */
     private val faded = HashSet<String>()
+    /** The torrents a fade took from a service (`fade?hash=&service=`), by service: from each, where it named none. */
+    private val fadedOn = HashMap<Cdn, MutableSet<String>>()
     private val account = LinkedHashMap<Int, Added>()
     /** The entries deleted from the account, by id: `requestdl` still links them while [deletedLinks]. */
     private val deleted = HashMap<Int, Added>()
@@ -110,7 +128,7 @@ class FakeDebridServer(
     /** New entries an add made, and entries a delete took out. */
     private var adds = 0
     private var removals = 0
-    /** The device test holding the fake, by the id it gave, and until when (System.nanoTime's milliseconds). */
+    /** The device test holding the fake, by the id it gave, and until when ([now]'s milliseconds). */
     private var holder: String? = null
     private var heldUntil = 0L
 
@@ -124,9 +142,24 @@ class FakeDebridServer(
     @Volatile private var checksHeld: java.util.concurrent.CountDownLatch? = null
 
     /** The CDN's faults, as a link made now keeps them. */
-    private class CdnFaults(val expireMs: Long? = null, val whole: Boolean = false, val page: Boolean = false, val cutAfter: Long? = null, val slowKBps: Long? = null)
+    private class CdnFaults(
+        val expireMs: Long? = null,
+        val whole: Boolean = false,
+        val page: Boolean = false,
+        val cutAfter: Long? = null,
+        val slowKBps: Long? = null,
+        /** A body closed where its link expires while it flows. */
+        val expireCuts: Boolean = false,
+        /** A ranged read answered from this many bytes on (or back) from where it asked. */
+        val shift: Long = 0,
+        /** The total a 206's Content-Range names, in place of the file's. */
+        val total: Long? = null,
+    )
 
-    /** Whose CDN a link is on: TorBox's says its ranges and gives a strong ETag, Premiumize's neither (item 39's live check). */
+    /**
+     * A service, and whose CDN a link is on: TorBox's says its ranges and gives a strong ETag, Premiumize's neither (item
+     * 39's live check).
+     */
     private enum class Cdn { TorBox, Premiumize }
 
     /**
@@ -159,8 +192,25 @@ class FakeDebridServer(
     private val cdnFrom = LinkedHashMap<String, Int>()
     /** Under [lock]: the token of the link TorBox gave last for each torrent's file, by torrent id and file id. */
     private val torboxLinks = HashMap<Pair<Int, Int>, String>()
+    /** Under [lock]: the CDN's bodies open now, and the most open at once since the last reset. */
+    private var cdnOpen = 0
+    private var cdnOpenMax = 0
     /** The video's strong ETag: its length and when it was written, as a file server's would be. */
     private val etag = "\"${video.length().toString(16)}-${video.lastModified().toString(16)}\""
+
+    /** The video's SHA-256 in hex, read once, when first asked. */
+    private val sha256 by lazy {
+        val digest = MessageDigest.getInstance("SHA-256")
+        video.inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) break
+                digest.update(buffer, 0, n)
+            }
+        }
+        digest.digest().joinToString("") { "%02x".format(it) }
+    }
 
     private val random = SecureRandom()
     private val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), port), 0)
@@ -233,7 +283,7 @@ class FakeDebridServer(
         }
         asked.filterNot { HASH.matches(it) }.forEach { _ -> problem(NOT_A_HASH) }
         val files = query["list_files"] == "true"
-        val found = asked.mapNotNull { cached(it) }.distinctBy { it.hash }
+        val found = asked.mapNotNull { cached(it, Cdn.TorBox) }.distinctBy { it.hash }
         val entries = found.map { c ->
             c.hash to linkedMapOf<String, Any?>("name" to c.torrent.title, "size" to c.size, "hash" to c.hash).apply {
                 if (files) {
@@ -254,10 +304,10 @@ class FakeDebridServer(
     private fun createtorrent(exchange: HttpExchange) {
         val form = multipartOf(exchange)
         val hash = hashOfMagnet(form["magnet"]) ?: return exchange.torboxError(400, "MISSING_REQUIRED_OPTION", "A magnet is required.")
-        val cached = cached(hash)
+        val cached = cached(hash, Cdn.TorBox)
         val added = synchronized(lock) {
             // One entry per torrent (L232): a hash the account holds, as an entry's own or an alternative, is that entry.
-            account.values.firstOrNull { it.holds(hash) && it.hash !in faded }
+            account.values.firstOrNull { it.holds(hash) && !gone(it.hash, Cdn.TorBox) }
                 ?: when {
                     cached != null -> Added(nextId++, hash, cached.torrent.title, cached.files)
                     form["add_only_if_cached"] == "true" -> null
@@ -278,7 +328,7 @@ class FakeDebridServer(
 
     private fun mylist(exchange: HttpExchange, query: Map<String, String>) {
         if (query["bypass_cache"] != "true") problem(MYLIST_CACHED)
-        val listed = synchronized(lock) { account.values.filter { it.hash !in faded } }
+        val listed = synchronized(lock) { account.values.filter { !gone(it.hash, Cdn.TorBox) } }
         val id = query["id"]
         if (id == null) {
             count(MYLIST_WHOLE)
@@ -316,13 +366,13 @@ class FakeDebridServer(
         val (torrent, file) = synchronized(lock) {
             val id = query["torrent_id"]?.toIntOrNull()
             // A deleted entry's file still gets a link, as the live check found TorBox giving one after the delete (L235).
-            val torrent = (account[id] ?: deleted[id]?.takeIf { deletedLinks })?.takeIf { it.hash !in faded }
+            val torrent = (account[id] ?: deleted[id]?.takeIf { deletedLinks })?.takeIf { !gone(it.hash, Cdn.TorBox) }
             torrent to torrent?.files?.getOrNull(fileId)
         }
         if (torrent == null || file == null) return exchange.torboxError(404, "ITEM_NOT_FOUND", "No such file.")
         // The file's link again while it lives, as TorBox gave it a minute later in the live check; a new one once expired.
         val link = synchronized(lock) {
-            torboxLinks[torrent.id to fileId]?.takeIf { cdnLinks[it]?.expiredAt(System.currentTimeMillis()) == false }
+            torboxLinks[torrent.id to fileId]?.takeIf { cdnLinks[it]?.expiredAt(now()) == false }
                 ?: token(file.first, Cdn.TorBox).also { torboxLinks[torrent.id to fileId] = it }
         }.let { linkOf(exchange, it, file.first) }
         fadeIfDue(torrent.hash)
@@ -403,7 +453,7 @@ class FakeDebridServer(
             )
             "cache/check" -> {
                 waitIfHeld()
-                val items = form.filter { it.first == "items[]" }.map { cached(hashOfMagnet(it.second)) }
+                val items = form.filter { it.first == "items[]" }.map { cached(hashOfMagnet(it.second), Cdn.Premiumize) }
                 log("debrid fake: premiumize cache/check: ${items.count { it != null }} of ${items.size} cached")
                 exchange.premiumizeData(
                     linkedMapOf(
@@ -417,7 +467,7 @@ class FakeDebridServer(
                 // A hash that is no torrent at all, as the live check found Premiumize answering one; an uncached torrent's
                 // answer is the fake's own choice.
                 if (FakeTorrents.all.none { it.hash == hash }) return exchange.premiumizeError("service_unsupported", "This source is not supported.")
-                val cached = cached(hash) ?: return exchange.premiumizeError("not_found", "The file isn't cached.")
+                val cached = cached(hash, Cdn.Premiumize) ?: return exchange.premiumizeError("not_found", "The file isn't cached.")
                 val content = cached.files.map { (path, size) ->
                     linkedMapOf("path" to path, "size" to size, "link" to link(exchange, path, Cdn.Premiumize), "stream_link" to null, "transcode_status" to "not_applicable")
                 }
@@ -456,12 +506,21 @@ class FakeDebridServer(
                 val faults = CdnFaults(
                     expireMs = query["expire"]?.toLongOrNull()?.let { it * 1_000 }, whole = query["whole"] == "true", page = query["page"] == "true",
                     cutAfter = query["cut"]?.toLongOrNull(), slowKBps = query["slow"]?.toLongOrNull()?.takeIf { it > 0 },
+                    expireCuts = query["expireCuts"] == "true", shift = query["shift"]?.toLongOrNull() ?: 0,
+                    total = query["total"]?.toLongOrNull()?.takeIf { it >= 0 },
                 )
                 // One service's links, the other's as they were; with none named, both.
-                val cdns = query["service"]?.let { name -> listOf(Cdn.entries.firstOrNull { it.name.lowercase() == name } ?: return exchange.reply(NO_SUCH_SERVICE, "application/json", 400)) }
-                    ?: Cdn.entries
+                val cdns = servicesOf(query) ?: return exchange.reply(NO_SUCH_SERVICE, "application/json", 400)
                 cdnFaults = cdnFaults + cdns.associateWith { faults }
             }
+            "fade" -> {
+                val hash = query["hash"]?.lowercase()?.takeIf { HASH.matches(it) }
+                    ?: return exchange.reply("""{"error":"hash= takes a v1 hash in 40 hex digits"}""", "application/json", 400)
+                // Gone from one service, the other's as it was; with none named, from both.
+                val services = servicesOf(query) ?: return exchange.reply(NO_SUCH_SERVICE, "application/json", 400)
+                synchronized(lock) { services.forEach { fadedOn.getOrPut(it) { HashSet() } += hash } }
+            }
+            "media" -> return exchange.reply(json(linkedMapOf("size" to video.length(), "sha256" to sha256)), "application/json")
             "fail" -> {
                 val call = "${query["service"]} ${query["call"]}"
                 if (call !in TORBOX_CALLS.values && call !in PREMIUMIZE_CALLS.values) {
@@ -472,13 +531,18 @@ class FakeDebridServer(
             "cdn-expire" -> synchronized(lock) { cdnLinks.values.forEach { it.expired = true } }
             "cdn-gone" -> cdnGone = on
             "cdn-dip" -> cdnDip = query["silent"]?.toLongOrNull()?.takeIf { it > 0 }?.let { ms ->
-                val now = System.nanoTime()
-                CdnDip(now, now + ms * 1_000_000)
+                val at = System.nanoTime()
+                CdnDip(at, at + ms * 1_000_000)
             }
             "reset" -> reset()
             "take" -> {
                 val by = query["by"]?.takeIf { it.isNotEmpty() } ?: return exchange.reply("""{"error":"by= names the test taking it"}""", "application/json", 400)
-                if (!take(by)) return exchange.reply("""{"held":true}""", "application/json", 409)
+                // A hold longer than a test's lease, for a pair; never so long that one that died keeps the fake.
+                val ms = query["ms"]?.let { asked ->
+                    asked.toLongOrNull()?.takeIf { it in 1..LONGEST_LEASE_MS }
+                        ?: return exchange.reply("""{"error":"ms= is a hold of 1 ms to half an hour"}""", "application/json", 400)
+                }
+                if (!take(by, ms ?: leaseMs)) return exchange.reply("""{"held":true}""", "application/json", 409)
             }
             "give-back" -> synchronized(lock) { if (holder == query["by"]) holder = null }
             "counts" -> return exchange.reply(
@@ -486,7 +550,7 @@ class FakeDebridServer(
                     json(
                         linkedMapOf(
                             "calls" to LinkedHashMap(calls), "problems" to LinkedHashMap(problems), "adds" to adds, "removals" to removals,
-                            "cdn" to LinkedHashMap(cdnAnswers), "cdnFrom" to LinkedHashMap(cdnFrom),
+                            "cdn" to LinkedHashMap(cdnAnswers), "cdnFrom" to LinkedHashMap(cdnFrom), "cdnOpen" to cdnOpen, "cdnOpenMax" to cdnOpenMax,
                         ),
                     )
                 },
@@ -518,14 +582,21 @@ class FakeDebridServer(
         exchange.reply(json(linkedMapOf("ok" to true, "torrent_id" to planted.id)), "application/json")
     }
 
-    /** Whether [by] holds the fake now: it was free, its lease over, or [by]'s already (taken again, its lease renewed). */
-    private fun take(by: String): Boolean = synchronized(lock) {
-        val now = System.nanoTime() / 1_000_000
-        if (holder != null && holder != by && now < heldUntil) return false
+    /**
+     * Whether [by] holds the fake now, for [ms] from now: it was free, its lease over, or [by]'s already (taken again, its
+     * lease renewed for [ms]).
+     */
+    private fun take(by: String, ms: Long): Boolean = synchronized(lock) {
+        val at = now()
+        if (holder != null && holder != by && at < heldUntil) return false
         holder = by
-        heldUntil = now + leaseMs
+        heldUntil = at + ms
         true
     }
+
+    /** The services `service=` names: one, or both with none named; null for a name that is neither. */
+    private fun servicesOf(query: Map<String, String>): List<Cdn>? =
+        query["service"]?.let { name -> Cdn.entries.firstOrNull { it.name.lowercase() == name }?.let(::listOf) } ?: Cdn.entries.takeIf { "service" !in query }
 
     /**
      * Holds every cache check (TorBox's checkcached, Premiumize's cache/check) until let go, so a device test sees a
@@ -563,7 +634,10 @@ class FakeDebridServer(
                 .forEach { problems[it] = 0 }
             CDN_STATUSES.forEach { cdnAnswers["$it"] = 0 }
             cdnFrom.clear()
+            // The bodies still flowing are open since the reset too.
+            cdnOpenMax = cdnOpen
             faded.clear()
+            fadedOn.clear()
             account.clear()
             deleted.clear()
             nextId = FIRST_ID
@@ -576,7 +650,11 @@ class FakeDebridServer(
 
     // Shared.
 
-    private fun cached(hash: String?): Cached? = hash?.let { h -> catalog[h]?.takeIf { synchronized(lock) { h !in faded } } }
+    /** The torrent of [hash] as [on]'s cache has it: none where it isn't cached, or has faded from that service. */
+    private fun cached(hash: String?, on: Cdn): Cached? = hash?.let { h -> catalog[h]?.takeIf { !gone(h, on) } }
+
+    /** Whether the torrent of [hash] has faded from [on]: from both services, or from that one alone. */
+    private fun gone(hash: String, on: Cdn): Boolean = synchronized(lock) { hash in faded || fadedOn[on]?.contains(hash) == true }
 
     private fun fadeIfDue(hash: String) {
         if (hash == FakeTorrents.CROWN_FADES.hash) synchronized(lock) { faded += hash }
@@ -588,7 +666,7 @@ class FakeDebridServer(
     /** A new link's token for [path]'s file on [cdn], kept with the CDN's faults as they are now. */
     private fun token(path: String, cdn: Cdn): String {
         val token = ByteArray(16).also(random::nextBytes).joinToString("") { "%02x".format(it) }
-        synchronized(lock) { cdnLinks[token] = CdnLink(path, System.currentTimeMillis(), cdn, cdnFaults.getValue(cdn)) }
+        synchronized(lock) { cdnLinks[token] = CdnLink(path, now(), cdn, cdnFaults.getValue(cdn)) }
         return token
     }
 
@@ -649,7 +727,7 @@ class FakeDebridServer(
         val link = synchronized(lock) { cdnLinks[token] }
         if (link == null || cdnGone || link.path.substringAfterLast('.').lowercase() !in VIDEOS) return exchange.cdnAnswer(404, "text/plain", "No such file.")
         val faults = link.faults
-        if (link.expiredAt(System.currentTimeMillis())) {
+        if (link.expiredAt(now())) {
             return exchange.cdnAnswer(403, "text/plain", "This link has expired.")
         }
         if (faults.page) return exchange.cdnAnswer(200, "text/html", "<html><body>Sign in to download</body></html>")
@@ -664,39 +742,68 @@ class FakeDebridServer(
             headers.add("ETag", etag)
         }
         val type = if (validated) mimeOf(link.path) else "application/octet-stream"
-        if (range == null || faults.whole || !sameFile) return exchange.cdnBody(200, 0, size, type, faults)
-        val from = range.groupValues[1].toLong()
-        if (from >= size) {
+        if (range == null || faults.whole || !sameFile) return exchange.cdnBody(200, 0, size, type, link)
+        val asked = range.groupValues[1].toLong()
+        if (asked >= size) {
             headers.add("Content-Range", "bytes */$size")
             return exchange.cdnAnswer(416, "text/plain", "Out of range.")
         }
-        val until = (range.groupValues[2].takeIf { it.isNotEmpty() }?.toLong()?.coerceAtMost(size - 1) ?: (size - 1)) + 1
-        headers.add("Content-Range", "bytes $from-${until - 1}/$size")
-        exchange.cdnBody(206, from, until, type, faults)
+        val end = range.groupValues[2].takeIf { it.isNotEmpty() }?.toLong()
+        // Shifted, the part answered starts elsewhere: to the file's end where the read asked for that, else as long as asked.
+        val from = (asked + faults.shift).coerceIn(0, size - 1)
+        val until = end?.let { (it + faults.shift + 1).coerceIn(from + 1, size) } ?: size
+        headers.add("Content-Range", "bytes $from-${until - 1}/${faults.total ?: size}")
+        exchange.cdnBody(206, from, until, type, link)
     }
 
-    /** [from] to [until] of the video with [status], as [type], cut and paced as [faults] say, silent through a dip. */
-    private fun HttpExchange.cdnBody(status: Int, from: Long, until: Long, type: String, faults: CdnFaults) {
+    /**
+     * [from] to [until] of the video with [status], as [type], cut and paced as [link]'s faults say, silent through a dip,
+     * and closed where [link] expires while it flows with `expireCuts`. Counted open ([cdnOpen]) from its answer until its
+     * last bytes go, or until it stops short: a reader has its next body only after either, so one that waits for the
+     * last one's end never meets two open.
+     */
+    private fun HttpExchange.cdnBody(status: Int, from: Long, until: Long, type: String, link: CdnLink) {
+        val faults = link.faults
         val began = System.nanoTime()
         cdnCount(status, from)
-        responseHeaders.add("Content-Type", type)
-        sendResponseHeaders(status, until - from)
-        val end = faults.cutAfter?.let { minOf(until, from + it) } ?: until
-        val chunk = faults.slowKBps?.let { (it * 100).toInt() } ?: (64 * 1024)
-        java.io.RandomAccessFile(video, "r").use { file ->
-            file.seek(from)
-            val buffer = ByteArray(chunk)
-            var at = from
-            while (at < end) {
-                silentThroughADip(began)
-                val n = file.read(buffer, 0, minOf(chunk.toLong(), end - at).toInt())
-                if (n <= 0) break
-                responseBody.write(buffer, 0, n)
-                responseBody.flush()
-                at += n
-                // A tenth of a second's worth at a time.
-                if (faults.slowKBps != null) Thread.sleep(100)
+        synchronized(lock) {
+            cdnOpen++
+            cdnOpenMax = maxOf(cdnOpenMax, cdnOpen)
+        }
+        var open = true
+        fun ended() {
+            if (!open) return
+            open = false
+            synchronized(lock) { cdnOpen-- }
+        }
+        try {
+            responseHeaders.add("Content-Type", type)
+            sendResponseHeaders(status, until - from)
+            val end = faults.cutAfter?.let { minOf(until, from + it) } ?: until
+            val chunk = faults.slowKBps?.let { (it * 100).toInt() } ?: (64 * 1024)
+            java.io.RandomAccessFile(video, "r").use { file ->
+                file.seek(from)
+                val buffer = ByteArray(chunk)
+                var at = from
+                while (at < end) {
+                    silentThroughADip(began)
+                    if (faults.expireCuts && link.expiredAt(now())) {
+                        log("debrid fake: cdn body closed at its link's expiry, at $at")
+                        break
+                    }
+                    val n = file.read(buffer, 0, minOf(chunk.toLong(), end - at).toInt())
+                    if (n <= 0) break
+                    if (at + n >= until) ended()
+                    responseBody.write(buffer, 0, n)
+                    responseBody.flush()
+                    at += n
+                    // A tenth of a second's worth at a time.
+                    if (faults.slowKBps != null) Thread.sleep(100)
+                }
             }
+        } finally {
+            // Before the exchange is closed: a body stopped short is seen so only once it is.
+            ended()
         }
     }
 
@@ -731,6 +838,8 @@ class FakeDebridServer(
         /** `mylist`'s page without a `limit`, as TorBox's OpenAPI 1.0.0 gives it. */
         private const val MYLIST_LIMIT = 1000
         private const val LEASE_MS = 5 * 60_000L
+        /** The longest hold `take?by=&ms=` gives, so a pair that died never keeps the fake past it. */
+        private const val LONGEST_LEASE_MS = 30 * 60_000L
         private const val HOLD_MAX_MS = 2 * 60_000L
         const val ACCOUNT_EMAIL = "quay.viewer@example.org"
         const val CUSTOMER_ID = 900000042L

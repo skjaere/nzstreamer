@@ -19,12 +19,16 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.io.IOException
+import java.io.InputStream
 import java.net.URI
 import java.net.URLEncoder
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.security.MessageDigest
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -35,7 +39,8 @@ import kotlin.test.assertTrue
 
 /**
  * The debrid fake (L189, items 15 and 31): TorBox- and Premiumize-shaped API answers over [FakeTorrents], read here as raw
- * HTTP and JSON, as the documented shapes are the point, and the Range CDN behind its links with its faults.
+ * HTTP and JSON, as the documented shapes are the point, and the Range CDN behind its links with its faults. Its clock is
+ * the real one, moved on by a test where a link's age or a lease is the point ([skew]), so no case waits for them.
  */
 class FakeDebridServerTest {
     @TempDir
@@ -43,7 +48,13 @@ class FakeDebridServerTest {
 
     private val video by lazy { File(media, "sample.mkv").apply { writeBytes(ByteArray(123_456) { it.toByte() }) } }
     private val lines = mutableListOf<String>()
-    private val server by lazy { video; FakeDebridServer(TORBOX_KEY, PREMIUMIZE_KEY, media, port = 0, log = { lines += it }) }
+
+    /** How far a case has moved the fake's clock on past the real one, in milliseconds. */
+    private val skew = AtomicLong()
+    private val server by lazy {
+        video
+        FakeDebridServer(TORBOX_KEY, PREMIUMIZE_KEY, media, port = 0, log = { lines += it }, now = { System.nanoTime() / 1_000_000 + skew.get() })
+    }
     private val http = HttpClient.newHttpClient()
 
     @AfterEach
@@ -914,6 +925,219 @@ class FakeDebridServerTest {
         assertEquals(404, cdn(cdnLink(), "Range" to "bytes=0-").statusCode())
         control("cdn-gone?on=false")
         assertEquals(206, cdn(fresh, "Range" to "bytes=0-").statusCode())
+    }
+
+    // The controls a debrid download's tests need (L419, L424, L476): a body closed at its link's expiry, the bodies open at
+    // once, a part from another byte or with another total, one service's torrent gone, a longer hold, the sample's digest.
+
+    /** [link]'s body from [range], as it begins to flow. */
+    private fun body(link: String, range: String = "bytes=0-"): InputStream =
+        http.send(HttpRequest.newBuilder(URI(link)).header("Range", range).GET().build(), HttpResponse.BodyHandlers.ofInputStream()).body()
+
+    /** The first [n] bytes of [body]. */
+    private fun readFirst(body: InputStream, n: Int) {
+        var read = 0
+        val buffer = ByteArray(1_000)
+        while (read < n) read += body.read(buffer, 0, minOf(buffer.size, n - read)).also { assertTrue(it > 0, "the body ended at $read") }
+    }
+
+    /** What is left of [body]: how many bytes came before its end, and whether it ended closed short of its length. */
+    private fun drain(body: InputStream): Pair<Int, Boolean> {
+        val buffer = ByteArray(8_192)
+        var read = 0
+        return try {
+            while (true) {
+                val n = body.read(buffer)
+                if (n < 0) break
+                read += n
+            }
+            read to false
+        } catch (e: IOException) {
+            read to true
+        }
+    }
+
+    /**
+     * L419: a body whose link expires while it flows is closed there with `expireCuts=true`, as a CDN ending a body at its
+     * link's expiry would: by the link's own time, and by every link expired at once. Without it a body flows on past its
+     * link's expiry, as before: expiry is read as a request starts.
+     */
+    @Test
+    fun `a body whose link expires while it flows is closed there with expireCuts, and flows on without it`() {
+        // Paced (10 kB a tenth of a second), so the links expire while their bodies flow.
+        control("cdn?expire=60&slow=100&expireCuts=true")
+        val cuts = freshLink()
+        control("cdn?expire=60&slow=100")
+        val flows = freshLink()
+        val cut = body(cuts)
+        val whole = body(flows)
+        readFirst(cut, 20_000)
+        readFirst(whole, 20_000)
+        skew.addAndGet(60_000)
+        val (cutRest, closedShort) = drain(cut)
+        assertTrue(closedShort, "closed short of its length")
+        assertTrue(20_000 + cutRest < video.length(), "the body ended at ${20_000 + cutRest} of ${video.length()} bytes")
+        assertEquals(video.length().toInt() to false, drain(whole).let { (rest, short) -> 20_000 + rest to short }, "flowed on past its link's expiry")
+        listOf(cuts, flows).forEach { assertEquals(403, cdn(it, "Range" to "bytes=0-").statusCode(), "expired, asked again") }
+
+        // Every link made so far expired at once (cdn-expire): a body flowing on one made with expireCuts is closed there too.
+        control("cdn?slow=100&expireCuts=true")
+        val flowing = body(freshLink())
+        readFirst(flowing, 20_000)
+        control("cdn-expire")
+        val (rest, short) = drain(flowing)
+        assertTrue(short && 20_000 + rest < video.length(), "closed at cdn-expire: ${20_000 + rest} bytes, short $short")
+    }
+
+    /**
+     * L419's one connection: the counts say the CDN's bodies open now (`cdnOpen`) and the most open at once since the last
+     * reset (`cdnOpenMax`). A body counts from its answer until its last bytes go, or until it stops short, so a reader
+     * that opens its next body once it has had the last one's end never finds two open; an answer with no file in it
+     * (a refusal, a page) is none.
+     */
+    @Test
+    fun `the counts say the cdn's bodies open now and the most open at once since the reset`() {
+        assertEquals(0, count("cdnOpen"))
+        assertEquals(0, count("cdnOpenMax"))
+        // One after another, each read to its end: never two at once.
+        repeat(3) { cdn(freshLink(), "Range" to "bytes=1000-").also { assertEquals(206, it.statusCode()) } }
+        assertEquals(0 to 1, count("cdnOpen") to count("cdnOpenMax"))
+        control("cdn?cut=1000")
+        val cut = freshLink()
+        assertFailsWith<IOException>("cut short") { cdn(cut, "Range" to "bytes=0-") }
+        control("cdn?page=true")
+        assertEquals(200, cdn(freshLink(), "Range" to "bytes=0-").statusCode())
+        control("cdn-expire")
+        assertEquals(403, cdn(cut, "Range" to "bytes=0-").statusCode())
+        assertEquals(0 to 1, count("cdnOpen") to count("cdnOpenMax"), "a body cut short is closed; a page and a refusal are none")
+
+        // Two flowing at once.
+        control("cdn?slow=100")
+        val first = body(freshLink())
+        val second = body(freshLink())
+        readFirst(first, 10_000)
+        readFirst(second, 10_000)
+        assertEquals(2 to 2, count("cdnOpen") to count("cdnOpenMax"))
+        listOf(first, second).forEach { assertEquals(video.length().toInt() - 10_000 to false, drain(it)) }
+        assertEquals(0 to 2, count("cdnOpen") to count("cdnOpenMax"))
+
+        // A reset starts the most from what is open then: none here.
+        control("reset")
+        assertEquals(0 to 0, count("cdnOpen") to count("cdnOpenMax"))
+        cdn(freshLink(), "Range" to "bytes=0-")
+        assertEquals(1, count("cdnOpenMax"))
+    }
+
+    /**
+     * L419's 206 rule: `shift=<bytes>` answers a ranged read with a 206 from another byte, its Content-Range naming the
+     * part sent; `total=<bytes>` names a total in the Content-Range that isn't the file's, the part's bytes and length as
+     * asked. A read with no range is answered whole, as before; a link keeps the faults it was made with.
+     */
+    @Test
+    fun `a part from another byte, or a content range with another total, as a link made after the switch keeps it`() {
+        val size = video.length()
+        val bytes = video.readBytes()
+        val before = freshLink()
+        control("cdn?shift=500")
+        val shifted = freshLink()
+        val part = cdn(shifted, "Range" to "bytes=1000-")
+        assertEquals(206, part.statusCode())
+        assertEquals("bytes 1500-${size - 1}/$size", part.headers().firstValue("Content-Range").get())
+        assertEquals("${size - 1500}", part.headers().firstValue("Content-Length").get())
+        assertTrue(bytes.copyOfRange(1500, size.toInt()).contentEquals(part.body()), "the part it names")
+        assertEquals("bytes 510-519/$size", cdn(shifted, "Range" to "bytes=10-19").headers().firstValue("Content-Range").get())
+        assertEquals(200, cdn(shifted).statusCode(), "no range: the whole file")
+        assertEquals("bytes 1000-${size - 1}/$size", cdn(before, "Range" to "bytes=1000-").headers().firstValue("Content-Range").get(), "made before")
+
+        control("cdn?shift=-500")
+        val back = cdn(freshLink(), "Range" to "bytes=1000-")
+        assertEquals("bytes 500-${size - 1}/$size", back.headers().firstValue("Content-Range").get())
+        assertTrue(bytes.copyOfRange(500, size.toInt()).contentEquals(back.body()))
+
+        control("cdn?total=999")
+        val total = cdn(freshLink(), "Range" to "bytes=1000-")
+        assertEquals(206, total.statusCode())
+        assertEquals("bytes 1000-${size - 1}/999", total.headers().firstValue("Content-Range").get())
+        assertEquals("${size - 1000}", total.headers().firstValue("Content-Length").get())
+        assertTrue(bytes.copyOfRange(1000, size.toInt()).contentEquals(total.body()), "the part asked for")
+        assertEquals(416, cdn(freshLink(), "Range" to "bytes=$size-").statusCode(), "past the end, as before")
+        control("cdn")
+        assertEquals("bytes 1000-${size - 1}/$size", cdn(freshLink(), "Range" to "bytes=1000-").headers().firstValue("Content-Range").get())
+    }
+
+    /**
+     * L424's next account: `fade?hash=<hex>&service=torbox` takes a torrent from one service alone, out of its cache and
+     * account, its links refused there as the first-link fade has them, while the other service still has it cached; with
+     * no service named, from both. Links made before keep serving; a reset brings it back.
+     */
+    @Test
+    fun `a torrent fades from one service alone, the other still giving it`() {
+        val good = FakeTorrents.GOOD_S01E02
+        val id = idOf(createtorrent(xt(good)))
+        val before = Regex(""""data":"([^"]+)"""").find(requestdl(id).body())!!.groupValues[1]
+        assertEquals(200, control("fade?hash=${good.hash}&service=torbox").statusCode())
+
+        assertFalse(good.hash!! in checkcached(listOf(good.hash)).body(), "TorBox no longer has it cached")
+        assertEquals(404, requestdl(id).statusCode(), "nor links it")
+        assertEquals(404, torbox("torrents/mylist?id=$id&bypass_cache=true").statusCode())
+        assertEquals(emptyList(), entries())
+        assertContains(createtorrent(xt(good)).body(), "\"error\":\"DOWNLOAD_NOT_CACHED\"")
+        assertContains(premiumize("cache/check", listOf("items[]" to xt(good))).body(), "\"response\":[true]")
+        assertContains(premiumize("transfer/directdl", listOf("src" to xt(good))).body(), "\"status\":\"success\"")
+        assertEquals(206, cdn(before, "Range" to "bytes=0-").statusCode(), "a link made before keeps serving")
+        assertContains(checkcached(listOf(FakeTorrents.PACK_S01.hash)).body(), FakeTorrents.PACK_S01.hash!!, message = "another torrent as it was")
+
+        control("fade?hash=${FakeTorrents.PACK_S01.hash}&service=premiumize")
+        assertContains(premiumize("cache/check", listOf("items[]" to xt(FakeTorrents.PACK_S01))).body(), "\"response\":[false]")
+        assertContains(premiumize("transfer/directdl", listOf("src" to xt(FakeTorrents.PACK_S01))).body(), "\"code\":\"not_found\"")
+        assertContains(checkcached(listOf(FakeTorrents.PACK_S01.hash)).body(), FakeTorrents.PACK_S01.hash!!)
+
+        control("fade?hash=${FakeTorrents.CROWN_WEB.hash}")
+        assertFalse(FakeTorrents.CROWN_WEB.hash!! in checkcached(listOf(FakeTorrents.CROWN_WEB.hash)).body())
+        assertContains(premiumize("cache/check", listOf("items[]" to xt(FakeTorrents.CROWN_WEB))).body(), "\"response\":[false]")
+
+        assertEquals(400, control("fade?hash=xyz&service=torbox").statusCode())
+        assertEquals(400, control("fade?service=torbox").statusCode())
+        assertEquals(400, control("fade?hash=${good.hash}&service=realdebrid").statusCode())
+        control("reset")
+        assertContains(checkcached(listOf(good.hash)).body(), good.hash!!)
+        assertContains(premiumize("cache/check", listOf("items[]" to xt(FakeTorrents.PACK_S01))).body(), "\"response\":[true]")
+    }
+
+    /**
+     * L476's pair holds the fake from its Start to its Check, longer than the lease a device test takes: `take?by=&ms=`
+     * holds it that long, half an hour at most, so a pair that dies lets go. The hold given back ends it at once.
+     */
+    @Test
+    fun `a hold asked for longer than the lease keeps the fake that long, and no longer`() {
+        assertEquals(400, control("take?by=pair&ms=0").statusCode())
+        assertEquals(400, control("take?by=pair&ms=-5").statusCode())
+        assertEquals(400, control("take?by=pair&ms=soon").statusCode())
+        assertEquals(400, control("take?by=pair&ms=${30 * 60_000 + 1}").statusCode(), "past half an hour")
+        assertEquals(200, control("take?by=other").statusCode(), "nothing taken by those refused")
+        control("give-back?by=other")
+
+        assertEquals(200, control("take?by=pair&ms=${12 * 60_000}").statusCode())
+        skew.addAndGet(5 * 60_000L + 1)
+        assertEquals(409, control("take?by=other").statusCode(), "held past the lease a test takes")
+        // A second short of its end (the real clock goes on too), then past it.
+        skew.addAndGet(7 * 60_000L - 1_001)
+        assertEquals(409, control("take?by=other").statusCode())
+        skew.addAndGet(1_000)
+        assertEquals(200, control("take?by=other").statusCode(), "its hold ran out")
+
+        assertEquals(200, control("take?by=other&ms=${30 * 60_000}").statusCode(), "its holder takes it again, for longer")
+        control("give-back?by=other")
+        assertEquals(200, control("take?by=pair").statusCode(), "given back")
+    }
+
+    /** L476's Check compares the downloaded file with the sample every video file is: `/control/media` says its size and SHA-256. */
+    @Test
+    fun `the media control says the sample's size and sha-256`() {
+        val media = Json.parseToJsonElement(control("media").body()).jsonObject
+        assertEquals(video.length(), media.getValue("size").jsonPrimitive.content.toLong())
+        val sha = MessageDigest.getInstance("SHA-256").digest(video.readBytes()).joinToString("") { "%02x".format(it) }
+        assertEquals(sha, media.getValue("sha256").jsonPrimitive.content)
     }
 
     private companion object {
