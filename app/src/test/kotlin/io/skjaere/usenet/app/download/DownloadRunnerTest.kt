@@ -1996,10 +1996,14 @@ class DownloadRunnerTest {
         val done = row(A, 1, 0, a) { it.copy(state = DownloadState.Done, completedAt = NOW) }
         row(B, 2, 1, a) { it.copy(state = DownloadState.Deleting) }
         val runner = runner()
-        // Asked as the process starts, before the runner's state has said: answered once it lists the row.
+        // Asked as the process starts, before the runner's state has said: answered once it lists the row, at once, not
+        // as its wait runs out.
+        val asked = testScheduler.currentTime
         val listed = async(start = CoroutineStart.UNDISPATCHED) { runner.listed(A) }
         assertFalse(listed.isCompleted, "answered before the runner's state listed it")
         runCurrent()
+        assertTrue(listed.isCompleted, "answered once the runner listed it")
+        assertEquals(asked, testScheduler.currentTime, "no time waited")
         assertEquals(done, listed.await())
         assertTrue(runner.state.value.any { it.row.id == A })
         assertEquals(done, runner.done.value[done.watchKey])
