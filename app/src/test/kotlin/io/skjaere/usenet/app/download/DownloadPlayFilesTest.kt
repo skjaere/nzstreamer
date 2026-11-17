@@ -58,7 +58,7 @@ class DownloadPlayFilesTest {
         val told = mutableListOf<String>()
         val video = File(dir, "v.mkv")
         val here = DownloadPlayFiles(Rows(rows), { row -> row.relativePath?.takeIf { volumeThere }?.let { video } }) { told += it.id }
-        rows[done.id] = done
+        rows[done.id] = done.copy(size = 16, safeOffset = 16)
         assertEquals(video, here.find(done.id)?.file)
         assertEquals(listOf(done.id), told)
         video.writeBytes(ByteArray(16))
@@ -66,6 +66,25 @@ class DownloadPlayFilesTest {
         volumeThere = false
         assertNull(here.find(done.id))
         assertEquals(listOf(done.id), told)
+    }
+
+    /**
+     * L417: a finished download whose file was cut short since it finished (by another app, or a fault of the file system)
+     * is gone as one deleted is: told as gone, so its row fails, and its file given still, for the source to say it can't
+     * read it. A file of its whole size isn't.
+     */
+    @Test
+    fun `a finished download whose file is cut short is told as gone, its file given still`(@TempDir dir: File) = runBlocking<Unit> {
+        val told = mutableListOf<String>()
+        val video = File(dir, "v.mkv").apply { writeBytes(ByteArray(16)) }
+        val here = DownloadPlayFiles(Rows(rows), { video }) { told += it.id }
+        rows[done.id] = done.copy(size = 16, safeOffset = 16)
+        assertEquals(video, here.found(done.id)?.file)
+        assertEquals(emptyList(), told, "a whole file told as gone")
+        rows[done.id] = done.copy(size = 32, safeOffset = 32)
+        assertEquals(video, here.found(done.id)?.file, "given still")
+        assertEquals(32, here.find(done.id)?.size)
+        assertEquals(listOf(done.id, done.id), told)
     }
 
     /**
@@ -101,10 +120,11 @@ class DownloadPlayFilesTest {
         val held = mutableSetOf<String>()
         val video = File(dir, "v.mkv").apply { writeBytes(ByteArray(16)) }
         val here = DownloadPlayFiles(Rows(rows), { row -> row.relativePath?.let { video } }, held = { it in held }) { told += it.id }
+        val done = done.copy(size = 16, safeOffset = 16)
         rows[done.id] = done
         val found = assertNotNull(here.found(done.id))
         assertEquals(video, found.file)
-        assertEquals(1_400_000_000, found.size)
+        assertEquals(16, found.size)
         assertEquals(listOf(10_000L..19_999L, 500_000L..500_099L), found.gaps)
         assertEquals("Harbor.Lights.S01E05.1080p.WEB.h264-KESTREL.mkv", found.name)
         assertEquals(here.find(done.id)?.toString(), found.toString())

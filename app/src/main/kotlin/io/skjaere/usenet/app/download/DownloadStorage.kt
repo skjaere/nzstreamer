@@ -309,7 +309,8 @@ class DownloadStorage(
      *   whose row and folders stay until its last hold ends (L413);
      * - a row whose marker is missing came from another device (a transfer carries the library, never these folders), and
      *   is dropped; a queued one has its marker from [add], before any NZB, and a finished one keeps it;
-     * - a finished row whose file is gone fails, "The downloaded file is gone", holding no file and no progress;
+     * - a finished row whose file is gone, or cut short since it finished (L417), fails, "The downloaded file is gone",
+     *   holding no file and no progress;
      * - a folder no row has, in either place, is deleted: what a process left as it died; but for the season packs' copies
      *   (`.packs`, a name no row's id can have), which are swept on their own, with the rows read here, as this holds
      *   [changes]: those no download holds, and any copy half written, go ([DownloadNzbs.sweep]).
@@ -347,10 +348,10 @@ class DownloadStorage(
     }
 
     /**
-     * [id]'s finished file found gone as it plays (deleted from outside the app while it runs): [reconcile]'s rule for that
-     * row alone, at once, rather than at the next start, so its title streams again meanwhile (the hooks play only Done
-     * rows) and the Downloads page offers Download again. Whether it failed it: not for a row that isn't Done, nor while
-     * the volume isn't there, when nothing is known gone.
+     * [id]'s finished file found gone as it plays (deleted from outside the app while it runs, or cut short since, L417):
+     * [reconcile]'s rule for that row alone, at once, rather than at the next start, so its title streams again meanwhile
+     * (the hooks play only Done rows) and the Downloads page offers Download again. Whether it failed it: not for a row
+     * that isn't Done, nor while the volume isn't there, when nothing is known gone.
      */
     suspend fun fileGone(id: String): Boolean = changes.withLock {
         withContext(io) {
@@ -362,9 +363,15 @@ class DownloadStorage(
         }
     }
 
-    /** Whether [row] is finished and its file isn't on [volume]. */
-    private fun isGone(row: Download, volume: File): Boolean =
-        row.state == DownloadState.Done && row.relativePath?.let { File(volume, it).isFile } != true
+    /**
+     * Whether [row] is finished and its file isn't whole on [volume]: not there, or shorter than its size, cut short since it
+     * finished (another app, or a fault of the file system), which nothing can read to its end (L417).
+     */
+    private fun isGone(row: Download, volume: File): Boolean {
+        if (row.state != DownloadState.Done) return false
+        val file = row.relativePath?.let { File(volume, it) }?.takeIf { it.isFile } ?: return true
+        return row.size?.let { file.length() < it } == true
+    }
 
     /** [row], whose file is gone, failed ([failedGone]). */
     private suspend fun failGone(row: Download) = downloads.update(failedGone(row, clock.now()))

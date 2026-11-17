@@ -34,6 +34,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 import java.io.IOException
+import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import kotlin.random.Random
 
@@ -556,6 +557,36 @@ class DownloadStorageDeviceTest {
         assertFalse(storage.fileGone("queued"))
         assertEquals(queued, downloads.get("queued"))
         assertFalse(storage.fileGone("unknown"))
+    }
+
+    /**
+     * L417: a finished download's file cut short since it finished (by another app, or a fault of the file system) is gone
+     * as one deleted is: what plays it can't read it to its end. Found so as it plays, its row alone fails at once, and at
+     * the next start reconcile fails one found so then; a whole file beside them is left as it is.
+     */
+    @Test
+    fun aFinishedFileCutShortIsGoneAsOneDeletedIs() = runBlocking<Unit> {
+        val storage = storage()
+        listOf("short", "cut", "whole").forEach { id ->
+            storage.add(row(id))
+            storage.open(id, NAME, 4096).close()
+            storage.finish(id, NAME)
+            finished(id, storage)
+        }
+        val whole = downloads.get("whole")!!
+        listOf("short", "cut").forEach { id -> RandomAccessFile(storage.file(downloads.get(id)!!)!!, "rw").use { it.setLength(2048) } }
+
+        assertTrue("not failed as gone as it plays", storage.fileGone("short"))
+        assertEquals(DownloadState.Failed to "The downloaded file is gone", downloads.get("short")!!.let { it.state to it.reason })
+        assertEquals(DownloadState.Done, downloads.get("cut")?.state)
+
+        storage.reconcile()
+        val cut = downloads.get("cut")!!
+        assertEquals(DownloadState.Failed to "The downloaded file is gone", cut.state to cut.reason)
+        assertNull(cut.relativePath)
+        assertEquals(0L, cut.safeOffset)
+        assertEquals(whole, downloads.get("whole"))
+        assertFalse(storage.fileGone("whole"))
     }
 
     /**

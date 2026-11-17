@@ -96,6 +96,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.io.RandomAccessFile
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -331,6 +332,23 @@ class DownloadCastDeviceTest {
         val loads = remote!!.loads.size
         val failed = withTimeout(LOAD_MILLIS) { cast(row).await() } as? MoveOutcome.Failed ?: throw AssertionError("the cast didn't fail")
         assertEquals(CastFailKind.CouldNotPlay, failed.failure.kind)
+        assertEquals(DownloadStorage.FILE_GONE, failed.failure.reason)
+        assertFalse("not the release's fault", failed.failure.providers)
+        assertEquals("nothing sent", loads, remote!!.loads.size)
+        val after = waitFor("the row failed") { runBlocking { dao.get(row.id) }?.takeIf { it.state == DownloadState.Failed } }
+        assertEquals(DownloadStorage.FILE_GONE, after.reason)
+    }
+
+    /**
+     * L417: a file cut short since it finished (by another app, or a fault of the file system) is gone as one deleted is:
+     * the load fails before anything is sent, and the row fails, so its title streams again.
+     */
+    @Test
+    fun aFileCutShortFailsTheLoadWithNothingSentAndTheRowFails() = runBlocking<Unit> {
+        val row = finished(2)
+        RandomAccessFile(checkNotNull(storage.file(row)), "rw").use { it.setLength(MIDDLE) }
+        val loads = remote!!.loads.size
+        val failed = withTimeout(LOAD_MILLIS) { cast(row).await() } as? MoveOutcome.Failed ?: throw AssertionError("the cast didn't fail")
         assertEquals(DownloadStorage.FILE_GONE, failed.failure.reason)
         assertFalse("not the release's fault", failed.failure.providers)
         assertEquals("nothing sent", loads, remote!!.loads.size)

@@ -276,7 +276,7 @@ internal object Casting : CastLoader {
      * read over the engine's stream; a debrid play's in the listing kept for it, read over HTTPS through the container's own
      * debrid source, one ranged GET an upstream (L217); a download's on this phone by the player's own rule, on an IO
      * dispatcher as this runs on the main thread, read from its file ([FileByteSource]). Null when the store or the listings
-     * have it no longer, or the download's file is gone (told as gone, so its row fails) or shorter than its size.
+     * have it no longer, or the download's file is gone or shorter than its size (told as gone either way, so its row fails).
      */
     private suspend fun find(container: AppContainer, launch: PlayerLaunch): Found? = when (val target = PlayUris.parse(launch.uri)) {
         is PlayUris.Target.Usenet -> {
