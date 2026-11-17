@@ -77,16 +77,16 @@ internal fun TvMenu(
 /**
  * A menu's item; on a TV it turns over while focused, as the app's own rows and buttons do, inset from the menu's sides,
  * its words in bold then ([selected] ones always, in the accent while not focused). A phone's is as it was, as wide as
- * the menu.
+ * the menu. Not [enabled], it is greyed as Material greys an item, and TalkBack says it is dimmed.
  */
 @Composable
-internal fun TvMenuItem(text: String, modifier: Modifier = Modifier, selected: Boolean = false, onClick: () -> Unit) {
+internal fun TvMenuItem(text: String, modifier: Modifier = Modifier, selected: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val turned = interaction.turnsOver()
     val inset = if (LocalFormFactor.current == FormFactor.Tv) Modifier.padding(horizontal = 6.dp) else Modifier
     OwnedRipple {
         DropdownMenuItem(
-            text = { Text(text, style = if (turned || selected) AppType.bodyStrong else AppType.body) }, onClick = onClick,
+            text = { Text(text, style = if (turned || selected) AppType.bodyStrong else AppType.body) }, onClick = onClick, enabled = enabled,
             modifier = modifier.focusScale(interaction, { it.rowScale }).then(inset).then(
                 if (turned) Modifier.clip(RoundedCornerShape(8.dp)).background(colors.text) else Modifier,
             ),
@@ -96,6 +96,7 @@ internal fun TvMenuItem(text: String, modifier: Modifier = Modifier, selected: B
                     selected -> colors.accent
                     else -> colors.text
                 },
+                disabledTextColor = colors.text.copy(alpha = DISABLED_TEXT),
             ),
             interactionSource = interaction,
         )
@@ -103,6 +104,9 @@ internal fun TvMenuItem(text: String, modifier: Modifier = Modifier, selected: B
 }
 
 private const val MENU_FOCUS_FRAMES = 10
+
+/** A greyed item's words: Material's disabled text, from the app's text colour. */
+private const val DISABLED_TEXT = 0.38f
 
 /** A TV's menu: the mockup's width, room for its items' words in bold at a larger text size. */
 private val TV_MENU_WIDTH = 240.dp

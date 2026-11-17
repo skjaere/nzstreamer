@@ -53,6 +53,7 @@ import io.skjaere.usenet.app.download.movieDownloadSlot
 import io.skjaere.usenet.app.home.HomeScreen
 import io.skjaere.usenet.app.play.EpisodePlay
 import io.skjaere.usenet.app.play.MovieTarget
+import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.search.MovieHeroCard
 import io.skjaere.usenet.app.search.TitleInfo
 import io.skjaere.usenet.app.settings.HubRow
@@ -60,6 +61,7 @@ import io.skjaere.usenet.app.settings.SettingsScreen
 import io.skjaere.usenet.app.ui.AppTheme
 import io.skjaere.usenet.app.ui.FormFactor
 import io.skjaere.usenet.app.waitFor
+import io.skjaere.usenet.core.FetchException
 import io.skjaere.usenet.data.CollectionViewPrefs
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
@@ -379,6 +381,46 @@ class TvNoDownloadsTest {
     }
 
     /**
+     * L439, L441: the Show page offline, as the container's signal says it (its test override, L438), on a TV in either
+     * layout: no "Offline · only downloaded episodes play", no episode greyed or read as dimmed, and a tap on one not
+     * downloaded plays as online rather than show a bar. The TV's indexers are off meanwhile and grabs refused, so that
+     * play searches none, and they are on again after.
+     */
+    @Test
+    fun theShowPageOfflineHasNoLineGreysNothingAndATapShowsNoBarInEitherLayout() = runBlocking<Unit> {
+        val enabled = container.settings.indexers.first().filter { it.enabled }.map { it.id }
+        val realFetch = PlaybackCoordinator.fetchNzb
+        try {
+            enabled.forEach { container.settings.setIndexerEnabled(it, false) }
+            PlaybackCoordinator.fetchNzb = { _, _, _ -> throw FetchException("Not to be fetched", stopsAll = true) }
+            container.offlineOverride.value = true
+            waitFor("the container offline", 5_000) { container.offline.value.takeIf { it } }
+            compose.setContent { AppTheme(formFactor = layout) { ShowScreen(SHOW, onBack = {}) } }
+            listOf(FormFactor.Tv, FormFactor.Phone).forEach { form ->
+                layout = form
+                val first = hasText("First Light", substring = true) and hasClickAction()
+                compose.waitUntil(15_000) { exists(first) }
+                assertFalse("an offline line on the $form layout's Show page", exists(hasText("Offline", substring = true, ignoreCase = true)))
+                val dimmed = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.Disabled)).fetchSemanticsNodes().filter { node ->
+                    node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { text -> season.episodes.any { it.name!! in text.text } }
+                }
+                assertEquals("episodes greyed on the $form layout's Show page", 0, dimmed.size)
+                runCatching { compose.onNode(hasScrollAction()).performScrollToNode(first) }
+                compose.onNode(first).performClick()
+                compose.waitForIdle()
+                SystemClock.sleep(BAR_MILLIS)
+                assertFalse("a bar on the $form layout's Show page", exists(hasText("isn't downloaded", substring = true)))
+                container.playback.cancel()
+            }
+        } finally {
+            container.offlineOverride.value = null
+            container.playback.cancel()
+            PlaybackCoordinator.fetchNzb = realFetch
+            enabled.forEach { container.settings.setIndexerEnabled(it, true) }
+        }
+    }
+
+    /**
      * L410, L441: offline, as the container's signal says it (its test override, L438; the TV's network is never touched),
      * with a finished download the play hook would take and an episode not downloaded in progress, Home is as online on TV
      * Home and in a phone's layout on a TV: no "Offline · showing downloads", and nothing in Up next greyed or read as
@@ -523,6 +565,9 @@ class TvNoDownloadsTest {
 
         /** Long enough for the start's schedule, and anything that would follow it, to have run. */
         const val SETTLE_MILLIS = 3_000L
+
+        /** Long enough for a bar a tap would show to be there. */
+        const val BAR_MILLIS = 1_000L
 
         /** A season's Download's words on a phone's Show page, whatever it counts. */
         val SEASON_DOWNLOAD = Regex("""Download (season \d+|\d+ episodes?)""")

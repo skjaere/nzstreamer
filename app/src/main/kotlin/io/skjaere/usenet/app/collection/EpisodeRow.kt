@@ -30,10 +30,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.SpanStyle
@@ -74,7 +76,9 @@ import io.skjaere.usenet.metadata.TmdbImages
  * that while the TV plays the episode for this phone ([onTv], W14) it says "On Living room TV · 32:10" in place of what
  * is left. Where downloads show (L369, L384), a phone's row says its [download] in a line under the date, with its mark
  * before the ✓, and TalkBack hears it as the row's state; the ⋮ then offers the download's [downloadEntries] after its
- * own two (L380), each done by [onDownloadEntry]. A TV's row is given none, and is as it was.
+ * own two (L380), each done by [onDownloadEntry]. A TV's row is given none, and is as it was. A phone's row offline
+ * (L439): [greyed] where it can't play, its words and marks dimmed and read as dimmed, its tap ([onPlay]) the page's
+ * bar; its ⋮'s items greyed where [menuEnabled] says (offline, what searches: Choose release and Download).
  */
 @Composable
 internal fun EpisodeRow(
@@ -93,6 +97,8 @@ internal fun EpisodeRow(
     download: TitleDownload? = null,
     downloadEntries: List<DownloadEntry> = emptyList(),
     onDownloadEntry: (DownloadEntry) -> Unit = {},
+    greyed: Boolean = false,
+    menuEnabled: (EpisodeMenuItem) -> Boolean = { true },
 ) {
     var menu by remember { mutableStateOf(false) }
     // Which opened the menu, for the focus on the way back from Choose release: the ⋮, or the row's long press.
@@ -103,7 +109,7 @@ internal fun EpisodeRow(
     val more = @Composable {
         EpisodeMenu(
             e, episodeMenu(state?.watched == true, downloadEntries), menu, onOpen = { fromMore = true; menu = true }, onDismiss = { menu = false },
-            onChoose = { onChoose(fromMore) }, onMark = onMark, onDownload = onDownloadEntry, modifier = moreModifier,
+            onChoose = { onChoose(fromMore) }, onMark = onMark, onDownload = onDownloadEntry, modifier = moreModifier, enabled = menuEnabled,
         )
     }
     if (LocalFormFactor.current == FormFactor.Tv) {
@@ -111,7 +117,9 @@ internal fun EpisodeRow(
         return
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        PhoneRowContent(e, aired, state?.watched == true, left, text, download, onTv, onPlay, { fromMore = false; menu = true }, modifier.then(said))
+        // Read as dimmed, as it is drawn: a greyed row (L439) is a disabled one to TalkBack, its tap the page's bar.
+        val dimmed = if (greyed) Modifier.semantics { disabled() } else Modifier
+        PhoneRowContent(e, aired, state?.watched == true, left, text, download, onTv, onPlay, { fromMore = false; menu = true }, modifier.then(said).then(dimmed), greyed)
         Box(Modifier.padding(end = 4.dp)) { more() }
     }
 }
@@ -129,20 +137,28 @@ private fun androidx.compose.foundation.layout.RowScope.PhoneRowContent(
     onPlay: () -> Unit,
     onMenu: () -> Unit,
     modifier: Modifier,
+    greyed: Boolean,
 ) {
+    // A greyed row, as drawn: its number and name in Material's disabled text, its date a little less dimmed.
+    val dim = if (greyed) GREYED else 1f
     Row(
         // As tall as the row was with its ⋮ inside it, and the ✓ as far from the ⋮: a phone's rows look as they did.
         modifier.weight(1f).heightIn(min = 68.dp).focusOutline().combinedClickable(onClickLabel = "Play", onClick = onPlay, onLongClick = onMenu)
             .padding(start = 12.dp, top = 10.dp, bottom = 10.dp, end = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("${e.episode}", style = AppType.bodyStrong, color = if (aired) colors.textSecondary else colors.muted, modifier = Modifier.width(28.dp))
+        Text(
+            "${e.episode}", style = AppType.bodyStrong, color = (if (aired) colors.textSecondary else colors.muted).copy(alpha = dim),
+            modifier = Modifier.width(28.dp),
+        )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(e.name ?: "Episode ${e.episode}", style = AppType.body, color = if (aired) colors.text else colors.textSecondary, maxLines = 1)
-            if (text.meta.isNotEmpty()) Text(text.meta, style = AppType.small, color = colors.muted)
+            Text(
+                e.name ?: "Episode ${e.episode}", style = AppType.body, color = (if (aired) colors.text else colors.textSecondary).copy(alpha = dim), maxLines = 1,
+            )
+            if (text.meta.isNotEmpty()) Text(text.meta, style = AppType.small, color = colors.muted.copy(alpha = if (greyed) GREYED_LINE else 1f))
             // The download's line under the date (DlPhoneEpisodeRow), wrapping at large sizes rather than cut. TalkBack hears
             // it once, as the row's state ("Downloading, 42 percent"): the line drawn says nothing of its own.
-            text.download?.let { Box(Modifier.clearAndSetSemantics {}) { DownloadLine(it) } }
+            text.download?.let { Box(Modifier.clearAndSetSemantics {}.alpha(dim)) { DownloadLine(it) } }
             if (onTv != null) {
                 Text(onTv.line, style = AppType.small, color = colors.accent)
                 LinearProgressIndicator(
@@ -158,10 +174,15 @@ private fun androidx.compose.foundation.layout.RowScope.PhoneRowContent(
             }
         }
         // Its mark before the ✓: never in the green that says watched.
-        download?.let { DownloadMarkIcon(TitleDownloads.mark(it)) }
-        if (watched) Text("✓", style = AppType.bodyStrong, color = colors.good)
+        download?.let { DownloadMarkIcon(TitleDownloads.mark(it), Modifier.alpha(dim)) }
+        if (watched) Text("✓", style = AppType.bodyStrong, color = colors.good, modifier = Modifier.alpha(if (greyed) GREYED_TICK else 1f))
     }
 }
+
+/** A greyed row's number and name, its date, and its ✓, as drawn offline. */
+private const val GREYED = 0.38f
+private const val GREYED_LINE = 0.55f
+private const val GREYED_TICK = 0.4f
 
 /**
  * A TV's row, as the TV design draws it: "N · name" over when it aired and how long it runs, with how much is
@@ -257,7 +278,7 @@ private fun Still(path: String?, progress: Float?) {
  * The row's ⋮ and its menu of [items] ([episodeMenu]): Choose release, Mark watched or unwatched, then on a phone its
  * download's. On a TV the menu's first item takes the focus as it opens (a remote has nothing to point at it with), and
  * its items turn over when focused. As it closes, the focus is where it was before: on the ⋮, or on the row after a long
- * press. The OK that opened it, held, picks nothing in it (play/OkGuard.kt's rule).
+ * press. The OK that opened it, held, picks nothing in it (play/OkGuard.kt's rule). An item not [enabled] is greyed.
  */
 @Composable
 private fun EpisodeMenu(
@@ -270,6 +291,7 @@ private fun EpisodeMenu(
     onMark: (Boolean) -> Unit,
     onDownload: (DownloadEntry) -> Unit,
     modifier: Modifier,
+    enabled: (EpisodeMenuItem) -> Boolean,
 ) {
     Box {
         IconButton(onClick = onOpen, modifier = modifier.focusOutline(CircleShape, fill = false)) {
@@ -277,7 +299,7 @@ private fun EpisodeMenu(
         }
         TvMenu(expanded, onDismiss) { first ->
             items.forEachIndexed { i, item ->
-                TvMenuItem(item.label, if (i == 0) first else Modifier) {
+                TvMenuItem(item.label, if (i == 0) first else Modifier, enabled = enabled(item)) {
                     onDismiss()
                     when (item) {
                         EpisodeMenuItem.ChooseRelease -> onChoose()

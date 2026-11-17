@@ -327,9 +327,17 @@ private fun FailedRow(
     }
 }
 
+/**
+ * A show's finished episodes as this page draws them, alone in a card of its own, opening its downloads ([onOpen]): the
+ * Show page's "Downloaded" section where TMDB gave it no page (L439). No select mode there, so no long press.
+ */
+@Composable
+internal fun DownloadsShowCard(row: DownloadsRow.Show, artwork: Boolean, onOpen: () -> Unit) =
+    ShowRow(row, first = true, last = true, selected = null, artwork = artwork, onSelect = null, onOpen = onOpen)
+
 /** A show's finished episodes: how many and their size, what plays next, and › to its downloads. */
 @Composable
-private fun ShowRow(row: DownloadsRow.Show, first: Boolean, last: Boolean, selected: Boolean?, artwork: Boolean, onSelect: () -> Unit, onOpen: () -> Unit) {
+private fun ShowRow(row: DownloadsRow.Show, first: Boolean, last: Boolean, selected: Boolean?, artwork: Boolean, onSelect: (() -> Unit)?, onOpen: () -> Unit) {
     RowFrame(
         row, first, last, selected, artwork, onClick = onOpen, onSelect = onSelect,
         end = { Text("›", style = AppType.body, color = colors.muted, modifier = Modifier.padding(start = 4.dp, end = 16.dp)) },
@@ -387,7 +395,8 @@ internal fun MissingLine(missing: String, before: String = "${DownloadsPage.DOWN
 /**
  * A row in its section's card: in select mode one target with its mark, the row selected toggled by a tap; else a tap
  * does [onClick] (none: nothing, as for a download still to finish) and a long press starts select mode with it
- * ([onSelect]). The poster through the image loader (L378), a plain tile while there is none. [end]: its button and ⋮.
+ * ([onSelect]; none where there is no select mode). The poster through the image loader (L378), a plain tile while there
+ * is none. [end]: its button and ⋮.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -398,7 +407,7 @@ private fun RowFrame(
     selected: Boolean?,
     artwork: Boolean,
     onClick: (() -> Unit)?,
-    onSelect: () -> Unit,
+    onSelect: (() -> Unit)?,
     end: @Composable RowScope.() -> Unit,
     lines: @Composable ColumnScope.() -> Unit,
 ) {
@@ -407,10 +416,11 @@ private fun RowFrame(
     // that, keyed on nothing, and a long one selects with the latest.
     val select by rememberUpdatedState(onSelect)
     val body = when {
-        selected != null -> Modifier.toggleable(value = selected, role = Role.Checkbox, onValueChange = { onSelect() })
+        selected != null -> Modifier.toggleable(value = selected, role = Role.Checkbox, onValueChange = { onSelect?.invoke() })
             .semantics { stateDescription = if (selected) "Selected" else "Not selected" }
         onClick != null -> Modifier.combinedClickable(onClick = onClick, onLongClick = onSelect)
-        else -> Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = { select() }) }
+        onSelect == null -> Modifier
+        else -> Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = { select?.invoke() }) }
             .semantics(mergeDescendants = true) { customActions = listOf(CustomAccessibilityAction(DownloadsPage.SELECT) { onSelect(); true }) }
     }
     Row(

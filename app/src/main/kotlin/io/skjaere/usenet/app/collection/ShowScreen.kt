@@ -16,7 +16,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -35,6 +37,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -57,6 +60,9 @@ import io.skjaere.usenet.app.download.DownloadSeasonSheet
 import io.skjaere.usenet.app.download.DownloadSheet
 import io.skjaere.usenet.app.download.SeasonDownloadRequest
 import io.skjaere.usenet.app.download.DownloadUndoBar
+import io.skjaere.usenet.app.download.DownloadsPage
+import io.skjaere.usenet.app.download.DownloadsRow
+import io.skjaere.usenet.app.download.DownloadsShowCard
 import io.skjaere.usenet.app.download.TitleDownload
 import io.skjaere.usenet.app.download.TitleDownloadActions
 import io.skjaere.usenet.app.download.TitleDownloads
@@ -92,6 +98,7 @@ import io.skjaere.usenet.app.ui.LocalFormFactor
 import io.skjaere.usenet.app.ui.GroupCard
 import io.skjaere.usenet.app.ui.InsetDivider
 import io.skjaere.usenet.app.ui.SecondaryButton
+import io.skjaere.usenet.app.ui.SectionHeader
 import io.skjaere.usenet.app.ui.TopBar
 import io.skjaere.usenet.app.ui.rememberReturnFocus
 import io.skjaere.usenet.app.ui.colors
@@ -119,6 +126,8 @@ import io.skjaere.usenet.search.RankedItem
 import io.skjaere.usenet.search.ResultGroup
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -166,6 +175,17 @@ class ShowViewModel(private val container: AppContainer, private val tmdbId: Int
 
     /** Whether a Usenet provider is saved and on, which a new download needs (L370). */
     val usenet: StateFlow<Boolean> = usenetUsable(container.settings).stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** Whether the app reads as offline (L438, L439): the container's one signal, or a test's say over it. */
+    val offline: StateFlow<Boolean> = container.offline
+
+    /**
+     * The show's finished downloads as the Downloads page's row draws them, for a page TMDB gave no answer for (L439): from
+     * the runner's rows and the library's watch states, neither of which needs TMDB. None on a TV.
+     */
+    val downloaded: StateFlow<DownloadsRow.Show?> = combine(container.downloads.forShow(tmdbId), states) { items, watched ->
+        ShowOffline.downloaded(tmdbId, items, watched)
+    }.distinctUntilChanged().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /** What the rows' download entries do (L379, L380): the runner's calls and the Undo bar. */
     val downloadActions = TitleDownloadActions(TitleDownloadActions.Deps.of(container), viewModelScope, container.appScope)
@@ -300,7 +320,10 @@ class ShowViewModel(private val container: AppContainer, private val tmdbId: Int
  * download removed shows the Undo bar at the page's foot (L379). There a season's aired episodes not yet downloaded have
  * a Download of their own before Mark season (W114), which opens the season's Download sheet. Under the watched bar, the
  * show's line says how many of its episodes are downloaded and how many are still in the queue (L409): a link to the
- * show's downloads ([onDownloadsShow]) where there is that page to open.
+ * show's downloads ([onDownloadsShow]) where there is that page to open. Offline (L439, [ShowOffline]): a line under the
+ * bar says so, the episodes that can't play here are greyed and a tap on one says why in a bar at the page's foot, the
+ * header's Play greys as its episode's row does, and the season's Download and the ⋮'s searches grey. With no answer
+ * from TMDB, the error is followed by the show's finished downloads, opening them, online or not.
  */
 @Composable
 fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDownloadsShow: ((showTmdbId: Int) -> Unit)? = null) {
@@ -320,16 +343,22 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDow
     val today by vm.today.collectAsStateWithLifecycle()
     val downloads by vm.downloads.collectAsStateWithLifecycle()
     val usenet by vm.usenet.collectAsStateWithLifecycle()
+    val offline by vm.offline.collectAsStateWithLifecycle()
+    val downloaded by vm.downloaded.collectAsStateWithLifecycle()
     // Downloads on phones and tablets alone, in their layout (L369): a TV's rows, and a phone's layout on a TV, have none.
     val downloadsHere = downloadsShown()
     // The episode whose Download sheet is up, by season and number; the season whose Download sheet is.
     var downloading by rememberSaveable { mutableStateOf<Pair<Int, Int>?>(null) }
     var downloadingSeason by rememberSaveable { mutableStateOf<Int?>(null) }
-    // What the Undo bar covers of the page's foot while it shows: the list ends above it.
+    // What the Undo bar and the offline bar cover of the page's foot while they show: the list ends above them.
     var undoRoom by remember { mutableStateOf(0.dp) }
+    var offlineRoom by remember { mutableStateOf(0.dp) }
+    val offlineBar = remember { OfflineBarState() }
     val onDownloadEntry = downloadEntryHandler(vm.downloadActions, onDownload = {}, onDownloads = null)
     // Where Play goes (W11); a TV has no choice to make.
     val playOn by container.playOn.target.collectAsStateWithLifecycle()
+    // The page offline (L439), where downloads show alone: a TV's page, and a phone's layout on a TV, are as online.
+    val page = ShowOffline(offline && downloadsHere, playOn)
     // The play this phone follows on a TV or a Cast device (W14, L91): a TV plays its own, and follows none.
     val remotePlay by remember(container) { container.remotePlaying.now }.collectAsStateWithLifecycle()
     val onTv = remotePlay?.takeIf { it.playingEpisodeOf(tmdbId) != null }
@@ -383,17 +412,32 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDow
                     }
                 }
             }
+            // Under the bar, outside the list, so it stays as the page scrolls.
+            if (page.offline) Text(ShowOffline.LINE, style = AppType.small, color = colors.muted, modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 8.dp))
             if (d == null) {
-                error?.let { PageLoadFailure(SHOW_LOAD_FAILED + it, vm::shown) } ?: CircularProgressIndicator(Modifier.padding(24.dp), color = colors.accent)
+                val failed = error
+                if (failed == null) {
+                    CircularProgressIndicator(Modifier.padding(24.dp), color = colors.accent)
+                } else {
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        PageLoadFailure(SHOW_LOAD_FAILED + failed, vm::shown)
+                        // The show's downloads need no TMDB: they still open, online or offline alike (L439).
+                        downloaded?.takeIf { downloadsHere }?.let { row ->
+                            SectionHeader(DownloadsPage.DOWNLOADED, Modifier.semantics(mergeDescendants = true) { heading() }, top = 10.dp)
+                            DownloadsShowCard(row, artwork) { onDownloadsShow?.invoke(tmdbId) }
+                        }
+                    }
+                }
                 return@Column
             }
             val progress = ShowProgress.of(d, states.values.toList().toEpisodeWatches(), today, d.recentlyAired())
             // Read from the page's own downloads, as its rows are (L407): where downloads show alone.
             val downloadLine = if (downloadsHere) TitleDownloads.showLine(downloads.values) else null
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = undoRoom)) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = undoRoom + offlineRoom)) {
                 item {
                     ShowHeader(
                         d, progress, artwork, nextUpError, playOn, onTv, onRemote, downloadLine, onDownloadsShow?.let { open -> { open(tmdbId) } },
+                        playGreyed = page.playGreyed(progress.nextUp, downloads),
                     ) { ref -> vm.playNext(ref) }
                 }
                 item {
@@ -417,7 +461,12 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDow
                     val mark = seasonMark(s.episodes, { d.hasAired(it, today) }, { states[it.season to it.episode]?.watched == true })
                     // As the episodes' ⋮ offers Download: where downloads show and a Usenet provider is on (L369, L370).
                     val download = if (downloadsHere && usenet) seasonDownload(s.episodes, { d.hasAired(it, today) }, downloads) else null
-                    item { SeasonButtons(mark, download, onMark = { vm.mark(mark.episodes, mark.watched) }, onDownload = { downloadingSeason = s.number }) }
+                    item {
+                        SeasonButtons(
+                            mark, download, onMark = { vm.mark(mark.episodes, mark.watched) }, onDownload = { downloadingSeason = s.number },
+                            downloadEnabled = page.seasonDownloadEnabled,
+                        )
+                    }
                     item {
                         GroupCard {
                             s.episodes.forEachIndexed { i, e ->
@@ -425,8 +474,15 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDow
                                 // The episode the TV or the Cast device plays says so, and opens the remote rather than starting it over (W14, L91).
                                 val playing = onTv?.takeIf { it.playingEpisodeOf(tmdbId) == e.season to e.episode }
                                 val download = downloads[e.season to e.episode]?.takeIf { downloadsHere }
+                                // Offline, one that can't play here says why rather than play (L439); the one a TV plays opens its remote.
+                                val greyed = playing == null && page.greyed(download)
                                 EpisodeRow(
-                                    e, states[e.season to e.episode], d.hasAired(e, today), onPlay = if (playing != null) onRemote else { { vm.play(e) } },
+                                    e, states[e.season to e.episode], d.hasAired(e, today),
+                                    onPlay = when {
+                                        playing != null -> onRemote
+                                        greyed -> { { offlineBar.show(ShowOffline.bar(d.name, e)) } }
+                                        else -> { { vm.play(e) } }
+                                    },
                                     onChoose = { vm.chooseRelease(e) }, onMark = { w -> vm.mark(listOf(e), w) },
                                     still = e.stillPath, showArtwork = artwork, current = progress.nextUp.episodeRef() == EpisodeRef(e.season, e.episode),
                                     onTv = playing?.let { rememberRemoteEpisodeLine(container.remotePlaying, it) },
@@ -435,6 +491,8 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDow
                                     onDownloadEntry = { entry ->
                                         if (entry == DownloadEntry.Download) downloading = e.season to e.episode else onDownloadEntry(entry, download)
                                     },
+                                    greyed = greyed,
+                                    menuEnabled = page::enabled,
                                 )
                             }
                         }
@@ -444,7 +502,13 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDow
                 }
             }
         }
-        if (downloadsHere) DownloadUndoBar(vm.downloadActions, Modifier.align(Alignment.BottomCenter), onRoom = { undoRoom = it })
+        // At the page's foot: a greyed episode's bar offline, then the Undo bar.
+        if (downloadsHere) {
+            Column(Modifier.align(Alignment.BottomCenter)) {
+                OfflineBar(offlineBar, onRoom = { offlineRoom = it })
+                DownloadUndoBar(vm.downloadActions, onRoom = { undoRoom = it })
+            }
+        }
     }
     // An episode's Download sheet, over the page, once its season is there (again, after a rotation); the sheet ends at
     // once where downloads don't show. Kept for a season the page no longer has open, it goes (sheetLeft).
@@ -469,13 +533,18 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDow
 
 /**
  * The season's buttons at the end of the line under its chips: its Download where there is one ([download]), then Mark
- * season. Where the two don't fit on one line, as at twice the text size, they go on two, Download first.
+ * season. Where the two don't fit on one line, as at twice the text size, they go on two, Download first. Download greys
+ * where it isn't [downloadEnabled] (offline, L439), and TalkBack hears it dimmed.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SeasonButtons(mark: SeasonMark, download: SeasonDownload?, onMark: () -> Unit, onDownload: () -> Unit) {
+private fun SeasonButtons(mark: SeasonMark, download: SeasonDownload?, onMark: () -> Unit, onDownload: () -> Unit, downloadEnabled: Boolean = true) {
     FlowRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.End) {
-        download?.let { TextButton(onClick = onDownload) { Text(it.label, style = AppType.secondary, color = colors.accent) } }
+        download?.let {
+            TextButton(onClick = onDownload, enabled = downloadEnabled) {
+                Text(it.label, style = AppType.secondary, color = if (downloadEnabled) colors.accent else colors.text.copy(alpha = DISABLED_TEXT))
+            }
+        }
         TextButton(onClick = onMark, enabled = mark.enabled) {
             Text(mark.label, style = AppType.secondary, color = colors.accent)
         }
@@ -493,6 +562,7 @@ private fun ShowHeader(
     onRemote: () -> Unit,
     downloadLine: String?,
     onDownloads: (() -> Unit)?,
+    playGreyed: Boolean,
     onPlayNext: (io.skjaere.usenet.metadata.EpisodeRef) -> Unit,
 ) {
     val container = LocalContext.current.container
@@ -516,8 +586,8 @@ private fun ShowHeader(
                         return@Box
                     }
                     when (val next = p.nextUp) {
-                        is NextUp.Resume -> PlayOnPrimary("Resume ${next.episode.label} · ${mmss(next.positionMs)}", playOn, { onPlayNext(next.episode) })
-                        is NextUp.Play -> PlayOnPrimary("Play ${next.episode.label}", playOn, { onPlayNext(next.episode) })
+                        is NextUp.Resume -> PlayOnPrimary("Resume ${next.episode.label} · ${mmss(next.positionMs)}", playOn, { onPlayNext(next.episode) }, enabled = !playGreyed)
+                        is NextUp.Play -> PlayOnPrimary("Play ${next.episode.label}", playOn, { onPlayNext(next.episode) }, enabled = !playGreyed)
                         is NextUp.UpToDate -> Text(next.returns?.let { "Up to date · next episode ${shortDate(it)}" } ?: "Up to date", style = AppType.secondary, color = colors.muted)
                     }
                 }
@@ -648,6 +718,9 @@ internal fun seasonSheetKey(number: Int, details: ShowDetails?, season: SeasonSt
 /** Choose release's "Choose file" on [item]'s row: its Play for [ep], asking which of its videos is the episode. */
 internal fun chooseFileRequest(ep: EpisodePlay, item: RankedItem, alternatives: List<RankedItem> = emptyList()) =
     chosenRequest(ep, item, alternatives).copy(picker = ChooseFile(FilePicker.Episode(ep.season, ep.episode)))
+
+/** A greyed button's words offline: Material's disabled text, from the app's text colour. */
+private const val DISABLED_TEXT = 0.38f
 
 /**
  * The Show page's footnote on a phone, and on a TV, whose remote has no tap. A phone's says the ⋮ downloads (L356) where

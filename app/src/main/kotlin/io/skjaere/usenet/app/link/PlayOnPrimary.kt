@@ -21,10 +21,11 @@ import io.skjaere.usenet.app.ui.colors
  * before, ▶ and [label]; with a TV or a Cast device chosen, its icon in place of ▶ (Google's Cast icon for a Cast device)
  * and "on Living room TV" under the words; greyed while that TV's NZStreamer isn't open, with "Open NZStreamer on Living
  * room TV" under the button, or while the Cast device connects, with "Connecting to Kitchen display…" (L97). Both light
- * up by themselves once it opens or connects.
+ * up by themselves once it opens or connects. Not [enabled] (the Show page offline, its episode not downloaded, L439),
+ * it is greyed too.
  */
 @Composable
-fun PlayOnPrimary(label: String, target: PlayTarget, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun PlayOnPrimary(label: String, target: PlayTarget, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
     val lead: ImageVector = when (target) {
         PlayTarget.Phone -> Icons.Filled.PlayArrow
         is PlayTarget.Tv -> TvIcon
@@ -37,7 +38,7 @@ fun PlayOnPrimary(label: String, target: PlayTarget, onClick: () -> Unit, modifi
     }?.takeIf { target.greyed }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         PrimaryButton(
-            label, onClick, modifier, enabled = !target.greyed, second = target.deviceName?.let(::onTvLine),
+            label, onClick, modifier, enabled = enabled && !target.greyed, second = target.deviceName?.let(::onTvLine),
             leading = { Icon(lead, contentDescription = null, modifier = Modifier.padding(end = 6.dp)) },
         )
         waiting?.let { Text(it, style = AppType.small, color = if (target is PlayTarget.Tv) colors.warn else colors.muted) }
