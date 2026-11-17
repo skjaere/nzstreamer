@@ -171,16 +171,22 @@ class ServiceDownloadWriterTest {
         io: CoroutineDispatcher = StandardTestDispatcher(testScheduler),
     ) = writer(io, testScheduler.timeSource, { testScheduler.currentTime }, on, services, shown, httpsOnly, throttle)
 
-    /** Writes [entry]'s file to [path] from [from], each open's offset in [opens] and each record in [records] and [events]. */
+    /**
+     * Writes [entry]'s file to [path] from [from], each open's offset in [opens] and each record in [records] and [events].
+     * With [suspends], each record goes to another dispatcher first, as the runner's database write does, so one asked for
+     * in a cancelled coroutine fails there unless the writer makes it non-cancellable.
+     */
     private suspend fun ServiceDownloadWriter.wrote(
         from: Long = 0,
         onOpen: (Long) -> Unit = {},
         channel: (FileChannel) -> FileChannel = { it },
+        suspends: Boolean = false,
     ): Outcome = channel(FileChannel.open(path.toPath(), StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE)).use { out ->
         write(ID, entry, fileA, out, from, onOpen = { offset ->
             opens += offset
             onOpen(offset)
         }) { offset ->
+            if (suspends) withContext(Dispatchers.IO) {}
             records += offset
             events += "record $offset"
         }
@@ -562,7 +568,8 @@ class ServiceDownloadWriterTest {
     fun `a cancel aborts the read under way from another thread and records what was forced`() = runBlocking<Unit> {
         reads.script(Script(blockAt = 500_000))
         val writer = writer(Dispatchers.IO, TimeSource.Monotonic, { 0L })
-        val write = launch(Dispatchers.Default) { writer.wrote() }
+        // Its record suspends, as the runner's does: the last one is made all the same.
+        val write = launch(Dispatchers.Default) { writer.wrote(suspends = true) }
         assertTrue(withContext(Dispatchers.IO) { reads.blocked.await(10, TimeUnit.SECONDS) }, "the read waiting on the CDN")
         withTimeout(10_000) { write.cancelAndJoin() }
         val read = reads.made.single()
