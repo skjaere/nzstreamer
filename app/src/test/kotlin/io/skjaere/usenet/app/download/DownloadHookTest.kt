@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.download
 
+import androidx.media3.common.MimeTypes
 import io.skjaere.usenet.app.casting.CastLauncher
 import io.skjaere.usenet.app.casting.CastLoad
 import io.skjaere.usenet.app.play.CastTo
@@ -9,10 +10,14 @@ import io.skjaere.usenet.app.play.PlayOrigin
 import io.skjaere.usenet.app.play.PlayState
 import io.skjaere.usenet.app.play.PlayerInFront
 import io.skjaere.usenet.app.play.PlayerLaunch
+import io.skjaere.usenet.app.play.ProbedTracksSerializer
 import io.skjaere.usenet.app.play.RemotePlay
 import io.skjaere.usenet.app.play.SavedRelease
 import io.skjaere.usenet.app.play.SessionMetadata
 import io.skjaere.usenet.app.play.WatchTarget
+import io.skjaere.usenet.core.ProbedTrack
+import io.skjaere.usenet.core.ProbedTracks
+import io.skjaere.usenet.data.CastDeviceMemory
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
@@ -36,6 +41,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.io.File
@@ -49,9 +55,10 @@ import kotlin.test.assertTrue
  * front's launch, a Cast device's launcher and the runner's map of finished downloads. A play of a downloaded title asked
  * for on this device launches its file at once: what was in flight stops (a search cancelled, what it still writes or
  * sends dropped, a cast on its way stopped), the sheet never opens, and the launch goes out as every launch does, its
- * player on its way. A cast's, a paired phone's or a TV's play, and a title with no finished download, leave everything
- * as it was, for the stream. And the coordinator's four entry points ask the hook before anything else, while Choose
- * release and Search's play never does. Names and ids are invented.
+ * player on its way. One cast to a Google Cast device (W121 c, L446) goes to the coordinator's cast of the file, held as a
+ * launch is, unless the title streams for the device instead. A paired phone's or a TV's play, and a title with no
+ * finished download, leave everything as it was, for the stream. And the coordinator's four entry points ask the hook
+ * before anything else, while Choose release and Search's play never does. Names and ids are invented.
  */
 class DownloadHookTest {
     private val scope = CoroutineScope(Dispatchers.Default + Job())
@@ -61,7 +68,19 @@ class DownloadHookTest {
     private var television = false
     private val done = mutableMapOf<String, Download>()
     private val holds = FakeHolds()
-    private val hook = DownloadHook(inFlight, television = { television }, done = { done.toMap() }, holds = { holds }, scope = scope)
+
+    /** The Cast devices' memory as the settings said it: null until read. */
+    private var devices: List<CastDeviceMemory>? = emptyList()
+    private var offline = false
+
+    /** The coordinator's cast of a download's file, as the hook calls it: the row, its launch and the cast's origin. */
+    private val casts = mutableListOf<Triple<Download, PlayerLaunch, PlayOrigin>>()
+    private val hook = hook(holds, scope)
+
+    private fun hook(holds: DownloadHolds, scope: CoroutineScope) = DownloadHook(
+        inFlight, television = { television }, done = { done.toMap() }, holds = { holds }, scope = scope, devices = { devices }, offline = { offline },
+        cast = { row, launch, origin -> casts += Triple(row, launch, origin) },
+    )
 
     private val row = Download(
         id = "3f2c9e1a-7b4d-4c2e-9a10-5e6f7a8b9c0d", watchKey = WatchKey.episode(900002, 1, 5), kind = DownloadKind.Episode, title = "Harbor Lights",
@@ -73,6 +92,15 @@ class DownloadHookTest {
 
     private val searching = PlayState.Searching("Copper Crown", "2019", "Searching your indexers…")
     private val cast = CastTo("route-1", "Invented display")
+    private val json = Json { ignoreUnknownKeys = true }
+
+    /** [row] with its file's tracks as Resolve's probe kept them: DTS its only sound, which no Cast device plays. */
+    private val silent = row.copy(
+        tracks = json.encodeToString(
+            ProbedTracksSerializer,
+            ProbedTracks(listOf(ProbedTrack(MimeTypes.VIDEO_H264, "H.264", width = 1920, height = 1080, bitDepth = 8)), listOf(ProbedTrack(MimeTypes.AUDIO_DTS, "DTS", "en", channels = 6))),
+        ),
+    )
 
     /** What lets each play before end, once the test is over, so none is left waiting. */
     private val ends = mutableListOf<CompletableDeferred<Unit>>()
@@ -171,16 +199,17 @@ class DownloadHookTest {
     }
 
     @Test
-    fun `a cast's, a paired phone's or a TV's play, or a title with no finished download, leaves the play in flight alone`() = runBlocking<Unit> {
+    fun `a paired phone's or a TV's play, or a title with no finished download, leaves the play in flight alone`() = runBlocking<Unit> {
         done[row.watchKey] = row
         val phone = RemotePlay("s-a", "aa".repeat(32), "Invented phone")
         val before = searchingPlay(PlayOrigin.Here)
-        assertFalse(hook.play(row.watchKey, PlayOrigin(cast = cast)))
         assertFalse(hook.play(row.watchKey, PlayOrigin(remote = phone)))
         assertFalse(hook.play(WatchKey.episode(900002, 1, 6), PlayOrigin.Here))
+        assertFalse(hook.play(WatchKey.episode(900002, 1, 6), PlayOrigin(cast = cast)))
         assertFalse(hook.play(null, PlayOrigin.Here))
         television = true
         assertFalse(hook.play(row.watchKey, PlayOrigin.Here))
+        assertFalse(hook.play(row.watchKey, PlayOrigin(cast = cast)))
 
         assertTrue(before.isActive, "the play in flight was stopped")
         assertEquals(searching, inFlight.writes.state.value)
@@ -188,6 +217,74 @@ class DownloadHookTest {
         assertNull(playerInFront.launching.value)
         assertEquals(0, launcher.stops)
         assertEquals(emptySet(), holds.held(), "a file held")
+        assertEquals(emptyList(), casts, "a file cast")
+    }
+
+    /**
+     * W121 (c), L446: a title's Play to a Cast device with a finished download whose file the device plays (nothing read
+     * of its tracks here) casts the file: the coordinator's cast of it is called with the row, its launch and the cast's
+     * origin, the file held as a launch's is, and nothing goes to this phone's player.
+     */
+    @Test
+    fun `a title's Play to a Cast device casts the downloaded file, held, with nothing launched here`() = runBlocking<Unit> {
+        done[row.watchKey] = row
+        val origin = PlayOrigin(cast = cast)
+        assertTrue(hook.play(row.watchKey, origin))
+        assertEquals(listOf(Triple(row, DownloadLaunch.of(row)!!, origin)), casts)
+        assertEquals(setOf(row.id), holds.held())
+        assertTrue(inFlight.launches.tryReceive().isFailure, "something was launched here")
+        assertNull(playerInFront.launching.value)
+    }
+
+    /**
+     * W121 (c), L446: a file the device can't fully play streams the title for it from a title's page while online: the hook
+     * answers false and holds nothing, so the entry point streams as without a download. Offline, as nothing can stream,
+     * the file is taken, to be asked about over it.
+     */
+    @Test
+    fun `a file the device can't fully play streams the title online, holding nothing, and is taken offline`() = runBlocking<Unit> {
+        done[row.watchKey] = silent
+        assertFalse(hook.play(row.watchKey, PlayOrigin(cast = cast)))
+        assertEquals(emptyList(), casts)
+        assertEquals(emptySet(), holds.held())
+        offline = true
+        assertTrue(hook.play(row.watchKey, PlayOrigin(cast = cast)))
+        assertEquals(listOf(silent.id), casts.map { it.first.id })
+        assertEquals(setOf(row.id), holds.held())
+    }
+
+    /**
+     * L446: a download still running is no file to cast, its `.part` holding zeros where nothing is written yet: the title
+     * streams for the device, nothing held. Nor before the Cast devices' memory is read (a moment at a cold start), as the
+     * device's profile can't be told without a wait; nor one Delete once watched has taken.
+     */
+    @Test
+    fun `a running download, profiles not read yet, or a row being deleted, isn't cast`() = runBlocking<Unit> {
+        done[row.watchKey] = row.copy(state = DownloadState.Running, safeOffset = 400_000_000)
+        assertFalse(hook.play(row.watchKey, PlayOrigin(cast = cast)))
+        done[row.watchKey] = row
+        devices = null
+        assertFalse(hook.play(row.watchKey, PlayOrigin(cast = cast)))
+        devices = emptyList()
+        holds.going = setOf(row.id)
+        assertFalse(hook.play(row.watchKey, PlayOrigin(cast = cast)))
+        assertEquals(emptyList(), casts)
+        assertEquals(emptySet(), holds.held())
+    }
+
+    /** L413, L447: the file a cast takes is held for 30 s as a launch's, until the cast's own hold has it. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a cast's file is held for 30 seconds, as a launch's`() = runTest {
+        done[row.watchKey] = row
+        val launches = FakeHolds()
+        assertTrue(hook(launches, backgroundScope).play(row.watchKey, PlayOrigin(cast = cast)))
+        advanceTimeBy(DownloadHook.LAUNCH_HOLD_MILLIS - 1)
+        runCurrent()
+        assertEquals(setOf(row.id), launches.held())
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(emptySet(), launches.held())
     }
 
     /**
@@ -200,7 +297,7 @@ class DownloadHookTest {
     fun `a download's launch holds its file for 30 seconds, each launch its own hold`() = runTest {
         done[row.watchKey] = row
         val launches = FakeHolds()
-        val timed = DownloadHook(inFlight, television = { television }, done = { done.toMap() }, holds = { launches }, scope = backgroundScope)
+        val timed = hook(launches, backgroundScope)
         assertTrue(timed.play(row.watchKey, PlayOrigin.Here))
         assertEquals(setOf(row.id), launches.held())
         advanceTimeBy(10_000)

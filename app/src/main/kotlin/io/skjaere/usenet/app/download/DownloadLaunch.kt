@@ -19,10 +19,10 @@ import io.skjaere.usenet.player.PlayUris
 internal object DownloadLaunch {
     /**
      * Whether a play from [origin] plays a finished download where there is one: a play asked for on this device (a tap, or
-     * what its player hands on: auto-advance, Previous and Next), never one cast to a Google Cast device (L377), a paired
-     * phone's (L353), or anything on a TV, which has no downloads (W108).
+     * what its player hands on: auto-advance, Previous and Next), or cast from it to a Google Cast device, whose file the
+     * hook may cast (W121 c, L446); never a paired phone's (L353), or anything on a TV, which has no downloads (W108).
      */
-    fun looks(origin: PlayOrigin, television: Boolean): Boolean = !television && origin.cast == null && origin.remote == null
+    fun looks(origin: PlayOrigin, television: Boolean): Boolean = !television && origin.remote == null
 
     /**
      * [row]'s launch: its file by its `download://` URI, under the row's names and watch key, with the watch target a stream

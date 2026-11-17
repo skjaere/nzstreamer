@@ -6,11 +6,13 @@ import androidx.annotation.VisibleForTesting
 import io.skjaere.usenet.app.AppContainer
 import io.skjaere.usenet.app.TmdbLookup
 import io.skjaere.usenet.app.casting.CastAction
+import io.skjaere.usenet.app.casting.CastDownloadPlan
 import io.skjaere.usenet.app.casting.CastFailKind
 import io.skjaere.usenet.app.casting.CastFailed
 import io.skjaere.usenet.app.casting.CastLine
 import io.skjaere.usenet.app.casting.CastLoad
 import io.skjaere.usenet.app.casting.CastLoadFailure
+import io.skjaere.usenet.app.casting.CastLoadOutcome
 import io.skjaere.usenet.app.casting.CastMove
 import io.skjaere.usenet.app.casting.CastPrecheck
 import io.skjaere.usenet.app.casting.CastProfile
@@ -31,6 +33,8 @@ import io.skjaere.usenet.app.debrid.ServiceSource
 import io.skjaere.usenet.app.debrid.triedBySource
 import io.skjaere.usenet.app.download.DownloadHook
 import io.skjaere.usenet.app.download.DownloadLaunch
+import io.skjaere.usenet.app.download.DownloadStorage
+import io.skjaere.usenet.app.download.PlayerBranches
 import io.skjaere.usenet.app.search.IndexerConfigs
 import io.skjaere.usenet.app.search.SourceTag
 import io.skjaere.usenet.app.search.playTag
@@ -64,6 +68,7 @@ import io.skjaere.usenet.core.UsenetSource
 import io.skjaere.usenet.core.UsenetTarget
 import io.skjaere.usenet.core.UsenetUris
 import io.skjaere.usenet.core.unreadableFailure
+import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.SearchPick
 import io.skjaere.usenet.data.TitleType
@@ -78,6 +83,7 @@ import io.skjaere.usenet.newznab.IndexerConfig
 import io.skjaere.usenet.newznab.NewznabItem
 import io.skjaere.usenet.newznab.NzbDownload
 import io.skjaere.usenet.player.LinkFailure
+import io.skjaere.usenet.player.PlayUris
 import io.skjaere.usenet.releases.Availability
 import io.skjaere.usenet.releases.ReleaseFacts
 import io.skjaere.usenet.releases.ReleaseKey
@@ -968,10 +974,12 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
     /**
      * The hooks (L353): a play asked for on this device of a title with a finished download plays its file at once, from
      * the runner's map of them, never a wait on the library; never on a TV. The file is held for the launch's first 30 s,
-     * until its player holds it (L413).
+     * until its player holds it (L413). One cast to a Google Cast device casts the file ([castDownload]), unless the title
+     * streams for the device instead, as the Cast devices' memory and the app's offline signal say (L446).
      */
     private val downloadHook = DownloadHook(
         inFlight, television = { container.television }, done = { container.downloads.done.value }, holds = { container.downloads }, scope = scope,
+        devices = { container.castDevices.value }, offline = { container.offline.value }, cast = ::castDownload,
     )
 
     /** Whether the sheet is starting a play now: searching, trying releases, or asking which file plays. */
@@ -1833,6 +1841,50 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         return null
     }
 
+    /**
+     * A finished download's file cast (W121 c; L446, L447): [row]'s file by its [launch], made from the row, from [origin],
+     * the cast's, with no provider or service, so it plays offline as online. Taken by the hook from a title's page, or
+     * from a place of files, what is left to judge is the file's own ([CastDownloadPlan.over]), by the device's profile
+     * and the tracks Resolve's probe kept, never a probe again. A file it plays: the one-step sheet, "Starting on Kitchen
+     * display" with W63's lines, then the hand-over. One it can't fully play: the pre-check over the file, Play on this
+     * phone, Cast anyway or Cancel. A type no Cast device opens: its failure, with Play on this phone and Close. Play on this
+     * phone plays the file here ([launchHere]). The job holds the file from its start until the device's outcome is known
+     * (C1), as the load's own hold takes over from it; a hold refused (Delete once watched took the row) fails as the file
+     * gone, nothing sent.
+     */
+    internal fun castDownload(row: Download, launch: PlayerLaunch, origin: PlayOrigin) {
+        val to = origin.cast ?: return
+        val cast = launch.copy(cast = to, remote = null, startPositionMs = origin.start ?: launch.startPositionMs)
+        replaceJob(origin, launch.title, launch.subtitle, launch.watch) { again -> if (again.cast == null) launchHere(launch) else castDownload(row, launch, again) }
+        // A file on this phone needs no provider or service (L447).
+        job = launchPlay(launch.title, launch.subtitle, origin = origin, gate = { null }) {
+            val owner = Any()
+            if (!container.downloads.hold(owner, row.id)) {
+                val gone = CastLoadFailure(CastFailKind.CouldNotPlay, DownloadStorage.FILE_GONE, fileUnreadable = true)
+                val starting = CastDownloadPlan.starting(cast, null, to)
+                _state.value = CastStart.after(CastLoadOutcome.Failed(gone), cast, starting, 0, canTryAnother = false, online = !container.offline.value)
+                return@launchPlay
+            }
+            try {
+                val profile = container.castProfile(to)
+                val plan = CastDownloadPlan.over(cast.release.fileName, cast.tracks, profile)
+                log.info("play: download {} is cast as {}", row.id, plan)
+                when (val shown = CastDownloadPlan.sheet(plan, cast, profile, castPrefs(cast.watch), to)) {
+                    is PlayState.Running -> handOver(cast, shown)?.let { onDevice(it) }
+                    is PlayState.Prechecking -> when (askBeforeCasting(shown)) {
+                        // Its lines were the pre-check's.
+                        CastPrecheck.Button.CastAnyway -> handOver(cast, CastDownloadPlan.starting(cast, null, to))?.let { onDevice(it) }
+                        CastPrecheck.Button.PlayHere -> launchHere(cast)
+                        CastPrecheck.Button.Compatible, CastPrecheck.Button.Cancel -> Unit
+                    }
+                    else -> shown?.let { _state.value = it }
+                }
+            } finally {
+                container.downloads.release(owner, row.id)
+            }
+        }
+    }
+
     /** [request]'s file, [file] of the NZB [nzbId], played here as Import plays it, its launch saving no progress. */
     private fun playFileHere(nzbId: String, file: FileCandidate, request: PlayRequest) {
         val launch = importedLaunch(nzbId, file, request, sessions.start(request, emptySet()))
@@ -1844,14 +1896,18 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         _state.value = PlayState.Idle
     }
 
-    /** Try again after the device couldn't reach this phone (W39): [launch] loaded again on its device, the sheet on its last step. */
+    /**
+     * Try again after the device couldn't reach this phone (W39): [launch] loaded again on its device, the sheet on its last
+     * step. A download's file needs no provider or service (L447): its load holds the file itself.
+     */
     fun castAgain(launch: PlayerLaunch) {
         if (launch.cast == null) return
         val shown = (_state.value as? PlayState.Failed)?.cast?.takeIf { it.launch == launch }?.running
         val running = (shown ?: PlayState.Running(launch.title, launch.subtitle, null, 1, 1, launch.release.title, emptyList(), emptyMap(), null)).copy(castStep = null)
         val origin = PlayOrigin.after(launch)
+        val gate: suspend () -> NoUsableProvider? = if (PlayerBranches.isDownload(launch.uri)) ({ null }) else ({ container.noUsableSource() })
         replaceJob(origin, launch.title, launch.subtitle, launch.watch)
-        job = launchPlay(launch.title, launch.subtitle, origin = origin) { handOver(launch, running)?.let { onDevice(it) } }
+        job = launchPlay(launch.title, launch.subtitle, origin = origin, gate = gate) { handOver(launch, running)?.let { onDevice(it) } }
     }
 
     /**
@@ -1964,8 +2020,8 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
 
     /**
      * Play on this phone after a cast play failed (L83): This phone is chosen, which ends the cast (L85), and [launch], made
-     * for the device, plays here, its NZB in the store; with none, nothing was made for the device, and the play is asked
-     * for again here.
+     * for the device, plays here, its NZB in the store, or a download's file held for its launch ([launchHere]); with none,
+     * nothing was made for the device, and the play is asked for again here.
      */
     fun playHere(launch: PlayerLaunch?) {
         container.playOn.choose(PlayChoice.Phone)
@@ -1973,8 +2029,17 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
             again?.invoke(PlayOrigin.Here)
             return
         }
+        launchHere(launch)
+    }
+
+    /**
+     * [launch] to this phone's player, the sheet closing: a download's file held for its launch's first 30 s, as the hook
+     * holds one, until its player holds it (L413, L447).
+     */
+    private fun launchHere(launch: PlayerLaunch) {
         val here = launch.copy(cast = null)
         _castTo.value = null
+        (PlayUris.parse(here.uri) as? PlayUris.Target.Download)?.let { downloadHook.holdLaunch(it.id) }
         _state.ifCurrent {
             container.playerInFront.launched(here.remote)
             _launches.trySend(here)
@@ -2014,11 +2079,15 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
      * it, opened if it was minimised, as the play waits on the answer ([precheck] below), with nothing sent to the device.
      * Cancel, Back or another play cancels the play, and with it the question.
      */
-    private suspend fun askBeforeCasting(request: PlayRequest, precheck: CastPrecheck): CastPrecheck.Button {
+    private suspend fun askBeforeCasting(request: PlayRequest, precheck: CastPrecheck): CastPrecheck.Button =
+        askBeforeCasting(PlayState.Prechecking(request.title, request.subtitle, precheck))
+
+    /** [asking], the pre-check's sheet, as [askBeforeCasting] asks it: a downloaded file's too, which has no request (L447). */
+    private suspend fun askBeforeCasting(asking: PlayState.Prechecking): CastPrecheck.Button {
         val answer = CompletableDeferred<CastPrecheck.Button>()
         prechecking = answer
         try {
-            _state.value = PlayState.Prechecking(request.title, request.subtitle, precheck)
+            _state.value = asking
             _expanded.value = true
             return answer.await()
         } finally {

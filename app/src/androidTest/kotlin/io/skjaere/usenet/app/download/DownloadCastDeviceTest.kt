@@ -7,6 +7,7 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import androidx.test.core.app.ActivityScenario
@@ -36,8 +37,10 @@ import io.skjaere.usenet.app.casting.CastFailKind
 import io.skjaere.usenet.app.casting.CastIdleReason
 import io.skjaere.usenet.app.casting.CastLink
 import io.skjaere.usenet.app.casting.CastPlayerState
+import io.skjaere.usenet.app.casting.CastPrecheck
 import io.skjaere.usenet.app.casting.CastPrompt
 import io.skjaere.usenet.app.casting.MoveOutcome
+import io.skjaere.usenet.app.casting.castingTo
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.everyStep
 import io.skjaere.usenet.app.link.CastButtonLook
@@ -46,10 +49,17 @@ import io.skjaere.usenet.app.link.PlayTarget
 import io.skjaere.usenet.app.onMainThread
 import io.skjaere.usenet.app.overlayNodes
 import io.skjaere.usenet.app.play.CastTo
+import io.skjaere.usenet.app.play.EpisodePlay
+import io.skjaere.usenet.app.play.PlayState
+import io.skjaere.usenet.app.play.PlaybackCoordinator
+import io.skjaere.usenet.app.play.ProbedTracksSerializer
 import io.skjaere.usenet.app.read
 import io.skjaere.usenet.app.shell
 import io.skjaere.usenet.app.views
 import io.skjaere.usenet.app.waitFor
+import io.skjaere.usenet.core.ProbedTrack
+import io.skjaere.usenet.core.ProbedTracks
+import io.skjaere.usenet.core.StepStatus
 import io.skjaere.usenet.data.AppSettings
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadGap
@@ -60,12 +70,14 @@ import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchTitle
 import io.skjaere.usenet.metadata.TmdbImages
+import io.skjaere.usenet.newznab.TvIds
 import io.skjaere.usenet.player.PlayUris
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -78,6 +90,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * A finished download cast from this phone (W121 c; L417, L448, L451), through the real cast service, its server and the
@@ -96,6 +109,13 @@ import java.util.concurrent.CopyOnWriteArrayList
  * - The player's Cast row (W121 c): a download playing here moves there, served byte for byte, and the player closes.
  * - A download with recorded gaps: the cast counts them as the device is served them, and its prompt offers Stream instead
  *   only while online (L449).
+ * - A title's Play with Kitchen display connected (the router's, as the Show page's button plays it): the file is cast,
+ *   "Starting on Kitchen display", nothing grabbed, with no provider or service usable (L446, L447).
+ * - Offline, a file the device can't fully play asks the pre-check over it, the file held past the hook's 30 s by the
+ *   cast's own hold (C1); Play on this phone plays it here, held for its launch.
+ * - Try again after the device couldn't reach the phone loads the file again with no provider or service.
+ *
+ * The session's picture is never fetched from TMDB's image host: an address is answered with none.
  *
  * Put back after each, whatever happened: the rows and their files, the downloads' jobs, the offline override, the cast
  * seams and Play on (This phone), the app's screens, the settings and the marks. The show, its releases and the device
@@ -135,6 +155,11 @@ class DownloadCastDeviceTest {
     private val pictures = CopyOnWriteArrayList<Any>()
     private val pictureBytes = CopyOnWriteArrayList<ByteArray>()
 
+    /** The coordinator's NZB grabs, counted through its seam: a cast of a file grabs nothing. */
+    private val realFetch = PlaybackCoordinator.fetchNzb
+    private val grabs = AtomicInteger()
+    private val json = Json { ignoreUnknownKeys = true }
+
     @Before
     fun setUp() = runBlocking<Unit> {
         assumeFalse("a TV never casts, and has no downloads (tv.TvNoCastTest, tv.TvNoDownloadsTest)", container.television)
@@ -155,7 +180,12 @@ class DownloadCastDeviceTest {
         val picture = Casting.picture
         Casting.picture = { c, model ->
             pictures += model
-            picture(c, model)?.also { pictureBytes += it }
+            // A stored file is read as the app reads it; TMDB's address is never fetched from a test.
+            (if (model is String) null else picture(c, model))?.also { pictureBytes += it }
+        }
+        PlaybackCoordinator.fetchNzb = { c, indexer, item ->
+            grabs.incrementAndGet()
+            realFetch(c, indexer, item)
         }
         // Nothing left over from another test for this one to take.
         onMainThread { container.playback.withdraw() }
@@ -166,6 +196,7 @@ class DownloadCastDeviceTest {
     fun tearDown() = runBlocking<Unit> {
         everyStep(
             { receiver.close() },
+            { PlaybackCoordinator.fetchNzb = realFetch },
             { container.offlineOverride.value = null },
             { onMainThread { container.playback.cancel() } },
             { alive().forEach { activity -> onMainThread { activity.finish() } } },
@@ -401,13 +432,88 @@ class DownloadCastDeviceTest {
         end(item)
     }
 
+    /**
+     * W121 (c), L446, L447: a title's Play of a downloaded episode with Kitchen display connected (the router's play, as the
+     * Show page's Play calls it) casts its file: the sheet says "Starting on Kitchen display" with the release under it and
+     * no release steps, the LOAD serves the file, and nothing is grabbed or looked up. No provider, service or indexer is
+     * usable, as a file on this phone needs none: a stream couldn't have started.
+     */
+    @Test
+    fun aTitlesPlayWithKitchenDisplayConnectedCastsTheFileWithNothingGrabbed() = runBlocking<Unit> {
+        val row = finished(2)
+        nothingToStreamFrom()
+        val loads = remote!!.loads.size
+        onMainThread { container.playRouter.playEpisode(episode(2)) }
+        val item = waitFor("the LOAD", LOAD_MILLIS) { remote!!.loads.drop(loads).lastOrNull() }
+        val starting = container.playback.state.value as? PlayState.Running ?: throw AssertionError("not starting: ${container.playback.state.value}")
+        assertEquals(StepStatus.Running(), starting.castStep)
+        assertEquals(NAME to "S01E02 · ${NAMES[1]}", starting.title to starting.subtitle)
+        assertEquals(checkNotNull(row.release).title, starting.release)
+        assertEquals("no release steps", emptyMap<Any, Any>(), starting.steps)
+        assertEquals("Casting to ${kitchen.name}", container.playback.castTo.value?.let { castingTo(it.name) })
+        standIn(item)
+        val head = receiver.ask(0) ?: throw AssertionError("the head's request unanswered")
+        assertEquals(206, head.status)
+        head.toEnd()
+        plays(item)
+        waitFor("the sheet closed", LOAD_MILLIS) { Unit.takeIf { container.playback.state.value == PlayState.Idle } }
+        assertEquals("the download's file there", PlayUris.download(row.id), Casting.feed.value?.launch?.uri)
+        assertEquals("grabs", 0, grabs.get())
+        assertEquals("TMDB asked", 0, tmdb!!.lookups.get())
+        end(item)
+    }
+
+    /**
+     * L446, L447 (C1): offline, a title's Play to Kitchen display of a file whose only sound it can't play asks the
+     * pre-check over the file, nothing sent; the file stays held past the hook's 30 s by the cast's own hold while it asks.
+     * Play on this phone chooses This phone and plays the file here, held for its launch.
+     */
+    @Test
+    fun offlineAMissAsksThePrecheckAndPlayOnThisPhonePlaysTheFileHere() = runBlocking<Unit> {
+        val row = finished(2, tracks = SILENT)
+        nothingToStreamFrom()
+        container.offlineOverride.value = true
+        waitFor("offline") { Unit.takeIf { container.offline.value } }
+        val loads = remote!!.loads.size
+        onMainThread { container.playRouter.playEpisode(episode(2)) }
+        val asking = waitFor("the pre-check", LOAD_MILLIS) { container.playback.state.value as? PlayState.Prechecking }
+        assertEquals("No sound on ${kitchen.name}", asking.precheck.headline)
+        assertEquals(listOf(CastPrecheck.Button.PlayHere, CastPrecheck.Button.CastAnyway, CastPrecheck.Button.Cancel), asking.precheck.buttons())
+        assertTrue("held as it asks", row.id in container.downloads.held.value)
+        // Past the hook's own 30 s: the cast's hold keeps the file while the question waits.
+        delay(DownloadHook.LAUNCH_HOLD_MILLIS + SETTLE_MILLIS)
+        assertTrue("held past the hook's 30 s", row.id in container.downloads.held.value)
+        onMainThread { container.playback.precheck(CastPrecheck.Button.PlayHere) }
+        val here = withTimeout(LOAD_MILLIS) { container.playback.launches.first() }
+        assertEquals(PlayUris.download(row.id), here.uri)
+        assertEquals("played here", null, here.cast)
+        assertEquals(PlayChoice.Phone, container.playOn.chosen.value)
+        assertTrue("held for its launch", row.id in container.downloads.held.value)
+        assertEquals("nothing sent", loads, remote!!.loads.size)
+    }
+
+    /** L447 (W39): Try again after the device couldn't reach this phone loads a download's file again, with no provider or service. */
+    @Test
+    fun tryAgainLoadsADownloadsFileAgainWithNoProviderOrService() = runBlocking<Unit> {
+        val row = finished(2)
+        nothingToStreamFrom()
+        val loads = remote!!.loads.size
+        onMainThread { container.playback.castAgain(checkNotNull(DownloadLaunch.of(row)).copy(cast = device)) }
+        val item = waitFor("the LOAD", LOAD_MILLIS) { remote!!.loads.drop(loads).lastOrNull() }
+        standIn(item)
+        (receiver.ask(0) ?: throw AssertionError("the head's request unanswered")).toEnd()
+        plays(item)
+        waitFor("the sheet closed", LOAD_MILLIS) { Unit.takeIf { container.playback.state.value == PlayState.Idle } }
+        end(item)
+    }
+
     // The download, the cast and the device.
 
     /**
      * Episode [number] of Quiet Meridian as a finished download is left: its row with its marker (as DownloadsPageSeeds
      * seeds one), then the device tests' chapters.mkv as its file, where storage keeps it.
      */
-    private fun finished(number: Int, gaps: List<DownloadGap> = emptyList()): Download {
+    private fun finished(number: Int, gaps: List<DownloadGap> = emptyList(), tracks: ProbedTracks? = null): Download {
         val id = Download.newId()
         val name = "Quiet.Meridian.S01E0$number.720p.WEB.h264-KESTREL.mkv"
         val size = film.size.toLong()
@@ -416,8 +522,8 @@ class DownloadCastDeviceTest {
             showTmdbId = SHOW, season = 1, episode = number, seasonEpisodes = EPISODES, episodeName = NAMES[number - 1], posterPath = POSTER,
             stillPath = STILL, state = DownloadState.Done, position = -1_000L + number,
             release = RememberedRelease(INDEXER, "qm-s01e0$number", name.removeSuffix(".mkv"), null, 0, "nzb-qm-$number", name, size),
-            fileName = name, size = size, indexerSize = size, safeOffset = size, gaps = gaps, relativePath = "downloads/$id/v.mkv", createdAt = 1,
-            completedAt = 2, updatedAt = 2,
+            fileName = name, size = size, indexerSize = size, safeOffset = size, gaps = gaps, relativePath = "downloads/$id/v.mkv",
+            tracks = tracks?.let { json.encodeToString(ProbedTracksSerializer, it) }, createdAt = 1, completedAt = 2, updatedAt = 2,
         )
         seeds.seed(row)
         made += row
@@ -508,6 +614,25 @@ class DownloadCastDeviceTest {
         ALIVE.flatMap { ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(it) }.filter { it is PlayerActivity || it is MainActivity }.distinct()
     }
 
+    /**
+     * Every provider, debrid service account and indexer switched off (the settings put back after): no stream could start
+     * or search, so what plays is the file. A play that streamed fails at once.
+     */
+    private suspend fun nothingToStreamFrom() {
+        val settings = container.settings
+        settings.providers.first().filter { it.enabled }.forEach { settings.setProviderEnabled(it.id, false) }
+        settings.services.first().filter { it.enabled }.forEach { settings.setServiceEnabled(it.id, false) }
+        settings.indexers.first().filter { it.enabled }.forEach { settings.setIndexerEnabled(it.id, false) }
+        settings.torrentIndexers.first().filter { it.enabled }.forEach { settings.setTorrentIndexerEnabled(it.id, false) }
+        assertTrue("a provider or service usable", container.noUsableSource() != null)
+    }
+
+    /** Episode [n] of Quiet Meridian as the Show page plays it, known to TMDB's fake as nothing. */
+    private fun episode(n: Int) = EpisodePlay(
+        showTmdbId = SHOW, showName = NAME, showYear = 2024, aliases = emptyList(), ids = TvIds(tmdb = SHOW), season = 1, episode = n,
+        episodeName = NAMES[n - 1], airDate = null, runtimeMinutes = 6,
+    )
+
     /** Kitchen display connected and chosen in Play on, with no cast service left over. */
     private suspend fun connectKitchen() {
         CastFakes.connected(kitchen, connector)
@@ -541,6 +666,11 @@ class DownloadCastDeviceTest {
         const val MIDDLE = 327_680L
         const val SEEK_READ = 64L * 1024
         const val TAIL = 96L * 1024
+
+        /** What Resolve's probe read of a file whose only sound is DTS, which no Cast device plays. */
+        val SILENT = ProbedTracks(
+            listOf(ProbedTrack(MimeTypes.VIDEO_H264, "H.264", width = 1280, height = 720, bitDepth = 8)), listOf(ProbedTrack(MimeTypes.AUDIO_DTS, "DTS", "en", channels = 6)),
+        )
 
         /** Three recorded gaps a minute or so into the film, 1000 bytes each. */
         const val GAP_AT = 120_000L

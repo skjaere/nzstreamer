@@ -34,8 +34,8 @@ import kotlin.test.assertTrue
  * L352, L353: the launch a finished download plays by ([DownloadLaunch]), built from its row alone, so it needs no TMDB,
  * indexer or provider: its `download://` URI, the row's names and watch key, the release its file came from with the file's
  * name and exact size, no request behind it, and what Resolve's probe read of the video and its tracks. And which plays
- * look for one: those asked for on this device (a tap, an auto-advance's hand-on), never a cast's, a paired phone's or a
- * TV's. Names and ids are invented.
+ * look for one: those asked for on this device (a tap, an auto-advance's hand-on) and those cast from it to a Google Cast
+ * device (W121 c, L446), never a paired phone's or a TV's. Names and ids are invented.
  */
 class DownloadLaunchTest {
     private val json = Json { ignoreUnknownKeys = true }
@@ -189,8 +189,12 @@ class DownloadLaunchTest {
         assertEquals(known, DownloadLaunch.filmFacts(known, launch.copy(uri = "usenet://nzb/d4e5f6/0")) { error("asked for $it") })
     }
 
+    /**
+     * L446 (W121 c): a play cast from this phone looks for a download too, as the hook judges whether its file is cast;
+     * a paired phone's never, nor anything on a TV.
+     */
     @Test
-    fun `plays asked for on this device look for a download, a cast's, a phone's or a TV's never`() {
+    fun `plays asked for on this device or cast from it look for a download, a phone's or a TV's never`() {
         val here = assertNotNull(DownloadLaunch.of(episode))
         assertTrue(DownloadLaunch.looks(PlayOrigin.Here, television = false))
         // Auto-advance, Previous and Next hand on from a play here.
@@ -199,13 +203,14 @@ class DownloadLaunchTest {
 
         val cast = CastTo("route-1", "Invented display")
         val phone = RemotePlay("s-a", "aa".repeat(32), "Invented phone")
-        assertFalse(DownloadLaunch.looks(PlayOrigin(cast = cast), television = false))
-        assertFalse(DownloadLaunch.looks(PlayOrigin.after(here.copy(cast = cast)), television = false))
+        assertTrue(DownloadLaunch.looks(PlayOrigin(cast = cast), television = false))
+        assertTrue(DownloadLaunch.looks(PlayOrigin.after(here.copy(cast = cast)), television = false), "a cast's next episode")
         assertFalse(DownloadLaunch.looks(PlayOrigin(remote = phone), television = false))
         assertFalse(DownloadLaunch.looks(PlayOrigin.after(here.copy(remote = phone)), television = false))
         // A TV has none, whatever asks (W108).
         assertFalse(DownloadLaunch.looks(PlayOrigin.Here, television = true))
         assertFalse(DownloadLaunch.looks(PlayOrigin.after(here), television = true))
+        assertFalse(DownloadLaunch.looks(PlayOrigin(cast = cast), television = true))
     }
 
     /**

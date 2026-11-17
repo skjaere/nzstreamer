@@ -103,6 +103,7 @@ import io.skjaere.usenet.app.settings.headerLinesToLog
 import io.skjaere.usenet.app.settings.loginResult
 import io.skjaere.usenet.app.setup.SetupPages
 import io.skjaere.usenet.app.ui.FormFactor
+import io.skjaere.usenet.data.CastDeviceMemory
 import io.skjaere.usenet.data.DataContainer
 import io.skjaere.usenet.data.ProviderRecord
 import io.skjaere.usenet.data.ProviderWithPassword
@@ -718,6 +719,15 @@ class AppContainer(private val context: Context) {
     /** The Cast devices' profiles, with what each has shown (L128). */
     private suspend fun castProfiles() = CastProfiles(settings.cast.first().devices)
 
+    /**
+     * The Cast devices' memory (L128), what each has shown, as settings.json has it, null until it is read: the
+     * coordinator's hook judges a cast of a download's file by it on the main thread, with no wait (L446), and passes while
+     * it is null. Read from [start] on, on a phone alone: a TV's is null for good.
+     */
+    val castDevices: StateFlow<List<CastDeviceMemory>?> by lazy {
+        if (television) MutableStateFlow<List<CastDeviceMemory>?>(null) else settings.cast.map { it.devices }.distinctUntilChanged().stateIn(appScope, SharingStarted.Eagerly, null)
+    }
+
     /** What the Cast device a play goes to ([to]) plays, by its model and what it has shown (L128): what its file is judged by (L129). */
     suspend fun castProfile(to: CastTo): CastProfile = castProfiles().of(to.device, to.model)
 
@@ -765,10 +775,11 @@ class AppContainer(private val context: Context) {
                 tvLinks.start()
                 phoneFinals.start()
                 tvPlaying.start()
-                // Read now, so the Play on list's gate has the opt-in (L112), the Cast button its face (L146) and the shell
-                // whether to introduce it (L123) as the first screen shows.
+                // Read now, so the Play on list's gate has the opt-in (L112), the Cast button its face (L146), the shell
+                // whether to introduce it (L123) and the hook what each Cast device plays (L446) as the first screen shows.
                 castLooking.value
                 castIntroShown.value
+                castDevices.value
                 refreshCastAvailable()
             }
         }
