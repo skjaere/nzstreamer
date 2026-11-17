@@ -1,6 +1,7 @@
 package io.skjaere.usenet.app.collection.model
 
 import androidx.compose.runtime.Immutable
+import io.skjaere.usenet.app.download.Downloaded
 
 /** A filter chip: its setting's [name], what it reads, how many titles it holds with the current search. */
 data class Chip(val name: String, val label: String, val count: Int, val selected: Boolean)
@@ -42,36 +43,69 @@ data class SideView(
 object CollectionView {
     private val LETTERS = listOf('#') + ('A'..'Z')
 
-    fun shows(rows: List<ShowRow>, filter: ShowFilter, sort: ShowSort, text: String, frozenOrder: List<TitleKey>? = null): SideView {
+    /**
+     * [downloaded]: the finished downloads by title (L408), empty where downloads don't show (a TV). Its chip, Downloaded,
+     * comes second while a show here has one, and under it the header counts those shows and their episodes.
+     */
+    fun shows(
+        rows: List<ShowRow>,
+        filter: ShowFilter,
+        sort: ShowSort,
+        text: String,
+        frozenOrder: List<TitleKey>? = null,
+        downloaded: Map<TitleKey, Downloaded> = emptyMap(),
+    ): SideView {
         val matching = search(rows, text)
         val newEpisodes = rows.count { it.newEpisodes > 0 }
+        val chip = hasDownload(rows, downloaded)
+        val shown = shown(filter, rows, downloaded)
+        val visible = sorted(matching.filter { inFilter(it, shown, downloaded) }, sort)
         return view(
             matching, total = rows.size, pending = rows.count { it.load == LoadState.Pending }, text = text,
-            chips = ShowFilter.entries.map { f -> Chip(f.name, f.label, matching.count { inFilter(it, f) }, f == filter) },
-            visible = sorted(matching.filter { inFilter(it, filter) }, sort), frozenOrder = frozenOrder, az = sort == ShowSort.AZ,
-            filter = filter.name, all = filter == ShowFilter.All, noun = "show",
+            chips = ShowFilter.entries.filter { it != ShowFilter.Downloaded || chip }.map { f -> Chip(f.name, f.label, matching.count { inFilter(it, f, downloaded) }, f == shown) },
+            visible = visible, frozenOrder = frozenOrder, az = sort == ShowSort.AZ,
+            filter = shown.name, all = shown == ShowFilter.All, noun = "show",
             summary = if (newEpisodes > 0) "$newEpisodes with new episodes" else null,
+            downloadedHead = if (shown == ShowFilter.Downloaded) {
+                "${count(visible.size, "show")} · ${count(visible.sumOf { downloaded[it.key]?.count ?: 0 }, "episode")} downloaded"
+            } else {
+                null
+            },
         )
     }
 
-    fun movies(rows: List<MovieRow>, filter: MovieFilter, sort: MovieSort, text: String, frozenOrder: List<TitleKey>? = null): SideView {
+    /** As [shows], for films: under Downloaded the header counts them ("1 movie downloaded"). */
+    fun movies(
+        rows: List<MovieRow>,
+        filter: MovieFilter,
+        sort: MovieSort,
+        text: String,
+        frozenOrder: List<TitleKey>? = null,
+        downloaded: Map<TitleKey, Downloaded> = emptyMap(),
+    ): SideView {
         val matching = search(rows, text)
         val unwatched = rows.count { it.state == MovieState.NotWatched }
+        val chip = hasDownload(rows, downloaded)
+        val shown = shown(filter, rows, downloaded)
+        val visible = sorted(matching.filter { inFilter(it, shown, downloaded) }, sort)
         return view(
             matching, total = rows.size, pending = rows.count { it.load == LoadState.Pending }, text = text,
-            chips = MovieFilter.entries.map { f -> Chip(f.name, f.label, matching.count { inFilter(it, f) }, f == filter) },
-            visible = sorted(matching.filter { inFilter(it, filter) }, sort), frozenOrder = frozenOrder, az = sort == MovieSort.AZ,
-            filter = filter.name, all = filter == MovieFilter.All, noun = "movie",
+            chips = MovieFilter.entries.filter { it != MovieFilter.Downloaded || chip }.map { f -> Chip(f.name, f.label, matching.count { inFilter(it, f, downloaded) }, f == shown) },
+            visible = visible, frozenOrder = frozenOrder, az = sort == MovieSort.AZ,
+            filter = shown.name, all = shown == MovieFilter.All, noun = "movie",
             summary = if (unwatched > 0) "$unwatched unwatched" else null,
+            downloadedHead = if (shown == MovieFilter.Downloaded) "${count(visible.size, "movie")} downloaded" else null,
         )
     }
 
     /**
      * Each started show with facts is in one of Watching, Up to date and Finished. Without facts a show
-     * is Not started while nothing of it played, and otherwise in All only.
+     * is Not started while nothing of it played, and otherwise in All only. Downloaded, beside those, holds
+     * the shows among [downloaded].
      */
-    fun inFilter(row: ShowRow, filter: ShowFilter): Boolean = when (filter) {
+    fun inFilter(row: ShowRow, filter: ShowFilter, downloaded: Map<TitleKey, Downloaded> = emptyMap()): Boolean = when (filter) {
         ShowFilter.All -> true
+        ShowFilter.Downloaded -> row.key in downloaded
         ShowFilter.Watching -> row.state == ShowState.Watching
         ShowFilter.NewEpisodes -> row.newEpisodes > 0
         ShowFilter.NotStarted -> row.state == ShowState.NotStarted
@@ -79,14 +113,30 @@ object CollectionView {
         ShowFilter.Finished -> row.state == ShowState.Finished
     }
 
-    /** The chips other than All split the movies with facts; In progress and Watched need only the watch state. */
-    fun inFilter(row: MovieRow, filter: MovieFilter): Boolean = when (filter) {
+    /**
+     * The chips other than All and Downloaded split the movies with facts; In progress and Watched need only the watch
+     * state. Downloaded, beside those, holds the films among [downloaded].
+     */
+    fun inFilter(row: MovieRow, filter: MovieFilter, downloaded: Map<TitleKey, Downloaded> = emptyMap()): Boolean = when (filter) {
         MovieFilter.All -> true
+        MovieFilter.Downloaded -> row.key in downloaded
         MovieFilter.Unwatched -> row.state == MovieState.NotWatched
         MovieFilter.InProgress -> row.state == MovieState.InProgress
         MovieFilter.Watched -> row.state == MovieState.Watched
         MovieFilter.NotYetReleased -> row.state == MovieState.Upcoming
     }
+
+    /** [filter] as [shows] shows it: Downloaded reads as All while no show of [rows] has a download, as its chip is gone (L408). */
+    fun shown(filter: ShowFilter, rows: List<ShowRow>, downloaded: Map<TitleKey, Downloaded>): ShowFilter =
+        if (filter == ShowFilter.Downloaded && !hasDownload(rows, downloaded)) ShowFilter.All else filter
+
+    /** [filter] as [movies] shows it: Downloaded reads as All while no film of [rows] has a download (L408). */
+    fun shown(filter: MovieFilter, rows: List<MovieRow>, downloaded: Map<TitleKey, Downloaded>): MovieFilter =
+        if (filter == MovieFilter.Downloaded && !hasDownload(rows, downloaded)) MovieFilter.All else filter
+
+    /** Whether a title of the side has a download, whatever the search leaves: only then is the Downloaded chip there. */
+    private fun hasDownload(rows: List<TitleRow>, downloaded: Map<TitleKey, Downloaded>): Boolean =
+        downloaded.isNotEmpty() && rows.any { it.key in downloaded }
 
     /** Every sort ends by title, then by key, so the order stays the same from one build to the next. */
     fun sorted(rows: List<ShowRow>, sort: ShowSort): List<ShowRow> = rows.sortedWith(
@@ -129,6 +179,7 @@ object CollectionView {
         all: Boolean,
         noun: String,
         summary: String?,
+        downloadedHead: String? = null,
     ): SideView {
         val rows = frozenOrder?.let { order ->
             val at = order.withIndex().associate { (i, key) -> key to i }
@@ -138,7 +189,7 @@ object CollectionView {
         val query = text.trim()
         val searching = TitleSearch.tokens(text).isNotEmpty()
         val head = if (searching) "${rows.size} of ${count(total, noun)} ${if (rows.size == 1) "matches" else "match"} “$query”"
-        else listOfNotNull(count(total, noun), summary).joinToString(" · ")
+        else downloadedHead ?: listOfNotNull(count(total, noun), summary).joinToString(" · ")
         val empty = when {
             total == 0 -> Empty.NoTitles
             rows.isNotEmpty() -> null

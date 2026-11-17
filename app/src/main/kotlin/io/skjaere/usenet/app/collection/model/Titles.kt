@@ -35,8 +35,12 @@ enum class Side {
     }
 }
 
+/**
+ * Collection › Shows' chips. [Downloaded], the shows with a finished download (L408), shows only while one has: second,
+ * after All.
+ */
 enum class ShowFilter(val label: String) {
-    All("All"), Watching("Watching"), NewEpisodes("New episodes"), NotStarted("Not started"), UpToDate("Up to date"), Finished("Finished");
+    All("All"), Downloaded("Downloaded"), Watching("Watching"), NewEpisodes("New episodes"), NotStarted("Not started"), UpToDate("Up to date"), Finished("Finished");
 
     companion object {
         fun byName(name: String) = entries.firstOrNull { it.name == name }
@@ -51,8 +55,9 @@ enum class ShowSort(val label: String) {
     }
 }
 
+/** Collection › Movies' chips. [Downloaded], the films with a finished download (L408), shows only while one has: second, after All. */
 enum class MovieFilter(val label: String) {
-    All("All"), Unwatched("Unwatched"), InProgress("In progress"), Watched("Watched"), NotYetReleased("Not yet released");
+    All("All"), Downloaded("Downloaded"), Unwatched("Unwatched"), InProgress("In progress"), Watched("Watched"), NotYetReleased("Not yet released");
 
     companion object {
         fun byName(name: String) = entries.firstOrNull { it.name == name }

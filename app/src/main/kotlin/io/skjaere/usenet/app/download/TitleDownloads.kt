@@ -24,7 +24,8 @@ import kotlinx.coroutines.launch
  * movie card. Only what they say, so a page draws again only when that changes: its [state] and [reason] as the runner
  * keeps them, how far it is ([percent], once its file is made), its file's [size] (exact once resolved, else the
  * indexer's), how many parts it lacks ([partsMissing]) and how many releases were [tried]; finished, whether Delete once
- * watched will delete it and it isn't due yet ([deleting], L415); [id] for the runner's calls.
+ * watched will delete it and it isn't due yet ([deleting], L415), and whether its file plays from the row alone ([plays],
+ * as the play hook's launch takes it: what the Show page's line counts, L407); [id] for the runner's calls.
  */
 data class TitleDownload(
     val id: String,
@@ -35,6 +36,7 @@ data class TitleDownload(
     val partsMissing: Int = 0,
     val tried: Int = 0,
     val deleting: Boolean = false,
+    val plays: Boolean = false,
 ) {
     companion object {
         /**
@@ -45,7 +47,8 @@ data class TitleDownload(
             val row = item.row
             val total = row.size ?: row.indexerSize
             val percent = if (row.relativePath != null && total > 0) (item.written.coerceIn(0, total) * 100 / total).toInt() else null
-            return TitleDownload(row.id, row.state, row.reason, percent, total, row.gaps.size, row.tried.size, deleting && row.state == DownloadState.Done)
+            val done = row.state == DownloadState.Done
+            return TitleDownload(row.id, row.state, row.reason, percent, total, row.gaps.size, row.tried.size, deleting && done, done && DownloadLaunch.accepts(row))
         }
     }
 }
@@ -201,6 +204,19 @@ object TitleDownloads {
             )
             DownloadState.Deleting -> error("Handled above")
         }
+    }
+
+    /**
+     * The Show page's line under the watched bar (L409), from the show's [downloads] by episode as its rows say them: "3
+     * downloaded · 4.1 GB", counting the finished ones whose file plays ([TitleDownload.plays], L407), then " · 5 in the
+     * queue" while some are still to finish (the one being written among them). None until one is downloaded: the line
+     * opens the show's downloads, which lists the finished ones.
+     */
+    fun showLine(downloads: Collection<TitleDownload>): String? {
+        val done = downloads.filter { it.state == DownloadState.Done && it.plays }
+        if (done.isEmpty()) return null
+        val queued = downloads.count { it.state in DownloadRunner.GOING_ON }
+        return "${done.size} downloaded$SEP${formatSize(done.sumOf { it.size })}" + if (queued > 0) "$SEP$queued in the queue" else ""
     }
 
     /** The button's menu once it is started (DlPhoneMovie): the ⋮'s items by state, then Open Downloads. */

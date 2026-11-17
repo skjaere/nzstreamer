@@ -89,6 +89,7 @@ import io.skjaere.usenet.app.collection.model.Side
 import io.skjaere.usenet.app.collection.model.TitleKey
 import io.skjaere.usenet.app.collection.model.TitleRow
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.download.downloadsShown
 import io.skjaere.usenet.app.link.CastButton
 import io.skjaere.usenet.app.ui.AppType
 import io.skjaere.usenet.app.ui.FormFactor
@@ -111,7 +112,9 @@ private const val HEADER_ITEMS = 3
  *
  * [jump]: a title "+ Collection" just added on Search, brought into view and highlighted, then
  * [onJumpDone]. While [backToSearch], Back returns there (AppNav's handler): a remote's Back from the
- * list doesn't stop at the top bar first.
+ * list doesn't stop at the top bar first. Where downloads show (L408), the Downloaded chip's header line
+ * has "Downloads ›", which opens the Downloads page ([onDownloads]), and each row with a finished download
+ * its mark.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -124,6 +127,7 @@ fun CollectionScreen(
     jump: CollectionJump? = null,
     onJumpDone: () -> Unit = {},
     backToSearch: Boolean = false,
+    onDownloads: (() -> Unit)? = null,
 ) {
     // A TV's own layout, a grid of posters; phones and tablets keep the list.
     if (LocalFormFactor.current == FormFactor.Tv) {
@@ -202,7 +206,7 @@ fun CollectionScreen(
                         vm.switchSide(side)
                     },
                     onFilter = vm::setFilter, onSort = vm::setSort,
-                    onJump = { focus.letterGrid = true }, onSelectAll = vm::selectAllVisible, onMetadata = onMetadata, onFind = onAdd,
+                    onJump = { focus.letterGrid = true }, onSelectAll = vm::selectAllVisible, onMetadata = onMetadata, onFind = onAdd, onDownloads = onDownloads,
                     onShowAll = { focused ->
                         // Its button goes as the rows come: the focus to the header line first (not to the top
                         // bar, nor the search field and its keyboard), then on to the first row.
@@ -291,7 +295,9 @@ private class PhoneLayout(private val focus: CollectionFocus, private val shows:
 @Composable
 private fun collectionViewModel(): CollectionViewModel {
     val container = LocalContext.current.container
-    return viewModel { CollectionViewModel(CollectionDeps.of(container), createSavedStateHandle()) }
+    // The finished downloads where they show (L408): the TV's grid, which shares this model, gets none.
+    val shown = downloadsShown()
+    return viewModel { CollectionViewModel(CollectionDeps.of(container, shown), createSavedStateHandle()) }
 }
 
 /** No touch screen (a TV), or a remote or keyboard in use. */
@@ -321,6 +327,7 @@ private fun SideList(
     onSelectAll: () -> Unit,
     onMetadata: () -> Unit,
     onFind: () -> Unit,
+    onDownloads: (() -> Unit)?,
     onShowAll: (focused: Boolean) -> Unit,
     onRow: (TitleRow) -> Unit,
     onLongRow: (TitleRow) -> Unit,
@@ -337,7 +344,7 @@ private fun SideList(
         item(key = "switch", contentType = "switch") { SideSwitch(ui.side, onSide) }
         // Each side's chips from their start.
         item(key = "chips", contentType = "chips") { key(ui.side) { FilterChips(ui.view.chips, noun, onFilter) } }
-        item(key = "header", contentType = "header") { HeaderLine(ui, dpad, jumpFocus, sortFocus, onSort, onJump, onSelectAll) }
+        item(key = "header", contentType = "header") { HeaderLine(ui, dpad, jumpFocus, sortFocus, onSort, onJump, onSelectAll, onDownloads) }
         // An empty side says it itself, with its own button.
         if (!ui.hasKey && ui.view.empty != Empty.NoTitles) item(key = "hint", contentType = "hint") { NoKeyHint(ui.side, onMetadata) }
         ui.note?.let { note -> item(key = "note", contentType = "note") { Text(note, style = AppType.small, color = colors.muted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) } }
@@ -351,6 +358,7 @@ private fun SideList(
                 row, first = i == 0, last = i == rows.lastIndex, selecting = ui.selection != null, selected = row.key in keys,
                 highlighted = row.key == ui.highlight, justAdded = row.key == ui.highlight && ui.highlightAdded,
                 artwork = ui.showArtwork, dateChip = ui.sortName == ShowSort.NextToAir.name,
+                downloaded = ui.downloaded[row.key],
                 focus = if (row.key == focusKey) rowFocus else null,
                 onClick = { onRow(row) }, onLongClick = { onLongRow(row) }, onSelect = { onSelectRow(row) }, onRemove = { onRemoveRow(row) },
             )

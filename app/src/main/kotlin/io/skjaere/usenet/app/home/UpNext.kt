@@ -6,6 +6,7 @@ import io.skjaere.usenet.app.collection.recentlyAired
 import io.skjaere.usenet.app.play.ReleaseName
 import io.skjaere.usenet.data.CollectedShow
 import io.skjaere.usenet.data.LibraryRepository
+import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.data.WatchState
 import io.skjaere.usenet.metadata.Episode
@@ -47,6 +48,16 @@ data class UpNextRow(
     /** A TV's card's 16:9 picture: the episode's still, the movie's backdrop, or that of a show not collected; null for none. */
     val landscapePath: String? = null,
 ) {
+    /**
+     * What the row plays as (L409): the play it resumes, an episode's, a film's or a release's, or the show's next episode.
+     * Up next's Downloaded mark looks for it among the finished downloads.
+     */
+    val watchKey: String
+        get() = when (play) {
+            is UpNextPlay.Resume -> play.state.key
+            is UpNextPlay.NextEpisode -> WatchKey.episode(play.show.tmdbId, play.episode.season, play.episode.episode)
+        }
+
     /**
      * The show or movie the row is of, whose page a TV's card opens; null for a release played without TMDB, which has
      * none, and for a special in progress: the Show page's Resume and Play are for the show's regular episodes, so the

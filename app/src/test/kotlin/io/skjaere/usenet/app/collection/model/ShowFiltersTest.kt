@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.collection.model
 
+import io.skjaere.usenet.app.download.Downloaded
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 
@@ -39,6 +40,16 @@ class ShowFiltersTest {
         assertEquals(listOf(ShowFilter.All), filters(showRow(collected(1), null, listOf(watched(1, 1, 1)))))
         assertEquals(listOf(ShowFilter.All), filters(showRow(collected(1), null, listOf(started(1, 1, 1)))))
         assertEquals(listOf(ShowFilter.All, ShowFilter.NotStarted), filters(showRow(collected(1), null, failure = "NotFound")))
+    }
+
+    /** L408: Downloaded holds the shows with a finished download, whatever else they are; without one, a show is never in it. */
+    @Test
+    fun `a show is in Downloaded only while it has a finished download`() {
+        val row = showRow(collected(1), d, listOf(watched(1, 1, 1)))
+        fun filters(downloaded: Map<TitleKey, Downloaded>) = ShowFilter.entries.filter { CollectionView.inFilter(row, it, downloaded) }
+        assertEquals(listOf(ShowFilter.All, ShowFilter.Downloaded, ShowFilter.Watching), filters(mapOf(TitleKey.show(1) to Downloaded(2, 1))))
+        assertEquals(listOf(ShowFilter.All, ShowFilter.Watching), filters(mapOf(TitleKey.show(2) to Downloaded(2, 1), TitleKey.movie(1) to Downloaded(1, 1))))
+        assertEquals(listOf(ShowFilter.All, ShowFilter.Watching), filters(emptyMap()))
     }
 
     @Test

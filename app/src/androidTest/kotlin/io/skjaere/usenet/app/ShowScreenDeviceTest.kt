@@ -36,6 +36,7 @@ import io.skjaere.usenet.app.collection.SHOW_FOOTNOTE_TV
 import io.skjaere.usenet.app.collection.ShowScreen
 import io.skjaere.usenet.app.collection.ShowViewModel
 import io.skjaere.usenet.app.collection.shortDate
+import io.skjaere.usenet.app.download.DownloadMarkLook
 import io.skjaere.usenet.app.download.DownloadSheetModel
 import io.skjaere.usenet.app.download.DownloadsPageSeeds
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.assertWhole
@@ -48,9 +49,11 @@ import io.skjaere.usenet.app.ui.AppTheme
 import io.skjaere.usenet.app.ui.FormFactor
 import io.skjaere.usenet.core.FetchException
 import io.skjaere.usenet.core.NzbSource
+import io.skjaere.usenet.core.formatSize
 import io.skjaere.usenet.data.AppSettings
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.EpisodeRef
+import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchTitle
 import io.skjaere.usenet.metadata.Episode
 import io.skjaere.usenet.metadata.EpisodeSummary
@@ -433,9 +436,77 @@ class ShowScreenDeviceTest {
         }
     }
 
-    /** S01E[number]'s download of Harbor Lights, as the runner keeps one in [state]; the latest added where [createdAt] is. */
-    private fun seed(number: Int, state: DownloadState, createdAt: Long = 1) {
-        seeds.seed(episode(1, number, state, show = HARBOR, title = "Harbor Lights").copy(createdAt = createdAt))
+    /**
+     * S01E[number]'s download of Harbor Lights, as the runner keeps one in [state]; the latest added where [createdAt] is;
+     * where [played], with the release Resolve keeps once its file is written, so the play hook's launch takes it.
+     */
+    private fun seed(number: Int, state: DownloadState, createdAt: Long = 1, played: Boolean = false) {
+        val row = episode(1, number, state, show = HARBOR, title = "Harbor Lights").copy(createdAt = createdAt)
+        seeds.seed(if (played) row.copy(release = RememberedRelease("dl-page-a", row.id, "Harbor.Lights.S01E0$number.1080p.WEB-DL-KESTREL", null, 0, "nzb-${row.id}")) else row)
+    }
+
+    /** Harbor Lights' page with the show's downloads to open ([opened] records them), at [fontScale]; [seeding] begun first. */
+    private fun harborPageWithDownloads(opened: MutableList<Int>, fontScale: Float = 1f) {
+        if (!seeding) {
+            seeding = true
+            seeds.before()
+        }
+        compose.showScaled(context, fontScale) { ShowScreen(HARBOR, onBack = {}, onDownloadsShow = { opened += it }) }
+        compose.waitUntil(15_000) { exists(hasText("Play S01E01", substring = true)) }
+    }
+
+    /**
+     * L409: under the watched bar the show's line, from the page's own downloads: how many episodes are downloaded and their
+     * size, then how many are still in the queue; none until one is downloaded, and one whose release wasn't kept (the play
+     * hook has no launch for it) isn't counted. A link to the show's downloads, with the 16 dp mark before its words, heard as
+     * a button by them.
+     */
+    @Test
+    fun theShowsLineCountsItsDownloadsAndOpensTheShowsDownloads() {
+        val opened = mutableListOf<Int>()
+        harborPageWithDownloads(opened)
+        seed(4, DownloadState.Queued)
+        seed(3, DownloadState.Done)
+        // The rows say them, but no episode plays from a file: no line.
+        shown(row("Brine") and SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Queued for download"), "S01E04 queued")
+        assertFalse(exists(hasText(" downloaded · ", substring = true)))
+        seed(1, DownloadState.Done, played = true)
+        seed(2, DownloadState.Done, played = true)
+        seed(5, DownloadState.Paused)
+        val words = "2 downloaded · ${formatSize(3_400_000_000)} · 2 in the queue"
+        compose.waitUntil(10_000) { exists(hasContentDescription(words)) }
+        val line = compose.onNode(hasContentDescription(words)).fetchSemanticsNode()
+        assertEquals(Role.Button, line.config.getOrNull(SemanticsProperties.Role))
+        assertTrue(hasText("$words\u00A0›").matches(line))
+        // Under the watched bar, before Play.
+        val watched = compose.onNode(hasText("0 of 5 watched")).fetchSemanticsNode().boundsInRoot
+        val play = compose.onNode(hasText("Play S01E01", substring = true)).fetchSemanticsNode().boundsInRoot
+        assertTrue("the line at ${line.boundsInRoot}, the watched count at $watched, Play at $play", watched.bottom <= line.boundsInRoot.top && line.boundsInRoot.bottom <= play.top)
+        val mark = compose.onAllNodes(SemanticsMatcher.keyIsDefined(DownloadMarkLook), useUnmergedTree = true).fetchSemanticsNodes()
+            .single { line.boundsInRoot.contains(it.boundsInRoot.center) }
+        val dp = mark.layoutInfo.density.density
+        assertTrue("the line's mark ${mark.boundsInRoot.width / dp} dp", abs(mark.boundsInRoot.width / dp - 16f) <= 1f)
+        compose.onNode(hasContentDescription(words)).performClick()
+        assertEquals(listOf(HARBOR), opened)
+    }
+
+    /** At twice the text size the show's line wraps whole, its mark beside its first line. */
+    @Test
+    fun atTwiceTheTextSizeTheShowsLineIsWhole() {
+        val opened = mutableListOf<Int>()
+        seeding = true
+        seeds.before()
+        seed(1, DownloadState.Done, played = true)
+        seed(4, DownloadState.Queued)
+        harborPageWithDownloads(opened, fontScale = 2f)
+        val words = "1 downloaded · ${formatSize(1_700_000_000)} · 1 in the queue"
+        compose.waitUntil(10_000) { exists(hasContentDescription(words)) }
+        val width = context.resources.displayMetrics.widthPixels
+        compose.assertWhole("$words\u00A0›", width)
+        val line = compose.onNode(hasContentDescription(words)).fetchSemanticsNode().boundsInRoot
+        val mark = compose.onAllNodes(SemanticsMatcher.keyIsDefined(DownloadMarkLook), useUnmergedTree = true).fetchSemanticsNodes()
+            .single { line.contains(it.boundsInRoot.center) }.boundsInRoot
+        assertTrue("the mark at $mark, the line at $line", mark.left >= line.left - 1f && mark.top < line.top + line.height / 2)
     }
 
     /**

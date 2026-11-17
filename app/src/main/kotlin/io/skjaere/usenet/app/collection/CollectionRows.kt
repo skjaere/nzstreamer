@@ -62,6 +62,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -74,8 +75,13 @@ import io.skjaere.usenet.app.collection.model.ShowFilter
 import io.skjaere.usenet.app.collection.model.ShowRow
 import io.skjaere.usenet.app.collection.model.Side
 import io.skjaere.usenet.app.collection.model.TitleRow
+import io.skjaere.usenet.app.download.DownloadMark
+import io.skjaere.usenet.app.download.DownloadMarkLook
+import io.skjaere.usenet.app.download.Downloaded
+import io.skjaere.usenet.app.download.DownloadedTitles
 import io.skjaere.usenet.app.search.Poster
 import io.skjaere.usenet.app.ui.AppType
+import io.skjaere.usenet.app.ui.DownloadedIcon
 import io.skjaere.usenet.app.ui.EdgeScrolling
 import io.skjaere.usenet.app.ui.FormFactor
 import io.skjaere.usenet.app.ui.LocalFormFactor
@@ -90,6 +96,8 @@ import io.skjaere.usenet.app.ui.tvFocusMemory
  * title, the status line, progress. The whole row is one target, with no button inside it (a remote
  * couldn't reach one, #160); TalkBack hears [TitleRow.a11y] and has Select and Remove as actions.
  * [highlighted]: a jump revealed it; TalkBack hears "Just added" only if it was ([justAdded]).
+ * [downloaded]: its finished downloads (L408), marked after the title and its pill, a show's with their
+ * count, and said at the end of TalkBack's sentence.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -108,6 +116,7 @@ internal fun TitleRowItem(
     onLongClick: () -> Unit,
     onSelect: () -> Unit,
     onRemove: () -> Unit,
+    downloaded: Downloaded? = null,
 ) {
     val glow = remember { Animatable(0f) }
     LaunchedEffect(highlighted) {
@@ -130,7 +139,7 @@ internal fun TitleRowItem(
             .focusOutline(RoundedCornerShape(if (first) 16.dp else 0.dp, if (first) 16.dp else 0.dp, if (last) 16.dp else 0.dp, if (last) 16.dp else 0.dp))
             .combinedClickable(onClickLabel = if (selecting) "Select" else "Open", onClick = onClick, onLongClick = if (selecting) null else onLongClick)
             .clearAndSetSemantics {
-                contentDescription = row.a11y
+                contentDescription = DownloadedTitles.said(row.a11y, downloaded, show = row is ShowRow)
                 when {
                     selecting -> {
                         role = Role.Checkbox
@@ -158,6 +167,7 @@ internal fun TitleRowItem(
                     row is ShowRow && dateChip && row.upcomingLabel != null -> Pill(row.upcomingLabel, colors.chip, colors.chipText)
                     row is ShowRow && row.newEpisodes > 0 -> Pill("NEW", colors.accentTint, colors.accent)
                 }
+                downloaded?.let { DownloadedMark(it, show = row is ShowRow) }
             }
             when (row) {
                 is ShowRow -> {
@@ -178,6 +188,21 @@ internal fun TitleRowItem(
                 }
             }
         }
+    }
+}
+
+/**
+ * A title's finished downloads after its title and pill: the tray with its tick, 18 dp at any font size, and a show's count
+ * of episodes. TalkBack hears them in the row's sentence.
+ */
+@Composable
+private fun DownloadedMark(downloaded: Downloaded, show: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        Icon(
+            DownloadedIcon, contentDescription = null, tint = colors.textSecondary,
+            modifier = Modifier.size(18.dp).semantics { this[DownloadMarkLook] = DownloadMark.Done },
+        )
+        if (show) Text("${downloaded.count}", style = AppType.secondary.copy(fontWeight = FontWeight.SemiBold), color = colors.textSecondary, maxLines = 1)
     }
 }
 
@@ -285,7 +310,8 @@ internal fun noun(noun: String, n: Int) = if (n == 1) noun else "${noun}s"
 
 /**
  * The header line: "214 shows · 12 with new episodes", the sort ([sortFocus]), "Jump to letter" for a
- * remote and Select all in Finished. It wraps at large font sizes.
+ * remote and Select all in Finished. Under the Downloaded chip it counts what is downloaded, and
+ * "Downloads ›" before the sort opens the Downloads page ([onDownloads], L408). It wraps at large font sizes.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -297,6 +323,7 @@ internal fun HeaderLine(
     onSort: (String) -> Unit,
     onJump: () -> Unit,
     onSelectAll: () -> Unit,
+    onDownloads: (() -> Unit)? = null,
 ) {
     FlowRow(
         Modifier.padding(horizontal = 16.dp).padding(top = 4.dp).fillMaxWidth(),
@@ -306,6 +333,9 @@ internal fun HeaderLine(
     ) {
         Text(ui.view.header, style = AppType.secondary, color = colors.muted, modifier = Modifier.padding(vertical = 12.dp).weight(1f, fill = true))
         if (dpad && ui.view.total > 0) TextAction("Jump to letter", Modifier.focusRequester(jumpFocus), onClick = onJump)
+        if (onDownloads != null && ui.filterName == ShowFilter.Downloaded.name) {
+            TextAction("Downloads ›", Modifier.semantics { contentDescription = "Downloads" }, onClick = onDownloads)
+        }
         var open by remember { mutableStateOf(false) }
         Box {
             TextAction("${ui.sortLabel} ▾", Modifier.focusRequester(sortFocus).semantics { contentDescription = "Sort: ${ui.sortLabel}" }, color = colors.accent) { open = true }

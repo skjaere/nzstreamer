@@ -15,6 +15,7 @@ import io.skjaere.usenet.app.collection.model.ShowSort
 import io.skjaere.usenet.app.collection.model.TitleKey
 import io.skjaere.usenet.app.collection.model.TitleRow
 import io.skjaere.usenet.app.collection.model.posterProgress
+import io.skjaere.usenet.app.download.DownloadedTitles
 import io.skjaere.usenet.app.download.DownloadsDeps
 import io.skjaere.usenet.app.download.PROGRESS_REDRAW_MILLIS
 import io.skjaere.usenet.app.download.atMostEvery
@@ -173,6 +174,13 @@ class HomeViewModel(private val container: AppContainer, private val collectionR
      */
     val downloads: StateFlow<HomeDownloads?> = container.downloads.state.atMostEvery(PROGRESS_REDRAW_MILLIS).map(HomeDownloads::of)
         .distinctUntilChanged().flowOn(Dispatchers.Default).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /**
+     * The watch keys whose download is finished and plays from its file (L409), for Up next's Downloaded mark: from the
+     * runner's finished ones, so none on a TV, where it has none.
+     */
+    val downloadedKeys: StateFlow<Set<String>> = container.downloads.done.map(DownloadedTitles::keys).distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
     /** A finished film's row in Home's Downloads: played here, from its file (L353), as the Downloads page plays it. */
     fun playDownload(row: Download) {

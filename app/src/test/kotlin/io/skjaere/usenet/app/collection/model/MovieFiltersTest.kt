@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.collection.model
 
+import io.skjaere.usenet.app.download.Downloaded
 import org.junit.jupiter.api.Test
 import java.time.LocalDate
 import kotlin.random.Random
@@ -48,6 +49,16 @@ class MovieFiltersTest {
         assertEquals(listOf(MovieFilter.All), filters(movieRow(m, null)))
         assertEquals(listOf(MovieFilter.All, MovieFilter.InProgress), filters(movieRow(m, null, movieWatch(11, positionMs = 600_000))))
         assertEquals(listOf(MovieFilter.All, MovieFilter.Watched), filters(movieRow(m, null, movieWatch(11, watched = true))))
+    }
+
+    /** L408: Downloaded holds the films with a finished download, beside their other chip; without one, a film is never in it. */
+    @Test
+    fun `a movie is in Downloaded only while it has a finished download`() {
+        val row = movieRow(m, movieSummary(11), movieWatch(11, watched = true))
+        fun filters(downloaded: Map<TitleKey, Downloaded>) = MovieFilter.entries.filter { CollectionView.inFilter(row, it, downloaded) }
+        assertEquals(listOf(MovieFilter.All, MovieFilter.Downloaded, MovieFilter.Watched), filters(mapOf(TitleKey.movie(11) to Downloaded(1, 1))))
+        assertEquals(listOf(MovieFilter.All, MovieFilter.Watched), filters(mapOf(TitleKey.show(11) to Downloaded(1, 1), TitleKey.movie(12) to Downloaded(1, 1))))
+        assertEquals(listOf(MovieFilter.All, MovieFilter.Watched), filters(emptyMap()))
     }
 
     @Test

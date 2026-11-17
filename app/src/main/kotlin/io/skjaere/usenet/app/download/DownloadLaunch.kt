@@ -59,6 +59,12 @@ internal object DownloadLaunch {
     }
 
     /**
+     * Whether [of] gives [row] a launch, told without building one (its probe's facts read): what every mark counts (L407),
+     * many rows at a time, so a mark means the file plays from the row alone. [of]'s own first test.
+     */
+    fun accepts(row: Download): Boolean = row.release?.nzbId != null
+
+    /**
      * [known], the film a download's [launch] streams instead (L354), with the year and length its download's row says,
      * which the film's search and the ranker's estimate go by where TMDB doesn't answer. The row is read by the launch's
      * id through [rowOf] in any state, never among the finished ones: by the time Stream instead is tapped on "The

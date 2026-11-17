@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.collection.model
 
+import io.skjaere.usenet.app.download.Downloaded
 import io.skjaere.usenet.data.ShowWatchAggregate
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -31,5 +32,23 @@ class CollectionViewScaleTest {
         assertEquals(1_001, cache.built)
         assertEquals(1_000, views.first().rows.size)
         assertTrue(ms < 5_000, "took $ms ms")
+    }
+
+    /**
+     * L407: the marks are looked up as a row is drawn, never built into it, so a download finishing builds no row again: the
+     * store's rows are the same, and only the view (its chips and the Downloaded filter) reads the new downloads.
+     */
+    @Test
+    fun `a download finishing rebuilds no row`() {
+        val shows = (1..1_000).map { collected(it, "Avrel %04d".format(it)) }
+        val summaries = shows.associate { it.tmdbId to showDetails(it.tmdbId).toSummary() }
+        val cache = RowCache<ShowRow>()
+        val rows = ShowRows.build(shows, summaries, emptyMap(), emptyMap(), today, true, cache)
+        val before = CollectionView.shows(rows, ShowFilter.All, ShowSort.AZ, "", downloaded = mapOf(TitleKey.show(3) to Downloaded(1, 1)))
+        val again = ShowRows.build(shows, summaries, emptyMap(), emptyMap(), today, true, cache)
+        val after = CollectionView.shows(again, ShowFilter.All, ShowSort.AZ, "", downloaded = mapOf(TitleKey.show(3) to Downloaded(2, 2), TitleKey.show(7) to Downloaded(1, 1)))
+        assertEquals(1_000, cache.built)
+        assertTrue(before.rows.zip(after.rows).all { (a, b) -> a === b })
+        assertEquals(listOf(1, 2), listOf(before, after).map { view -> view.chips.single { it.name == "Downloaded" }.count })
     }
 }

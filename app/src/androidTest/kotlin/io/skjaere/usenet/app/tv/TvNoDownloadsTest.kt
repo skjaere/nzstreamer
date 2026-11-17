@@ -22,6 +22,8 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.createSavedStateHandle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -29,6 +31,10 @@ import io.skjaere.usenet.app.FakeTmdb
 import io.skjaere.usenet.app.MainActivity
 import io.skjaere.usenet.app.TvDevice
 import io.skjaere.usenet.app.assumeTv
+import io.skjaere.usenet.app.collection.CollectionDeps
+import io.skjaere.usenet.app.collection.CollectionHarness
+import io.skjaere.usenet.app.collection.CollectionScreen
+import io.skjaere.usenet.app.collection.CollectionViewModel
 import io.skjaere.usenet.app.collection.MovieScreen
 import io.skjaere.usenet.app.collection.SHOW_FOOTNOTE_PHONE
 import io.skjaere.usenet.app.collection.ShowScreen
@@ -37,6 +43,7 @@ import io.skjaere.usenet.app.download.DownloadBootReceiver
 import io.skjaere.usenet.app.download.DownloadJobService
 import io.skjaere.usenet.app.download.DownloadMarkLook
 import io.skjaere.usenet.app.download.DownloadNotice
+import io.skjaere.usenet.app.download.DownloadPlaces
 import io.skjaere.usenet.app.download.DownloadRequest
 import io.skjaere.usenet.app.download.DownloadSeasonSheet
 import io.skjaere.usenet.app.download.SeasonDownloadRequest
@@ -53,12 +60,16 @@ import io.skjaere.usenet.app.settings.SettingsScreen
 import io.skjaere.usenet.app.ui.AppTheme
 import io.skjaere.usenet.app.ui.FormFactor
 import io.skjaere.usenet.app.waitFor
+import io.skjaere.usenet.data.CollectionViewPrefs
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.EpisodeRef
+import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.data.WatchKind
+import io.skjaere.usenet.data.WatchState
 import io.skjaere.usenet.data.WatchTitle
 import io.skjaere.usenet.metadata.Episode
 import io.skjaere.usenet.metadata.EpisodeSummary
@@ -84,6 +95,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -95,7 +107,8 @@ import java.time.LocalDate
  * as a test leaves them (nothing on a TV makes one): in the TV's layout and in a phone's layout on it,
  * - the episode ⋮ offers no download, and no row has a mark or a line; the season has no Download beside Mark season,
  *   and its sheet, asked for all the same, ends at once; the Movie page and Search's movie card have no Download; Home
- *   has no Downloads section; Settings has no Downloads row, nor After watching;
+ *   has no Downloads section, and Up next no Downloaded mark; Settings has no Downloads row, nor After watching; the
+ *   Collection has no Downloaded chip and no mark, with finished downloads of its titles (L441);
  * - with Delete once watched on and the finished episode marked watched, nothing is said to go or goes;
  * - and once the app is opened as a TV opens it, no permission is asked, no job waits in the downloads' namespace or as
  *   the service's watchdog, the boot receiver is off, and no download notification shows; the rows are as they were.
@@ -113,6 +126,7 @@ class TvNoDownloadsTest {
     private val context = instrumentation.targetContext
     private val container = context.container
     private var tmdb: FakeTmdb? = null
+    private var harness: CollectionHarness? = null
     private val seeded = mutableListOf<Download>()
     private var layout by mutableStateOf(FormFactor.Tv)
 
@@ -135,7 +149,14 @@ class TvNoDownloadsTest {
             // What a page asked of other titles was refused, never sent.
         }
         seeded.forEach { container.downloadStorage.delete(it.id) }
+        harness?.close()
     }
+
+    /** [row] with the release Resolve keeps once its file is written: a finished one a phone's play hook, and marks, take. */
+    private fun played(row: Download) = row.copy(release = RememberedRelease("tv-none", row.id, "Harbor.Lights.S01E03.1080p.WEB-DL-KESTREL", null, 0, "nzb-${row.id}"))
+
+    /** [row] kept as a test leaves one, deleted after with the others. */
+    private suspend fun seed(row: Download): Download = row.also { seeded += it; container.downloadStorage.add(it) }
 
     private fun exists(matcher: SemanticsMatcher) = compose.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty()
 
@@ -288,6 +309,73 @@ class TvNoDownloadsTest {
         assertEquals(0, opened)
         // The runner shows a TV none of what its table holds.
         assertEquals(emptyList<Any>(), container.downloads.state.value)
+    }
+
+    /**
+     * L408, L441: the Collection in [form]'s layout, over a library of its own (CollectionHarness: two shows and two films)
+     * whose first show and first film have finished downloads the play hook takes, told through the app's own gate for
+     * where this composes: no Downloaded chip and no mark on either side, a Downloaded filter saved on both reading as All
+     * and kept, and no "Downloads ›".
+     */
+    private fun collectionHasNoDownloads(form: FormFactor) = runBlocking<Unit> {
+        val prefs = CollectionViewPrefs(showFilter = "Downloaded", movieFilter = "Downloaded")
+        val h = CollectionHarness(context, shows = 2, movies = 2, prefs = prefs, downloaded = CollectionDeps.downloaded(container, DownloadPlaces.shown(form, container.television)))
+        harness = h
+        h.seed()
+        val f = h.fixture
+        (1..2).forEach { e -> seed(played(row(DownloadState.Done, episode = e).copy(showTmdbId = f.showId(0), watchKey = WatchKey.episode(f.showId(0), 1, e)))) }
+        seed(played(row(DownloadState.Done, episode = null).copy(movieTmdbId = f.movieId(0), watchKey = WatchKey.movie(f.movieId(0)))))
+        var opened = 0
+        layout = form
+        compose.setContent {
+            AppTheme(formFactor = layout) {
+                val vm = viewModel { CollectionViewModel(h.deps, createSavedStateHandle()) }
+                CollectionScreen(onShow = {}, onMovie = {}, onAdd = {}, onMetadata = {}, vm = vm, onDownloads = { opened++ })
+            }
+        }
+        listOf(f.showName(0), f.movieName(0)).forEachIndexed { i, title ->
+            if (i == 1) compose.onNode(hasText("Movies", substring = true) and hasClickAction()).performClick()
+            compose.waitUntil(15_000) { exists(hasContentDescription(title, substring = true)) }
+            noDownloads("on the $form layout's Collection, with $title")
+            assertFalse("a Downloaded chip or mark in the $form layout, with $title", exists(hasContentDescription("downloaded", substring = true, ignoreCase = true)))
+        }
+        assertEquals(0, opened)
+        // The side switched is saved; the filters are as saved.
+        assertEquals("Downloaded" to "Downloaded", h.prefs.value.let { it.showFilter to it.movieFilter })
+    }
+
+    @Test
+    fun theCollectionGridHasNoDownloadedChipOrMark() = collectionHasNoDownloads(FormFactor.Tv)
+
+    @Test
+    fun theCollectionListInAPhonesLayoutHasNoDownloadedChipOrMark() = collectionHasNoDownloads(FormFactor.Phone)
+
+    /**
+     * L409, L441: Up next's row of an episode whose download is finished (and taken by the play hook), in progress, has no
+     * Downloaded mark on TV Home, nor in a phone's layout on a TV.
+     */
+    @Test
+    fun upNextHasNoDownloadedMarkInEitherLayout() = runBlocking<Unit> {
+        assumeTrue("setup isn't done, so Home shows the first run", container.setup.first { it != null }?.complete == true)
+        seed(played(row(DownloadState.Done, episode = 3)))
+        val ref = EpisodeRef(SHOW, 1, 3, WatchTitle.episode("Harbor Lights", 1, 3))
+        val started = WatchState(WatchKey.episode(SHOW, 1, 3), WatchKind.Episode, showTmdbId = SHOW, season = 1, episode = 3, title = ref.title, updatedAt = 0)
+        try {
+            container.library.recordProgress(started, 600_000, 3_000_000)
+            compose.setContent {
+                AppTheme(formFactor = layout) {
+                    HomeScreen(onSearch = {}, onRecent = {}, onSettings = {}, onSetup = { _, _ -> }, onShow = {}, onCollection = {}, onImport = {}, onDownloads = {}, onDownloadsShow = {})
+                }
+            }
+            listOf(FormFactor.Tv, FormFactor.Phone).forEach { form ->
+                layout = form
+                compose.waitUntil(15_000) { exists(hasText("S01E03", substring = true)) }
+                noDownloads("on the $form layout's Up next")
+                assertFalse("a Downloaded mark on the $form layout's Up next", exists(hasContentDescription("Downloaded", substring = true, ignoreCase = true)))
+            }
+        } finally {
+            container.library.markEpisodes(listOf(ref), watched = false)
+        }
     }
 
     /**

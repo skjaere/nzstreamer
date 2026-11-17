@@ -341,10 +341,16 @@ fun NavGraphBuilder.appGraph(
             jump = jumps.jump,
             onJumpDone = jumps::jumpDone,
             backToSearch = jumps.backToSearch,
+            // Under the Downloaded chip, "Downloads ›" (L408): where downloads show alone.
+            onDownloads = downloads.downloads?.let { open -> { screen.ifResumed { open() } } },
         )
     }
     composable<ShowRoute> { screen ->
-        io.skjaere.usenet.app.collection.ShowScreen(screen.toRoute<ShowRoute>().tmdbId, onBack = back(screen), onRemote = { screen.ifResumed { nav.openRemote() } })
+        io.skjaere.usenet.app.collection.ShowScreen(
+            screen.toRoute<ShowRoute>().tmdbId, onBack = back(screen), onRemote = { screen.ifResumed { nav.openRemote() } },
+            // The show's line opens its downloads (L409), as Home's show row does.
+            onDownloadsShow = downloads.show?.let { open -> { id -> screen.ifResumed { open(id) } } },
+        )
     }
     // The remote closes as the play it controls ends, and with its Back: once, whatever the moment (a crossfade's second tap).
     composable<TvRemoteRoute> { TvRemoteScreen(onBack = { if (nav.currentDestination?.hasRoute(TvRemoteRoute::class) == true) nav.popBackStack() }) }

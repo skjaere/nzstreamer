@@ -130,10 +130,16 @@ class DownloadLaunchTest {
         }
     }
 
+    /** And the marks, which count what the launch takes (L407), don't count it: accepts says what of says, without building it. */
     @Test
     fun `a row with no release kept has no launch`() {
         assertNull(DownloadLaunch.of(episode.copy(release = null)))
         assertNull(DownloadLaunch.of(episode.copy(release = release.copy(nzbId = null))))
+        listOf(episode, film, episode.copy(release = null), episode.copy(release = release.copy(nzbId = null)), film.copy(release = null)).forEach { row ->
+            assertEquals(DownloadLaunch.of(row) != null, DownloadLaunch.accepts(row), "${row.id}: ${row.release}")
+        }
+        assertTrue(DownloadLaunch.accepts(episode))
+        assertFalse(DownloadLaunch.accepts(film.copy(release = null)))
     }
 
     /**

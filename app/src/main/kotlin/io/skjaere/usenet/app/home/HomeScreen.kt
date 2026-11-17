@@ -51,6 +51,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.skjaere.usenet.app.collection.rememberDpad
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.download.DownloadMark
+import io.skjaere.usenet.app.download.DownloadMarkLook
 import io.skjaere.usenet.app.download.color
 import io.skjaere.usenet.app.download.downloadsShown
 import io.skjaere.usenet.app.link.CastButton
@@ -65,6 +67,7 @@ import io.skjaere.usenet.app.search.kindLabel
 import io.skjaere.usenet.app.search.openedTitle
 import io.skjaere.usenet.app.tv.TvMenu
 import io.skjaere.usenet.app.ui.AppType
+import io.skjaere.usenet.app.ui.DownloadedIcon
 import io.skjaere.usenet.app.ui.GroupCard
 import io.skjaere.usenet.app.ui.FormFactor
 import io.skjaere.usenet.app.ui.InsetDivider
@@ -110,6 +113,7 @@ fun HomeScreen(
     val focusAfter by vm.focusAfter.collectAsStateWithLifecycle()
     val playOn by container.playOn.target.collectAsStateWithLifecycle()
     val downloads by vm.downloads.collectAsStateWithLifecycle()
+    val downloadedKeys by vm.downloadedKeys.collectAsStateWithLifecycle()
     // Phones and tablets alone, in their layout (L369), and only where the page is there to see them all.
     val downloadsHere = downloadsShown() && onDownloads != null
     val edits = UpNextEdits(offer, focusAfter, vm::remove, vm::markWatched, vm::undo, vm::undoShown, vm::dismissUndo, vm::focusTaken)
@@ -130,6 +134,7 @@ fun HomeScreen(
             // The Cast button on phones and tablets alone (L36, L115).
             playOn = playOn.takeUnless { container.television }, onPlayOn = container.playOn::openSheet,
             downloads = downloads.takeIf { downloadsHere }, onDownloads = { onDownloads?.invoke() },
+            downloadedKeys = if (downloadsHere) downloadedKeys else emptySet(),
             onDownload = { row ->
                 when (val opens = row.opens) {
                     HomeDownloadOpen.Page -> onDownloads?.invoke()
@@ -147,7 +152,8 @@ fun HomeScreen(
  * have a menu ([edits]), whose Remove and Mark watched offer Undo in a bar at Home's foot. [playOn]: where Play goes
  * (W11), the Cast button before Settings opening the Play on sheet ([onPlayOn]); null for none (a TV). [downloads]: Home's
  * Downloads section (L384), between Up next and the collection, its See all opening the page ([onDownloads]) and each
- * row what it names ([onDownload]); null for none.
+ * row what it names ([onDownload]); null for none. [downloadedKeys]: the watch keys downloaded, whose Up next rows have
+ * the Downloaded mark after their title (L409); none where downloads don't show.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -169,6 +175,7 @@ fun HomeContent(
     downloads: HomeDownloads? = null,
     onDownloads: () -> Unit = {},
     onDownload: (HomeDownloadRow) -> Unit = {},
+    downloadedKeys: Set<String> = emptySet(),
 ) {
     val searchFocus = remember { FocusRequester() }
     // A touch screen has nothing focused: the request only takes with a D-pad.
@@ -207,7 +214,7 @@ fun HomeContent(
                             key(row.key) {
                                 if (i > 0) InsetDivider()
                                 val focus = rowFocus.getOrPut(row.key) { FocusRequester() }
-                                UpNextRowView(row, artwork, primary = i == 0, tracked, Modifier.focusRequester(focus), playOn) { onPlay(row) }
+                                UpNextRowView(row, artwork, primary = i == 0, tracked, Modifier.focusRequester(focus), playOn, downloaded = row.watchKey in downloadedKeys) { onPlay(row) }
                             }
                         }
                     }
@@ -337,11 +344,22 @@ private fun RecentChip(recent: RecentSearch, onClick: () -> Unit) {
  * The row plays when tapped, as its Play button does; they sit side by side so a remote reaches both, and its ⋮ after them
  * (L21): Remove from Up next, and Mark watched for an episode or film in progress ([edits]). A long press on the row opens
  * the same menu, at the ⋮; TalkBack has its items as the row's actions. [modifier] goes on the row's playing part. With a
- * TV chosen ([playOn]) Play says so, and greys while that TV's NZStreamer isn't open (PtPhoneWhere B).
+ * TV chosen ([playOn]) Play says so, and greys while that TV's NZStreamer isn't open (PtPhoneWhere B). [downloaded]: its
+ * title's file is downloaded (L409), marked by the 16 dp tray with its tick after the title, which TalkBack hears as
+ * "Downloaded".
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun UpNextRowView(row: UpNextRow, artwork: Boolean, primary: Boolean, edits: UpNextEdits, modifier: Modifier, playOn: PlayTarget?, onPlay: () -> Unit) {
+private fun UpNextRowView(
+    row: UpNextRow,
+    artwork: Boolean,
+    primary: Boolean,
+    edits: UpNextEdits,
+    modifier: Modifier,
+    playOn: PlayTarget?,
+    downloaded: Boolean,
+    onPlay: () -> Unit,
+) {
     var menu by remember { mutableStateOf(false) }
     val items = edits.items(row)
     Row(Modifier.fillMaxWidth().padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -353,7 +371,15 @@ private fun UpNextRowView(row: UpNextRow, artwork: Boolean, primary: Boolean, ed
         ) {
             Poster(row.posterPath, artwork, 44, 66)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(row.title, style = AppType.bodyStrong, color = colors.text)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(row.title, style = AppType.bodyStrong, color = colors.text, modifier = Modifier.weight(1f, fill = false))
+                    if (downloaded) {
+                        Icon(
+                            DownloadedIcon, contentDescription = "Downloaded", tint = colors.textSecondary,
+                            modifier = Modifier.size(16.dp).semantics { this[DownloadMarkLook] = DownloadMark.Done },
+                        )
+                    }
+                }
                 Text(row.line, style = AppType.secondary, color = colors.muted)
                 row.progress?.let { p ->
                     LinearProgressIndicator(

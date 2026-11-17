@@ -156,14 +156,19 @@ class CollectionScaleDeviceTest {
         assertEquals("Avrel 0090", vm.ui.value!!.view.rows.single().text.name)
     }
 
-    /** Each chip says how many it holds, and picking it leaves exactly those: the header still counts every show. */
+    /**
+     * Each chip shown says how many it holds, and picking it leaves exactly those: the header still counts every show. The
+     * harness has no downloads, so no Downloaded chip shows (L408): the walk is over the chips shown.
+     */
     @Test
     fun aFilterNarrowsAndCountsMatchChips() {
         val h = harness()
         opened(h)
         val header = vm.ui.value!!.view.header
         val chips = compose.onNode(hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange))
-        ShowFilter.entries.forEach { filter ->
+        val shown = vm.ui.value!!.view.chips.map { chip -> ShowFilter.entries.single { it.name == chip.name } }
+        assertEquals(ShowFilter.entries - ShowFilter.Downloaded, shown)
+        shown.forEach { filter ->
             val chip = hasContentDescription("${filter.label}, ", substring = true)
             chips.performScrollToNode(chip)
             val said = compose.onNode(chip).fetchSemanticsNode().config[SemanticsProperties.ContentDescription].single()

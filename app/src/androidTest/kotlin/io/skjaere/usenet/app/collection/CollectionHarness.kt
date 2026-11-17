@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import io.skjaere.usenet.app.Today
 import io.skjaere.usenet.app.collection.model.TitleKey
+import io.skjaere.usenet.app.download.Downloaded
 import io.skjaere.usenet.app.refresh.LibrarySummaryStore
 import io.skjaere.usenet.app.refresh.RateGate
 import io.skjaere.usenet.app.refresh.SummaryRefresher
@@ -19,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.filterNotNull
@@ -37,7 +39,8 @@ import java.util.Collections
  * fixture's TMDB and a fixed clock: the app's container, its library, TMDB and the key are never
  * touched ([hasKey] is what the screen is told). The refresher runs only once [startRefresher] is
  * called; [prioritized] records what the screen handed it. Artwork is off, unless [posters]: each title
- * has a poster then, and artwork is on (a test's image loader answers for TMDB). Close it in @After.
+ * has a poster then, and artwork is on (a test's image loader answers for TMDB). [downloaded]: the finished
+ * downloads by title the screen is told of; none, as a TV's, unless a test gives the app runner's. Close it in @After.
  */
 class CollectionHarness(
     private val context: Context,
@@ -46,6 +49,7 @@ class CollectionHarness(
     prefs: CollectionViewPrefs = CollectionViewPrefs(),
     hasKey: Boolean = true,
     posters: Boolean = false,
+    downloaded: Flow<Map<TitleKey, Downloaded>> = flowOf(emptyMap()),
 ) : AutoCloseable {
     val clock: Clock = Clock.fixed(Instant.parse("2026-10-14T12:00:00Z"), ZoneOffset.UTC)
     val fixture = ScaleFixture(LocalDate.now(clock), clock.millis(), shows, movies, posters)
@@ -69,7 +73,7 @@ class CollectionHarness(
         shows = store.shows, movies = store.movies, writes = LibraryWrites(library),
         prioritize = { keys -> prioritized += keys; refresher.prioritize(keys) }, refreshStatus = refresher.status,
         prefs = this.prefs, savePrefs = { change -> this.prefs.update(change) },
-        hasKey = flowOf(hasKey), showArtwork = flowOf(posters), today = today, writeScope = scope, clock = clock,
+        hasKey = flowOf(hasKey), showArtwork = flowOf(posters), today = today, writeScope = scope, clock = clock, downloaded = downloaded,
     )
 
     fun seed() = runBlocking { fixture.seed(db) }

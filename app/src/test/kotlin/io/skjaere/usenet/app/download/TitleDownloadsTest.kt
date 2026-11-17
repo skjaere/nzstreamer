@@ -8,6 +8,7 @@ import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.ProviderRecord
+import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -134,6 +135,37 @@ class TitleDownloadsTest {
         assertTrue(byEpisode.getValue(2 to 3).deleting)
         assertFalse(byEpisode.getValue(2 to 5).deleting)
         assertFalse(byEpisode.getValue(2 to 6).deleting)
+    }
+
+    /**
+     * L409: the Show page's line under the watched bar: how many of the show's episodes are downloaded and their size, and
+     * while some are still to finish how many, the one being written among them; none until one is downloaded. Only a
+     * finished one whose file plays from its row counts as downloaded (L407), as the play hook's launch takes it.
+     */
+    @Test
+    fun `the show's line counts its finished episodes and their size, and those still to finish`() {
+        fun d(state: DownloadState, size: Long = 1_300_000_000, plays: Boolean = state == DownloadState.Done) = TitleDownload("x", state, size = size, plays = plays)
+        val done = listOf(d(DownloadState.Done), d(DownloadState.Done, 1_400_000_000), d(DownloadState.Done, 1_400_000_000))
+        assertEquals("3 downloaded · 4.1 GB", TitleDownloads.showLine(done + d(DownloadState.Failed) + d(DownloadState.Deleting)))
+        val going = listOf(DownloadState.Queued, DownloadState.Resolving, DownloadState.Running, DownloadState.Paused, DownloadState.Waiting).map { d(it) }
+        assertEquals("3 downloaded · 4.1 GB · 5 in the queue", TitleDownloads.showLine(done + going + d(DownloadState.Failed)))
+        assertEquals("1 downloaded · 1.3 GB · 1 in the queue", TitleDownloads.showLine(listOf(d(DownloadState.Done), d(DownloadState.Stopped))))
+        // One whose file the play hook can't take doesn't count; with none counted, there is no line, whatever is queued.
+        assertEquals("1 downloaded · 1.3 GB", TitleDownloads.showLine(listOf(d(DownloadState.Done), d(DownloadState.Done, plays = false))))
+        assertNull(TitleDownloads.showLine(going + d(DownloadState.Done, plays = false)))
+        assertNull(TitleDownloads.showLine(emptyList()))
+    }
+
+    /** A title's download says whether its file plays from its row: finished, with the release it came from kept with its NZB's id. */
+    @Test
+    fun `a finished download plays from its row only with its release kept`() {
+        val release = RememberedRelease("fake-indexer", "hl-s02e03", "Harbor.Lights.S02E03.1080p.WEB-KESTREL", null, 0, "nzb-c")
+        val done = row("c", 3, DownloadState.Done, size = 1_300_000_000, file = true, offset = 1_300_000_000).copy(release = release)
+        assertTrue(TitleDownload.of(DownloadRunner.Item(done, done.safeOffset, null)).plays)
+        assertFalse(TitleDownload.of(DownloadRunner.Item(done.copy(release = null), done.safeOffset, null)).plays)
+        assertFalse(TitleDownload.of(DownloadRunner.Item(done.copy(release = release.copy(nzbId = null)), done.safeOffset, null)).plays)
+        // Resolve keeps its release before the file is written: a file still to finish doesn't play.
+        assertFalse(TitleDownload.of(DownloadRunner.Item(done.copy(state = DownloadState.Running), 0, null)).plays)
     }
 
     /** The runner's calls and the host's schedule, as the actions make them, in order. */

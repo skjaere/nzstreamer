@@ -1,6 +1,8 @@
 package io.skjaere.usenet.app
 
 import android.os.SystemClock
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 
@@ -22,6 +24,8 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.app.collection.model.TitleKey
+import io.skjaere.usenet.app.download.DownloadMarkLook
+import io.skjaere.usenet.app.download.DownloadsPageSeeds
 import io.skjaere.usenet.app.home.MARK_WATCHED
 import io.skjaere.usenet.app.home.REMOVE_FROM_UP_NEXT
 import io.skjaere.usenet.app.home.UpNext
@@ -34,6 +38,8 @@ import io.skjaere.usenet.core.PreparedNzb
 import io.skjaere.usenet.core.UsenetUris
 import io.skjaere.usenet.data.AppSettings
 import io.skjaere.usenet.data.CollectedShow
+import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.EpisodeRef
 import io.skjaere.usenet.data.RecentSearch
 import io.skjaere.usenet.data.RememberedRelease
@@ -69,6 +75,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.time.LocalDate
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.abs
 
 /**
  * Home over the real library: an episode of the fake catalogue's Harbor Lights in progress, and
@@ -100,6 +107,8 @@ class HomeDeviceTest {
     private lateinit var saved: AppSettings
     private var keyAdded = false
     private var orbitCollected = true
+    private val seeds = DownloadsPageSeeds(context, container)
+    private var seeding = false
 
     private val harborLights = ShowDetails(
         SHOW, "Harbor Lights", null, 2021, null, null, null, "Ended", false, 45,
@@ -141,6 +150,7 @@ class HomeDeviceTest {
 
     @After
     fun restore() {
+        if (seeding) seeds.after()
         tmdb?.close()
         PlaybackCoordinator.fetchNzb = realFetch
         PlayerActivity.nextEpisode = realNext
@@ -301,6 +311,50 @@ class HomeDeviceTest {
         val back = runBlocking { container.library.state(key).first()!! }
         assertFalse(back.watched)
         assertEquals(POSITION_MS, back.positionMs)
+    }
+
+    /** [show]'s S01E[episode] downloaded, with the release Resolve keeps once its file is written, so the play hook takes it. */
+    private fun downloaded(show: Int, title: String, episode: Int): Download {
+        val row = DownloadsPageSeeds.episode(1, episode, DownloadState.Done, show = show, title = title)
+        return seeds.seed(row.copy(release = RememberedRelease(FAKE_INDEXER, row.id, "$title.S01E0$episode.720p.WEB.h264-HOME".replace(' ', '.'), null, 0, "nzb-${row.id}")))
+    }
+
+    /** What TalkBack hears besides the texts of the merged row [matcher] finds. */
+    private fun said(matcher: SemanticsMatcher): String =
+        compose.onNode(matcher).fetchSemanticsNode().config.getOrNull(SemanticsProperties.ContentDescription).orEmpty().joinToString()
+
+    /**
+     * L409: Up next's row of an episode downloaded has the 16 dp Downloaded mark after its title, heard as "Downloaded", as the
+     * episode in progress and, once downloaded, a show's next episode do; a row of one not downloaded has none.
+     */
+    @Test
+    fun upNextMarksTheRowsWhoseEpisodeIsDownloaded() {
+        runBlocking {
+            seedNextEpisode()
+            seedEpisodeInProgress(RememberedRelease(FAKE_INDEXER, "hl-s01e05-home", RELEASE, null, 0, "not-stored"))
+        }
+        seeding = true
+        seeds.before()
+        downloaded(SHOW, "Harbor Lights", 5)
+        showHome()
+        val resume = hasContentDescription("Resume Harbor Lights S01E05")
+        val next = hasContentDescription("Play The Quiet Orbit S01E02")
+        compose.waitUntil(15_000) { exists(resume) && exists(next) }
+        val resumeRow = hasText("S01E05 · Episode 5 · 4 min left")
+        val nextRow = hasText("S01E02 · Episode 2 · 7 unwatched")
+        compose.waitUntil(10_000) { said(resumeRow) == "Downloaded" }
+        // After the title, in its row, 16 dp.
+        val row = compose.onNode(resumeRow).fetchSemanticsNode().boundsInRoot
+        val title = compose.onAllNodes(hasText("Harbor Lights"), useUnmergedTree = true).fetchSemanticsNodes().single { row.contains(it.boundsInRoot.center) }.boundsInRoot
+        val mark = compose.onAllNodes(SemanticsMatcher.keyIsDefined(DownloadMarkLook), useUnmergedTree = true).fetchSemanticsNodes().single { row.contains(it.boundsInRoot.center) }
+        val dp = mark.layoutInfo.density.density
+        assertTrue("the mark at ${mark.boundsInRoot}, the title at $title", mark.boundsInRoot.left >= title.right - 1f && mark.boundsInRoot.center.y in title.top..title.bottom)
+        assertTrue("the mark ${mark.boundsInRoot.width / dp} dp", abs(mark.boundsInRoot.width / dp - 16f) <= 1f)
+        compose.onNode(hasScrollAction()).performScrollToNode(next)
+        assertEquals("", said(nextRow))
+        // The next episode downloaded since: its row is marked too.
+        downloaded(ORBIT, "The Quiet Orbit", 2)
+        compose.waitUntil(10_000) { said(nextRow) == "Downloaded" }
     }
 
     /** The field on Home opens the Search tab ready to type in, so TMDB's suggestions show as there. */

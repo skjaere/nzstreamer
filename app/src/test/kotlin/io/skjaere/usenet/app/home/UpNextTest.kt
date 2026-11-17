@@ -368,6 +368,26 @@ class UpNextTest {
     }
 
     /**
+     * L409: what a row plays as, which Up next's Downloaded mark looks for among the finished downloads: the play it resumes
+     * (an episode's, a film's or a release's), or the show's next episode.
+     */
+    @Test
+    fun `a row's watch key is the play it resumes, or the show's next episode`() {
+        val harbor = show(1, "Harbor Lights")
+        val orbit = show(2, "The Quiet Orbit")
+        val started = episode(1, "Harbor Lights", 2, 5, positionMs = 900_000, playedAt = 60)
+        val film = movie(10, "Copper Crown", positionMs = 600_000, playedAt = 50)
+        val release = releaseOnly("Quiet.Meridian.2019.1080p.WEB.h264-GRP", positionMs = 600_000, playedAt = 40)
+        val tmdb = TmdbAnswers(shows = mapOf(1 to details(1, "Harbor Lights"), 2 to details(2, "The Quiet Orbit")))
+        val pilot = episode(2, "The Quiet Orbit", 1, 1, watched = true)
+        val rows = rows(listOf(started, film, release), listOf(harbor, orbit), mapOf(1 to listOf(started), 2 to listOf(pilot)), tmdb)
+        assertEquals(
+            listOf(WatchKey.episode(1, 2, 5), WatchKey.movie(10), WatchKey.release("n-Quiet.Meridian.2019.1080p.WEB.h264-GRP", 0), WatchKey.episode(2, 1, 2)),
+            rows.map { it.watchKey },
+        )
+    }
+
+    /**
      * A special in progress has no page that plays it: the Show page's Resume and Play are for the show's regular
      * episodes, and it opens on a regular season. Its card plays it, as a release's does.
      */

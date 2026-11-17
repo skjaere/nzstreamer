@@ -1,6 +1,7 @@
 package io.skjaere.usenet.app.collection
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,9 +12,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -27,6 +32,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
@@ -39,6 +49,8 @@ import io.skjaere.usenet.app.DeviceClock
 import io.skjaere.usenet.app.TmdbLookup
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.download.DownloadEntry
+import io.skjaere.usenet.app.download.DownloadMark
+import io.skjaere.usenet.app.download.DownloadMarkLook
 import io.skjaere.usenet.app.download.DownloadRequest
 import io.skjaere.usenet.app.download.DownloadRunner
 import io.skjaere.usenet.app.download.DownloadSeasonSheet
@@ -73,6 +85,7 @@ import io.skjaere.usenet.app.search.forEpisode
 import io.skjaere.usenet.app.search.rankedAgain
 import io.skjaere.usenet.app.tv.LocalRailFocus
 import io.skjaere.usenet.app.ui.AppType
+import io.skjaere.usenet.app.ui.DownloadedIcon
 import io.skjaere.usenet.app.ui.Footnote
 import io.skjaere.usenet.app.ui.FormFactor
 import io.skjaere.usenet.app.ui.LocalFormFactor
@@ -82,6 +95,7 @@ import io.skjaere.usenet.app.ui.SecondaryButton
 import io.skjaere.usenet.app.ui.TopBar
 import io.skjaere.usenet.app.ui.rememberReturnFocus
 import io.skjaere.usenet.app.ui.colors
+import io.skjaere.usenet.app.ui.focusOutline
 import io.skjaere.usenet.core.FilePicker
 import io.skjaere.usenet.data.CollectedShow
 import io.skjaere.usenet.data.DownloadState
@@ -284,10 +298,12 @@ class ShowViewModel(private val container: AppContainer, private val tmdbId: Int
  * Living room TV" and that episode's row "On Living room TV · 32:10": either opens the remote ([onRemote]). On a phone or
  * tablet each episode's row says its download and its ⋮ offers it (L356, L384): Download opens the Download sheet, and a
  * download removed shows the Undo bar at the page's foot (L379). There a season's aired episodes not yet downloaded have
- * a Download of their own before Mark season (W114), which opens the season's Download sheet.
+ * a Download of their own before Mark season (W114), which opens the season's Download sheet. Under the watched bar, the
+ * show's line says how many of its episodes are downloaded and how many are still in the queue (L409): a link to the
+ * show's downloads ([onDownloadsShow]) where there is that page to open.
  */
 @Composable
-fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}) {
+fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDownloadsShow: ((showTmdbId: Int) -> Unit)? = null) {
     val container = LocalContext.current.container
     val vm: ShowViewModel = viewModel(key = "show-$tmdbId") { ShowViewModel(container, tmdbId) }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.shown() }
@@ -372,8 +388,14 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}) {
                 return@Column
             }
             val progress = ShowProgress.of(d, states.values.toList().toEpisodeWatches(), today, d.recentlyAired())
+            // Read from the page's own downloads, as its rows are (L407): where downloads show alone.
+            val downloadLine = if (downloadsHere) TitleDownloads.showLine(downloads.values) else null
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = undoRoom)) {
-                item { ShowHeader(d, progress, artwork, nextUpError, playOn, onTv, onRemote) { ref -> vm.playNext(ref) } }
+                item {
+                    ShowHeader(
+                        d, progress, artwork, nextUpError, playOn, onTv, onRemote, downloadLine, onDownloadsShow?.let { open -> { open(tmdbId) } },
+                    ) { ref -> vm.playNext(ref) }
+                }
                 item {
                     SeasonChips(
                         d.seasons, selected, { n -> states.count { (key, st) -> key.first == n && st.watched } }, vm::selectSeason,
@@ -469,6 +491,8 @@ private fun ShowHeader(
     playOn: PlayTarget,
     onTv: RemoteNow?,
     onRemote: () -> Unit,
+    downloadLine: String?,
+    onDownloads: (() -> Unit)?,
     onPlayNext: (io.skjaere.usenet.metadata.EpisodeRef) -> Unit,
 ) {
     val container = LocalContext.current.container
@@ -485,6 +509,7 @@ private fun ShowHeader(
                         color = colors.accent, trackColor = colors.divider, drawStopIndicator = {},
                     )
                 }
+                downloadLine?.let { ShowDownloadLine(it, onDownloads) }
                 Box(Modifier.padding(top = 6.dp)) {
                     if (onTv != null) {
                         PlayingOnButton(onTv, rememberRemotePosition(container.remotePlaying, onTv), onRemote)
@@ -500,6 +525,37 @@ private fun ShowHeader(
             }
         }
         d.overview?.let { Text(it, style = AppType.secondary, color = colors.textSecondary, maxLines = 4) }
+    }
+}
+
+/**
+ * The show's line under its watched bar (L409): the 16 dp tray with its tick, then "3 downloaded · 4.1 GB · 5 in the
+ * queue". With the show's downloads to open ([onClick]) it is a link in the accent, "›" after it, heard as a button by its
+ * words; without, muted. The words wrap whole at large sizes, the mark beside their first line.
+ */
+@Composable
+private fun ShowDownloadLine(line: String, onClick: (() -> Unit)?) {
+    val color = if (onClick != null) colors.accent else colors.textSecondary
+    val style = AppType.secondary.copy(fontWeight = FontWeight.Medium)
+    val lineHeight = with(LocalDensity.current) { style.lineHeight.toDp() }
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 40.dp)
+            .then(
+                if (onClick != null) {
+                    Modifier.focusOutline(RoundedCornerShape(8.dp), fill = false).clickable(role = Role.Button, onClick = onClick)
+                        .semantics(mergeDescendants = true) { contentDescription = line }
+                } else {
+                    Modifier.semantics(mergeDescendants = true) { contentDescription = line }
+                },
+            )
+            .padding(vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(
+            DownloadedIcon, contentDescription = null, tint = color,
+            modifier = Modifier.padding(top = ((lineHeight - 16.dp) / 2).coerceAtLeast(0.dp)).size(16.dp).semantics { this[DownloadMarkLook] = DownloadMark.Done },
+        )
+        Text(if (onClick != null) "$line\u00A0›" else line, style = style, color = color)
     }
 }
 
