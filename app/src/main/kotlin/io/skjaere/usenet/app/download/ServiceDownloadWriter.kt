@@ -28,6 +28,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -38,6 +39,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
@@ -307,9 +309,9 @@ class ServiceDownloadWriter(
         // Since when the service has been out of reach on a validated network, reopen after reopen.
         var outOfReach: TimeMark? = null
         while (true) {
-            // Nothing opens while something streams; a stop the stream before asked for is over.
-            run.stopped = false
-            if (streaming.value) {
+            // Nothing opens while something streams, nor before 10 s after a stream that started since the last body,
+            // however short (one that came and went during a wait or a prepare): its stop is kept until its wait is over.
+            if (run.stopped || streaming.value) {
                 waitOutStreams(run)
                 outOfReach = null
                 continue
@@ -420,7 +422,8 @@ class ServiceDownloadWriter(
                 run.id, run.written, run.size, ended.kind, if (misses > 0) ", $misses of $MAX_NO_PROGRESS with no progress" else "", wait.inWholeSeconds,
             )
             reopen = true
-            if (wakes.pause(wait, since)) {
+            // A stream that starts meanwhile ends the wait for its own (L471), at the top.
+            if (pause(wait, since) == true) {
                 wait = firstBackoff
                 outOfReach = null
             } else {
@@ -610,7 +613,7 @@ class ServiceDownloadWriter(
 
     /**
      * Waits while something streams (L471), its live saying so, until [streaming] has read false for [QUIET] together:
-     * another stream starting meanwhile waits again.
+     * another stream starting meanwhile waits again. The stop of every stream before is then over.
      */
     private suspend fun waitOutStreams(run: Run) {
         run.out.unreachable = false
@@ -621,9 +624,23 @@ class ServiceDownloadWriter(
             streaming.first { !it }
             if (withTimeoutOrNull(QUIET) { streaming.first { it } } == null) break
         }
+        run.stopped = false
         run.out.streamWait = false
         run.out.said()
         log.info("download {}: nothing has streamed for {} s: going on at {} of {} bytes", run.id, QUIET.inWholeSeconds, run.written, run.size)
+    }
+
+    /**
+     * [wakes]' wait of [wait] before a reopen: true when a retry asked for or the network's return since [since] ended it
+     * sooner, null when a stream started meanwhile, false when it ran out.
+     */
+    private suspend fun pause(wait: Duration, since: BackoffWakes.Mark): Boolean? = coroutineScope {
+        val woke = async { wakes.pause(wait, since) }
+        val streams = async { streaming.first { it } }
+        select<Boolean?> {
+            woke.onAwait { it }
+            streams.onAwait { null }
+        }.also { coroutineContext.cancelChildren() }
     }
 
     private fun notReached() = if (network.value) Into.Unreachable else Into.Offline

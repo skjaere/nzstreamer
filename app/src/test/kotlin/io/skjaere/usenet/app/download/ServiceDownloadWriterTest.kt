@@ -28,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -195,6 +196,7 @@ class ServiceDownloadWriterTest {
         a.failing = null
         a.again = null
         b.prepareFailing = null
+        b.onPrepare = {}
         reads.reads.set(0)
         reads.blocked = CountDownLatch(1)
         path.delete()
@@ -727,6 +729,45 @@ class ServiceDownloadWriterTest {
         assertContentEquals(data, path.readBytes())
     }
 
+    /**
+     * L471 between bodies: a stream that starts while the write waits to open again ends that wait for its own, the live
+     * saying so in place of the service out of reach, and the next open comes 10 s after it ends. One that came and went
+     * while the next account prepared the torrent holds the open after it as long.
+     */
+    @Test
+    fun `a stream that starts between bodies holds the next open until 10 s after it ends, its live saying it waits`() = runTest(timeout = 60.seconds) {
+        reads.script(Script(unreached = true))
+        val writer = writer()
+        val openedAt = CopyOnWriteArrayList<Long>()
+        val write = async { writer.wrote(onOpen = { openedAt += currentTime }) }
+        // The open reaches nothing: 2 s before the next, the live saying the service is out of reach.
+        advanceTimeBy(1_000)
+        assertEquals(true, writer.live.value?.unreachable)
+        val meter = traffic.open()
+        advanceTimeBy(500)
+        assertEquals(DownloadWriter.Live(ID, 0, unreachable = false, streamWait = true), writer.live.value)
+        meter.close()
+        val ended = currentTime
+        advanceTimeBy(9_999)
+        assertEquals(1, openedAt.size, "no open within 10 s of the stream's end")
+        assertEquals(Outcome.Done, write.await())
+        assertEquals(listOf(0L, ended + 10_000), openedAt)
+
+        reset()
+        var closed = 0L
+        b.onPrepare = {
+            val during = traffic.open()
+            delay(500)
+            during.close()
+            closed = currentTime
+        }
+        reads.script(Script(cutAt = 400_000, opened = { a.failing = ServiceError.NotCached }))
+        val opened = CopyOnWriteArrayList<Long>()
+        assertEquals(Outcome.Done, writer(on = listOf(ACCOUNT_A, ACCOUNT_B)).wrote(onOpen = { opened += currentTime }))
+        assertEquals(closed + 10_000, opened.last(), "$opened")
+        assertContentEquals(data, path.readBytes())
+    }
+
     @Test
     fun `a wait counts as no failure, and it goes on at once when it is over`() = runTest(timeout = 60.seconds) {
         var meter: StreamTraffic.Meter? = null
@@ -794,6 +835,9 @@ class ServiceDownloadWriterTest {
         /** The torrent as the account added it again: handed out with the next link, once. */
         @Volatile var again: Prepared? = null
 
+        /** Heard as each prepare starts. */
+        @Volatile var onPrepare: suspend () -> Unit = {}
+
         @Volatile var scheme = "https"
 
         override suspend fun test() = throw AssertionError("a download never tests a key")
@@ -802,6 +846,7 @@ class ServiceDownloadWriterTest {
 
         override suspend fun prepare(hash: InfoHash, pick: suspend (ServiceListing) -> ServiceFile?): Prepared {
             prepareFailing?.let { throw ServiceException(it) }
+            onPrepare()
             val picked = pick(listing)
             picks += picked
             // Nothing is added for a pick of none: no handle.
