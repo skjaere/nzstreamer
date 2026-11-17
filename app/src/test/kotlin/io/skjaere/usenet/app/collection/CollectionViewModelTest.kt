@@ -36,6 +36,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -87,7 +88,10 @@ class CollectionViewModelTest {
         override suspend fun undoMarks(snapshot: WatchSnapshot): Int = 1.also { undone += snapshot }
     }
 
-    /** [downloads]: the finished downloads by title, as a phone's runner tells them; null for none, as a TV's deps have. */
+    /**
+     * [downloads]: the finished downloads by title, as a phone's runner tells them ([downloaded]: null until the runner has
+     * read them, when nothing is told); none given, as a TV's deps have.
+     */
     private inner class Fixture(scope: TestScope, prefs: Flow<CollectionViewPrefs>? = null, downloads: Boolean = true) {
         val dispatcher = StandardTestDispatcher(scope.testScheduler)
         val shows = MutableStateFlow<List<ShowRow>?>(null)
@@ -99,14 +103,14 @@ class CollectionViewModelTest {
         val prioritized = mutableListOf<List<TitleKey>>()
         val status = MutableStateFlow<RefreshStatus>(RefreshStatus.Idle)
         val writeScope = CoroutineScope(SupervisorJob() + dispatcher)
-        val downloaded = MutableStateFlow<Map<TitleKey, Downloaded>>(emptyMap())
+        val downloaded = MutableStateFlow<Map<TitleKey, Downloaded>?>(null)
         val deps = if (downloads) {
             CollectionDeps(
                 shows = shows, movies = movies, writes = writes, prioritize = { prioritized += it }, refreshStatus = status,
                 prefs = prefs ?: stored,
                 savePrefs = { change -> holdSave?.await(); stored.value = change(stored.value).also { saved += it } },
                 hasKey = MutableStateFlow(true), showArtwork = MutableStateFlow(true), today = MutableStateFlow(today),
-                writeScope = writeScope, clock = SchedulerClock(scope.testScheduler), dispatcher = dispatcher, downloaded = downloaded,
+                writeScope = writeScope, clock = SchedulerClock(scope.testScheduler), dispatcher = dispatcher, downloaded = downloaded.filterNotNull(),
             )
         } else {
             // As a TV's are built: no downloads given, the default.
@@ -553,9 +557,9 @@ class CollectionViewModelTest {
     }
 
     /**
-     * L408: the Downloaded chip and the rows' marks come from the finished downloads. A saved Downloaded with no chip reads as
-     * All and stays saved (it shows again with the next download); once its chip goes from under it, as the last download is
-     * removed, All is saved in its place.
+     * L408: the Downloaded chip and the rows' marks come from the finished downloads. Until they are read, the list shows at
+     * once, a saved Downloaded reading as All and saved as it was (the runner's map starts empty, which says nothing); once
+     * its chip goes from under it, as the last download is removed, All is saved in its place.
      */
     @Test
     fun `the Downloaded chip follows the downloads, and All is saved once it goes from under it`() = runTest {
@@ -567,6 +571,7 @@ class CollectionViewModelTest {
         assertEquals("All", vm.ui.value?.filterName)
         assertEquals(3, vm.ui.value?.view?.rows?.size)
         assertEquals(listOf("All", "Watching"), vm.ui.value?.view?.chips?.map { it.name }?.take(2))
+        assertEquals(emptyList(), f.saved, "nothing saved before the downloads are read")
         f.downloaded.value = mapOf(harbor.key to Downloaded(3, 4_100_000_000), TitleKey.movie(9) to Downloaded(1, 1))
         runCurrent()
         val ui = vm.ui.value!!
@@ -584,6 +589,34 @@ class CollectionViewModelTest {
         assertEquals("All", f.saved.last().showFilter)
         // A download since brings the chip back, All kept.
         f.downloaded.value = mapOf(orbit.key to Downloaded(1, 1))
+        runCurrent()
+        assertEquals("All", vm.ui.value?.filterName)
+        assertEquals(3, vm.ui.value?.view?.rows?.size)
+    }
+
+    /**
+     * L408: a saved Downloaded filter whose side has no download, once the downloads are read, is saved as All, though its
+     * chip never showed in this screen's life (its last download went while the Collection was away, or as the app
+     * started): the next download doesn't bring the filter back over the list the user has used since.
+     */
+    @Test
+    fun `a saved Downloaded with no download on its side is saved as All once the downloads are read, its chip never shown here`() = runTest {
+        val f = Fixture(this)
+        f.stored.value = CollectionViewPrefs(showFilter = "Downloaded", movieFilter = "Downloaded")
+        f.downloaded.value = emptyMap()
+        f.shows.value = listOf(harbor, orbit, copper)
+        val vm = f.vm()
+        subscribed(vm)
+        assertEquals("All", vm.ui.value?.filterName)
+        assertEquals(listOf("All"), f.saved.map { it.showFilter }.distinct(), "the shows' saved as All")
+        vm.switchSide(Side.Movies)
+        runCurrent()
+        assertEquals("All", vm.ui.value?.filterName)
+        assertEquals("All" to "All", f.stored.value.showFilter to f.stored.value.movieFilter)
+        // A download since: the chip, the list as it was.
+        f.downloaded.value = mapOf(TitleKey.movie(9) to Downloaded(1, 1))
+        vm.switchSide(Side.Shows)
+        f.downloaded.value = mapOf(harbor.key to Downloaded(1, 1))
         runCurrent()
         assertEquals("All", vm.ui.value?.filterName)
         assertEquals(3, vm.ui.value?.view?.rows?.size)

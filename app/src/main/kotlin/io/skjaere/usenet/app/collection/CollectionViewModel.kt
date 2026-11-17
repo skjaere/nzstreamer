@@ -47,7 +47,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.getAndUpdate
@@ -62,7 +64,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Clock
 import java.time.LocalDate
-import java.util.Collections
 
 /** The library writes the collection makes; [LibraryWrites] in the app, a fake on the JVM. */
 interface CollectionWrites {
@@ -84,8 +85,9 @@ class LibraryWrites(private val library: LibraryRepository) : CollectionWrites {
 /**
  * What the collection screen reads and writes. [writeScope] outlives the screen (the app's scope), so
  * leaving it can't stop a removal or a mark halfway; [dispatcher] builds the list off the main thread.
- * [downloaded]: the finished downloads by title, for the Downloaded chip and the rows' marks (L408); none
- * unless downloads show where the screen is ([of]'s `shown`), so a TV's grid, which shares the model, has none.
+ * [downloaded]: the finished downloads by title, for the Downloaded chip and the rows' marks (L408), telling nothing until
+ * the runner has read them; none (null) unless downloads show where the screen is ([of]'s `shown`), so a TV's grid, which
+ * shares the model, has none.
  */
 class CollectionDeps(
     val shows: Flow<List<ShowRow>?>,
@@ -101,7 +103,7 @@ class CollectionDeps(
     val writeScope: CoroutineScope,
     val clock: Clock,
     val dispatcher: CoroutineDispatcher = Dispatchers.Default,
-    val downloaded: Flow<Map<TitleKey, Downloaded>> = flowOf(emptyMap()),
+    val downloaded: Flow<Map<TitleKey, Downloaded>>? = null,
 ) {
     companion object {
         /** The app's, with its runner's finished downloads where they are [shown] (downloadsShown()). */
@@ -112,9 +114,12 @@ class CollectionDeps(
             writeScope = c.appScope, clock = DeviceClock, downloaded = downloaded(c, shown),
         )
 
-        /** The app runner's finished downloads by title where they are [shown]; none elsewhere, as on a TV (L408). */
-        fun downloaded(c: AppContainer, shown: Boolean): Flow<Map<TitleKey, Downloaded>> =
-            if (shown) DownloadedTitles.flow(c.downloads.done) else flowOf(emptyMap())
+        /**
+         * The app runner's finished downloads by title where they are [shown], once it has read them ([DownloadRunner.doneRead]);
+         * none elsewhere, as on a TV (L408).
+         */
+        fun downloaded(c: AppContainer, shown: Boolean): Flow<Map<TitleKey, Downloaded>>? =
+            if (shown) DownloadedTitles.flow(c.downloads.doneRead) else null
     }
 }
 
@@ -263,9 +268,20 @@ class CollectionViewModel(private val deps: CollectionDeps, private val saved: S
         }
     }
 
+    /**
+     * The finished downloads by title: null until they are read, so the list shows at once and a saved Downloaded isn't
+     * judged by the runner's empty start; always null where none are given (L408).
+     */
+    private val downloadedRead: Flow<Map<TitleKey, Downloaded>?> = deps.downloaded?.let { given ->
+        flow {
+            emit(null)
+            emitAll(given.distinctUntilChanged())
+        }
+    } ?: flowOf(null)
+
     /** Null until the saved view and the side's rows are known: no default sort or empty list flashes up first. */
     val ui: StateFlow<CollectionUi?> = combine(
-        local.filterNotNull(), combine(deps.shows, deps.movies, deps.downloaded.distinctUntilChanged(), ::Titles),
+        local.filterNotNull(), combine(deps.shows, deps.movies, downloadedRead, ::Titles),
         // The refresher's note, not its status: a fill's count of what is left changes with every fetch and shows nowhere.
         combine(deps.refreshStatus.map { note(it) }, deps.hasKey, deps.showArtwork) { note, key, artwork -> Extras(note, key, artwork) }.distinctUntilChanged(),
         undo.offer,
@@ -274,8 +290,8 @@ class CollectionViewModel(private val deps: CollectionDeps, private val saved: S
         .flowOn(deps.dispatcher)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    /** Each side's rows (null until read) and the finished downloads by title. */
-    private class Titles(val shows: List<ShowRow>?, val movies: List<MovieRow>?, val downloaded: Map<TitleKey, Downloaded>)
+    /** Each side's rows (null until read) and the finished downloads by title (null until read, or where none are given). */
+    private class Titles(val shows: List<ShowRow>?, val movies: List<MovieRow>?, val downloaded: Map<TitleKey, Downloaded>?)
 
     private class Inputs(val local: Local, val titles: Titles, val extras: Extras, val offer: UndoTimer.Offer<Undoable>?)
 
@@ -283,12 +299,9 @@ class CollectionViewModel(private val deps: CollectionDeps, private val saved: S
     @Volatile
     private var downloadedNow: Map<TitleKey, Downloaded> = emptyMap()
 
-    /** The sides whose Downloaded chip has shown: once it goes from under its filter, All is saved in its place (L408). */
-    private val chipShown: MutableSet<Side> = Collections.synchronizedSet(mutableSetOf())
-
     private fun build(i: Inputs): CollectionUi? {
         val l = i.local
-        val downloaded = i.titles.downloaded
+        val downloaded = i.titles.downloaded.orEmpty()
         downloadedNow = downloaded
         i.titles.shows?.let { rows -> sideRows = sideRows + (Side.Shows to rows.associateBy { it.key }) }
         i.titles.movies?.let { rows -> sideRows = sideRows + (Side.Movies to rows.associateBy { it.key }) }
@@ -306,7 +319,7 @@ class CollectionViewModel(private val deps: CollectionDeps, private val saved: S
                 Quad(CollectionView.movies(rows, filter, sort, l.text, l.frozen, downloaded), filter.name, sort.name, MovieSort.entries.map { it.name to it.label })
             }
         }
-        allWhenChipGoes(l, view)
+        allWhenChipGoes(l, view, read = i.titles.downloaded != null)
         val visible = view.rows.map { it.key }
         return CollectionUi(
             side = l.side,
@@ -334,18 +347,16 @@ class CollectionViewModel(private val deps: CollectionDeps, private val saved: S
     }
 
     /**
-     * L408: a saved Downloaded filter whose chip has gone from under it (the side's last download removed) is saved as All.
-     * One whose chip never showed here reads as All and stays saved: a TV's (whose model has no downloads), and a phone's
-     * whose downloads went while it was away, which shows Downloaded again with the next one.
+     * L408: a saved Downloaded filter with no chip under it, once the downloads are [read], is saved as All: the side's last
+     * download has gone, as the Collection showed it or while it was away, so the next one doesn't bring the filter back
+     * over the list used since. Not before they are read (the runner's map starts empty), and never where none are given (a
+     * TV's model): there it reads as All and stays saved.
      */
-    private fun allWhenChipGoes(l: Local, view: SideView) {
+    private fun allWhenChipGoes(l: Local, view: SideView, read: Boolean) {
         val side = l.side
-        if (view.chips.any { it.name == DOWNLOADED }) {
-            chipShown += side
-            return
-        }
+        if (!read || view.chips.any { it.name == DOWNLOADED }) return
         val saved = if (side == Side.Shows) l.prefs.showFilter else l.prefs.movieFilter
-        if (saved != DOWNLOADED || !chipShown.remove(side)) return
+        if (saved != DOWNLOADED) return
         viewModelScope.launch {
             persist { p ->
                 when {
