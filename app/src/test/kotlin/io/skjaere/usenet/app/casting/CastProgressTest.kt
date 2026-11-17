@@ -10,6 +10,7 @@ import io.skjaere.usenet.app.play.WatchTarget
 import io.skjaere.usenet.core.UsenetUris
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
+import io.skjaere.usenet.player.PlayUris
 import io.skjaere.usenet.serve.ServeCounters
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -122,6 +123,27 @@ class CastProgressTest {
         val other = mutableListOf<WatchSave>()
         CastProgress(other::add, CastTimings()).heard(feed(CastPlayerState.Idle, 600_000, end = CastEnd(CastEnd.How.Failed, 600_000)), 2_000)
         assertEquals(release.toRemembered(), other.single().release)
+    }
+
+    /**
+     * L448: a download's cast that the file failed there (the phone's file, read on this phone, not the release) saves
+     * where it was and keeps its release, as the end [CastingRules] makes of it says: Resume plays the download again.
+     */
+    @Test
+    fun `a download's cast ended by its file's failure keeps its release`() {
+        val download = launch.copy(uri = PlayUris.download("3f2c9e1a"))
+        val served = ServeCounters(requests = 1, partials = 1, firstRequestAt = 1)
+        val rules = CastingRules(
+            "Kitchen display", "load-1", CastFile("mkv", video = true, source = CastSource.Download), deviceHasStatus = false, loadedAt = 0, probedDurationMs = length,
+        )
+        rules.heard(CastEvent.Status(CastPlayerState.Playing, null, "load-1", 0, 0), served, 0)
+        rules.tick(served, 1_000, 600_000, length)
+        val failed = served.copy(upstreamFailures = 1)
+        rules.heard(CastEvent.Status(CastPlayerState.Idle, CastIdleReason.Error, "load-1", 600_000, 2_000), failed, 2_000)
+        val end = rules.over(Why.Failed, failed, 2_000).filterIsInstance<Act.Ended>().single().end
+        assertEquals(CastEnd(CastEnd.How.Failed, 600_000), end)
+        progress.heard(feed(CastPlayerState.Idle, 600_000, end = end, of = download), 2_000)
+        assertEquals(release.toRemembered(), saved.single().release)
     }
 
     /** L84: the next play's load took its place there: saved then. L60: a long pause's end too. */

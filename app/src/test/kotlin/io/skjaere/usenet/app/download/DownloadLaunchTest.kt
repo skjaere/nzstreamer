@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.download
 
+import io.skjaere.usenet.app.link.TvArt
 import io.skjaere.usenet.app.play.CastTo
 import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.play.PlayOrigin
@@ -205,5 +206,19 @@ class DownloadLaunchTest {
         // A TV has none, whatever asks (W108).
         assertFalse(DownloadLaunch.looks(PlayOrigin.Here, television = true))
         assertFalse(DownloadLaunch.looks(PlayOrigin.after(here), television = true))
+    }
+
+    /**
+     * L451: what a cast of a download shows of TMDB's, from its row alone, with no lookup: an episode's still, else its
+     * show's poster; a film's poster (a still is an episode's alone, as its stored pictures are); none where the row has
+     * neither.
+     */
+    @Test
+    fun `a download's picture for a cast is its row's still, else its poster, with no lookup`() {
+        assertEquals(TvArt("/hl-s01e05.jpg"), DownloadLaunch.art(episode.copy(stillPath = "/hl-s01e05.jpg", posterPath = "/hl.jpg")))
+        assertEquals(TvArt("/hl.jpg", poster = true), DownloadLaunch.art(episode.copy(stillPath = null, posterPath = "/hl.jpg")))
+        assertEquals(TvArt("/cc.jpg", poster = true), DownloadLaunch.art(film.copy(stillPath = "/cc-still.jpg", posterPath = "/cc.jpg")))
+        assertNull(DownloadLaunch.art(episode.copy(stillPath = null, posterPath = null)))
+        assertNull(DownloadLaunch.art(film.copy(posterPath = null)))
     }
 }

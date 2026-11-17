@@ -17,8 +17,8 @@ enum class LoadStep {
 
 /**
  * How a cast play ended on its device once it had played there (L60, L61, L84, L88, L93): where it was ([positionMs], the
- * film's length once it was watched), and whether the providers failed its release ([providers]), which Resume then no
- * longer plays.
+ * film's length once it was watched), and whether the providers (or the debrid service) failed its release ([providers]),
+ * which Resume then no longer plays; never a download's file, which is the phone's (L448).
  */
 data class CastEnd(val how: How, val positionMs: Long, val providers: Boolean = false) {
     enum class How {
@@ -326,7 +326,8 @@ class CastingRules(
                 if (length == null || length - at <= timings.finishMarginMillis) CastEnd(CastEnd.How.Watched, length ?: at) else CastEnd(CastEnd.How.Stopped, at)
             }
             Why.SessionEnded -> if (pausedSince?.let { now - it >= timings.longPauseMillis } == true) CastEnd(CastEnd.How.LongPause, at) else CastEnd(CastEnd.How.Stopped, at)
-            Why.Failed, Why.LostStream -> CastEnd(CastEnd.How.Failed, at, providers = served.upstreamFailures > 0)
+            // A download's file failing is the phone's, not the release's (L448): Resume keeps it.
+            Why.Failed, Why.LostStream -> CastEnd(CastEnd.How.Failed, at, providers = served.upstreamFailures > 0 && file.source != CastSource.Download)
             else -> CastEnd(CastEnd.How.Stopped, at)
         }
     }

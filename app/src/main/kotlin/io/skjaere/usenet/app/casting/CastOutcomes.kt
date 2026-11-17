@@ -1,13 +1,35 @@
 package io.skjaere.usenet.app.casting
 
+import io.skjaere.usenet.player.PlayUris
 import io.skjaere.usenet.serve.ServeCounters
 import java.util.Locale
 
+/** Where the phone reads a cast play's file from (L220, L448): the user's providers, a debrid service, or this phone. */
+enum class CastSource {
+    /** The user's Usenet providers, over the engine's stream. */
+    Providers,
+
+    /** A debrid service, over HTTPS (L220). */
+    Service,
+
+    /** A finished download's file on this phone (L417). */
+    Download;
+
+    companion object {
+        /** Where a play's launch at [uri] is read from, by its source ([PlayUris]). */
+        fun of(uri: String): CastSource = when (PlayUris.parse(uri)) {
+            is PlayUris.Target.Service -> Service
+            is PlayUris.Target.Download -> Download
+            else -> Providers
+        }
+    }
+}
+
 /**
  * The file a cast play's load serves, as a refusal on the device is read (L102): its [extension], whether the probe found
- * [video] in it, and whether the phone reads it from a debrid service ([fromService], L220) rather than from providers.
+ * [video] in it, and where the phone reads it from ([source], L220, L448).
  */
-data class CastFile(val extension: String, val video: Boolean, val fromService: Boolean = false) {
+data class CastFile(val extension: String, val video: Boolean, val source: CastSource = CastSource.Providers) {
     /**
      * A file the device may refuse as it opens it, though its type is castable (L102): MOV and M4V, read through the MP4
      * demuxer's QuickTime side and tried only with H.264 and AAC, and a file with no video, which the Shield refused for
@@ -36,6 +58,13 @@ const val CAST_PROVIDERS = "Couldn't read the release from your providers"
 
 /** [CAST_PROVIDERS] for a release the phone reads from a debrid service (L220): words that name no service. Words not drawn. */
 const val CAST_SERVICE = "Couldn't read the release from your debrid service"
+
+/**
+ * [CAST_PROVIDERS] for a download's file, read on this phone (L448): the file's fault, never the release's, so Resume
+ * keeps the release.
+ */
+const val CAST_DOWNLOAD = "Couldn't read the downloaded file"
+
 const val CAST_CLOSED_WITHOUT_ERROR = "The device's player closed the file without an error"
 
 fun stoppedWithError(code: Int) = "The device's player stopped (error $code)"
@@ -114,8 +143,13 @@ object CastOutcomes {
         if (served.upstreamFailures > 0) providers(file) else CastLoadFailure(CastFailKind.CouldNotPlay, lostTheStream(name))
 
     /**
-     * The release's fault, not the device's: Try another release forgets it as the release Resume plays. Said of where the
-     * phone reads the [file] from: the providers, or the debrid service.
+     * The reading of the [file] failed, not the device: said of where the phone reads it from. From the providers or the
+     * debrid service, the release's fault, which Try another release forgets as the release Resume plays; from a download's
+     * file on this phone, the file's, so the release stays (L448).
      */
-    private fun providers(file: CastFile) = CastLoadFailure(CastFailKind.CouldNotPlay, if (file.fromService) CAST_SERVICE else CAST_PROVIDERS, providers = true)
+    private fun providers(file: CastFile) = when (file.source) {
+        CastSource.Providers -> CastLoadFailure(CastFailKind.CouldNotPlay, CAST_PROVIDERS, providers = true)
+        CastSource.Service -> CastLoadFailure(CastFailKind.CouldNotPlay, CAST_SERVICE, providers = true)
+        CastSource.Download -> CastLoadFailure(CastFailKind.CouldNotPlay, CAST_DOWNLOAD)
+    }
 }

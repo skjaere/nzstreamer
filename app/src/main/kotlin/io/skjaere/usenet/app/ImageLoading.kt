@@ -32,13 +32,14 @@ fun appImageLoader(context: PlatformContext, memory: DeviceMemory?): ImageLoader
 }
 
 /**
- * The picture at [url] as JPEG bytes, through the app's image loader: what a Cast session's notification shows, from its
- * caches where they have it, and what a download keeps of its poster and still (L411), never [cached], so the copy is what
- * the image host answers now: Coil's caches keep a picture with no age limit, and a download's copy counts its 180 days
- * from its fetch. The answer is written to the caches all the same. Null where none came.
+ * The picture [data] gives, an address or a file (any model Coil takes), as JPEG bytes, through the app's image loader:
+ * what a Cast session's notification shows, from its caches where they have it, or a download's stored copy, which needs
+ * no network (L451); and what a download keeps of its poster and still (L411), never [cached], so the copy is what the
+ * image host answers now: Coil's caches keep a picture with no age limit, and a download's copy counts its 180 days from
+ * its fetch. The answer is written to the caches all the same. Null where none came.
  */
-suspend fun jpegOf(context: Context, url: String, cached: Boolean = true): ByteArray? {
-    val request = ImageRequest.Builder(context).data(url).allowHardware(false)
+suspend fun jpegOf(context: Context, data: Any, cached: Boolean = true): ByteArray? {
+    val request = ImageRequest.Builder(context).data(data).allowHardware(false)
         .apply {
             if (!cached) {
                 memoryCachePolicy(CachePolicy.WRITE_ONLY)

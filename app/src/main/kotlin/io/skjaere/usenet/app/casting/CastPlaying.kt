@@ -22,7 +22,6 @@ import io.skjaere.usenet.app.play.MissingParts
 import io.skjaere.usenet.app.play.PlayerLaunch
 import io.skjaere.usenet.app.play.SlowStream
 import io.skjaere.usenet.data.PlaybackPrefs
-import io.skjaere.usenet.player.PlayUris
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -534,16 +533,15 @@ class CastPlaying(private val scope: CoroutineScope, private val deps: CastPlayi
     }
 
     /**
-     * Makes [slow]'s banner for [p]'s play on [name]: the hint by the maximums set (W52, W64), the slow source the debrid
-     * service for a play from one (L220), and Try a smaller release where the play has one (W2); shown while it is still
-     * the dip there and the slot is its.
+     * Makes [slow]'s banner for [p]'s play on [name]: the hint by the maximums set (W52, W64), the slow source said by where
+     * the phone reads the play (the debrid service for a play from one, L220; the Wi-Fi alone for a download's file, L448),
+     * and Try a smaller release where the play has one (W2); shown while it is still the dip there and the slot is its.
      */
     private fun banner(p: Parts, slow: CastDip.Slow, launch: PlayerLaunch, name: String) {
         scope.launch {
             val prefs = deps.playbackPrefs()
             val smaller = deps.canTrySmaller(launch, slow.dip.rateBps, slow.dip.bitrateBps)
-            val fromService = PlayUris.parse(launch.uri) is PlayUris.Target.Service
-            val made = CastSlowBanner(CastSlowStream.shown(slow, name, prefs.maxBitrate.mbps(), prefs.castMaxBitrate.mbps(), fromService = fromService), smaller)
+            val made = CastSlowBanner(CastSlowStream.shown(slow, name, prefs.maxBitrate.mbps(), prefs.castMaxBitrate.mbps(), source = CastSource.of(launch.uri)), smaller)
             synchronized(lock) {
                 if (parts !== p || p.slowFor !== slow) return@synchronized
                 p.banner = made

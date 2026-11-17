@@ -2158,6 +2158,33 @@ class DownloadRunnerTest {
     }
 
     /**
+     * L417: a cast of a download is a third holder, beside the hook's launch and a player's lease. A move to Kitchen
+     * display holds the file in its own name before the player closes and lets go, so a due download the cast holds is
+     * left by the run, and goes as the cast's hold ends: Delete once watched counts a cast as a play.
+     */
+    @Test
+    fun `a due download a cast holds is left by the run, and goes as the cast lets go`() = test {
+        val runner = runner()
+        val casting = finished(A, 1, completedAt = NOW - 3 * DAY)
+        deleteOnceWatched(NOW - 4 * DAY)
+        watched.value = listOf(watchedAt(casting, NOW - 2 * DAY))
+        runner.hold("player:lease", casting.id)
+        work.launch { runner.autoDelete() }
+        runCurrent()
+        val follow = Any()
+        assertTrue(runner.hold(follow, casting.id), "the cast's own hold")
+        runner.release("player:lease")
+        advanceTimeBy(2 * MINUTE + 1)
+        runCurrent()
+        assertEquals(DownloadState.Done, stored(A).state, "while it casts, the player gone")
+        assertTrue(storage.video(A).isFile)
+        assertEquals(emptyList(), runner.deleteWatched(NOW))
+        runner.release(follow, casting.id)
+        runCurrent()
+        assertTrue(gone(A), "as the cast let go")
+    }
+
+    /**
      * L413: the run never deletes a file a play holds, though the play began as it ran. A Play of the next due download,
      * taken while the run deletes the one before, holds it before the run comes to it, and the run leaves it to go as that
      * hold ends; one the run has taken can't be held, so no play is launched from a file going, nor handed to a player.

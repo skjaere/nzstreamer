@@ -241,15 +241,16 @@ class AppContainer(private val context: Context) {
     val serviceSources = ServiceDataSource.Factory(LinkResolver { target, stale -> serviceLinks.link(target, stale) }, streamTraffic)
 
     /**
-     * A finished download's file on this device (L352), found by its row: read as it is, with nothing read ahead, and still
-     * while a play holds it once it is removed (L413). One found gone fails its row at once, in the app's scope
-     * ([DownloadStorage.fileGone]).
+     * The finished downloads' files on this device (L352, L417), found by their rows, still while a play or a cast holds one
+     * once it is removed (L413): the player's and the probe's ([downloadSources]) and a cast's (Casting), by one rule. One
+     * found gone fails its row at once, in the app's scope ([DownloadStorage.fileGone]).
      */
-    private val downloadSources = DownloadDataSource.Factory(
-        DownloadPlayFiles(data.downloads, fileOf = { row -> downloadStorage.file(row) }, held = { id -> id in downloads.held.value }) { row ->
-            appScope.launch { saveOrLog("fail download ${row.id}, its file gone") { downloadStorage.fileGone(row.id) } }
-        },
-    )
+    internal val downloadFiles = DownloadPlayFiles(data.downloads, fileOf = { row -> downloadStorage.file(row) }, held = { id -> id in downloads.held.value }) { row ->
+        appScope.launch { saveOrLog("fail download ${row.id}, its file gone") { downloadStorage.fileGone(row.id) } }
+    }
+
+    /** A finished download's file as the player reads it (L352): as it is, with nothing read ahead. */
+    private val downloadSources = DownloadDataSource.Factory(downloadFiles)
 
     /**
      * Where the track probe and the cast relay read a play's file, by its URI's scheme ([PlayUris]): Usenet's, from the

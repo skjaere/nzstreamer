@@ -8,6 +8,7 @@ import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.WatchKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -87,6 +88,38 @@ class DownloadPlayFilesTest {
             rows[done.id] = done.copy(state = state)
             assertNull(playing.find(done.id), "$state")
         }
+    }
+
+    /**
+     * L417 (C5): a cast's load finds the file by the same rule, as a coroutine off the main thread it runs on: a finished
+     * download's file, one being deleted while it is held and not after, a file gone told as gone and given still, none for
+     * a download not finished; the player's find is that rule run on its loading thread.
+     */
+    @Test
+    fun `found serves what find serves, from a coroutine`(@TempDir dir: File) = runBlocking<Unit> {
+        val told = mutableListOf<String>()
+        val held = mutableSetOf<String>()
+        val video = File(dir, "v.mkv").apply { writeBytes(ByteArray(16)) }
+        val here = DownloadPlayFiles(Rows(rows), { row -> row.relativePath?.let { video } }, held = { it in held }) { told += it.id }
+        rows[done.id] = done
+        val found = assertNotNull(here.found(done.id))
+        assertEquals(video, found.file)
+        assertEquals(1_400_000_000, found.size)
+        assertEquals(listOf(10_000L..19_999L, 500_000L..500_099L), found.gaps)
+        assertEquals("Harbor.Lights.S01E05.1080p.WEB.h264-KESTREL.mkv", found.name)
+        assertEquals(here.find(done.id)?.toString(), found.toString())
+
+        rows[done.id] = done.copy(state = DownloadState.Deleting)
+        assertNull(here.found(done.id), "being deleted, held by nothing")
+        held += done.id
+        assertEquals(video, here.found(done.id)?.file, "being deleted while it is held")
+        rows[done.id] = done.copy(state = DownloadState.Running)
+        assertNull(here.found(done.id), "not finished")
+
+        rows[done.id] = done
+        video.delete()
+        assertEquals(video, here.found(done.id)?.file, "a file gone given still, for the source to say so")
+        assertEquals(listOf(done.id), told)
     }
 
     @Test

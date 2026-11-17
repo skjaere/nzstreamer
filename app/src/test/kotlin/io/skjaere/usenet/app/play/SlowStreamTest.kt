@@ -1,6 +1,7 @@
 package io.skjaere.usenet.app.play
 
 import io.skjaere.usenet.app.casting.CastDip
+import io.skjaere.usenet.app.casting.CastSource
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -197,10 +198,10 @@ class SlowStreamTest {
      */
     @Test
     fun `during a debrid cast the debrid service is the slow part, and TalkBack hears it so`() {
-        assertEquals("Your debrid service is the slow part.", CastSlowStream.cause(CastDip.Cause.Providers, "Kitchen display", fromService = true))
-        assertEquals("The Wi-Fi to Kitchen display is the slow part.", CastSlowStream.cause(CastDip.Cause.WiFi, "Kitchen display", fromService = true))
+        assertEquals("Your debrid service is the slow part.", CastSlowStream.cause(CastDip.Cause.Providers, "Kitchen display", CastSource.Service))
+        assertEquals("The Wi-Fi to Kitchen display is the slow part.", CastSlowStream.cause(CastDip.Cause.WiFi, "Kitchen display", CastSource.Service))
         val service = CastSlowStream.shown(
-            CastDip.Slow(DipDetector.Dip(mbps(13.0), mbps(31.0)), CastDip.Cause.Providers), "Kitchen display", max = null, castMax = 40, choices = choices, fromService = true,
+            CastDip.Slow(DipDetector.Dip(mbps(13.0), mbps(31.0)), CastDip.Cause.Providers), "Kitchen display", max = null, castMax = 40, choices = choices, source = CastSource.Service,
         )
         assertEquals("13 of 31 Mbps", service.numbers)
         assertEquals(
@@ -212,9 +213,29 @@ class SlowStreamTest {
                 "casting to 10 megabits per second, in Settings, Quality and languages, picks smaller releases next time.",
             service.spoken,
         )
-        val wifi = CastSlowStream.shown(CastDip.Slow(DipDetector.Dip(mbps(19.0), mbps(31.0)), CastDip.Cause.WiFi), "Kitchen display", max = null, castMax = 40, choices = choices, fromService = true)
+        val wifi = CastSlowStream.shown(CastDip.Slow(DipDetector.Dip(mbps(19.0), mbps(31.0)), CastDip.Cause.WiFi), "Kitchen display", max = null, castMax = 40, choices = choices, source = CastSource.Service)
         assertTrue(wifi.hint.orEmpty().startsWith("The Wi-Fi to Kitchen display is the slow part."), wifi.hint)
         listOf(service.hint.orEmpty(), service.spoken).forEach { assertFalse("TorBox" in it || "Premiumize" in it || "providers" in it, it) }
+    }
+
+    /**
+     * L448: a download's file is read on this phone, so a cast of it is slow on the Wi-Fi alone: whichever part the dip
+     * found waiting more, the banner names the Wi-Fi to the device, never the providers or a service.
+     */
+    @Test
+    fun `during a download's cast the Wi-Fi is the slow part, whichever part waited more`() {
+        assertEquals("The Wi-Fi to Kitchen display is the slow part.", CastSlowStream.cause(CastDip.Cause.Providers, "Kitchen display", CastSource.Download))
+        assertEquals("The Wi-Fi to Kitchen display is the slow part.", CastSlowStream.cause(CastDip.Cause.WiFi, "Kitchen display", CastSource.Download))
+        val download = CastSlowStream.shown(
+            CastDip.Slow(DipDetector.Dip(mbps(13.0), mbps(31.0)), CastDip.Cause.Providers), "Kitchen display", max = null, castMax = 40, choices = choices,
+            source = CastSource.Download,
+        )
+        assertEquals(
+            "The Wi-Fi to Kitchen display is the slow part. Lowering Maximum bitrate when casting to 10 Mbps (Settings › Quality and languages) picks smaller " +
+                "releases next time.",
+            download.hint,
+        )
+        listOf(download.hint.orEmpty(), download.spoken).forEach { assertFalse("providers" in it || "debrid" in it, it) }
     }
 
     /** What the banner shows of a dip, and what TalkBack reads once as it appears (QlPhoneTalkBack). */

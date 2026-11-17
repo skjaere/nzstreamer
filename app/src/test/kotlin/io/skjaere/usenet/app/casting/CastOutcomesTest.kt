@@ -98,8 +98,8 @@ class CastOutcomesTest {
     @Test
     fun `a debrid release that couldn't be read names the debrid service, never the providers`() {
         val service = CastLoadFailure(CastFailKind.CouldNotPlay, "Couldn't read the release from your debrid service", providers = true)
-        val mkv = CastFile("mkv", video = true, fromService = true)
-        val mp4 = CastFile("mp4", video = true, fromService = true)
+        val mkv = CastFile("mkv", video = true, source = CastSource.Service)
+        val mp4 = CastFile("mp4", video = true, source = CastSource.Service)
         val head = upstream.copy(headFailures = 1)
         // The head's read failed, or any of an MP4's.
         assertEquals(service, error(104, head, mkv))
@@ -116,6 +116,36 @@ class CastOutcomesTest {
         assertEquals(CastLoadFailure(CastFailKind.CouldNotPlay, "Kitchen display lost the stream from this phone"), error(103, fetched, mkv))
         assertEquals(CastLoadFailure(CastFailKind.CouldNotPlay, "The device's player can't open this file", format = true), error(104, fetched, mkv))
         assertEquals(CastLoadFailure(CastFailKind.CannotReach), error(104, none, mkv))
+    }
+
+    /**
+     * L448: a download's file is read on this phone, so each path that blames the reading of the file says the downloaded
+     * file couldn't be read, under the sheet's "couldn't play this release", and the release isn't at fault: Resume keeps
+     * it (providers false). What isn't the reading's fault keeps its words, and Usenet's and debrid's are as they were.
+     */
+    @Test
+    fun `a download's file that couldn't be read says so, never the providers, and keeps its release`() {
+        val read = CastLoadFailure(CastFailKind.CouldNotPlay, "Couldn't read the downloaded file")
+        val file = CastFile("mkv", video = true, source = CastSource.Download)
+        val mp4 = CastFile("mp4", video = true, source = CastSource.Download)
+        val head = upstream.copy(headFailures = 1)
+        // The head's read failed, or any of an MP4's.
+        assertEquals(read, error(104, head, file))
+        assertEquals(read, error(905, head, file))
+        assertEquals(read, error(104, upstream, mp4))
+        // The media gone with no code after a read failed.
+        assertEquals(read, CastOutcomes.vanished(upstream, name, file))
+        assertEquals(read, error(null, upstream, file))
+        // The stream lost after a read failed.
+        assertEquals(read, error(103, upstream, file))
+        assertEquals(read, error(300, upstream, file))
+
+        assertEquals(CastLoadFailure(CastFailKind.CouldNotPlay, "Kitchen display lost the stream from this phone"), error(103, fetched, file))
+        assertEquals(CastLoadFailure(CastFailKind.CouldNotPlay, "The device's player can't open this file", format = true), error(104, fetched, file))
+        assertEquals(CastLoadFailure(CastFailKind.CannotReach), error(104, none, file))
+        // Usenet's and debrid's words as they were.
+        assertEquals(CastLoadFailure(CastFailKind.CouldNotPlay, CAST_PROVIDERS, providers = true), error(104, head))
+        assertEquals(CastLoadFailure(CastFailKind.CouldNotPlay, CAST_SERVICE, providers = true), error(104, head, CastFile("mkv", video = true, source = CastSource.Service)))
     }
 
     @Test

@@ -53,6 +53,9 @@ class CastPlayingSlowTest {
         release = release.copy(guid = "btih:$hash", nzbId = "btih:$hash", source = ReleaseFacts.TORRENT),
     )
 
+    /** The same episode played from its download on this phone (L417). */
+    private val fromDownload = launch.copy(uri = PlayUris.download("3f2c9e1a"))
+
     /** A second of missing articles [atMs] into the film: 3,875 bytes a millisecond. */
     private fun gapAt(atMs: Long) = atMs * 3_875 until (atMs + 1_000) * 3_875
 
@@ -142,6 +145,19 @@ class CastPlayingSlowTest {
         )
         assertTrue("Your debrid service is the slow part" in banner.shown.spoken, banner.shown.spoken)
         assertFalse("providers" in banner.shown.spoken)
+    }
+
+    /**
+     * L448: a download's cast reads the file on this phone, so its dip names the Wi-Fi to the device, though the server's
+     * answers waited more on the file than on the device: there are no providers to name.
+     */
+    @Test
+    fun `a download's cast slow at its source says the Wi-Fi is the slow part`() = runTest {
+        val f = Fixture(this, fromDownload)
+        f.counts(17)
+        val banner = assertNotNull(f.banner)
+        assertTrue(banner.shown.hint.orEmpty().startsWith("The Wi-Fi to Kitchen display is the slow part."), banner.shown.hint)
+        assertFalse("providers" in banner.shown.spoken, banner.shown.spoken)
     }
 
     /** One at a time, the missing-parts prompt first (W37, L134): the banner waits under it, and shows as it goes. */

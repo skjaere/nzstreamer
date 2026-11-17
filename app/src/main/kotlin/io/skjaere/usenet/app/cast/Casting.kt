@@ -25,6 +25,7 @@ import io.skjaere.usenet.app.casting.CastPlayerState
 import io.skjaere.usenet.app.casting.CastProgress
 import io.skjaere.usenet.app.casting.CastRefusal
 import io.skjaere.usenet.app.casting.CastServiceRules.Why
+import io.skjaere.usenet.app.casting.CastSource
 import io.skjaere.usenet.app.casting.CastingRules
 import io.skjaere.usenet.app.casting.CastingRules.Act
 import io.skjaere.usenet.app.casting.LoadStep
@@ -32,7 +33,9 @@ import io.skjaere.usenet.app.casting.castEndLine
 import io.skjaere.usenet.app.casting.castTimings
 import io.skjaere.usenet.app.casting.counted
 import io.skjaere.usenet.app.container
-import io.skjaere.usenet.app.debrid.DebridAdds
+import io.skjaere.usenet.app.download.DownloadImages
+import io.skjaere.usenet.app.download.DownloadLaunch
+import io.skjaere.usenet.app.download.DownloadStorage
 import io.skjaere.usenet.app.jpegOf
 import io.skjaere.usenet.app.link.TvArt
 import io.skjaere.usenet.app.link.TvPlayingDeps
@@ -47,9 +50,11 @@ import io.skjaere.usenet.core.ContainerTypes
 import io.skjaere.usenet.core.PrepareOutcome
 import io.skjaere.usenet.data.CastDeviceMemory
 import io.skjaere.usenet.data.CastPrefs
+import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.SettingsRepository
 import io.skjaere.usenet.player.PlayUris
 import io.skjaere.usenet.serve.ByteSource
+import io.skjaere.usenet.serve.FileByteSource
 import io.skjaere.usenet.serve.ServeCounters
 import io.skjaere.usenet.serve.Served
 import io.skjaere.usenet.serve.ServedFile
@@ -74,11 +79,13 @@ import java.io.IOException
 /**
  * What loads a cast play's launch on its device and follows it there (L60, L62, L65, L68, L88, L102, L103): the real
  * [CastLoader], over the cast service ([CastServing]). The launch's file is found again as the player finds it, a Usenet
- * play's in the phone's store and a debrid play's in its kept listing (W73), and checked once more for a type the device
- * plays (L57); the service's server serves it to the device at the address it was found at (L55), its head opened ahead
- * of the LOAD so the device's first request is answered at once (L56), and a debrid play's link refused there fails the
- * load before anything is sent (L218). Its item ([CastItems]) says the play as [CastMetadata] does, TMDB's picture with
- * it while "Show artwork" is on, decoded first for the session's notification (L58), whose line names the device (L120).
+ * play's in the phone's store, a debrid play's in its kept listing (W73) and a download's on this phone, held while it
+ * plays there (L417), and checked once more for a type the device plays (L57); the service's server serves it to the
+ * device at the address it was found at (L55), its head opened ahead of the LOAD so the device's first request is
+ * answered at once (L56), and a debrid play's link refused there, or a download's file gone, fails the load before
+ * anything is sent (L218, L417). Its item ([CastItems]) says the play as [CastMetadata] does, TMDB's picture with it while
+ * "Show artwork" is on (a download's from its row, with no lookup, L451), decoded first for the session's notification
+ * (L58), whose line names the device (L120).
  * Once the session's media
  * channel exists (#889), the load goes in
  * [CastingRules]' order (L68), and the rules, which hear the device through [CastSeams.events] and read the server's
@@ -106,10 +113,13 @@ internal object Casting : CastLoader {
     @Volatile
     var artOf: suspend (AppContainer, String) -> TvArt? = TvPlayingDeps::art
 
-    /** A picture's bytes from its address, for the session's notification (L58): Coil's, its caches first, or a test's. */
+    /**
+     * A picture's bytes from its address, or from a download's stored copy (L451), for the session's notification (L58):
+     * Coil's, its caches first, or a test's.
+     */
     @VisibleForTesting
     @Volatile
-    var picture: suspend (Context, String) -> ByteArray? = ::jpegOf
+    var picture: suspend (Context, Any) -> ByteArray? = ::jpegOf
 
     /** This loader for [context]'s app. */
     fun with(context: Context): Casting = apply { app = context.applicationContext }
@@ -122,20 +132,26 @@ internal object Casting : CastLoader {
 
     override suspend fun load(launch: PlayerLaunch, serving: CastServing): CastLoadOutcome = withContext(Dispatchers.Main.immediate) {
         val container = app.container
-        // What a debrid play added to the account is held while it plays there (L234): from here, before a move's player
-        // closes and lets go of its own, until the play is followed no more, or the load ends without its following.
-        val lease = (PlayUris.parse(launch.uri) as? PlayUris.Target.Service)?.let { Lease(container.debridAdds, it.listingId) }
+        // What the play reads is held while it plays there (L234, L417): what a debrid play added to the account, a
+        // download's file. From here, before a move's player closes and lets go of its own, until the play is followed no
+        // more, or the load ends without its following.
+        val lease = Lease.of(container, PlayUris.parse(launch.uri))
         try {
-            loadHeld(container, launch, serving, lease)
+            // A download Delete once watched has taken can't be held: its file is going, so nothing is sent.
+            if (lease?.held == false) fileGone() else loadHeld(container, launch, serving, lease)
         } finally {
             if (lease?.followed == false) lease.release()
         }
     }
 
-    /** [load] with what its debrid play added held by [lease], which its [Follow] takes over once the LOAD is sent. */
+    /** [load] with what its play reads held by [lease], which its [Follow] takes over once the LOAD is sent. */
     private suspend fun loadHeld(container: AppContainer, launch: PlayerLaunch, serving: CastServing, lease: Lease?): CastLoadOutcome {
         val name = launch.cast?.name ?: return gone()
-        val file = find(container, launch) ?: return CastLoadOutcome.Failed(CastLoadFailure(CastFailKind.CouldNotPlay, CAST_NOT_HERE))
+        val file = find(container, launch) ?: return if (PlayUris.parse(launch.uri) is PlayUris.Target.Download) {
+            fileGone()
+        } else {
+            CastLoadOutcome.Failed(CastLoadFailure(CastFailKind.CouldNotPlay, CAST_NOT_HERE))
+        }
         val extension = ContainerTypes.extension(file.name)
         val type = ContainerTypes.mimeOf(file.name)
         // L57 again: the probe checked it, and a file chosen by hand is checked here too, before anything is sent.
@@ -144,25 +160,44 @@ internal object Casting : CastLoader {
         }
         val media = media() ?: return CastLoadOutcome.Failed(CastOutcomes.noRequest())
         val served = serving.serve(ServedFile(file.size, type, extension, file.source), media.address) ?: return CastLoadOutcome.Failed(CastOutcomes.noRequest())
-        val refused = withContext(Dispatchers.IO) {
+        val headFailed = withContext(Dispatchers.IO) {
             try {
                 served.openHead()
                 null
             } catch (e: IOException) {
-                // The device's first request opens its own; but a link the service refused fails the load here (L218).
                 log.info("A cast's head couldn't be opened ahead ({})", e.javaClass.simpleName)
-                file.account?.let { CastRefusal.of(launch, e, it) }
+                e
             }
         }
+        // A download's file gone or cut short since it was found: nothing is sent, and its row fails as the player's
+        // source fails it (L417, L448).
+        if (headFailed != null && file.download != null) {
+            val id = file.download.id
+            container.appScope.launch { saveOrLog("fail download $id, its file gone") { container.downloadStorage.fileGone(id) } }
+            return fileGone()
+        }
+        // The device's first request opens its own; but a link the service refused fails the load here (L218).
+        val refused = headFailed?.let { e -> file.account?.let { CastRefusal.of(launch, e, it) } }
         if (refused != null) {
             // Remembered against the account as a play's failure is, so plays pass it over meanwhile (L174).
             saveOrLog("remember a debrid cast's refused link") { container.serviceMisses.record(refused.candidate, refused.account, refused.failure) }
             return CastLoadOutcome.Failed(CastRefusal.card(refused))
         }
         val showArtwork = container.settings.metadata.first().showArtwork
-        val art = if (showArtwork && launch.watch.rememberedKey != null) withTimeoutOrNull(PICTURE_MS) { artOf(container, launch.watchKey) } else null
+        val art = when {
+            !showArtwork || launch.watch.rememberedKey == null -> null
+            // A download's from its row, with no lookup: offline, one would hold the LOAD up to its wait (L451).
+            file.download != null -> DownloadLaunch.art(file.download)
+            else -> withTimeoutOrNull(PICTURE_MS) { artOf(container, launch.watchKey) }
+        }
         val said = CastMetadata.of(launch, container.appName, art, showArtwork)
-        val still = said.imageUrl?.let { url -> withTimeoutOrNull(PICTURE_MS) { picture(app, url) } }
+        // The device is told TMDB's address all the same; the session's picture is a download's stored copy while it is
+        // fresh, which needs no network (L411, L451).
+        val model = said.imageUrl?.let { url ->
+            val kind = if (art?.poster == true) DownloadImages.Kind.Poster else DownloadImages.Kind.Still
+            file.download?.let { row -> container.downloadImages.model(row.id, kind, url) } ?: url
+        }
+        val still = model?.let { withTimeoutOrNull(PICTURE_MS) { picture(app, it) } }
         still?.let { bytes -> withContext(Dispatchers.Default) { serving.artwork(bytes) } }
         val item = CastItems.item(served.url, type, said, still, name, Build.VERSION.SDK_INT)
         val start = startOf(container, launch)
@@ -170,7 +205,7 @@ internal object Casting : CastLoader {
         val castMax = container.settings.playback.first().castMaxBitrate?.let { (it / 1_000_000).toInt() }
         val loadedAt = SystemClock.elapsedRealtime()
         val rules = CastingRules(
-            name, item.mediaId, CastFile(extension, video = launch.video != null, fromService = file.account != null), media.hasStatus, loadedAt,
+            name, item.mediaId, CastFile(extension, video = launch.video != null, source = file.kind), media.hasStatus, loadedAt,
             launch.video?.durationMs, size = file.size,
         )
         // What the device shows of it is learned by its Cast id (L128), over what was kept of it: a launch from before the
@@ -202,50 +237,67 @@ internal object Casting : CastLoader {
     }
 
     /**
-     * A debrid cast's hold on what its play added to the account (L234), by an owner of its own, taken as it is made:
-     * [followed] once its [Follow] has started, which lets it go as following ends; else its load does. Letting go again
-     * changes nothing.
+     * A cast's hold on what its play reads, by an owner of its own, taken as it is made ([take]): what a debrid play added
+     * to the account (L234), or a download's file, its third holder beside the hook's launch and a player (L413, L417), which
+     * Remove, Delete all and Delete once watched wait for. [held]: whether it holds, never a download Delete once watched has
+     * taken. [followed] once its [Follow] has started, which lets it go as following ends; else its load does. Letting go
+     * again changes nothing.
      */
-    private class Lease(private val adds: DebridAdds, listingId: String) {
+    private class Lease(take: (Any) -> Boolean, private val letGo: (Any) -> Unit) {
         private val owner = Any()
+
+        val held: Boolean = take(owner)
 
         @Volatile
         var followed = false
 
-        init {
-            adds.hold(owner, listingId)
-        }
+        fun release() = letGo(owner)
 
-        fun release() = adds.release(owner)
+        companion object {
+            /** What a play from [target] holds: a debrid play's add, a download's file; nothing for a Usenet play's. */
+            fun of(container: AppContainer, target: PlayUris.Target?): Lease? = when (target) {
+                is PlayUris.Target.Service -> Lease({ owner -> container.debridAdds.hold(owner, target.listingId); true }, container.debridAdds::release)
+                is PlayUris.Target.Download -> Lease({ owner -> container.downloads.hold(owner, target.id) }, { owner -> container.downloads.release(owner, target.id) })
+                else -> null
+            }
+        }
     }
 
     /**
-     * [launch]'s file as a cast serves it ([source]), its [name] and [size]; [account]: the debrid service account its
-     * listing came from, null for a Usenet play's.
+     * [launch]'s file as a cast serves it ([source], read from [kind]), its [name] and [size]; [account]: the debrid service
+     * account its listing came from; [download]: the download's row, a download's file alone.
      */
-    private class Found(val name: String, val size: Long, val source: ByteSource, val account: String? = null)
+    private class Found(
+        val name: String, val size: Long, val source: ByteSource, val kind: CastSource, val account: String? = null, val download: Download? = null,
+    )
 
     /**
-     * [launch]'s file, found as the player finds it, by its URI's source (W73): a Usenet play's in the phone's store, read
-     * over the engine's stream; a debrid play's in the listing kept for it, read over HTTPS through the container's own
-     * debrid source, one ranged GET an upstream (L217). Null when the store or the listings have it no longer, and for a
-     * download's file, which no cast serves yet (L377).
+     * [launch]'s file, found as the player finds it, by its URI's source (W73, L417): a Usenet play's in the phone's store,
+     * read over the engine's stream; a debrid play's in the listing kept for it, read over HTTPS through the container's own
+     * debrid source, one ranged GET an upstream (L217); a download's on this phone by the player's own rule, on an IO
+     * dispatcher as this runs on the main thread, read from its file ([FileByteSource]). Null when the store or the listings
+     * have it no longer, or the download's file is gone (told as gone, so its row fails) or shorter than its size.
      */
     private suspend fun find(container: AppContainer, launch: PlayerLaunch): Found? = when (val target = PlayUris.parse(launch.uri)) {
         is PlayUris.Target.Usenet -> {
             val nzb = (container.store.getOrPrepare(target.nzb.nzbId, container.preparer) as? PrepareOutcome.Ready)?.nzb
             nzb?.find(target.fileIndex, target.name, target.size)?.let { file ->
-                Found(file.name, file.size, ServedStream(nzb, file, container.opener, container.appScope, container.streamTraffic, container.gapReports))
+                Found(file.name, file.size, ServedStream(nzb, file, container.opener, container.appScope, container.streamTraffic, container.gapReports), CastSource.Providers)
             }
         }
         is PlayUris.Target.Service -> container.debridListings.get(target.listingId)?.let { entry ->
             entry.prepared.listing.files.firstOrNull { it.index == target.fileIndex }?.let { file ->
                 val source = ServiceByteSource(file.size, SourceReads(container.serviceSources, launch.uri), container.appScope)
-                Found(file.name, file.size, source, entry.account)
+                Found(file.name, file.size, source, CastSource.Service, entry.account)
             }
         }
-        // No download is served to a Cast device yet: the player hides Cast while one plays (L377), and a cast play streams.
-        is PlayUris.Target.Download -> null
+        is PlayUris.Target.Download -> withContext(Dispatchers.IO) {
+            container.downloadFiles.found(target.id)?.takeIf { it.file.isFile && it.file.length() >= it.size }
+        }?.let { file ->
+            val row = container.data.downloads.get(target.id) ?: return@let null
+            val name = file.name ?: launch.release.fileName ?: return@let null
+            Found(name, file.size, FileByteSource(file.file, file.size, file.gaps), CastSource.Download, download = row)
+        }
         null -> null
     }
 
@@ -266,6 +318,9 @@ internal object Casting : CastLoader {
 
     /** The outcome of a load with no device to go to: as one whose session went (L60). */
     private fun gone() = CastLoadOutcome.Failed(CastLoadFailure(CastFailKind.CannotReach, sessionEnded = true))
+
+    /** A download's load whose file is gone, or going (L417): failed before anything is sent, in the player's source's words. */
+    private fun fileGone() = CastLoadOutcome.Failed(CastLoadFailure(CastFailKind.CouldNotPlay, DownloadStorage.FILE_GONE))
 
     /**
      * One play on its device, from its LOAD ([loadedAt]) until it ends there ([CastingRules]): the device's events, a tick
@@ -443,7 +498,11 @@ internal object Casting : CastLoader {
         }
     }
 
-    /** The release's file isn't on this phone any longer: it was just prepared, so seldom. Words not drawn. */
+    /**
+     * The release's file isn't on this phone any longer: the store let its NZB go, or the listing kept for it went, though it
+     * was just prepared, so seldom. A download's file gone says so in its own words ([DownloadStorage.FILE_GONE]). Words not
+     * drawn.
+     */
     private const val CAST_NOT_HERE = "Couldn't open the release on this phone"
 
     /** How often the session's player is read, as Media3 polls the device's position (L61). */

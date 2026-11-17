@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.skjaere.usenet.app.casting.CastDip
+import io.skjaere.usenet.app.casting.CastSource
 import io.skjaere.usenet.app.ui.AppType
 import io.skjaere.usenet.app.ui.colors
 import io.skjaere.usenet.data.PlaybackPrefs
@@ -109,12 +110,15 @@ internal object SlowStream {
  */
 internal object CastSlowStream {
     /**
-     * Which part is slow (W64): the Wi-Fi from this phone to [device], or where the phone reads the film from, the providers
-     * or, for a play from a debrid service ([fromService], L220), the user's debrid service, which it names no service of.
+     * Which part is slow (W64): the Wi-Fi from this phone to [device], or where the phone reads the film from ([source]),
+     * the providers or, for a play from a debrid service (L220), the user's debrid service, which it names no service of. A
+     * download's file is read on this phone, which has no providers to name: its cast is slow on the Wi-Fi, whichever
+     * part [cause] found waiting more (L448).
      */
-    fun cause(cause: CastDip.Cause, device: String, fromService: Boolean = false): String = when (cause) {
-        CastDip.Cause.WiFi -> "The Wi-Fi to $device is the slow part."
-        CastDip.Cause.Providers -> if (fromService) "Your debrid service is the slow part." else "Your providers are the slow part."
+    fun cause(cause: CastDip.Cause, device: String, source: CastSource = CastSource.Providers): String = when {
+        cause == CastDip.Cause.WiFi || source == CastSource.Download -> "The Wi-Fi to $device is the slow part."
+        source == CastSource.Service -> "Your debrid service is the slow part."
+        else -> "Your providers are the slow part."
     }
 
     /**
@@ -144,14 +148,14 @@ internal object CastSlowStream {
     }
 
     /**
-     * The banner's words for [slow] on [device], with the maximums set (null: not set), a play [fromService] or the
-     * providers'; TalkBack's once, the numbers in words.
+     * The banner's words for [slow] on [device], with the maximums set (null: not set), for a play read from [source];
+     * TalkBack's once, the numbers in words.
      */
     fun shown(
-        slow: CastDip.Slow, device: String, max: Int?, castMax: Int?, choices: List<Int> = PlaybackPrefs.MAX_BITRATES_MBPS, fromService: Boolean = false,
+        slow: CastDip.Slow, device: String, max: Int?, castMax: Int?, choices: List<Int> = PlaybackPrefs.MAX_BITRATES_MBPS, source: CastSource = CastSource.Providers,
     ): SlowStream.Shown {
         val dip = slow.dip
-        val cause = cause(slow.cause, device, fromService)
+        val cause = cause(slow.cause, device, source)
         // Above a maximum, that alone: which part is slow says nothing a release the user let through needs.
         val said = above(dip.bitrateBps, max, castMax)?.let(::listOf)
             ?: listOfNotNull(SlowStream.Hint(cause, cause), hint(dip.rateBps, dip.bitrateBps, max, castMax, choices))

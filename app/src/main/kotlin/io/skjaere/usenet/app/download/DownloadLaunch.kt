@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.download
 
+import io.skjaere.usenet.app.link.TvArt
 import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.play.PlayOrigin
 import io.skjaere.usenet.app.play.PlayerLaunch
@@ -63,6 +64,14 @@ internal object DownloadLaunch {
      * many rows at a time, so a mark means the file plays from the row alone. [of]'s own first test.
      */
     fun accepts(row: Download): Boolean = row.release?.nzbId != null
+
+    /**
+     * What a cast of [row]'s launch shows of TMDB's (L451), from the row alone with no lookup, as a title's play says it
+     * ([io.skjaere.usenet.app.link.TvPlayingDeps]): an episode's still, else its show's poster; a film's poster. None where
+     * the row keeps neither.
+     */
+    fun art(row: Download): TvArt? =
+        row.stillPath?.takeIf { row.kind == DownloadKind.Episode }?.let { TvArt(it) } ?: row.posterPath?.let { TvArt(it, poster = true) }
 
     /**
      * [known], the film a download's [launch] streams instead (L354), with the year and length its download's row says,
