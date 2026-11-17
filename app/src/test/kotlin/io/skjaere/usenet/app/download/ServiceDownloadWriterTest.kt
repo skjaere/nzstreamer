@@ -406,6 +406,46 @@ class ServiceDownloadWriterTest {
         assertContentEquals(data, path.readBytes())
     }
 
+    /** Resume and a services save ([ServiceDownloadWriter.retryNow]) end the wait before a reopen, as the Usenet writer's do. */
+    @Test
+    fun `retryNow ends the wait between reopens and starts the backoff again from 2 s`() = runTest(timeout = 60.seconds) {
+        reads.script(*Array(6) { Script(unreached = true) })
+        val writer = writer()
+        val openedAt = CopyOnWriteArrayList<Long>()
+        backgroundScope.launch {
+            delay(40.seconds)
+            writer.retryNow()
+        }
+        assertEquals(Outcome.Done, writer.wrote(onOpen = { openedAt += currentTime }))
+        // 2, 4, 8 and 16 s apart; the wait of 32 s ended at 40 s; then 2 s again.
+        assertEquals(listOf(0L, 2, 6, 14, 30, 40, 42).map { it * 1_000 }, openedAt)
+        assertContentEquals(data, path.readBytes())
+    }
+
+    /**
+     * A Resume, a services save or the network's return that comes while a read opens, not while the writer waits, still
+     * ends the wait after that open fails: an open that reaches nothing takes a connect's time, and the wait after it can be
+     * five minutes.
+     */
+    @Test
+    fun `a retryNow or the network's return while a read opens ends the wait after it`() = runTest(timeout = 60.seconds) {
+        lateinit var writer: ServiceDownloadWriter
+        reads.script(
+            Script(unreached = true),
+            // Resume as the second opens.
+            Script(unreached = true, opened = { writer.retryNow() }),
+            // The network lost as the third opens, and back as the fourth does.
+            Script(unreached = true, opened = { network.value = false }),
+            Script(unreached = true, opened = { network.value = true }),
+        )
+        writer = writer()
+        val openedAt = CopyOnWriteArrayList<Long>()
+        assertEquals(Outcome.Done, writer.wrote(onOpen = { openedAt += currentTime }))
+        // 2 s after the first; none after the second, the backoff starting again; 2 s; none after the fourth.
+        assertEquals(listOf(0L, 2_000, 2_000, 4_000, 4_000), openedAt)
+        assertContentEquals(data, path.readBytes())
+    }
+
     @Test
     fun `a limit ends the write with the account and when its gate opens, and a refused key waits for a new one`() = runTest(timeout = 60.seconds) {
         reads.script(Script(cutAt = 250_000))
