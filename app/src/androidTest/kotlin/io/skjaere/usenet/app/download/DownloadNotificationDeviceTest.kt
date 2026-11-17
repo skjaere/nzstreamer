@@ -5,10 +5,17 @@ import android.app.Activity
 import android.app.ActivityOptions
 import android.app.Notification
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.service.notification.StatusBarNotification
+import android.view.View
+import android.view.ViewGroup
+import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.media3.common.Player
@@ -75,7 +82,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * - The status one a host's end leaves, gone as a host starts; Finished with Play, Failed with Choose release.
  * - A show's episodes finishing: one Finished notification for the show, updated in place, secret on a lock screen, and
  *   its Play reaching the coordinator's hook with the show's next downloaded episode, through MainActivity and the show's
- *   downloads (L437, L445).
+ *   downloads (L437, L445), those downloads already on top too.
  * - MainActivity's download extras: a resume without the app's token only opens the page, and resumes nothing; the app's
  *   own resumes.
  *
@@ -341,14 +348,7 @@ class DownloadNotificationDeviceTest {
         val shown = waitFor("the show's notification") { shown(PLAYED)?.takeIf { title(it) == "$PLAYED_NAME · 2 of 2 downloaded" } }
         val play = shown.notification.actions.single()
         assertEquals("Play", play.title.toString())
-        // As a tap sends it, with the sender's leave to start an activity, as the system's tap has (Android 14's mode).
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            @Suppress("DEPRECATION")
-            val options = ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
-            play.actionIntent.send(context, 0, null, null, null, null, options.toBundle())
-        } else {
-            play.actionIntent.send()
-        }
+        tap(play.actionIntent)
         val main = waitFor("the app opened by its Play") { resumed<MainActivity>() }
         assertEquals(DownloadAsk.PlayShow(latest.id), onMain { main.downloadAsked })
         val player = waitFor("the player ready on the show's next episode", READY_MILLIS) {
@@ -357,6 +357,38 @@ class DownloadNotificationDeviceTest {
         assertEquals(PlayUris.download(first.id), onMain { player.player!!.currentMediaItem?.localConfiguration?.uri?.toString() })
         // The hook's hold, or the player's after it (L413): the file is the one played.
         assertTrue("held: ${container.downloads.held.value}", first.id in container.downloads.held.value)
+        assertEquals("indexer grabs", 0, grabs.get())
+    }
+
+    /**
+     * L437: the show's notification's Play, sent while its tap's page, the show's downloads, is on top, plays the show's
+     * next downloaded episode there all the same: the page takes each ask that comes to it once, not only the one it
+     * opened with.
+     */
+    @Test
+    fun theShowsPlayReachingItsDownloadsAlreadyOnTopPlaysItsNextDownloadedEpisode() = runBlocking<Unit> {
+        quiet()
+        val e1 = underWay(1)
+        val e2 = underWay(2)
+        waitFor("both under way in the runner's state") { container.downloads.state.value.count { it.row.id in setOf(e1.id, e2.id) && it.row.state == DownloadState.Running }.takeIf { it == 2 } }
+        delay(500)
+        val first = written(e1)
+        val latest = written(e2)
+        played += first
+        val shown = waitFor("the show's notification") { shown(PLAYED)?.takeIf { title(it) == "$PLAYED_NAME · 2 of 2 downloaded" } }
+        // Its tap: the show's downloads, shown, nothing played.
+        tap(shown.notification.contentIntent)
+        val main = waitFor("the app opened by its tap") { resumed<MainActivity>() }
+        assertEquals(DownloadAsk.OpenShow(latest.id), onMain { main.downloadAsked })
+        waitFor("the show's downloads shown", PAGE_MILLIS) { Unit.takeIf { DownloadsShow.seasonTitle(1).uppercase() in words(main) } }
+        assertNull("nothing played from the tap", resumed<PlayerActivity>())
+        // Then its Play, to the page on top.
+        tap(shown.notification.actions.single().actionIntent)
+        waitFor("the Play's ask taken") { onMain { main.downloadAsked }.takeIf { it == DownloadAsk.PlayShow(latest.id) } }
+        val player = waitFor("the player ready on the show's next episode", READY_MILLIS) {
+            resumed<PlayerActivity>()?.takeIf { p -> onMain { p.player?.playbackState } == Player.STATE_READY }
+        }
+        assertEquals(PlayUris.download(first.id), onMain { player.player!!.currentMediaItem?.localConfiguration?.uri?.toString() })
         assertEquals("indexer grabs", 0, grabs.get())
     }
 
@@ -453,6 +485,28 @@ class DownloadNotificationDeviceTest {
         return done
     }
 
+    /** [intent] sent as a tap sends it, with the sender's leave to start an activity, as the system's tap has (Android 14's mode). */
+    private fun tap(intent: PendingIntent) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            @Suppress("DEPRECATION")
+            val options = ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+            intent.send(context, 0, null, null, null, null, options.toBundle())
+        } else {
+            intent.send()
+        }
+    }
+
+    /** The words [activity]'s Compose views show now, as their semantics say them. */
+    private fun words(activity: Activity): List<String> = onMain {
+        views(activity.window.decorView).filterIsInstance<ViewRootForTest>().filter { it.view.isShown }
+            .flatMap { subtree(it.semanticsOwner.unmergedRootSemanticsNode) }
+            .flatMap { node -> node.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } }
+    }
+
+    private fun views(view: View): List<View> = listOf(view) + ((view as? ViewGroup)?.let { group -> (0 until group.childCount).flatMap { views(group.getChildAt(it)) } } ?: emptyList())
+
+    private fun subtree(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::subtree)
+
     /** The show [show]'s Finished notification, as the manager holds it. */
     private fun shown(show: Int): StatusBarNotification? = active(DownloadNotifications.DONE_ID, DownloadNotice.showTag(show))
 
@@ -524,6 +578,7 @@ class DownloadNotificationDeviceTest {
         /** The device tests' film with chapters: six minutes at 10 fps, 0.7 MB. */
         const val MEDIA = "chapters.mkv"
         const val READY_MILLIS = 30_000L
+        const val PAGE_MILLIS = 15_000L
         const val SEEDING_MILLIS = 60_000L
     }
 }

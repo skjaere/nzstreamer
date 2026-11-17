@@ -258,14 +258,12 @@ class DownloadEdits(private val deps: DownloadsDeps, scope: CoroutineScope) {
 /**
  * The Downloads page's state (L372, L379-L381): the page's rows ([DownloadsPage]), the space strip, the lines about
  * mobile data and Android's background limit, select mode and Undo ([edits]), and Choose release ([choice]). A download
- * asked for by a notification ([choose]: its list of releases; [play]: played) is taken up once, kept so in [saved].
+ * asked for by a notification is taken up once for each ask ([take]), kept so in [saved].
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class DownloadsViewModel(
     private val deps: DownloadsDeps,
     private val saved: SavedStateHandle,
-    choose: String? = null,
-    play: String? = null,
 ) : ViewModel() {
     val edits = DownloadEdits(deps, viewModelScope)
     val choice = DownloadChoice(viewModelScope, deps.online, deps.lookUp, deps::replacing)
@@ -313,13 +311,18 @@ class DownloadsViewModel(
 
     val undoMillis: Long get() = deps.undoMillis
 
-    init {
-        if (choose != null && saved.get<Boolean>(CHOSE) != true) {
-            saved[CHOSE] = true
+    /**
+     * A notification's [ask] (its own id, [DownloadsRoute.ask]): a download's list of releases opened ([choose]) or a
+     * finished one played ([play]). Each ask is taken once: not again as the page is made again over its saved state, and
+     * a later one to the page already on top all the same.
+     */
+    fun take(ask: String?, choose: String?, play: String?) {
+        if (ask == null || saved.get<String>(ASKED) == ask) return
+        saved[ASKED] = ask
+        if (choose != null) {
             viewModelScope.launch { deps.get(choose)?.takeIf { it.state != DownloadState.Done && it.state != DownloadState.Deleting }?.let(choice::open) }
         }
-        if (play != null && saved.get<Boolean>(PLAYED) != true) {
-            saved[PLAYED] = true
+        if (play != null) {
             viewModelScope.launch { deps.get(play)?.takeIf { it.state == DownloadState.Done }?.let(deps.play) }
         }
     }
@@ -356,8 +359,8 @@ class DownloadsViewModel(
     }
 
     private companion object {
-        const val CHOSE = "chose"
-        const val PLAYED = "played"
+        /** The last ask taken. */
+        const val ASKED = "asked"
 
         /** How often the page draws the running download's bytes again, at most. */
         const val REDRAW_MILLIS = 250L
@@ -365,14 +368,14 @@ class DownloadsViewModel(
 }
 
 /**
- * A show's downloads (L372): its finished episodes with their watch states, Resume's pick, select mode and Undo. Opened by
- * the show's notification's Play ([play], L437), it plays what Resume at its top would, once, kept so in [saved].
+ * A show's downloads (L372): its finished episodes with their watch states, Resume's pick, select mode and Undo. Asked by
+ * the show's notification's Play (L437), it plays what Resume at its top would, once for each ask ([take]), kept so in
+ * [saved].
  */
 class DownloadsShowViewModel(
     private val deps: DownloadsDeps,
     val showTmdbId: Int,
     private val saved: SavedStateHandle,
-    play: Boolean = false,
 ) : ViewModel() {
     val edits = DownloadEdits(deps, viewModelScope)
 
@@ -396,14 +399,18 @@ class DownloadsShowViewModel(
 
     val undoMillis: Long get() = deps.undoMillis
 
-    init {
-        if (play && saved.get<Boolean>(PLAYED) != true) {
-            saved[PLAYED] = true
-            // The rows as the runner has them, which the page asks before it opens (DownloadRunner.listed).
-            viewModelScope.launch {
-                val rows = episodes.filterNotNull().first()
-                DownloadsShow.next(rows, deps.episodeStates(showTmdbId).first())?.let { deps.play(it.row) }
-            }
+    /**
+     * The show's notification's Play ([ask], its own id, [DownloadsShowRoute.ask], with [play]): the next downloaded
+     * episode played. Each ask is taken once: not again as the page is made again over its saved state, and a later one
+     * to the page already on top all the same.
+     */
+    fun take(ask: String?, play: Boolean) {
+        if (!play || ask == null || saved.get<String>(ASKED) == ask) return
+        saved[ASKED] = ask
+        // The rows as the runner has them, which the page asks before it opens (DownloadRunner.listed).
+        viewModelScope.launch {
+            val rows = episodes.filterNotNull().first()
+            DownloadsShow.next(rows, deps.episodeStates(showTmdbId).first())?.let { deps.play(it.row) }
         }
     }
 
@@ -414,7 +421,8 @@ class DownloadsShowViewModel(
     }
 
     private companion object {
-        const val PLAYED = "played"
+        /** The last ask taken. */
+        const val ASKED = "asked"
     }
 }
 

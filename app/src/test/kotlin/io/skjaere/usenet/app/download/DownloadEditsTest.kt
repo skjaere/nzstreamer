@@ -160,87 +160,110 @@ class DownloadEditsTest {
     }
 
     @Test
-    fun `a notification's Play plays a finished download once, a page remade on the same state playing nothing more`() = runTest {
+    fun `a notification's Play plays a finished download once for each ask, a page remade on the same state playing nothing more`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val fakes = PageFakes()
         fakes.rows["done"] = episode("done", 3, DownloadState.Done)
         fakes.rows["run"] = episode("run", 4, DownloadState.Running)
         val saved = SavedStateHandle()
-        fun page(choose: String? = null, play: String? = null, state: SavedStateHandle = saved) = ViewModelProvider(
+        fun page(state: SavedStateHandle = saved) = ViewModelProvider(
             ViewModelStore().also { stores += it },
-            viewModelFactory { initializer { DownloadsViewModel(fakes.deps(backgroundScope), state, choose, play) } },
+            viewModelFactory { initializer { DownloadsViewModel(fakes.deps(backgroundScope), state) } },
         )[DownloadsViewModel::class.java]
-        page(play = "done")
+        val first = page()
+        first.take("ask-1", choose = null, play = "done")
         runCurrent()
         assertEquals(listOf("play done"), fakes.calls)
-        // A rotation remakes the page over its saved state: it has played already.
-        page(play = "done")
+        // A rotation remakes the page over its saved state, its route's ask with it: it has played already.
+        page().take("ask-1", choose = null, play = "done")
         runCurrent()
         assertEquals(listOf("play done"), fakes.calls)
-        // One not finished, or gone, plays nothing.
-        page(play = "run", state = SavedStateHandle())
-        page(play = "gone", state = SavedStateHandle())
+        // Another Play to the page already on top, which keeps its model: played again.
+        first.take("ask-2", choose = null, play = "done")
         runCurrent()
-        assertEquals(listOf("play done"), fakes.calls)
+        assertEquals(listOf("play done", "play done"), fakes.calls)
+        // One not finished, or gone, plays nothing; nor does a page opened with no ask.
+        page(SavedStateHandle()).take("ask-3", choose = null, play = "run")
+        page(SavedStateHandle()).take("ask-4", choose = null, play = "gone")
+        page(SavedStateHandle()).take(null, choose = null, play = "done")
+        runCurrent()
+        assertEquals(listOf("play done", "play done"), fakes.calls)
         stores.forEach { it.clear() }
     }
 
     /**
      * L437: a show's notification's Play opens the show's downloads, which play its next downloaded episode (as Resume at
-     * the page's top would) once, a page remade on the same state playing nothing more; opened by its tap, nothing plays.
+     * the page's top would) once for each ask, a page remade on the same state playing nothing more, and a later Play to
+     * the page already on top playing it again; opened by its tap, nothing plays.
      */
     @Test
-    fun `a show's notification's Play plays its next downloaded episode once, its tap nothing`() = runTest {
+    fun `a show's notification's Play plays its next downloaded episode once for each ask, its tap nothing`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val fakes = PageFakes()
         fakes.items.value = (1..3).map { DownloadRunner.Item(episode("e$it", it, DownloadState.Done), 0, null) }
         // S02E01 watched: S02E02 is next.
         fakes.states = mapOf((2 to 1) to WatchState(WatchKey.episode(HL, 2, 1), WatchKind.Episode, showTmdbId = HL, season = 2, episode = 1, title = "Harbor Lights S02E01", watched = true, updatedAt = 1))
         val saved = SavedStateHandle()
-        fun page(play: Boolean, state: SavedStateHandle = saved) = ViewModelProvider(
+        fun page(state: SavedStateHandle = saved) = ViewModelProvider(
             ViewModelStore().also { stores += it },
-            viewModelFactory { initializer { DownloadsShowViewModel(fakes.deps(backgroundScope), HL, state, play) } },
+            viewModelFactory { initializer { DownloadsShowViewModel(fakes.deps(backgroundScope), HL, state) } },
         )[DownloadsShowViewModel::class.java]
-        page(play = true)
+        // Opened by its tap first, or from Home's row: nothing plays.
+        val onTop = page()
+        onTop.take(null, play = false)
+        runCurrent()
+        assertEquals(emptyList<String>(), fakes.calls)
+        // The Play to the page on top, which keeps its model: the next one played.
+        onTop.take("ask-1", play = true)
         runCurrent()
         assertEquals(listOf("play e2"), fakes.calls)
-        // A rotation remakes the page over its saved state: it has played already.
-        page(play = true)
+        // A rotation remakes the page over its saved state, its route's ask with it: it has played already.
+        page().take("ask-1", play = true)
         runCurrent()
         assertEquals(listOf("play e2"), fakes.calls)
-        // Opened by its tap, or from Home's row: nothing plays.
-        page(play = false, state = SavedStateHandle())
+        // Another Play: played again.
+        onTop.take("ask-2", play = true)
         runCurrent()
-        assertEquals(listOf("play e2"), fakes.calls)
+        assertEquals(listOf("play e2", "play e2"), fakes.calls)
         // Every downloaded episode watched: nothing to play.
         fakes.states = (1..3).associate { (2 to it) to WatchState(WatchKey.episode(HL, 2, it), WatchKind.Episode, showTmdbId = HL, season = 2, episode = it, title = "Harbor Lights S02E0$it", watched = true, updatedAt = 1) }
-        page(play = true, state = SavedStateHandle())
+        page(SavedStateHandle()).take("ask-3", play = true)
         runCurrent()
-        assertEquals(listOf("play e2"), fakes.calls)
+        assertEquals(listOf("play e2", "play e2"), fakes.calls)
         stores.forEach { it.clear() }
     }
 
     @Test
-    fun `a notification's Choose release opens a download's list once, and none for a finished one`() = runTest {
+    fun `a notification's Choose release opens a download's list once for each ask, and none for a finished one`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val fakes = PageFakes()
         fakes.rows["failed"] = episode("failed", 4, DownloadState.Failed)
         fakes.rows["done"] = episode("done", 3, DownloadState.Done)
         val saved = SavedStateHandle()
-        fun page(choose: String?, state: SavedStateHandle = saved) = ViewModelProvider(
+        fun page(state: SavedStateHandle = saved) = ViewModelProvider(
             ViewModelStore().also { stores += it },
-            viewModelFactory { initializer { DownloadsViewModel(fakes.deps(backgroundScope), state, choose = choose) } },
+            viewModelFactory { initializer { DownloadsViewModel(fakes.deps(backgroundScope), state) } },
         )[DownloadsViewModel::class.java]
-        val first = page("failed")
+        val first = page()
+        first.take("ask-1", choose = "failed", play = null)
         runCurrent()
         val choosing = assertIs<DownloadChoice.State.Choosing>(first.choice.state.value)
         assertEquals("failed", choosing.row.id)
         // Remade on the same state: not opened again.
-        val again = page("failed")
+        val again = page()
+        again.take("ask-1", choose = "failed", play = null)
         runCurrent()
         assertEquals(DownloadChoice.State.None, again.choice.state.value)
+        // Another Choose release to the page on top, its list closed meanwhile: opened again.
+        first.choice.close()
+        runCurrent()
+        assertEquals(DownloadChoice.State.None, first.choice.state.value)
+        first.take("ask-2", choose = "failed", play = null)
+        runCurrent()
+        assertEquals("failed", assertIs<DownloadChoice.State.Choosing>(first.choice.state.value).row.id)
         // A finished one has no releases to choose.
-        val done = page("done", SavedStateHandle())
+        val done = page(SavedStateHandle())
+        done.take("ask-3", choose = "done", play = null)
         runCurrent()
         assertEquals(DownloadChoice.State.None, done.choice.state.value)
         stores.forEach { it.clear() }

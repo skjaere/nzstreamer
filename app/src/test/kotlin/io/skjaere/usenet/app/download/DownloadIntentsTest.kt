@@ -155,24 +155,33 @@ class DownloadIntentsTest {
     @Test
     fun `where downloads show, the ways in open the Downloads page, at a download's releases or playing it, a show's downloads and its settings`() = runBlocking<Unit> {
         val opened = mutableListOf<Any>()
-        val pages = downloadPages(shown = true, register = {}, open = { opened += it })
+        var asks = 0
+        val pages = downloadPages(shown = true, register = {}, open = { opened += it }, newAsk = { "ask-${++asks}" })
         pages.take(DownloadAsk.Open) {}
         pages.take(DownloadAsk.Choose(ID)) {}
         pages.take(DownloadAsk.Play(ID)) {}
         // Home's row for a show's finished episodes (L384).
         pages.show!!.invoke(SHOW)
         pages.settings!!.invoke()
-        // A show's notification: its tap, and its Play, which plays the show's next there (L437).
+        // A show's notification: its tap, and its Play, which plays the show's next there (L437); twice, each its own ask,
+        // so a page already on top takes the second too.
         val rowOf: suspend (String) -> Download? = { row(it, SHOW) }
         pages.take(DownloadAsk.OpenShow(ID), rowOf) {}
         pages.take(DownloadAsk.PlayShow(ID), rowOf) {}
+        pages.take(DownloadAsk.PlayShow(ID), rowOf) {}
         assertEquals(
             listOf(
-                DownloadsRoute(), DownloadsRoute(choose = ID), DownloadsRoute(play = ID), DownloadsShowRoute(SHOW), DownloadSettingsRoute, DownloadsShowRoute(SHOW),
-                DownloadsShowRoute(SHOW, play = true),
+                DownloadsRoute(), DownloadsRoute(choose = ID, ask = "ask-1"), DownloadsRoute(play = ID, ask = "ask-2"), DownloadsShowRoute(SHOW), DownloadSettingsRoute,
+                DownloadsShowRoute(SHOW), DownloadsShowRoute(SHOW, play = true, ask = "ask-3"), DownloadsShowRoute(SHOW, play = true, ask = "ask-4"),
             ),
             opened,
         )
+        // The app's asks are random ids, each its own.
+        val made = mutableListOf<Any>()
+        val app = downloadPages(shown = true, register = {}, open = { made += it })
+        repeat(2) { app.take(DownloadAsk.Play(ID)) {} }
+        val ids = made.map { (it as DownloadsRoute).ask }
+        assertEquals(2, ids.filterNotNull().toSet().size)
         val hidden = downloadPages(shown = false, register = {}, open = { opened += it })
         assertNull(hidden.settings)
         assertNull(hidden.show)

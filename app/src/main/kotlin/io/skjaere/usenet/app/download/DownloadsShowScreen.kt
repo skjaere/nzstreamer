@@ -67,7 +67,7 @@ import io.skjaere.usenet.data.WatchState
  * Phones and tablets alone (W108, L369). Once every episode is gone, and no Undo waits or was taken, it closes.
  */
 @Composable
-fun DownloadsShowScreen(showTmdbId: Int, onBack: () -> Unit, onOpenShow: (showTmdbId: Int) -> Unit, play: Boolean = false) {
+fun DownloadsShowScreen(showTmdbId: Int, onBack: () -> Unit, onOpenShow: (showTmdbId: Int) -> Unit, play: Boolean = false, ask: String? = null) {
     val context = LocalContext.current
     val container = context.container
     if (!DownloadPlaces.shown(LocalFormFactor.current, container.television)) {
@@ -75,13 +75,25 @@ fun DownloadsShowScreen(showTmdbId: Int, onBack: () -> Unit, onOpenShow: (showTm
         return
     }
     val deps = remember(container) { DownloadsDeps.of(container, context.applicationContext) }
-    DownloadsShowScreen(deps, showTmdbId, onBack, onOpenShow, play)
+    DownloadsShowScreen(deps, showTmdbId, onBack, onOpenShow, play, ask)
 }
 
-/** The show's downloads over [deps]: the app's, or a test's seams; [play]: its next downloaded episode played, once (L437). */
+/**
+ * The show's downloads over [deps]: the app's, or a test's seams; [play]: its next downloaded episode played, once for its
+ * [ask] (L437).
+ */
 @Composable
-internal fun DownloadsShowScreen(deps: DownloadsDeps, showTmdbId: Int, onBack: () -> Unit, onOpenShow: (showTmdbId: Int) -> Unit, play: Boolean = false) {
-    val vm: DownloadsShowViewModel = viewModel(key = "downloads-show-$showTmdbId") { DownloadsShowViewModel(deps, showTmdbId, createSavedStateHandle(), play) }
+internal fun DownloadsShowScreen(
+    deps: DownloadsDeps,
+    showTmdbId: Int,
+    onBack: () -> Unit,
+    onOpenShow: (showTmdbId: Int) -> Unit,
+    play: Boolean = false,
+    ask: String? = null,
+) {
+    val vm: DownloadsShowViewModel = viewModel(key = "downloads-show-$showTmdbId") { DownloadsShowViewModel(deps, showTmdbId, createSavedStateHandle()) }
+    // Each ask once, the one the page opened with and any that comes to it on top (DownloadsShowRoute.ask).
+    LaunchedEffect(ask) { vm.take(ask, play) }
     val episodes by vm.episodes.collectAsStateWithLifecycle()
     val states by vm.states.collectAsStateWithLifecycle()
     val deleting by vm.deleting.collectAsStateWithLifecycle()

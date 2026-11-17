@@ -492,6 +492,7 @@ fun NavGraphBuilder.downloadScreens(nav: NavController, shown: Boolean): Downloa
                     onOpenMovie = { id -> screen.ifResumed { nav.navigate(MovieRoute(id)) } },
                     choose = route.choose,
                     play = route.play,
+                    ask = route.ask,
                 )
             }
             composable<io.skjaere.usenet.app.download.DownloadsShowRoute> { screen ->
@@ -501,6 +502,7 @@ fun NavGraphBuilder.downloadScreens(nav: NavController, shown: Boolean): Downloa
                     onBack = back(screen),
                     onOpenShow = { id -> screen.ifResumed { nav.navigate(ShowRoute(id)) } },
                     play = route.play,
+                    ask = route.ask,
                 )
             }
             composable<io.skjaere.usenet.app.download.DownloadSettingsRoute> { screen ->

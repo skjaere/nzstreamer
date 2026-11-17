@@ -6,6 +6,7 @@ import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.UUID
 
 /** What MainActivity's download extras ask of the app ([io.skjaere.usenet.app.MainActivity.openDownloads]): the page, and what to do there. */
 sealed interface DownloadAsk {
@@ -112,18 +113,19 @@ data class DownloadPages(
  * The downloads' part of the phone's graph (L369): while [shown], [register] adds their screens, and the ways into them
  * open their routes by [open]: the Downloads page, at a download's releases or playing a finished one there, a show's
  * downloads, or playing its next there, and Settings › Downloads. Where downloads don't show, neither runs. AppNav's
- * `downloadScreens` is this over its graph and navigation.
+ * `downloadScreens` is this over its graph and navigation. Each ask that acts on a page carries an id of its own
+ * ([newAsk]), so the page takes it though it is already on top.
  */
-fun downloadPages(shown: Boolean, register: () -> Unit, open: (route: Any) -> Unit): DownloadPages {
+fun downloadPages(shown: Boolean, register: () -> Unit, open: (route: Any) -> Unit, newAsk: () -> String = { UUID.randomUUID().toString() }): DownloadPages {
     if (!shown) return DownloadPages()
     register()
     return DownloadPages(
         downloads = { open(DownloadsRoute()) },
-        chooseRelease = { id -> open(DownloadsRoute(choose = id)) },
-        play = { id -> open(DownloadsRoute(play = id)) },
+        chooseRelease = { id -> open(DownloadsRoute(choose = id, ask = newAsk())) },
+        play = { id -> open(DownloadsRoute(play = id, ask = newAsk())) },
         settings = { open(DownloadSettingsRoute) },
         show = { id -> open(DownloadsShowRoute(id)) },
-        playShow = { id -> open(DownloadsShowRoute(id, play = true)) },
+        playShow = { id -> open(DownloadsShowRoute(id, play = true, ask = newAsk())) },
     )
 }
 

@@ -114,7 +114,7 @@ import io.skjaere.usenet.metadata.TmdbImages
  * Pause or Resume, then the queue with Move up and Move down), Failed, and Downloaded, one row per show ([onShow] opens
  * its downloads) and one per film (a tap plays it); select mode with Delete and the Undo bar. Choose release and Choose
  * another release show the release list in download mode in the page's place. [onOpenMovie] opens a film's page. A
- * notification's ask comes as [choose] (a download's releases) or [play] (a finished one played).
+ * notification's ask comes as [choose] (a download's releases) or [play] (a finished one played), with its own id ([ask]).
  */
 @Composable
 fun DownloadsScreen(
@@ -124,6 +124,7 @@ fun DownloadsScreen(
     onOpenMovie: (movieTmdbId: Int) -> Unit,
     choose: String? = null,
     play: String? = null,
+    ask: String? = null,
 ) {
     val context = LocalContext.current
     val container = context.container
@@ -132,7 +133,7 @@ fun DownloadsScreen(
         return
     }
     val deps = remember(container) { DownloadsDeps.of(container, context.applicationContext) }
-    DownloadsScreen(deps, onBack, onSettings, onShow, onOpenMovie, choose, play)
+    DownloadsScreen(deps, onBack, onSettings, onShow, onOpenMovie, choose, play, ask)
 }
 
 /** The page over [deps]: the app's, or a test's seams. */
@@ -145,8 +146,11 @@ internal fun DownloadsScreen(
     onOpenMovie: (movieTmdbId: Int) -> Unit,
     choose: String? = null,
     play: String? = null,
+    ask: String? = null,
 ) {
-    val vm: DownloadsViewModel = viewModel { DownloadsViewModel(deps, createSavedStateHandle(), choose, play) }
+    val vm: DownloadsViewModel = viewModel { DownloadsViewModel(deps, createSavedStateHandle()) }
+    // Each ask once, the one the page opened with and any that comes to it on top (DownloadsRoute.ask).
+    LaunchedEffect(ask) { vm.take(ask, choose, play) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.shown() }
     val choosing by vm.choice.state.collectAsStateWithLifecycle()
     when (val c = choosing) {
