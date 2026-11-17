@@ -323,6 +323,23 @@ class AppContainer(private val context: Context) {
     val validatedNetwork: StateFlow<Boolean> get() = defaultNetwork.validated
 
     /**
+     * A device test's say over [offline] (L438, backlog 358): true or false is read in the network's place, null leaves
+     * it to the network. The Show page builds its view model from the container, so a test can't hand it a flow of its
+     * own; set here, it reaches every page at once, and a test never switches the device's Wi-Fi to make the app offline.
+     */
+    @VisibleForTesting
+    internal val offlineOverride = MutableStateFlow<Boolean?>(null)
+
+    /**
+     * Whether Home and the Show page read as offline (L410, L438): [validatedNetwork] through [OfflineSignal]'s three
+     * seconds, one signal for the process, unless a test says otherwise ([offlineOverride]).
+     */
+    val offline: StateFlow<Boolean> by lazy {
+        combine(OfflineSignal(validatedNetwork, appScope).offline, offlineOverride) { signal, test -> test ?: signal }
+            .stateIn(appScope, SharingStarted.Eagerly, false)
+    }
+
+    /**
      * This device's downloads, one at a time (L335, L337), which a host runs: its rows' state and the finished ones by
      * watch key start with it, from the reconcile at the app's start. Nothing runs on a TV (L369).
      */

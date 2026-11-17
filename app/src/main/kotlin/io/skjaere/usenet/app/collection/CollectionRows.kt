@@ -33,7 +33,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -50,6 +52,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalAccessibilityManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -64,6 +69,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.skjaere.usenet.app.collection.model.Chip
@@ -90,6 +96,7 @@ import io.skjaere.usenet.app.ui.SecondaryButton
 import io.skjaere.usenet.app.ui.colors
 import io.skjaere.usenet.app.ui.focusOutline
 import io.skjaere.usenet.app.ui.tvFocusMemory
+import kotlinx.coroutines.delay
 
 /**
  * One title's row, a segment of the Dense group card ([first] and [last] round its corners): poster,
@@ -477,5 +484,51 @@ internal fun UndoBar(message: String, focus: FocusRequester?, onUndo: (() -> Uni
         if (onUndo != null) TextAction("Undo", undoModifier.then(focus?.let { Modifier.focusRequester(it) } ?: Modifier), onClick = onUndo)
     }
 }
+
+/**
+ * What a greyed row's tap says offline (L410, L439) while its bar shows: its [message], and how many times it was [shown],
+ * so a tap again shows it for its whole time again.
+ */
+@Stable
+internal class OfflineBarState {
+    var message by mutableStateOf<String?>(null)
+        private set
+    var shown by mutableIntStateOf(0)
+        private set
+
+    fun show(message: String) {
+        this.message = message
+        shown++
+    }
+
+    fun gone() {
+        message = null
+    }
+}
+
+/**
+ * The bar a greyed row's tap shows offline, in the Undo bar's place ([UndoBar], with no Undo): it goes by itself after
+ * [OFFLINE_BAR_MS], longer where TalkBack's settings ask, as a polite live region says it. [onRoom] is told how much of
+ * the page's foot it covers, none once it has gone.
+ */
+@Composable
+internal fun OfflineBar(state: OfflineBarState, modifier: Modifier = Modifier, onRoom: (Dp) -> Unit = {}) {
+    val a11y = LocalAccessibilityManager.current
+    val keep = remember(a11y) { a11y?.calculateRecommendedTimeoutMillis(OFFLINE_BAR_MS, containsIcons = false, containsText = true, containsControls = false) ?: OFFLINE_BAR_MS }
+    val density = LocalDensity.current
+    val message = state.message
+    if (message == null) {
+        LaunchedEffect(Unit) { onRoom(0.dp) }
+        return
+    }
+    UndoBar(message, null, onUndo = null, modifier = modifier.onSizeChanged { onRoom(with(density) { it.height.toDp() }) })
+    LaunchedEffect(state.shown) {
+        delay(keep)
+        state.gone()
+    }
+}
+
+/** How long the offline bar stays: a line to read, with nothing to press. */
+internal const val OFFLINE_BAR_MS = 4_000L
 
 internal const val HIGHLIGHT_FADE_MS = 2_000

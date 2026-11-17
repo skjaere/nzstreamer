@@ -379,6 +379,42 @@ class TvNoDownloadsTest {
     }
 
     /**
+     * L410, L441: offline, as the container's signal says it (its test override, L438; the TV's network is never touched),
+     * with a finished download the play hook would take and an episode not downloaded in progress, Home is as online on TV
+     * Home and in a phone's layout on a TV: no "Offline · showing downloads", and nothing in Up next greyed or read as
+     * dimmed.
+     */
+    @Test
+    fun homeOfflineHasNoOfflineLineAndGreysNothingInEitherLayout() = runBlocking<Unit> {
+        assumeTrue("setup isn't done, so Home shows the first run", container.setup.first { it != null }?.complete == true)
+        seed(played(row(DownloadState.Done, episode = 3)))
+        val ref = EpisodeRef(SHOW, 1, 1, WatchTitle.episode("Harbor Lights", 1, 1))
+        val started = WatchState(WatchKey.episode(SHOW, 1, 1), WatchKind.Episode, showTmdbId = SHOW, season = 1, episode = 1, title = ref.title, updatedAt = 0)
+        try {
+            container.library.recordProgress(started, 600_000, 3_000_000)
+            container.offlineOverride.value = true
+            waitFor("the container offline", 5_000) { container.offline.value.takeIf { it } }
+            compose.setContent {
+                AppTheme(formFactor = layout) {
+                    HomeScreen(onSearch = {}, onRecent = {}, onSettings = {}, onSetup = { _, _ -> }, onShow = {}, onCollection = {}, onImport = {}, onDownloads = {}, onDownloadsShow = {})
+                }
+            }
+            listOf(FormFactor.Tv, FormFactor.Phone).forEach { form ->
+                layout = form
+                compose.waitUntil(15_000) { exists(hasText("S01E01", substring = true)) }
+                assertFalse("an offline line on the $form layout's Home", exists(hasText("Offline", substring = true, ignoreCase = true)))
+                val dimmed = compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.Disabled)).fetchSemanticsNodes()
+                    .filter { node -> node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { "Harbor Lights" in it.text } || node.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty().any { "Harbor Lights" in it } }
+                assertEquals("Up next greyed on the $form layout's Home", 0, dimmed.size)
+                noDownloads("on the $form layout's Home offline")
+            }
+        } finally {
+            container.offlineOverride.value = null
+            container.library.markEpisodes(listOf(ref), watched = false)
+        }
+    }
+
+    /**
      * L441: Delete once watched does nothing on a TV. Switched on (as a settings file brought from a phone could have it)
      * with the finished episode marked watched, the run deletes nothing even a day and more after the mark, nothing says
      * it goes, and Settings in either layout has no After watching to switch it from.

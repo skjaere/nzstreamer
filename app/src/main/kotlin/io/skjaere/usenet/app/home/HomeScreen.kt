@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -39,16 +40,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.skjaere.usenet.app.collection.OfflineBar
+import io.skjaere.usenet.app.collection.OfflineBarState
 import io.skjaere.usenet.app.collection.rememberDpad
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.download.DownloadMark
@@ -68,8 +74,8 @@ import io.skjaere.usenet.app.search.openedTitle
 import io.skjaere.usenet.app.tv.TvMenu
 import io.skjaere.usenet.app.ui.AppType
 import io.skjaere.usenet.app.ui.DownloadedIcon
-import io.skjaere.usenet.app.ui.GroupCard
 import io.skjaere.usenet.app.ui.FormFactor
+import io.skjaere.usenet.app.ui.GroupCard
 import io.skjaere.usenet.app.ui.InsetDivider
 import io.skjaere.usenet.app.ui.LocalFormFactor
 import io.skjaere.usenet.app.ui.SecondaryButton
@@ -114,6 +120,7 @@ fun HomeScreen(
     val playOn by container.playOn.target.collectAsStateWithLifecycle()
     val downloads by vm.downloads.collectAsStateWithLifecycle()
     val downloadedKeys by vm.downloadedKeys.collectAsStateWithLifecycle()
+    val offline by container.offline.collectAsStateWithLifecycle()
     // Phones and tablets alone, in their layout (L369), and only where the page is there to see them all.
     val downloadsHere = downloadsShown() && onDownloads != null
     val edits = UpNextEdits(offer, focusAfter, vm::remove, vm::markWatched, vm::undo, vm::undoShown, vm::dismissUndo, vm::focusTaken)
@@ -135,6 +142,7 @@ fun HomeScreen(
             playOn = playOn.takeUnless { container.television }, onPlayOn = container.playOn::openSheet,
             downloads = downloads.takeIf { downloadsHere }, onDownloads = { onDownloads?.invoke() },
             downloadedKeys = if (downloadsHere) downloadedKeys else emptySet(),
+            offline = offline,
             onDownload = { row ->
                 when (val opens = row.opens) {
                     HomeDownloadOpen.Page -> onDownloads?.invoke()
@@ -153,7 +161,9 @@ fun HomeScreen(
  * (W11), the Cast button before Settings opening the Play on sheet ([onPlayOn]); null for none (a TV). [downloads]: Home's
  * Downloads section (L384), between Up next and the collection, its See all opening the page ([onDownloads]) and each
  * row what it names ([onDownload]); null for none. [downloadedKeys]: the watch keys downloaded, whose Up next rows have
- * the Downloaded mark after their title (L409); none where downloads don't show.
+ * the Downloaded mark after their title (L409); none where downloads don't show. [offline] (L410): with a finished
+ * download, "Offline · showing downloads" under the recent searches, the Downloads section first, and Up next's rows that
+ * can't play here greyed, a tap on one saying why in a bar at Home's foot ([OfflineHome]); otherwise Home is as online.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -176,6 +186,7 @@ fun HomeContent(
     onDownloads: () -> Unit = {},
     onDownload: (HomeDownloadRow) -> Unit = {},
     downloadedKeys: Set<String> = emptySet(),
+    offline: Boolean = false,
 ) {
     val searchFocus = remember { FocusRequester() }
     // A touch screen has nothing focused: the request only takes with a D-pad.
@@ -187,6 +198,27 @@ fun HomeContent(
     val tracked = undo.tracking(edits, keys)
     // The rows' playing parts, by key: where a remote's focus goes back to after an edit.
     val rowFocus = remember { mutableMapOf<String, FocusRequester>() }
+    // Home offline (L410): only with a finished download, on a phone or tablet (a TV's Home is given no keys).
+    val offlineHome = state?.let { OfflineHome.of(it.upNext, downloads, downloadedKeys, offline, playOn) }
+    val offlineBar = remember { OfflineBarState() }
+    // Home's Downloads section (L384): after Up next, or first offline.
+    fun LazyListScope.downloadsSection(section: HomeDownloads, top: Dp) {
+        item(key = "downloads-header") {
+            SectionHeader(section.header, Modifier.padding(top = top)) {
+                TextButton(onClick = onDownloads, modifier = Modifier.focusOutline(RoundedCornerShape(20.dp), fill = false)) {
+                    Text("See all", style = AppType.bodyStrong.copy(fontSize = 14.sp), color = colors.accent)
+                }
+            }
+        }
+        item(key = "downloads") {
+            GroupCard {
+                section.rows.forEachIndexed { i, row ->
+                    if (i > 0) InsetDivider()
+                    DownloadRow(row) { onDownload(row) }
+                }
+            }
+        }
+    }
     Box(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize().tvFocusMemory()) {
             item(key = "search") {
@@ -201,12 +233,19 @@ fun HomeContent(
                             recent.forEach { r -> RecentChip(r) { onRecent(r) } }
                         }
                     }
+                    // Discover's offline look: small and muted, 16 dp in.
+                    if (offlineHome != null) {
+                        Text(OfflineHome.LINE, style = AppType.small, color = colors.muted, modifier = Modifier.padding(horizontal = 16.dp).padding(top = 12.dp))
+                    }
                 }
             }
             if (state == null) return@LazyColumn
             val collection = state.collection
+            // Offline, the downloads come first (L410): what can play.
+            val first = downloads?.takeIf { offlineHome != null }
+            first?.let { downloadsSection(it, top = 0.dp) }
             if (state.upNext.isNotEmpty()) {
-                item(key = "up-next-header") { SectionHeader("Up next", Modifier.padding(top = 0.dp)) }
+                item(key = "up-next-header") { SectionHeader("Up next", Modifier.padding(top = if (first != null) 20.dp else 0.dp)) }
                 item(key = "up-next") {
                     GroupCard {
                         state.upNext.forEachIndexed { i, row ->
@@ -214,7 +253,11 @@ fun HomeContent(
                             key(row.key) {
                                 if (i > 0) InsetDivider()
                                 val focus = rowFocus.getOrPut(row.key) { FocusRequester() }
-                                UpNextRowView(row, artwork, primary = i == 0, tracked, Modifier.focusRequester(focus), playOn, downloaded = row.watchKey in downloadedKeys) { onPlay(row) }
+                                val greyed = offlineHome != null && row.key in offlineHome.greyed
+                                UpNextRowView(
+                                    row, artwork, primary = i == 0, tracked, Modifier.focusRequester(focus), playOn, downloaded = row.watchKey in downloadedKeys,
+                                    greyed = greyed,
+                                ) { if (greyed) offlineBar.show(OfflineHome.bar(row)) else onPlay(row) }
                             }
                         }
                     }
@@ -227,23 +270,7 @@ fun HomeContent(
                     )
                 }
             }
-            downloads?.let { section ->
-                item(key = "downloads-header") {
-                    SectionHeader(section.header, Modifier.padding(top = 20.dp)) {
-                        TextButton(onClick = onDownloads, modifier = Modifier.focusOutline(RoundedCornerShape(20.dp), fill = false)) {
-                            Text("See all", style = AppType.bodyStrong.copy(fontSize = 14.sp), color = colors.accent)
-                        }
-                    }
-                }
-                item(key = "downloads") {
-                    GroupCard {
-                        section.rows.forEachIndexed { i, row ->
-                            if (i > 0) InsetDivider()
-                            DownloadRow(row) { onDownload(row) }
-                        }
-                    }
-                }
-            }
+            if (first == null) downloads?.let { downloadsSection(it, top = 20.dp) }
             if (!state.hasTmdbKey) {
                 item(key = "tmdb-hint") {
                     Row(
@@ -280,12 +307,12 @@ fun HomeContent(
                 )
             }
         }
-        // Over the list, above the tab bar. As it goes, a remote's focus goes back to Up next's rows, else to the field.
-        UpNextUndo(
-            edits, undo, keys, dpad,
-            handTo = { key -> if (key == null || rowFocus[key]?.tryFocus() != true) searchFocus.tryFocus() },
-            modifier = Modifier.align(Alignment.BottomCenter),
-        )
+        // Over the list, above the tab bar: a greyed row's bar offline, then the Undo bar. As Undo's goes, a remote's focus
+        // goes back to Up next's rows, else to the field.
+        Column(Modifier.align(Alignment.BottomCenter)) {
+            OfflineBar(offlineBar)
+            UpNextUndo(edits, undo, keys, dpad, handTo = { key -> if (key == null || rowFocus[key]?.tryFocus() != true) searchFocus.tryFocus() })
+        }
     }
 }
 
@@ -346,7 +373,8 @@ private fun RecentChip(recent: RecentSearch, onClick: () -> Unit) {
  * the same menu, at the ⋮; TalkBack has its items as the row's actions. [modifier] goes on the row's playing part. With a
  * TV chosen ([playOn]) Play says so, and greys while that TV's NZStreamer isn't open (PtPhoneWhere B). [downloaded]: its
  * title's file is downloaded (L409), marked by the 16 dp tray with its tick after the title, which TalkBack hears as
- * "Downloaded".
+ * "Downloaded". [greyed] offline (L410): its poster and words dimmed and read as dimmed, its Play greyed; its tap
+ * ([onPlay], Home's bar then) and its ⋮ as they are.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -358,21 +386,28 @@ private fun UpNextRowView(
     modifier: Modifier,
     playOn: PlayTarget?,
     downloaded: Boolean,
+    greyed: Boolean,
     onPlay: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
     val items = edits.items(row)
+    // Dimmed as a greyed row is drawn: Material's disabled text, the line a little less so.
+    val dim = if (greyed) GREYED else 1f
     Row(Modifier.fillMaxWidth().padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Row(
             modifier.weight(1f).focusOutline().combinedClickable(onClick = onPlay, onLongClick = { menu = true })
-                .semantics { customActions = upNextActions(items) }.padding(12.dp),
+                .semantics {
+                    customActions = upNextActions(items)
+                    if (greyed) disabled()
+                }
+                .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Poster(row.posterPath, artwork, 44, 66)
+            Poster(row.posterPath, artwork, 44, 66, Modifier.alpha(dim))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(row.title, style = AppType.bodyStrong, color = colors.text, modifier = Modifier.weight(1f, fill = false))
+                    Text(row.title, style = AppType.bodyStrong, color = colors.text.copy(alpha = dim), modifier = Modifier.weight(1f, fill = false))
                     if (downloaded) {
                         Icon(
                             DownloadedIcon, contentDescription = "Downloaded", tint = colors.textSecondary,
@@ -380,16 +415,16 @@ private fun UpNextRowView(
                         )
                     }
                 }
-                Text(row.line, style = AppType.secondary, color = colors.muted)
+                Text(row.line, style = AppType.secondary, color = colors.muted.copy(alpha = if (greyed) GREYED_LINE else 1f))
                 row.progress?.let { p ->
                     LinearProgressIndicator(
-                        progress = { p }, modifier = Modifier.padding(top = 4.dp).fillMaxWidth().height(4.dp),
+                        progress = { p }, modifier = Modifier.padding(top = 4.dp).fillMaxWidth().height(4.dp).alpha(dim),
                         color = colors.accent, trackColor = colors.chip, drawStopIndicator = {}, gapSize = 0.dp,
                     )
                 }
                 if (row.new) Text(
                     "NEW", style = AppType.tag, color = colors.accent,
-                    modifier = Modifier.padding(top = 2.dp).background(colors.accentTint, RoundedCornerShape(6.dp)).padding(horizontal = 7.dp, vertical = 2.dp),
+                    modifier = Modifier.padding(top = 2.dp).alpha(dim).background(colors.accentTint, RoundedCornerShape(6.dp)).padding(horizontal = 7.dp, vertical = 2.dp),
                 )
             }
         }
@@ -397,7 +432,7 @@ private fun UpNextRowView(
         PlayCircle(
             primary, there?.deviceName?.let { "${row.playLabel} ${onTvLine(it)}" } ?: row.playLabel, onPlay,
             Modifier.focusOutline(CircleShape, color = if (primary) colors.text else colors.accent, fill = false),
-            enabled = there?.greyed != true,
+            enabled = there?.greyed != true && !greyed,
         )
         Box {
             IconButton(onClick = { menu = true }, modifier = Modifier.focusOutline(CircleShape, fill = false)) {
@@ -407,6 +442,10 @@ private fun UpNextRowView(
         }
     }
 }
+
+/** A greyed row's poster and title (Material's disabled text), and its second line, as drawn offline. */
+private const val GREYED = 0.38f
+private const val GREYED_LINE = 0.55f
 
 /**
  * The device this row's Play goes to, with [target] chosen in Play on; null where it plays on this phone. A TV gets only
