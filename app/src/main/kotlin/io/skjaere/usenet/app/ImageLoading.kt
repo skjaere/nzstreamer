@@ -6,6 +6,7 @@ import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import coil3.memory.MemoryCache
+import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
 import coil3.request.allowHardware
@@ -31,11 +32,21 @@ fun appImageLoader(context: PlatformContext, memory: DeviceMemory?): ImageLoader
 }
 
 /**
- * The picture at [url] as JPEG bytes, through the app's image loader and its caches: what a Cast session's notification
- * shows, and what a download keeps of its poster and still (L411). Null where none came.
+ * The picture at [url] as JPEG bytes, through the app's image loader: what a Cast session's notification shows, from its
+ * caches where they have it, and what a download keeps of its poster and still (L411), never [cached], so the copy is what
+ * the image host answers now: Coil's caches keep a picture with no age limit, and a download's copy counts its 180 days
+ * from its fetch. The answer is written to the caches all the same. Null where none came.
  */
-suspend fun jpegOf(context: Context, url: String): ByteArray? {
-    val result = SingletonImageLoader.get(context).execute(ImageRequest.Builder(context).data(url).allowHardware(false).build())
+suspend fun jpegOf(context: Context, url: String, cached: Boolean = true): ByteArray? {
+    val request = ImageRequest.Builder(context).data(url).allowHardware(false)
+        .apply {
+            if (!cached) {
+                memoryCachePolicy(CachePolicy.WRITE_ONLY)
+                diskCachePolicy(CachePolicy.WRITE_ONLY)
+            }
+        }
+        .build()
+    val result = SingletonImageLoader.get(context).execute(request)
     val bitmap = (result as? SuccessResult)?.image?.toBitmap() ?: return null
     return withContext(Dispatchers.Default) { ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it) }.toByteArray() }
 }

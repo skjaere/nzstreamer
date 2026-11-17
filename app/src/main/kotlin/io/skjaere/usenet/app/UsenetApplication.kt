@@ -311,11 +311,13 @@ class AppContainer(private val context: Context) {
 
     /**
      * Each download's poster and still, kept with it (L411): fetched through the app's image loader as JPEGs at enqueue and
-     * again while the app is in front and online, none while Show artwork is off, and drawn while under 180 days old.
+     * again while the app is in front and online, each time from the image host, never its caches, none while Show artwork
+     * is off, and drawn while under 180 days old.
      */
     val downloadImages: DownloadImages by lazy {
         DownloadImages(
-            File(context.filesDir, DownloadStorage.DIR), settings.metadata.map { it.showArtwork }, ImageFetch { url -> jpegOf(context, url) }, appScope,
+            File(context.filesDir, DownloadStorage.DIR), settings.metadata.map { it.showArtwork },
+            ImageFetch { url -> jpegOf(context, url, cached = false) }, appScope,
             folders = downloadStorage.changes,
         )
     }

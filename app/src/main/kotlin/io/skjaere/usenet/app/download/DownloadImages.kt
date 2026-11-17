@@ -33,7 +33,10 @@ import org.slf4j.LoggerFactory
 import java.io.File
 import java.io.IOException
 
-/** A picture's bytes from its address: the app's image loader's, as a JPEG ([io.skjaere.usenet.app.jpegOf]), or a test's. Null where none came. */
+/**
+ * A picture's bytes from its address: the app's image loader's, as a JPEG from the image host's answer now, never its
+ * caches ([io.skjaere.usenet.app.jpegOf]), or a test's. Null where none came.
+ */
 fun interface ImageFetch {
     suspend fun fetch(url: String): ByteArray?
 }

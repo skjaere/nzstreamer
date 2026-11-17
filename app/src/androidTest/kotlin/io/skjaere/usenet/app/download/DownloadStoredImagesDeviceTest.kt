@@ -2,6 +2,7 @@ package io.skjaere.usenet.app.download
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.os.SystemClock
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -58,7 +59,11 @@ import org.junit.runner.RunWith
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.net.InetAddress
+import java.net.ServerSocket
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.concurrent.thread
 
 /**
  * L411: each download's poster and still kept with it, and drawn from there, with no TMDB: the pictures come through the
@@ -70,6 +75,8 @@ import java.util.concurrent.ConcurrentLinkedQueue
  * - With the host out of reach: a show's row on the Downloads page draws its latest episode's stored poster, Up next's
  *   row of a downloaded episode its download's, and the player's next-episode card for a downloaded next episode its
  *   download's stored still, as the player picks it.
+ * - The app's own fetch asks the image host each time, never Coil's caches: a host on the device's loopback, the
+ *   screens' loader the app's own for that case.
  *
  * The downloads queued here list a release of an indexer that isn't set up, so nothing could be grabbed for them, and no
  * host is asked to run. Every row is the test's own, deleted with its folders after; the fetch seam, the screens' image
@@ -233,6 +240,83 @@ class DownloadStoredImagesDeviceTest {
     }
 
     /** [rows]' pictures kept through the app's own path (the seam answering), then the image host out of reach. */
+    /**
+     * L411: the app's own fetch for the downloads' pictures asks the image host each time, never Coil's caches, so a copy's
+     * time is when the host answered: a refresh at 30 days fetches the picture again, and its 180 days count from then. The
+     * host here is one on the device's loopback, its picture changed between the two fetches; the screens' loader is the
+     * app's own, with its caches, for the case.
+     */
+    @Test
+    @OptIn(DelicateCoilApi::class)
+    fun theAppsFetchAsksTheImageHostEachTimeNeverCoilsCaches() = runBlocking<Unit> {
+        val loader = appImageLoader(context, container.memory)
+        SingletonImageLoader.setUnsafe(loader)
+        LoopbackImageHost(listOf(jpeg(Color.RED), jpeg(Color.BLUE))).use { host ->
+            try {
+                val first = checkNotNull(realFetch.fetch(host.url)) { "no picture came" }
+                assertEquals(1, host.asked.get())
+                assertEquals(Color.RED, colour(first))
+                // A month on, the host has a new picture at the same address.
+                val again = checkNotNull(realFetch.fetch(host.url)) { "no picture came again" }
+                assertEquals("asked again, not read from Coil's caches", 2, host.asked.get())
+                assertEquals(Color.BLUE, colour(again))
+            } finally {
+                loader.memoryCache?.clear()
+                loader.diskCache?.remove(host.url)
+                loader.shutdown()
+            }
+        }
+    }
+
+    /** A picture of one [colour], as a JPEG. */
+    private fun jpeg(colour: Int): ByteArray = ByteArrayOutputStream().also { out ->
+        Bitmap.createBitmap(34, 51, Bitmap.Config.ARGB_8888).apply { eraseColor(colour) }.compress(Bitmap.CompressFormat.JPEG, 90, out)
+    }.toByteArray()
+
+    /** [jpeg]'s colour at its centre, red or blue as near as a JPEG keeps it; else what it is. */
+    private fun colour(jpeg: ByteArray): Int {
+        val bitmap = checkNotNull(BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size))
+        val pixel = bitmap.getPixel(bitmap.width / 2, bitmap.height / 2)
+        return when {
+            Color.red(pixel) > 200 && Color.blue(pixel) < 60 -> Color.RED
+            Color.blue(pixel) > 200 && Color.red(pixel) < 60 -> Color.BLUE
+            else -> pixel
+        }
+    }
+
+    /**
+     * An image host on the device's loopback: each request answered with the next of [answers] (the last again once they
+     * run out), and counted in [asked].
+     */
+    private class LoopbackImageHost(private val answers: List<ByteArray>) : AutoCloseable {
+        private val socket = ServerSocket(0, 8, InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)))
+        val asked = AtomicInteger()
+        val url: String = "http://127.0.0.1:${socket.localPort}/harbor-lights-poster.jpg"
+
+        init {
+            thread(isDaemon = true, name = "loopback-image-host") {
+                while (!socket.isClosed) {
+                    val client = try {
+                        socket.accept()
+                    } catch (e: IOException) {
+                        break
+                    }
+                    client.use { c ->
+                        val request = c.getInputStream().bufferedReader(Charsets.ISO_8859_1)
+                        while (request.readLine()?.isNotEmpty() == true) Unit
+                        val body = answers[minOf(asked.getAndIncrement(), answers.lastIndex)]
+                        val out = c.getOutputStream()
+                        out.write("HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray(Charsets.ISO_8859_1))
+                        out.write(body)
+                        out.flush()
+                    }
+                }
+            }
+        }
+
+        override fun close() = socket.close()
+    }
+
     private fun kept(vararg rows: Download) {
         runBlocking { images.keep(rows.toList()) }
         rows.forEach { row -> Kind.entries.forEach { assertTrue("$it kept", copy(row, it).isFile) } }
