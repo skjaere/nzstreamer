@@ -182,9 +182,10 @@ class ShowViewModel(private val container: AppContainer, private val tmdbId: Int
 
     /**
      * The show's finished downloads as the Downloads page's row draws them, for a page TMDB gave no answer for (L439): from
-     * the runner's rows and the library's watch states, neither of which needs TMDB. None on a TV.
+     * the runner's rows and the library's watch states, neither of which needs TMDB, built again only as the finished ones
+     * or the watch states change, not with each chunk a download writes. None on a TV.
      */
-    val downloaded: StateFlow<DownloadsRow.Show?> = combine(container.downloads.forShow(tmdbId), states) { items, watched ->
+    val downloaded: StateFlow<DownloadsRow.Show?> = combine(ShowOffline.finished(container.downloads.forShow(tmdbId)), states) { items, watched ->
         ShowOffline.downloaded(tmdbId, items, watched)
     }.distinctUntilChanged().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 

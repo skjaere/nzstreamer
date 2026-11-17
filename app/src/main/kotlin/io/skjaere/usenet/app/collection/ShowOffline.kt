@@ -7,10 +7,14 @@ import io.skjaere.usenet.app.download.DownloadsRow
 import io.skjaere.usenet.app.download.TitleDownload
 import io.skjaere.usenet.app.isntDownloaded
 import io.skjaere.usenet.app.link.PlayTarget
+import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.WatchState
 import io.skjaere.usenet.metadata.Episode
 import io.skjaere.usenet.metadata.EpisodeRef
 import io.skjaere.usenet.metadata.NextUp
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 /**
  * The Show page offline (L439), where downloads show and the app reads as [offline] (the container's
@@ -46,6 +50,13 @@ internal data class ShowOffline(val offline: Boolean, val playOn: PlayTarget) {
 
         /** What a greyed episode's tap says: "Harbor Lights S02E05 isn't downloaded. It plays once you're online." */
         fun bar(show: String, e: Episode): String = isntDownloaded("$show ${EpisodeRef(e.season, e.episode).label}")
+
+        /**
+         * Of the show's downloads as the runner tells them ([items], with each chunk the writer writes), its finished ones
+         * alone, told again only as they change: what [downloaded] needs, read at the page's pace, not the writer's.
+         */
+        fun finished(items: Flow<List<DownloadRunner.Item>>): Flow<List<DownloadRunner.Item>> =
+            items.map { all -> all.filter { it.row.state == DownloadState.Done } }.distinctUntilChanged()
 
         /**
          * The page with no answer from TMDB (L439): show [showTmdbId]'s finished downloads among [items] (the runner's for

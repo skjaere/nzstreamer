@@ -18,6 +18,11 @@ import io.skjaere.usenet.link.KeyId
 import io.skjaere.usenet.metadata.Episode
 import io.skjaere.usenet.metadata.EpisodeRef
 import io.skjaere.usenet.metadata.NextUp
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import java.time.LocalDate
 import kotlin.random.Random
@@ -125,6 +130,27 @@ class ShowOfflineTest {
         assertEquals(2, assertIs<ShowNext.Play>(row.next).row.episode)
         // Another show's downloads are not this one's.
         assertNull(ShowOffline.downloaded(QM, rows, emptyMap()))
+    }
+
+    /**
+     * The no-page section reads the show's finished downloads alone, told again only as they change: the runner tells the
+     * show's rows with each chunk the writer writes (about 30 times a second), which the section has no use for.
+     */
+    @Test
+    fun `the no-page section hears the show's finished downloads alone, and only as they change`() = runTest(UnconfinedTestDispatcher()) {
+        val e1 = item(episode(HL, 2, 1, DownloadState.Done))
+        val running = item(episode(HL, 2, 2, DownloadState.Running))
+        val items = MutableStateFlow(listOf(e1, running))
+        val told = mutableListOf<List<DownloadRunner.Item>>()
+        val job = launch { ShowOffline.finished(items).toList(told) }
+        // The writer at work: each chunk written says the running one's bytes again.
+        (1..100).forEach { written -> items.value = listOf(e1, running.copy(written = written * 1_000_000L)) }
+        assertEquals(listOf(listOf(e1)), told)
+        // One finished: told.
+        val e2 = item(episode(HL, 2, 2, DownloadState.Done))
+        items.value = listOf(e1, e2)
+        job.cancel()
+        assertEquals(listOf(listOf(e1), listOf(e1, e2)), told)
     }
 
     private companion object {
