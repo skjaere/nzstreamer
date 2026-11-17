@@ -15,10 +15,11 @@ import org.junit.runner.RunWith
 
 /**
  * Delete once watched's clock as the library joins it (L412): each finished download whose title's watch state is
- * watched and not a tombstone, written after the download finished, with when it was written. Not one watched before
- * it finished (a title downloaded again after its mark), nor one marked at the moment it finished, nor a tombstone, an
- * unwatched title, a download being deleted, still queued or failed. And followed: a watch state written again is seen
- * again, by the same reader, as Room tells it of either table's writes.
+ * watched with no place to resume (a mark, or a play to its end) and not a tombstone, written after the download
+ * finished, with when it was written. Not one watched before it finished (a title downloaded again after its mark), nor
+ * one marked at the moment it finished, nor one a replay's first minute left watched with a place in it, nor a
+ * tombstone, an unwatched title, a download being deleted, still queued or failed. And followed: a watch state written
+ * again is seen again, by the same reader, as Room tells it of either table's writes.
  */
 @RunWith(AndroidJUnit4::class)
 class DownloadWatchDaoTest {
@@ -74,6 +75,28 @@ class DownloadWatchDaoTest {
         assertEquals(listOf("kept"), joined.watched().first().map { it.id })
     }
 
+    /**
+     * A watched title with a place to resume in it isn't a mark: a replay's save in its first minute keeps it watched, with
+     * a later time, and its download isn't joined, whenever it finished, until it is marked or played to its end again.
+     */
+    @Test
+    fun aWatchedTitleWithAPlaceInItIsntJoinedUntilMarkedOrPlayedToItsEndAgain() = runBlocking<Unit> {
+        downloads.insert(episode("again", 1, DownloadState.Done, completedAt = 300))
+        downloads.insert(episode("kept", 2, DownloadState.Done, completedAt = 100))
+        watches.upsert(
+            listOf(
+                // Marked before it was downloaded again, then opened and left 10 s in.
+                episodeState(1, watched = true, updatedAt = 400, positionMs = 10_000),
+                // Marked after it finished, then replayed for 20 s.
+                episodeState(2, watched = true, updatedAt = 400, positionMs = 20_000),
+            ),
+        )
+        assertEquals(emptyList<String>(), joined.watched().first().map { it.id })
+        // Played to its end again, or marked: no place left, watched as of then.
+        watches.upsert(listOf(episodeState(1, watched = true, updatedAt = 500), episodeState(2, watched = true, updatedAt = 500)))
+        assertEquals(listOf("kept" to 500L, "again" to 500L), joined.watched().first().map { it.id to it.watchedAt })
+    }
+
     @Test
     fun aWatchStateWrittenAgainIsSeenAgainByTheSameReader() = runBlocking<Unit> {
         downloads.insert(episode("done", 1, DownloadState.Done, completedAt = 100))
@@ -116,9 +139,9 @@ class DownloadWatchDaoTest {
         size = 1_000, indexerSize = 1_000, createdAt = 1, completedAt = completedAt, updatedAt = 1,
     )
 
-    private fun episodeState(number: Int, watched: Boolean, updatedAt: Long) = WatchState(
+    private fun episodeState(number: Int, watched: Boolean, updatedAt: Long, positionMs: Long = 0) = WatchState(
         key = WatchKey.episode(SHOW, 1, number), kind = WatchKind.Episode, showTmdbId = SHOW, season = 1, episode = number,
-        title = WatchTitle.episode("Harbor Lights", 1, number), watched = watched, updatedAt = updatedAt,
+        title = WatchTitle.episode("Harbor Lights", 1, number), positionMs = positionMs, watched = watched, updatedAt = updatedAt,
     )
 
     private fun movieState(watched: Boolean, updatedAt: Long) =

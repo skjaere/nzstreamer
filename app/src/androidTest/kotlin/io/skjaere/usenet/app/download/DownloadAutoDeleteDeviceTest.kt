@@ -38,7 +38,8 @@ import java.nio.ByteBuffer
  * the marks, while the app's own run, on the device's clock, finds nothing due yet.
  * - Switched on, a finished episode marked watched says it goes tomorrow, then goes: its file, both its folders and its
  *   row, as storage deletes a download; one not marked stays.
- * - One an open player plays stays while it plays, whatever is due, and goes once the player has finished.
+ * - One an open player plays to its end again stays while it plays, whatever is due, and goes once the player has
+ *   finished.
  * - A title downloaded again after it was marked watched stays.
  * - Switched off, nothing goes and nothing is said.
  *
@@ -110,25 +111,36 @@ class DownloadAutoDeleteDeviceTest {
         assertTrue(checkNotNull(storage.file(staying)).isFile)
     }
 
-    /** L413: what plays is never deleted; held by its player, it goes once the player has finished. */
+    /**
+     * L413: what plays is never deleted; held by its player, it goes once the player has finished. Played again to its end
+     * (a replay's first minute alone is no mark, L412), it is watched again as of the player's last save, so due a day on.
+     */
     @Test
     fun aDownloadAnOpenPlayerPlaysStaysUntilThePlayerHasFinished() = runBlocking<Unit> {
         val playing = seed(episode(1), playable = true)
         val file = checkNotNull(storage.file(playing))
         settings.setDownloadsDeleteOnceWatched(true)
         mark(1)
+        val markedAt = checkNotNull(container.library.episodeStates(SHOW).first()[1 to 1]).updatedAt
         waitFor("it says it goes tomorrow") { runner.deletingTomorrow.value.takeIf { playing.id in it } }
         ActivityScenario.launch<PlayerActivity>(PlayerActivity.intent(context, checkNotNull(DownloadLaunch.of(playing)))).use { scenario ->
             waitFor("the file playing", 30_000) { scenario.read { a -> a.player?.takeIf { it.isPlaying } } }
             assertTrue("held by its player", playing.id in runner.held.value)
+            assertFalse(playing.id in runner.deleteWatched(System.currentTimeMillis() + DAY + MINUTE))
+            // On to its last minutes: played to its end again as the player closes.
+            val end = scenario.read { a -> a.player!!.duration * 95 / 100 }
+            scenario.read { a -> a.player!!.seekTo(end) }
+            waitFor("its last minutes playing", 30_000) { scenario.read { a -> a.player?.takeIf { it.isPlaying && it.currentPosition >= end } } }
             assertFalse(playing.id in runner.deleteWatched(System.currentTimeMillis() + DAY + MINUTE))
             assertEquals(DownloadState.Done, dao.get(playing.id)?.state)
             assertTrue("its file, while it plays", file.isFile)
             assertTrue(scenario.read { a -> a.player?.isPlaying == true })
         }
         waitFor("its player let go", 30_000) { Unit.takeIf { playing.id !in runner.held.value } }
-        // Its first seconds played again: still watched, as of the player's last save.
-        assertTrue(container.library.episodeStates(SHOW).first()[1 to 1]?.watched == true)
+        // Watched again with no place in it, as of the player's save as it closed.
+        waitFor("the player's last save", 30_000) {
+            runBlocking { container.library.episodeStates(SHOW).first()[1 to 1] }?.takeIf { it.watched && it.positionMs == 0L && it.updatedAt > markedAt }
+        }
         assertEquals(listOf(playing.id), runner.deleteWatched(System.currentTimeMillis() + DAY + MINUTE).filter { id -> made.any { it.id == id } })
         assertEquals(null, dao.get(playing.id))
         assertFalse(file.exists())

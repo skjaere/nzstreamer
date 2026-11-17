@@ -8,9 +8,10 @@ import io.skjaere.usenet.data.WatchedDownload
  * setting. Pure, so the JVM reads every case; the runner deletes ([DownloadRunner.deleteWatched]) and the pages say
  * "Deleting tomorrow" ([DownloadRunner.deletingTomorrow]).
  * - A download is due a day after the later of its watched mark ([WatchedDownload.watchedAt]: the last write of its
- *   watch state while watched, after it finished) and the time the setting was switched on, so nothing goes on the day it
- *   is switched on. A later touch of the watch state (a replay's first seconds, Mark season watched again) only delays it,
- *   which errs toward keeping. Mark unwatched keeps it.
+ *   watch state as watched with no place in it, a mark or a play to its end, after it finished) and the time the setting
+ *   was switched on, so nothing goes on the day it is switched on. Marked again, or played to its end again, it goes a
+ *   day after that. A replay's first minute leaves a place in it, which keeps it until then; a title downloaded again
+ *   after its mark is never due on that mark, however it is opened. Mark unwatched keeps it.
  * - None while the setting is off.
  * - One due that plays is left ([due]'s held): it goes once nothing holds it (L413).
  * - "Deleting tomorrow" only while its deletion is still ahead: one already due, in the start's two minutes or held by a

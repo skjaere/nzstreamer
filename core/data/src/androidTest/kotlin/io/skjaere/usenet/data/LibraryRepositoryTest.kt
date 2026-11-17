@@ -246,8 +246,8 @@ class LibraryRepositoryTest {
     /**
      * Delete once watched's clock reads a watched title's last write (L412), so it moves whenever a mark is made or a play
      * saved: a play's save at its 90 % marks it watched as of then, and a replay's save under a minute keeps it watched with
-     * a later time (which only delays a deletion); Mark watched, and Mark season watched (L416), as of then; and an Undo of a
-     * mark as of its own time. A mark that changes nothing leaves the time it had.
+     * a later time and a place in it (which the clock doesn't count as a mark); Mark watched, and Mark season watched (L416),
+     * as of then; and an Undo of a mark as of its own time. A mark that changes nothing leaves the time it had.
      */
     @Test
     fun aWatchedTitlesTimeMovesWithEachMarkAndPlaySavedNotWithAMarkThatChangesNothing() = runBlocking<Unit> {
@@ -288,6 +288,38 @@ class LibraryRepositoryTest {
         time = 9_000
         assertEquals(1, library.undoMarks(snapshot))
         assertEquals(false to 9_000L, db.watchStates().get(film)!!.watched to db.watchStates().get(film)!!.updatedAt)
+    }
+
+    /**
+     * L412: a mark counts for Delete once watched only when made after the download finished. A title marked watched, then
+     * downloaded again and opened for a few seconds, keeps watched with a later time (a replay's first minute, here or on
+     * a TV), and its download stays out of the clock's join: nothing made it watched since it finished. Played to its end
+     * again, it is in, as of then.
+     */
+    @Test
+    fun aReplaysFirstMinuteOfATitleDownloadedAgainAfterItsMarkIsntAMark() = runBlocking<Unit> {
+        val key = WatchKey.episode(900002, 1, 1)
+        time = 1_000
+        library.markEpisodes(listOf(EpisodeRef(900002, 1, 1, "E1")), watched = true)
+        db.downloads().insert(
+            Download(
+                id = "again", watchKey = key, kind = DownloadKind.Episode, title = "Harbor Lights", showTmdbId = 900002, season = 1, episode = 1,
+                state = DownloadState.Done, position = 1, size = 1_000, indexerSize = 1_000, createdAt = 1_500, completedAt = 2_000, updatedAt = 2_000,
+            ),
+        )
+        time = 3_000
+        library.recordProgress(episode(1, 1), positionMs = 10_000, durationMs = 2_700_000)
+        assertEquals("a replay's first seconds: still watched, later", true to 3_000L, db.watchStates().get(key)!!.watched to db.watchStates().get(key)!!.updatedAt)
+        assertEquals(emptyList<String>(), db.downloadWatches().watched().first().map { it.id })
+        // A TV's play of 20 s, as a play here saves it.
+        time = 4_000
+        assertTrue(library.recordRemoteProgress(final(20_000, ageMs = 0)))
+        assertEquals(true, db.watchStates().get(key)!!.watched)
+        assertEquals(emptyList<String>(), db.downloadWatches().watched().first().map { it.id })
+        // Played to its end again: watched as of then.
+        time = 5_000
+        library.recordProgress(episode(1, 1), positionMs = 2_500_000, durationMs = 2_700_000)
+        assertEquals(listOf("again" to 5_000L), db.downloadWatches().watched().first().map { it.id to it.watchedAt })
     }
 
     @Test

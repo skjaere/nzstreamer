@@ -179,7 +179,7 @@ interface DownloadDao {
 
 /**
  * A finished download whose title is marked watched (L412): download [id], of [watchKey], finished at [completedAt], and
- * when its watch state was last written while watched ([watchedAt]): its mark, or a play's last save since.
+ * when its watch state was last written watched with no place in it ([watchedAt]): its mark, or a play to its end since.
  */
 data class WatchedDownload(val id: String, val watchKey: String, val completedAt: Long, val watchedAt: Long)
 
@@ -191,15 +191,18 @@ data class WatchedDownload(val id: String, val watchKey: String, val completedAt
 @Dao
 interface DownloadWatchDao {
     /**
-     * Each finished download whose title's watch state is watched and not a tombstone, written after the download
-     * finished: one marked before it finished (a title downloaded again after it was watched) isn't watched as far as its
-     * download goes. Room runs it again on a write to either table, so a mark, a play's save or a removal is seen.
+     * Each finished download whose title's watch state is watched with no place to resume and not a tombstone, written
+     * after the download finished. Watched with no place is what a mark and a play to its end leave; a replay's save in
+     * its first minute keeps it watched with a place in it and a later time, which is no mark. So one marked before it
+     * finished (a title downloaded again after it was watched) isn't watched as far as its download goes, however it is
+     * opened since, until it is marked or played to its end again. Room runs it again on a write to either table, so a
+     * mark, a play's save or a removal is seen.
      */
     @Query(
         """
         SELECT d.id AS id, d.watchKey AS watchKey, d.completedAt AS completedAt, w.updatedAt AS watchedAt
         FROM download d JOIN watch_state w ON w.`key` = d.watchKey
-        WHERE d.state = 'Done' AND w.watched = 1 AND w.deleted = 0 AND w.updatedAt > d.completedAt
+        WHERE d.state = 'Done' AND w.watched = 1 AND w.positionMs = 0 AND w.deleted = 0 AND w.updatedAt > d.completedAt
         ORDER BY d.completedAt, d.createdAt
         """,
     )
