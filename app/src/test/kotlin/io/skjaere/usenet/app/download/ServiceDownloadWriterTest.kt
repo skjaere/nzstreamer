@@ -29,6 +29,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -137,6 +138,7 @@ class ServiceDownloadWriterTest {
         shown: () -> Boolean = { true },
         httpsOnly: Boolean = true,
         throttle: Long? = null,
+        letGo: kotlin.time.Duration = ServiceDownloadWriter.LET_GO,
     ) = ServiceDownloadWriter(
         reads,
         accounts = { id ->
@@ -155,6 +157,7 @@ class ServiceDownloadWriterTest {
         shown = shown,
         httpsOnly = { httpsOnly },
         timeSource = time,
+        letGo = letGo,
     )
 
     /** The writer on the test's virtual time, its reads on the test's dispatcher unless [io] says another. */
@@ -193,6 +196,7 @@ class ServiceDownloadWriterTest {
         a.again = null
         b.prepareFailing = null
         reads.reads.set(0)
+        reads.blocked = CountDownLatch(1)
         path.delete()
     }
 
@@ -553,8 +557,10 @@ class ServiceDownloadWriterTest {
         assertEquals(5, reads.reads.get(), "no read after the one under way")
         val first = reads.made.single()
         assertTrue(first.aborted.get() && first.closed.get(), "the body closed at once")
-        assertEquals(listOf(5L * READ), records)
-        assertEquals(DownloadWriter.Live(ID, 5L * READ, unreachable = false, streamWait = true), writer.live.value)
+        assertFalse(first.abortedInRead.get(), "never aborted while it read")
+        // The bytes of the read the stream started during are left, to be read again after the wait.
+        assertEquals(listOf(4L * READ), records)
+        assertEquals(DownloadWriter.Live(ID, 4L * READ, unreachable = false, streamWait = true), writer.live.value)
 
         advanceTimeBy(30.minutes)
         assertEquals(1, a.links.size, "no link while it streams")
@@ -571,7 +577,7 @@ class ServiceDownloadWriterTest {
         runCurrent()
 
         assertEquals(Outcome.Done, write.await())
-        assertEquals(listOf(0L, 5L * READ), opens)
+        assertEquals(listOf(0L, 4L * READ), opens)
         assertEquals(quiet + 10_000, openedAt.last())
         assertEquals(2, a.links.size, "one link per stream start")
         assertContentEquals(data, path.readBytes())
@@ -591,15 +597,16 @@ class ServiceDownloadWriterTest {
         assertEquals(1, a.links.size)
     }
 
+    /** A read still waiting on the CDN after the stop's moment ([ServiceDownloadWriter.LET_GO]) is aborted from another thread. */
     @Test
-    fun `a read waiting on the CDN as a stream starts is aborted from another thread at once`() = runTest(timeout = 60.seconds) {
+    fun `a read waiting on the CDN as a stream starts is aborted from another thread`() = runTest(timeout = 60.seconds) {
         reads.script(Script(blockAt = 300_000))
         val writer = writer(io = Dispatchers.IO)
         val write = async { writer.wrote() }
         assertTrue(withContext(Dispatchers.IO) { reads.blocked.await(10, TimeUnit.SECONDS) }, "the read waiting on the CDN")
         val meter = traffic.open()
         assertTrue(withContext(Dispatchers.IO) { reads.made.single().closedLatch.await(10, TimeUnit.SECONDS) }, "the body closed at once")
-        assertTrue(reads.made.single().aborted.get())
+        assertTrue(reads.made.single().abortedInRead.get())
         runCurrent()
         assertEquals(listOf(300_000L), records)
         assertEquals(true, writer.live.value?.streamWait)
@@ -607,6 +614,116 @@ class ServiceDownloadWriterTest {
         advanceTimeBy(10_001.milliseconds)
         assertEquals(Outcome.Done, write.await())
         assertEquals(listOf(0L, 300_000L), opens)
+        assertContentEquals(data, path.readBytes())
+    }
+
+    /**
+     * A read under way as a stream starts is given a moment to come back (here a long one, so the case never leans on a
+     * machine's pace): one from a body still flowing comes back, and only then is its body let go, so no other thread
+     * meets its HTTP stack's buffers while it reads.
+     */
+    @Test
+    fun `a read still flowing as a stream starts comes back before its body is let go`() = runBlocking<Unit> {
+        val streamed = CountDownLatch(1)
+        val flowing = CountDownLatch(1)
+        var meter: StreamTraffic.Meter? = null
+        reads.script(
+            Script(onRead = { count ->
+                if (count == 3) {
+                    meter = traffic.open()
+                    streamed.countDown()
+                    // Still flowing: it comes back once the case lets it.
+                    flowing.await(10, TimeUnit.SECONDS)
+                }
+            }),
+        )
+        val writer = writer(Dispatchers.IO, TimeSource.Monotonic, { 0L }, letGo = 30.seconds)
+        val write = launch(Dispatchers.Default) { writer.wrote() }
+        try {
+            assertTrue(withContext(Dispatchers.IO) { streamed.await(10, TimeUnit.SECONDS) }, "the stream started during a read")
+            flowing.countDown()
+            withTimeout(10_000) { writer.live.first { it?.streamWait == true } }
+            val read = reads.made.single()
+            assertFalse(read.abortedInRead.get(), "never aborted while it read")
+            assertTrue(read.aborted.get() && read.closed.get(), "its body let go once it came back")
+            // The byte reached before that read, or after it where it came back before the stop was seen.
+            val at = records.single()
+            assertTrue(at == 2L * READ || at == 3L * READ, "$records")
+            assertContentEquals(data.copyOf(at.toInt()), path.readBytes().copyOf(at.toInt()))
+        } finally {
+            withTimeout(10_000) { write.cancelAndJoin() }
+            meter?.close()
+        }
+    }
+
+    /**
+     * Whatever a read the stop aborted comes back with is never taken (here bytes that aren't the file's, as a read an
+     * abort's close met in the HTTP stack's buffers may give): the file goes on, whole, from the byte reached before it.
+     */
+    @Test
+    fun `bytes a read comes back with once a stream's stop aborted it are never taken`() = runTest(timeout = 60.seconds) {
+        reads.script(Script(blockAt = 300_000, afterAbort = AfterAbort.Garbles))
+        val writer = writer(io = Dispatchers.IO)
+        val write = async { writer.wrote() }
+        assertTrue(withContext(Dispatchers.IO) { reads.blocked.await(10, TimeUnit.SECONDS) }, "the read waiting on the CDN")
+        val meter = traffic.open()
+        assertTrue(withContext(Dispatchers.IO) { reads.made.single().closedLatch.await(10, TimeUnit.SECONDS) }, "its body let go")
+        assertTrue(reads.made.single().abortedInRead.get())
+        runCurrent()
+        assertEquals(listOf(300_000L), records)
+        meter.close()
+        advanceTimeBy(10_001.milliseconds)
+        assertEquals(Outcome.Done, write.await())
+        assertEquals(listOf(0L, 300_000L), opens)
+        assertContentEquals(data, path.readBytes())
+    }
+
+    /** A read the stop's abort ends (-1, as a ServiceDataSource read after its abort gives) is a wait, not a body ended short. */
+    @Test
+    fun `a read a stream's stop ends is a wait, never a failure counted`() = runTest(timeout = 60.seconds) {
+        // Five reopens counted with nothing; then a body whose first read waits on the CDN as a stream starts.
+        reads.script(*Array(6) { Script(refuse = LinkFailure.NoWorkingLink) }, Script(blockAt = 0, afterAbort = AfterAbort.Ends))
+        val writer = writer(io = Dispatchers.IO)
+        val write = async { writer.wrote() }
+        assertTrue(withContext(Dispatchers.IO) { reads.blocked.await(10, TimeUnit.SECONDS) }, "the read waiting on the CDN")
+        val meter = traffic.open()
+        assertTrue(withContext(Dispatchers.IO) { reads.made.last().closedLatch.await(10, TimeUnit.SECONDS) }, "its body let go")
+        runCurrent()
+        assertFalse(write.isCompleted, "a wait, not a sixth failure")
+        assertEquals(true, writer.live.value?.streamWait)
+        meter.close()
+        advanceTimeBy(10_001.milliseconds)
+        assertEquals(Outcome.Done, write.await())
+        assertContentEquals(data, path.readBytes())
+    }
+
+    /**
+     * What a source throws besides an IOException (Media3's, or its HTTP stack's own state, as okio's "closed") is a cut,
+     * counted, mid-body or at an open, and once a stream's stop came, a wait: it never leaves the write unsorted.
+     */
+    @Test
+    fun `what a source throws besides an IOException is a cut, mid-body or at an open, and after a stream's stop a wait`() = runTest(timeout = 60.seconds) {
+        reads.script(Script(breakAt = 300_000), Script(openBreaks = true))
+        assertEquals(Outcome.Done, writer().wrote())
+        assertEquals(listOf(0L, 300_000L, 300_000L), opens)
+        assertEquals(listOf(300_000L, size), records)
+        // After the first, with progress, 2 s; after the second, with none, 4 s.
+        assertEquals(6_000, currentTime)
+        assertContentEquals(data, path.readBytes())
+
+        reset()
+        reads.script(Script(blockAt = 300_000, afterAbort = AfterAbort.Breaks))
+        val writer = writer(io = Dispatchers.IO)
+        val write = async { writer.wrote() }
+        assertTrue(withContext(Dispatchers.IO) { reads.blocked.await(10, TimeUnit.SECONDS) }, "the read waiting on the CDN")
+        val meter = traffic.open()
+        assertTrue(withContext(Dispatchers.IO) { reads.made.single().closedLatch.await(10, TimeUnit.SECONDS) }, "its body let go")
+        runCurrent()
+        assertEquals(listOf(300_000L), records)
+        assertEquals(true, writer.live.value?.streamWait)
+        meter.close()
+        advanceTimeBy(10_001.milliseconds)
+        assertEquals(Outcome.Done, write.await())
         assertContentEquals(data, path.readBytes())
     }
 
@@ -706,8 +823,9 @@ class ServiceDownloadWriterTest {
     /**
      * How one open answers: refused with [refuse] (a ServiceDataSource's own refusal), or reaching nothing ([unreached]);
      * else with [length] and [total], then its body from the byte asked: cut after [cutAt] bytes (an IOException), ended
-     * early after [endAt], or waiting on the CDN after [blockAt] until aborted; [past] bytes more after the file's end.
-     * [opened] hears it open; [onRead], each read of every body, counted together.
+     * early after [endAt], waiting on the CDN after [blockAt] until aborted (then as [afterAbort] says), or meeting a broken
+     * state after [breakAt] (an IllegalStateException); [past] bytes more after the file's end. [openBreaks] throws such
+     * a state at the open. [opened] hears it open; [onRead], each read of every body, counted together.
      */
     private inner class Script(
         val refuse: LinkFailure? = null,
@@ -717,10 +835,28 @@ class ServiceDownloadWriterTest {
         val cutAt: Long? = null,
         val endAt: Long? = null,
         val blockAt: Long? = null,
+        val afterAbort: AfterAbort = AfterAbort.Throws,
+        val breakAt: Long? = null,
+        val openBreaks: Boolean = false,
         val past: Int = 0,
         val opened: () -> Unit = {},
         val onRead: (Int) -> Unit = {},
     )
+
+    /** What a read waiting on the CDN does once it is aborted from another thread. */
+    private enum class AfterAbort {
+        /** Fails, as a read on a socket closed under it does. */
+        Throws,
+
+        /** Ends (-1), as a ServiceDataSource read the abort came just before gives. */
+        Ends,
+
+        /** Gives bytes that aren't the file's, as a read an abort's close met in the HTTP stack's buffers may. */
+        Garbles,
+
+        /** Throws what isn't an IOException, as the HTTP stack's own state may (okio's "closed"). */
+        Breaks,
+    }
 
     /**
      * The reads as the app's make them, each over the writer's link resolver: an open asks it for its link first, as a
@@ -738,7 +874,7 @@ class ServiceDownloadWriterTest {
         val reads = AtomicInteger()
 
         /** Counted down as a read waits on the CDN. */
-        val blocked = CountDownLatch(1)
+        @Volatile var blocked = CountDownLatch(1)
 
         fun script(vararg more: Script) = synchronized(scripts) { scripts.addAll(more) }
 
@@ -754,6 +890,10 @@ class ServiceDownloadWriterTest {
         inner class Read(private val resolver: LinkResolver, val uri: String, private val script: Script) : ServiceDownloadWriter.Read {
             @Volatile var link: HttpLink? = null
             val aborted = AtomicBoolean()
+
+            /** Whether an abort came while a read was under way: from another thread, in its buffers. */
+            val abortedInRead = AtomicBoolean()
+            private val inRead = AtomicBoolean()
             val closed = AtomicBoolean()
             val closedLatch = CountDownLatch(1)
             private val abortedLatch = CountDownLatch(1)
@@ -767,21 +907,38 @@ class ServiceDownloadWriterTest {
                 script.opened()
                 script.refuse?.let { throw LinkUnavailable(it) }
                 if (script.unreached) throw ConnectException("Connection refused")
+                if (script.openBreaks) throw IllegalStateException("unexpected answer")
                 at = position
                 return ServiceDownloadWriter.Answer(script.length(position), script.total(position))
             }
 
             override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-                if (aborted.get()) throw IOException("aborted")
+                // As a ServiceDataSource after its abort: nothing more to read.
+                if (aborted.get()) return -1
+                inRead.set(true)
+                try {
+                    return body(buffer, offset, length)
+                } finally {
+                    inRead.set(false)
+                }
+            }
+
+            private fun body(buffer: ByteArray, offset: Int, length: Int): Int {
                 script.onRead(reads.incrementAndGet())
                 script.blockAt?.let {
                     if (sent >= it) {
                         blocked.countDown()
                         // A CDN gone silent: until the connection is let go.
                         abortedLatch.await(30, TimeUnit.SECONDS)
-                        throw IOException("the connection was let go")
+                        return when (script.afterAbort) {
+                            AfterAbort.Throws -> throw IOException("the connection was let go")
+                            AfterAbort.Ends -> -1
+                            AfterAbort.Garbles -> minOf(length, READ).also { n -> buffer.fill(0x55, offset, offset + n) }
+                            AfterAbort.Breaks -> throw IllegalStateException("closed")
+                        }
                     }
                 }
+                script.breakAt?.let { if (sent >= it) throw IllegalStateException("closed") }
                 script.cutAt?.let { if (sent >= it) throw IOException("the body was cut") }
                 script.endAt?.let { if (sent >= it) return -1 }
                 if (at >= size) {
@@ -790,7 +947,7 @@ class ServiceDownloadWriterTest {
                     buffer[offset] = 1
                     return 1
                 }
-                val stop = listOfNotNull(script.cutAt, script.endAt, script.blockAt).minOrNull()?.let { it - sent } ?: Long.MAX_VALUE
+                val stop = listOfNotNull(script.cutAt, script.endAt, script.blockAt, script.breakAt).minOrNull()?.let { it - sent } ?: Long.MAX_VALUE
                 val n = minOf(length.toLong(), READ.toLong(), size - at, stop).toInt()
                 data.copyInto(buffer, offset, at.toInt(), (at + n).toInt())
                 at += n
@@ -799,6 +956,7 @@ class ServiceDownloadWriterTest {
             }
 
             override fun abort() {
+                if (inRead.get()) abortedInRead.set(true)
                 aborted.set(true)
                 abortedLatch.countDown()
             }

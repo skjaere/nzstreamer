@@ -29,6 +29,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -45,6 +47,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeMark
@@ -88,9 +91,11 @@ import kotlin.time.TimeSource
  * the same listing id, as [ServiceLinks] keeps a play's, so the next link asks by its new handle.
  *
  * **While something streams** (L471, W123): [streaming] true (a play's or a cast's meter open) stops the reads within
- * one read: the body aborted from another thread and closed at once, what was written forced and recorded, and its live
- * says so ([DownloadWriter.Live.streamWait]). Once [streaming] has read false for [QUIET] together, it goes on at the
- * safe offset with a fresh link, at once: one link per stream start, and a wait counts as no failure. Nothing opens while
+ * one read: the read under way is given a moment to come back ([LET_GO]; one from a body still flowing does within
+ * milliseconds), else it is aborted from another thread, and whatever it comes back with is left, to be read again; the
+ * body is then let go at once, what was written forced and recorded, and its live says so
+ * ([DownloadWriter.Live.streamWait]). Once [streaming] has read false for [QUIET] together, it goes on at the safe
+ * offset with a fresh link, at once: one link per stream start, and a wait counts as no failure. Nothing opens while
  * something streams.
  *
  * A cancel (a pause, a cancel, the host ending) aborts the read under way from another thread and records what was
@@ -131,6 +136,8 @@ class ServiceDownloadWriter(
     private val timeSource: TimeSource = TimeSource.Monotonic,
     /** The first wait before a reopen, doubling to [MAX_BACKOFF]: a device test's given short. */
     private val firstBackoff: Duration = FIRST_BACKOFF,
+    /** How long a stream's stop gives a call on the read under way to come back before it aborts it ([LET_GO]). */
+    private val letGo: Duration = LET_GO,
 ) {
     /** How a write ended. */
     sealed interface Outcome {
@@ -268,7 +275,7 @@ class ServiceDownloadWriter(
             return try {
                 coroutineScope {
                     // A stream that starts stops the read under way at once, wherever it waits.
-                    val watch = launch(start = CoroutineStart.UNDISPATCHED) { streaming.collect { if (it) run.stopForStream() } }
+                    val watch = launch(start = CoroutineStart.UNDISPATCHED) { streaming.collect { if (it) run.stopForStream(letGo) } }
                     try {
                         wakes.watching { transfer(run, onOpen) }
                     } finally {
@@ -441,11 +448,17 @@ class ServiceDownloadWriter(
         try {
             if (run.stopped || streaming.value) return Ended.StreamWait
             val answer = try {
-                blocking(read) { read.open(from) }
+                calling(run, read) { read.open(from) } ?: return Ended.StreamWait
             } catch (e: LinkUnavailable) {
                 return Ended.Refused(e.failure)
+            } catch (e: CancellationException) {
+                currentCoroutineContext().ensureActive()
+                return if (run.stopped) Ended.StreamWait else Ended.Cut(e)
             } catch (e: IOException) {
                 return if (run.stopped) Ended.StreamWait else Ended.NotReached(e)
+            } catch (e: Exception) {
+                // What else the source threw (Media3's, or its HTTP stack's own state): a broken answer, counted.
+                return if (run.stopped) Ended.StreamWait else Ended.Cut(e)
             }
             if (answer.length != null && answer.length != run.size - from || answer.total != null && answer.total != run.size) {
                 log.info("download {}: an answer at {} of {} bytes isn't the rest of the file", run.id, from, run.size)
@@ -455,12 +468,19 @@ class ServiceDownloadWriter(
             while (run.written < run.size) {
                 // Looked at before each read: a stream that started stops the reads here at the latest.
                 if (streaming.value) run.stopped = true
-                if (run.stopped) return Ended.StreamWait
                 val n = try {
-                    blocking(read) { read.read(run.out.buffer, 0, minOf(run.out.buffer.size.toLong(), run.size - run.written).toInt()) }
-                } catch (e: IOException) {
+                    calling(run, read) { read.read(run.out.buffer, 0, minOf(run.out.buffer.size.toLong(), run.size - run.written).toInt()) }
+                        ?: return Ended.StreamWait
+                } catch (e: CancellationException) {
+                    currentCoroutineContext().ensureActive()
+                    return if (run.stopped) Ended.StreamWait else Ended.Cut(e)
+                } catch (e: Exception) {
+                    // A cut (an IOException), or what else the source threw, a close from another thread meeting it among them.
                     return if (run.stopped) Ended.StreamWait else Ended.Cut(e)
                 }
+                // A read a stream's stop came during: none of its bytes is taken, as an abort from another thread may have
+                // met it, nor its end; they are read again from the safe offset after the wait.
+                if (run.stopped) return Ended.StreamWait
                 if (n <= 0) return Ended.Cut(null)
                 run.out.took(n)
                 pace?.took(n)
@@ -487,7 +507,10 @@ class ServiceDownloadWriter(
     /** Whether a byte comes past the size from [read], whose answer said no length. */
     private suspend fun past(read: Read): Boolean = try {
         blocking(read) { read.read(ByteArray(1), 0, 1) } > 0
-    } catch (e: IOException) {
+    } catch (e: CancellationException) {
+        currentCoroutineContext().ensureActive()
+        false
+    } catch (e: Exception) {
         false
     }
 
@@ -606,6 +629,27 @@ class ServiceDownloadWriter(
     private fun notReached() = if (network.value) Into.Unreachable else Into.Offline
 
     /**
+     * [call] on [run]'s [read] (its open or a read), marked under way for a stream's stop to see; null, with no call made,
+     * where a stop came first. The mark is set before the stop is looked at, and a stop is set before the mark is: so
+     * either the stop waits for the call, or the call is never made.
+     */
+    private suspend fun <T> calling(run: Run, read: Read, call: () -> T): T? {
+        run.calling.value = true
+        try {
+            if (run.stopped) return null
+            return blocking(read) {
+                try {
+                    call()
+                } finally {
+                    run.calling.value = false
+                }
+            }
+        } finally {
+            run.calling.value = false
+        }
+    }
+
+    /**
      * [call] on [dispatcher], where it may block; a cancel meanwhile aborts [read], so the call comes back at once and
      * the cancel goes on.
      */
@@ -635,7 +679,7 @@ class ServiceDownloadWriter(
         }
 
         /** The body ended before the file's end: [cause], or none for an end that came early. */
-        class Cut(val cause: IOException?) : Ended {
+        class Cut(val cause: Exception?) : Ended {
             override val kind get() = cause?.let { it::class.simpleName } ?: "EndedShort"
         }
 
@@ -678,9 +722,12 @@ class ServiceDownloadWriter(
         /** The accounts asked for the torrent in this write: its own first. */
         val tried = hashSetOf(entry.account)
 
-        /** The read open now, which a stream's start aborts. */
+        /** The read open now, which a stream's start stops. */
         @Volatile
         var current: Read? = null
+
+        /** Whether a call on [current] (its open or a read) is under way. */
+        val calling = MutableStateFlow(false)
 
         /** Set as a stream starts: the body under way stops. */
         @Volatile
@@ -689,10 +736,15 @@ class ServiceDownloadWriter(
         /** Whether the file was started again from 0 in this write. */
         var restarted = false
 
-        /** A stream started: the body stops, the read it waits on aborted from this thread. */
-        fun stopForStream() {
+        /**
+         * A stream started: the body stops. A call on its read under way is given [letGo] to come back, and is then let go
+         * on the writer's side alone (Android's HTTP stack reads the rest of a body on the thread that closes it, which
+         * beside a read would have two threads in its buffers); one still waiting on the CDN after it is aborted from here.
+         */
+        suspend fun stopForStream(letGo: Duration) {
             stopped = true
-            current?.abort()
+            val read = current ?: return
+            if (withTimeoutOrNull(letGo) { calling.first { !it } } == null) read.abort()
         }
     }
 
@@ -721,6 +773,13 @@ class ServiceDownloadWriter(
 
         /** How long nothing must have streamed before the download goes on (L471): the lead's, which M-wait measures. */
         val QUIET = 10.seconds
+
+        /**
+         * How long a stream's stop gives a call on the read under way to come back before it aborts it from another thread:
+         * one from a body still flowing comes back within milliseconds and is let go after it on the writer's side alone,
+         * as the player's read-ahead and the cast relay let theirs go; one still waiting after it waits on a CDN gone silent.
+         */
+        val LET_GO = 200.milliseconds
 
         /** How long a service's gate stays closed for a limit whose answer named no wait, as its gate keeps it. */
         val LIMIT_WITHOUT_WAIT = 1.hours
