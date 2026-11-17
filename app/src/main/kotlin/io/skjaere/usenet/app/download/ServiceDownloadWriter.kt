@@ -77,7 +77,7 @@ import kotlin.time.TimeSource
  *   there from an earlier process, it fails ([DownloadHostRules.CANT_RESUME]). With nothing written, nothing can start
  *   again: it is no working link;
  * - a limit of the account ends the write with the account and when its gate opens ([Wait.Limit]); its key refused waits
- *   for a new one ([Wait.KeyRefused]);
+ *   for a new one ([Wait.KeyRefused]), at the refusal and at each open after it while no new key is saved ([keyRefused]);
  * - the torrent lost on its account (not cached any more, taken down, refused there, or the account switched off or
  *   signed out of) goes on from the safe offset on the next account on that lists its file at the same path and size,
  *   prepared there, the listing kept as the row's (L424); with none, the release is given up ([Outcome.NextRelease]);
@@ -102,6 +102,11 @@ class ServiceDownloadWriter(
     private val reads: Reads = ServiceFileReads,
     /** Account [accountId]'s service while it is on and debrid shows (L422's gated lookup); null otherwise. */
     private val accounts: suspend (accountId: String) -> DebridService?,
+    /**
+     * Whether account [accountId] is saved and switched on with its key refused since it was saved: the registry marks a
+     * key at the first refusal any call meets, after which [accounts] gives none for it.
+     */
+    private val keyRefused: suspend (accountId: String) -> Boolean,
     /** The listings plays keep: a torrent added again, or taken from the next account, is kept there too. */
     private val listings: DebridListingStore,
     /** The accounts on, by id, in the user's order: where a torrent lost on its account is looked for next (L424). */
@@ -308,6 +313,12 @@ class ServiceDownloadWriter(
             }
             val service = accounts(run.entry.account)
             if (service == null) {
+                // A refused key (this write's own refusal, or a play's) leaves the account saved and switched on: it waits
+                // for a new key at its offset, and its torrent is never moved or given up for it (L474).
+                if (keyRefused(run.entry.account)) {
+                    log.info("download {}: its account's key was refused: waiting for a new one at {} of {} bytes", run.id, run.written, run.size)
+                    return Outcome.Waiting(Wait.KeyRefused)
+                }
                 if (!nextAccount(run, Lost.AccountGone)) return Outcome.NextRelease(Lost.AccountGone)
                 wait = firstBackoff
                 misses = 0

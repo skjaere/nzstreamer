@@ -109,6 +109,7 @@ class ServiceDownloadWriterDeviceTest {
     private fun writer(reads: ServiceDownloadWriter.Reads = ServiceFileReads, firstBackoff: Duration = ServiceDownloadWriter.FIRST_BACKOFF) = ServiceDownloadWriter(
         reads,
         accounts = { id -> torbox.takeIf { id == ACCOUNT } },
+        keyRefused = { false },
         listings = DebridListingStore(File(dir, "listings.json")),
         accountsOn = { listOf(ACCOUNT) },
         streaming = container.streamTraffic.streaming,

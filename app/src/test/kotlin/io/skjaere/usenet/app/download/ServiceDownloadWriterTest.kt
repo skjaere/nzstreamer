@@ -108,11 +108,17 @@ class ServiceDownloadWriterTest {
     private val fileB = ServiceFile(0, PATH, size, "31")
     private val listingB = ServiceListing(listOf(fileB, ServiceFile(1, SAMPLE, 50_000, "32")))
     private val entry = DebridListingStore.Entry(DebridListingStore.idFor(ACCOUNT_A, HASH), ACCOUNT_A, TITLE, Prepared(HASH, listingA, fileA, handle = "4101"))
-    private val a = FakeService(listingA, handle = "4101")
-    private val b = FakeService(listingB, handle = "5202")
+    private val a = FakeService(ACCOUNT_A, listingA, handle = "4101")
+    private val b = FakeService(ACCOUNT_B, listingB, handle = "5202")
 
     /** The accounts switched off or signed out of: the gated lookup gives none. */
     private val gone = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * The accounts whose key was refused since it was saved, as the registry marks one at the first refusal any call
+     * meets (a [FakeService]'s too): still saved and switched on, but the gated lookup gives none for them.
+     */
+    private val refused = ConcurrentHashMap.newKeySet<String>()
 
     /** Each account the gated lookup was asked for. */
     private val lookups = CopyOnWriteArrayList<String>()
@@ -135,10 +141,11 @@ class ServiceDownloadWriterTest {
         reads,
         accounts = { id ->
             lookups += id
-            services[id]?.takeIf { id !in gone }
+            services[id]?.takeIf { id !in gone && id !in refused }
         },
+        keyRefused = { id -> id in refused && id !in gone },
         listings = listings,
-        accountsOn = { on.filter { it !in gone } },
+        accountsOn = { on.filter { it !in gone && it !in refused } },
         streaming = traffic.streaming,
         folder = folder,
         network = network,
@@ -181,6 +188,7 @@ class ServiceDownloadWriterTest {
         folder.copies.clear()
         folder.marked.clear()
         gone.clear()
+        refused.clear()
         a.failing = null
         a.again = null
         b.prepareFailing = null
@@ -365,9 +373,43 @@ class ServiceDownloadWriterTest {
         val key = writer().wrote(from = 250_000)
         assertEquals(Outcome.Waiting(Wait.KeyRefused), key)
         assertEquals(DownloadHostRules.CHECK_SERVICE, (key as Outcome.Waiting).wait.reason)
+        // A new key saved, and the CDN's read refused it.
         a.failing = null
+        refused.clear()
         reads.script(Script(refuse = LinkFailure.KeyRefused(ServiceKind.TorBox.displayName)))
         assertEquals(Outcome.Waiting(Wait.KeyRefused), writer().wrote(from = 250_000))
+    }
+
+    /**
+     * L474: a refused key leaves its account saved and switched on, but the gated lookup gives none for it from then on, as
+     * the registry marks the key at the first refusal any call meets. The download waits for a new key at its offset,
+     * after its own refusal or a play's, and a Resume before one is saved waits again: its torrent is never moved to
+     * another account, nor its release given up (L424 is for an account switched off or signed out of).
+     */
+    @Test
+    fun `a refused key waits for a new one at its offset, though the lookup gives none for its account from then on`() = runTest(timeout = 60.seconds) {
+        val on = listOf(ACCOUNT_A, ACCOUNT_B)
+        // Its own reopen's link refused: the registry marks the key.
+        reads.script(Script(cutAt = 400_000))
+        assertEquals(Outcome.Waiting(Wait.KeyRefused), writer(on = on).wrote(onOpen = { offset -> if (offset > 0) a.failing = ServiceError.KeyRefused }))
+        assertEquals(setOf(ACCOUNT_A), refused)
+        assertEquals(listOf(400_000L), records)
+
+        // Resume before a new key is saved: the lookup gives none, and it waits again, asking nothing of either account.
+        a.failing = null
+        assertEquals(Outcome.Waiting(Wait.KeyRefused), writer(on = on).wrote(from = 400_000))
+        assertEquals(2, a.links.size)
+        assertEquals(1, reads.made.size)
+        assertTrue(b.picks.isEmpty() && b.links.isEmpty() && folder.copies.isEmpty())
+        assertEquals(listOf(400_000L), records)
+
+        // A play meets the refusal while the download writes: its next open waits too, what came before recorded.
+        reset()
+        reads.script(Script(cutAt = 600_000, opened = { refused += ACCOUNT_A }))
+        assertEquals(Outcome.Waiting(Wait.KeyRefused), writer(on = on).wrote())
+        assertEquals(listOf(600_000L), records)
+        assertEquals(1, a.links.size)
+        assertTrue(b.picks.isEmpty() && b.links.isEmpty() && folder.copies.isEmpty())
     }
 
     @Test
@@ -415,7 +457,7 @@ class ServiceDownloadWriterTest {
     @Test
     fun `with no other account that lists the file at its size the release is given up, nothing added there`() = runTest(timeout = 60.seconds) {
         // B lists it at another size: its pick is none, so nothing is added.
-        val other = FakeService(ServiceListing(listOf(ServiceFile(0, PATH, size + 1, "31"))), handle = "5202")
+        val other = FakeService(ACCOUNT_B, ServiceListing(listOf(ServiceFile(0, PATH, size + 1, "31"))), handle = "5202")
         reads.script(Script(cutAt = 400_000, opened = { a.failing = ServiceError.NotCached }))
         val services = mapOf(ACCOUNT_A to a, ACCOUNT_B to other)
         assertEquals(Outcome.NextRelease(Lost.NotCached), writer(on = listOf(ACCOUNT_A, ACCOUNT_B), services = services).wrote())
@@ -617,8 +659,11 @@ class ServiceDownloadWriterTest {
         assertEquals(emptyList(), words.filter { it in bad.message.orEmpty() || it in limit.toString() })
     }
 
-    /** One account's service: its [listing], prepared under [handle]; each link asked recorded with what it was asked for. */
-    private inner class FakeService(private val listing: ServiceListing, private val handle: String) : DebridService {
+    /**
+     * Account [id]'s service: its [listing], prepared under [handle]; each link asked recorded with what it was asked for.
+     * A refused key marks the account, as the registry's watch of its clients does.
+     */
+    private inner class FakeService(private val id: String, private val listing: ServiceListing, private val handle: String) : DebridService {
         override val kind = ServiceKind.TorBox
         val links = CopyOnWriteArrayList<Pair<Prepared, ServiceFile>>()
         val picks = CopyOnWriteArrayList<ServiceFile?>()
@@ -648,7 +693,10 @@ class ServiceDownloadWriterTest {
 
         override suspend fun link(prepared: Prepared, file: ServiceFile): ServiceLink {
             links += prepared to file
-            failing?.let { throw ServiceException(it) }
+            failing?.let {
+                if (it == ServiceError.KeyRefused) refused += id
+                throw ServiceException(it)
+            }
             return ServiceLink("$scheme://cdn.example.org/dl/0123abcd${links.size}/$NAME?token=$KEY", Instant.ofEpochMilli(EPOCH), prepared = again?.also { again = null })
         }
 
