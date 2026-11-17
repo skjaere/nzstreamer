@@ -39,6 +39,7 @@ import kotlin.random.Random
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -291,6 +292,20 @@ class ServedStreamTest {
         assertEquals(data.size - 1_000L, snapshot.totalBytes)
         assertEquals(1L, snapshot.endedStreams)
         assertEquals(emptyMap(), snapshot.streams)
+    }
+
+    /** L471: the cast relay's upstream counts as something streaming from its open until its close, each on its own. */
+    @Test
+    fun `an upstream says something streams from its open to its close`() {
+        val traffic = StreamTraffic()
+        val first = source(traffic = traffic).open(0) {}
+        assertTrue(traffic.streaming.value)
+        val second = source(traffic = traffic).open(1_000) {}
+        assertContentEquals(data, first.readAll())
+        first.close()
+        assertTrue(traffic.streaming.value, "the second still open")
+        second.close()
+        assertFalse(traffic.streaming.value)
     }
 
     private companion object {

@@ -129,6 +129,29 @@ class UsenetStreamReaderTest {
         assertEquals(2L, traffic.snapshot().endedStreams)
     }
 
+    /**
+     * L471: a Usenet stream counts as something streaming, for a debrid download to wait, from its start (the first read,
+     * as its meter counts) until its close; one opened and never read started no stream.
+     */
+    @Test
+    @Timeout(10)
+    fun aStreamSaysSomethingStreamsFromItsStartToItsClose() {
+        val traffic = StreamTraffic()
+        val reader = UsenetStreamReader(store, preparer, opener, traffic)
+        reader.open("ab12", 0, 0, C.LENGTH_UNSET.toLong())
+        assertFalse(traffic.streaming.value, "opened and never read")
+        assertEquals(7_000, reader.read(ByteArray(7_000), 0, 7_000))
+        assertTrue(traffic.streaming.value)
+        reader.close()
+        assertFalse(traffic.streaming.value)
+        // A seek is a close and an open: the next stream streams from its own start.
+        reader.open("ab12", 0, 150_000, C.LENGTH_UNSET.toLong())
+        assertTrue(reader.read(ByteArray(1_000), 0, 1_000) > 0)
+        assertTrue(traffic.streaming.value)
+        reader.close()
+        assertFalse(traffic.streaming.value)
+    }
+
     @Test
     @Timeout(10)
     fun rangedReadIsClampedToFileEnd() {
