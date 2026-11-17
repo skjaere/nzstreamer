@@ -79,22 +79,27 @@ class DownloadImages(
         scope.launch { quietly("keep the pictures of ${rows.size} downloads") { keep(rows) } }
     }
 
-    /** [rows]' pictures that are missing or [REFRESH_MILLIS] old fetched and kept; none while Show artwork is off. */
+    /**
+     * [rows]' pictures that are missing or [REFRESH_MILLIS] old fetched and kept; none while Show artwork is off. Each
+     * address is asked once a call, its answer (or none) kept for every row it is due for: a season's episodes share their
+     * show's poster, and their copies come due together.
+     */
     suspend fun keep(rows: List<Download>) {
+        val answers = HashMap<String, Result<ByteArray?>>()
         for (row in rows) {
             for (kind in Kind.entries) {
                 val url = url(row, kind) ?: continue
                 if (!artwork.first()) return
-                keep(row.id, kind, url)
+                keep(row.id, kind, url, answers)
             }
         }
     }
 
-    private suspend fun keep(id: String, kind: Kind, url: String) {
+    private suspend fun keep(id: String, kind: Kind, url: String, answers: MutableMap<String, Result<ByteArray?>>) {
         try {
             val folder = folder(id) ?: return
             if (!withContext(io) { marked(folder) && due(File(folder, kind.file)) }) return
-            val bytes = fetch.fetch(url)
+            val bytes = answers.getOrPut(url) { ask(url) }.getOrThrow()
             if (bytes == null) {
                 log.info("Download {}: its {} wasn't kept, none came", id, kind.word)
                 return
@@ -108,6 +113,15 @@ class DownloadImages(
         } catch (e: Exception) {
             log.info("Download {}: its {} wasn't kept ({})", id, kind.word, e::class.simpleName)
         }
+    }
+
+    /** [url]'s bytes as the host answered, or why none came; a cancellation is the caller's. */
+    private suspend fun ask(url: String): Result<ByteArray?> = try {
+        Result.success(fetch.fetch(url))
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 
     /**

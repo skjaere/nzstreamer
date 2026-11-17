@@ -79,6 +79,43 @@ class DownloadImagesTest {
         assertEquals(3, fetch.asked.size)
     }
 
+    /**
+     * L411: a season's episodes share their show's poster, so one keep asks the host for it once and writes the answer
+     * into each one's copy; so does the 30-day refresh, when a season's copies are due together. A poster none came for,
+     * or one the host failed to give, is asked once too.
+     */
+    @Test
+    fun `a season's rows sharing one poster ask the host once for the poster and once for each still`() = runTest {
+        val images = images()
+        val season = (1..3).map { made(episode("e$it", it)) }
+        images.keep(season)
+        assertEquals(listOf(posterUrl(POSTER)) + (1..3).map { stillUrl(stillPath(it)) }, fetch.asked)
+        (1..3).forEach {
+            assertContentEquals(FakeImageFetch.bytes(posterUrl(POSTER)), File(root, "e$it/poster.jpg").readBytes(), "e$it")
+            assertContentEquals(FakeImageFetch.bytes(stillUrl(stillPath(it))), File(root, "e$it/still.jpg").readBytes(), "e$it")
+        }
+
+        // 30 days on, the season's copies are due together: the poster asked once again.
+        fetch.asked.clear()
+        now = START + 30 * DAY
+        images.keep(season)
+        assertEquals(listOf(posterUrl(POSTER)) + (1..3).map { stillUrl(stillPath(it)) }, fetch.asked)
+        (1..3).forEach { assertEquals(now, File(root, "e$it/poster.jpg").lastModified(), "e$it") }
+
+        // A poster none came for, and one the host failed to give: each asked once, and nothing kept of it.
+        fetch.asked.clear()
+        fetch.none = setOf(posterUrl(OTHER_POSTER))
+        fetch.failing = setOf(posterUrl(THIRD_POSTER))
+        val other = (4..5).map { made(episode("e$it", it).copy(posterPath = OTHER_POSTER)) }
+        val third = (6..7).map { made(episode("e$it", it).copy(posterPath = THIRD_POSTER)) }
+        images.keep(other + third)
+        assertEquals(
+            listOf(posterUrl(OTHER_POSTER), stillUrl(stillPath(4)), stillUrl(stillPath(5)), posterUrl(THIRD_POSTER), stillUrl(stillPath(6)), stillUrl(stillPath(7))),
+            fetch.asked,
+        )
+        (4..7).forEach { assertEquals(setOf(DownloadStorage.MARKER, "still.jpg"), names("e$it"), "e$it") }
+    }
+
     @Test
     fun `a download whose folder is gone gets no picture, and no folder is made for it`() = runTest {
         val images = images()
@@ -189,10 +226,10 @@ class DownloadImagesTest {
         front.value = true
         runCurrent()
         assertEquals(4, fetch.asked.size)
-        // Online again, in front: both, each 30 days old by now.
+        // Online again, in front: both, each 30 days old by now, their shared poster asked once.
         online.value = true
         runCurrent()
-        assertEquals(8, fetch.asked.size)
+        assertEquals(listOf(posterUrl(POSTER), stillUrl(stillPath(1)), stillUrl(stillPath(2))), fetch.asked.drop(4))
     }
 
     /**
@@ -373,6 +410,8 @@ class DownloadImagesTest {
         const val MOVIE = 990_902
         const val POSTER = "/harbor-lights-poster.jpg"
         const val FILM_POSTER = "/copper-crown-poster.jpg"
+        const val OTHER_POSTER = "/quiet-meridian-poster.jpg"
+        const val THIRD_POSTER = "/harbor-lights-season-3-poster.jpg"
         const val VIDEO = "v.mkv"
         val OLD = "the poster before".encodeToByteArray()
 

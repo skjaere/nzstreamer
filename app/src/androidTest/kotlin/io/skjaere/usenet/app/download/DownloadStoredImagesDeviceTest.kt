@@ -239,7 +239,6 @@ class DownloadStoredImagesDeviceTest {
         assertEquals(emptyList<String>(), screens.refused.toList())
     }
 
-    /** [rows]' pictures kept through the app's own path (the seam answering), then the image host out of reach. */
     /**
      * L411: the app's own fetch for the downloads' pictures asks the image host each time, never Coil's caches, so a copy's
      * time is when the host answered: a refresh at 30 days fetches the picture again, and its 180 days count from then. The
@@ -317,6 +316,7 @@ class DownloadStoredImagesDeviceTest {
         override fun close() = socket.close()
     }
 
+    /** [rows]' pictures kept through the app's own path (the seam answering), then the image host out of reach. */
     private fun kept(vararg rows: Download) {
         runBlocking { images.keep(rows.toList()) }
         rows.forEach { row -> Kind.entries.forEach { assertTrue("$it kept", copy(row, it).isFile) } }
