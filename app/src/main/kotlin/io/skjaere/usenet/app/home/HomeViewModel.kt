@@ -186,9 +186,9 @@ class HomeViewModel(private val container: AppContainer, private val collectionR
     val downloadedIds: StateFlow<Map<String, String>> = container.downloads.done.map(DownloadedTitles::ids).distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
-    /** A finished film's row in Home's Downloads: played here, from its file (L353), as the Downloads page plays it. */
+    /** A finished film's row in Home's Downloads: its file played where Play on points (L418), as the Downloads page plays it. */
     fun playDownload(row: Download) {
-        DownloadsDeps.playHere(container, row)
+        DownloadsDeps.play(container, row)
     }
 
     /** A row's Play: resumes what is in progress, or finds and plays a show's next episode, where Play on says (L7). */

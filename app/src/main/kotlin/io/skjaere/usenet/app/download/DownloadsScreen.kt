@@ -91,7 +91,9 @@ import io.skjaere.usenet.app.collection.TopPill
 import io.skjaere.usenet.app.collection.UndoBar
 import io.skjaere.usenet.app.collection.cardSegment
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.link.CastButton
 import io.skjaere.usenet.app.link.PauseIcon
+import io.skjaere.usenet.app.link.SheetPlace
 import io.skjaere.usenet.app.search.PlayCircle
 import io.skjaere.usenet.app.search.Poster
 import io.skjaere.usenet.app.search.ReleaseList
@@ -109,10 +111,11 @@ import io.skjaere.usenet.metadata.TmdbImages
 
 /**
  * The Downloads page (item 19; L372, L379-L381), on phones and tablets alone (W108, L369): where downloads don't show it
- * ends at once and shows nothing. The bar's Select and its gear to Settings › Downloads ([onSettings]); the space strip,
- * with the lines about mobile data and Android's background limit (L361); Downloading (the row the queue is at, with
- * Pause or Resume, then the queue with Move up and Move down), Failed, and Downloaded, one row per show ([onShow] opens
- * its downloads) and one per film (a tap plays it); select mode with Delete and the Undo bar. Choose release and Choose
+ * ends at once and shows nothing. The bar's Select, the Cast button and its gear to Settings › Downloads ([onSettings],
+ * L453), the title on a line of its own where they leave it no room (L470); the space strip, with the lines about mobile
+ * data and Android's background limit (L361); Downloading (the row the queue is at, with Pause or Resume, then the queue
+ * with Move up and Move down), Failed, and Downloaded, one row per show ([onShow] opens its downloads) and one per film
+ * (a tap plays it where Play on points, L418); select mode with Delete and the Undo bar. Choose release and Choose
  * another release show the release list in download mode in the page's place. [onOpenMovie] opens a film's page. A
  * notification's ask comes as [choose] (a download's releases) or [play] (a finished one played), with its own id ([ask]).
  */
@@ -179,6 +182,7 @@ internal fun DownloadsScreen(
     val keepFor = undoTimeout(vm.undoMillis)
     val compact = compactBar()
     val context = LocalContext.current
+    val playOn by context.container.playOn.target.collectAsStateWithLifecycle()
     BackHandler(enabled = selection != null, onBack = vm.edits::exitSelect)
 
     val p = page
@@ -194,8 +198,10 @@ internal fun DownloadsScreen(
                     onDelete = { vm.edits.remove(rows.flatMap { it.downloads }, keepFor) },
                 )
             } else {
-                TopBar(DownloadsPage.TITLE, onBack) {
+                TopBar(DownloadsPage.TITLE, onBack, stacked = true) {
                     if (p?.empty == false) TopPill(DownloadsPage.SELECT, Icons.Filled.CheckCircle, compact, onClick = { vm.edits.startSelect() })
+                    // Where the rows play (L453): Play on opened here ticks This phone with a TV chosen, as Import's does.
+                    CastButton(playOn, { context.container.playOn.openSheet(SheetPlace.PhoneOnly) }, place = SheetPlace.PhoneOnly)
                     IconButton(onClick = onSettings, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.Filled.Settings, contentDescription = DownloadsPage.SETTINGS, tint = colors.text)
                     }
@@ -231,8 +237,8 @@ internal fun DownloadsScreen(
                     when (row) {
                         is DownloadsRow.Show -> ShowRow(row, first, last, select(row), artwork, onSelect = { pick(row) }, onOpen = { onShow(row.showTmdbId) })
                         is DownloadsRow.Film -> FilmRow(
-                            row, first, last, select(row), artwork, onSelect = { pick(row) }, onPlay = { vm.play(row.row) },
-                            onRemove = { vm.edits.remove(row.downloads, keepFor) }, onMark = { vm.mark(row.row, !row.watched) },
+                            row, first, last, select(row), artwork, DownloadsPage.playLabel(row.title, playOn), onSelect = { pick(row) },
+                            onPlay = { vm.play(row.row) }, onRemove = { vm.edits.remove(row.downloads, keepFor) }, onMark = { vm.mark(row.row, !row.watched) },
                             onOpen = { row.row.movieTmdbId?.let(onOpenMovie) },
                         )
                         else -> Unit
@@ -354,7 +360,7 @@ private fun ShowRow(row: DownloadsRow.Show, first: Boolean, last: Boolean, selec
 
 /**
  * A finished film: its year, length and size, its missing parts, and "Deleting tomorrow" while Delete once watched has it
- * going (L415); Play, and its ⋮. A tap plays it.
+ * going (L415); Play, read as [playLabel] (the Cast device it plays on, L470), and its ⋮. A tap plays it.
  */
 @Composable
 private fun FilmRow(
@@ -363,6 +369,7 @@ private fun FilmRow(
     last: Boolean,
     selected: Boolean?,
     artwork: Boolean,
+    playLabel: String,
     onSelect: () -> Unit,
     onPlay: () -> Unit,
     onRemove: () -> Unit,
@@ -377,7 +384,7 @@ private fun FilmRow(
     RowFrame(
         row, first, last, selected, artwork, onClick = onPlay, onSelect = onSelect,
         end = {
-            PlayCircle(primary = false, label = "Play ${row.title}", onClick = onPlay)
+            PlayCircle(primary = false, label = playLabel, onClick = onPlay)
             MoreMenu(moreFor(row.row), menu)
         },
     ) {

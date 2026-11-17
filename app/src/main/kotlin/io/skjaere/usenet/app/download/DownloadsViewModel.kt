@@ -112,7 +112,7 @@ data class DownloadsDeps(
         /**
          * The app's: the runner's queue and calls, the downloads' storage, the settings, the default network, the library's
          * watch states and marks, TMDB's lookup as a play's (TmdbLookup), the Download sheet's search, the host scheduled
-         * from the visible app, and a finished download played here from its file (the coordinator's hook, L353).
+         * from the visible app, and a finished download played from its file where Play on points ([play], L418).
          */
         fun of(container: AppContainer, context: Context) = DownloadsDeps(
             items = container.downloads.state,
@@ -140,7 +140,7 @@ data class DownloadsDeps(
             },
             search = DownloadSheetDeps.of(container, ask = null, context),
             get = container.data.downloads::get,
-            play = { row -> playHere(container, row) },
+            play = { row -> play(container, row) },
             mark = { row, watched -> mark(container, row, watched) },
             work = container.appScope,
             packs = container.downloads.packs,
@@ -149,10 +149,18 @@ data class DownloadsDeps(
         )
 
         /**
-         * Plays [row]'s file here (L353): by its title's own play, which the coordinator's hook turns to the file, so its
-         * progress and Up next are the title's either way. Home's Downloads plays a film so too.
+         * Plays [row]'s file where Play on points (L418), through the router: here with This phone or a TV chosen
+         * ([playHere]); on the connected Cast device, its file cast as from a place of files, which asks before a file the
+         * device can't fully play (L447). The pages' rows and Resume, their notifications' Play and Home's Downloads rows
+         * all play a download so.
          */
-        internal fun playHere(container: AppContainer, row: Download) {
+        internal fun play(container: AppContainer, row: Download) = container.playRouter.playDownload(row) { playHere(container, row) }
+
+        /**
+         * Plays [row]'s file here (L353): by its title's own play, which the coordinator's hook turns to the file, so its
+         * progress and Up next are the title's either way. Only the router's here, for This phone or a TV.
+         */
+        private fun playHere(container: AppContainer, row: Download) {
             when (row.kind) {
                 DownloadKind.Episode -> {
                     val target = EpisodeTarget(row.showTmdbId ?: return, row.title, row.season ?: return, row.episode ?: return)

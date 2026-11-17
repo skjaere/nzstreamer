@@ -1,6 +1,9 @@
 package io.skjaere.usenet.app.download
 
 import io.skjaere.usenet.app.NetworkNow
+import io.skjaere.usenet.app.casting.CastLink
+import io.skjaere.usenet.app.link.PlayTarget
+import io.skjaere.usenet.app.link.TvState
 import io.skjaere.usenet.app.play.EpisodePlay
 import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.search.MovieFind
@@ -30,6 +33,7 @@ import io.skjaere.usenet.search.FoundRelease
 import io.skjaere.usenet.search.RankedItem
 import io.skjaere.usenet.search.SearchStage
 import io.skjaere.usenet.data.PlaybackPrefs
+import io.skjaere.usenet.link.KeyId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,6 +48,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.time.LocalDate
 import java.util.Locale
+import kotlin.random.Random
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -132,6 +137,22 @@ class DownloadsPageTest {
         // Nothing begun: the next after the furthest watched.
         val next = DownloadsPage.of(episodes.map(::item), episodeStates = mapOf(HL to states - (2 to 1)))
         assertEquals("Next: S02E01", DownloadsPage.nextLine(assertIs<DownloadsRow.Show>(next.downloaded.single()).next!!))
+    }
+
+    /**
+     * L418, L470: a download row plays on this phone with This phone or a TV chosen (a TV never gets this phone's file) and on
+     * the Cast device chosen, connected or connecting, so a film's ▶ is read with that device's name; as now otherwise.
+     */
+    @Test
+    fun `a film's Play is read with the Cast device chosen, and as now with This phone or a TV`() {
+        val tv = PlayTarget.Tv(KeyId.of(Random.nextBytes(91)), "Living room TV", TvState.Ready)
+        val kitchen = PlayTarget.Cast("route-1", "Kitchen display", CastLink.Connected)
+        val connecting = kitchen.copy(link = CastLink.Connecting)
+        assertEquals(listOf(PlayTarget.Phone, PlayTarget.Phone, kitchen, connecting), listOf(PlayTarget.Phone, tv, kitchen, connecting).map(DownloadsPage::playsOn))
+        assertEquals(
+            listOf("Play Copper Crown", "Play Copper Crown", "Play Copper Crown on Kitchen display", "Play Copper Crown on Kitchen display"),
+            listOf(PlayTarget.Phone, tv, kitchen, connecting).map { DownloadsPage.playLabel("Copper Crown", it) },
+        )
     }
 
     /** C4, L415: with Delete once watched on, a film going tomorrow says so on its row; a show's row is its page's to say. */

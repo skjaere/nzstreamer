@@ -6,6 +6,7 @@ import io.skjaere.usenet.app.collection.movieHeader
 import io.skjaere.usenet.app.casting.CastDeviceKind
 import io.skjaere.usenet.app.casting.CastLink
 import io.skjaere.usenet.app.collection.movieTarget
+import io.skjaere.usenet.app.download.DownloadLaunch
 import io.skjaere.usenet.app.home.UpNextPlay
 import io.skjaere.usenet.app.play.EpisodePlay
 import io.skjaere.usenet.app.play.EpisodeTarget
@@ -16,6 +17,7 @@ import io.skjaere.usenet.app.play.PlayOutcome
 import io.skjaere.usenet.app.play.PlayRequest
 import io.skjaere.usenet.app.play.WatchTarget
 import io.skjaere.usenet.core.FileCandidate
+import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.data.WatchState
@@ -48,6 +50,9 @@ interface PlayHere {
 
     /** A file Import opened, [file] of the NZB [nzbId], prepared and stored, cast from [origin] (L147). */
     fun castFile(nzbId: String, file: FileCandidate, origin: PlayOrigin)
+
+    /** A finished download's file, [row]'s, cast from [origin] with nothing searched (L418, L447). */
+    fun castDownload(row: Download, origin: PlayOrigin)
 }
 
 /** What a phone asks a TV to play (L6, L25): an episode or a movie, and this phone's own place for it ([from], L39). */
@@ -105,6 +110,9 @@ class PlayRouterDeps(
                 override fun resume(state: WatchState, origin: PlayOrigin) = c.playback.resume(state, origin)
                 override fun play(request: PlayRequest, origin: PlayOrigin) = c.playback.play(request, origin)
                 override fun castFile(nzbId: String, file: FileCandidate, origin: PlayOrigin) = c.playback.castFile(nzbId, file, origin)
+                override fun castDownload(row: Download, origin: PlayOrigin) {
+                    DownloadLaunch.of(row)?.let { launch -> c.playback.castDownload(row, launch, origin) }
+                }
             },
             // Made on the first play on a TV: a TV's own pages route through here too, and never play on one.
             tv = PlayOnTv { tv, title, subtitle, ask -> c.tvStart.start(tv, title, subtitle, ask) },
@@ -135,10 +143,12 @@ class PlayRouterDeps(
  * grabbed on the phone (C4). Up next's rows are worked out with this phone's TMDB key first, as the coordinator would
  * (L6); a release played without TMDB has nothing a TV could search by, and plays here. Each Play carries this phone's
  * own place for its watch key, with how long ago it was saved (L39). Choose release and Search never reach a TV
- * ([chosen]), nor does Import, which plays here with no launch ([playFile]).
+ * ([chosen]), nor does Import, which plays here with no launch ([playFile]), nor a finished download's row, whose file is
+ * this phone's ([playDownload]).
  *
  * With a Cast device connected, each plays here as for This phone, with the cast origin (L80): the phone runs the whole
- * play, Choose release, Search, Import's file and a release played without TMDB too, and the device shows it. While it
+ * play, Choose release, Search, Import's file and a release played without TMDB too, and the device shows it; a
+ * download's row casts its file. While it
  * connects or reconnects nothing plays and the Play on sheet opens, where it says so. A Cast speaker or speaker group
  * plays only the sound, so a Play there asks first, at its tap (W50, L122): Cast anyway runs the same Play there, and the
  * session isn't asked again; Play on this phone chooses This phone and runs it here; Cancel runs nothing.
@@ -237,6 +247,25 @@ class PlayRouter(private val deps: PlayRouterDeps) {
                 when (to) {
                     Where.Here -> here()
                     is Where.Cast -> deps.here.castFile(nzbId, file, to.origin)
+                    is Where.Tv, Where.Nowhere -> Unit
+                }
+            }
+        }
+    }
+
+    /**
+     * A finished download's [row] (L418), from the Downloads pages, Home's Downloads rows and the Finished notifications:
+     * with This phone or a TV chosen it plays [here] (a TV never gets this phone's file, W108); on the connected Cast
+     * device its file is cast from the cast origin, nothing searched (L447). While the device connects nothing plays and
+     * the sheet opens; to a speaker, as the answer to its question says.
+     */
+    fun playDownload(row: Download, here: () -> Unit) {
+        when (deps.target()) {
+            PlayTarget.Phone, is PlayTarget.Tv -> here()
+            is PlayTarget.Cast -> routed { to ->
+                when (to) {
+                    Where.Here -> here()
+                    is Where.Cast -> deps.here.castDownload(row, to.origin)
                     is Where.Tv, Where.Nowhere -> Unit
                 }
             }

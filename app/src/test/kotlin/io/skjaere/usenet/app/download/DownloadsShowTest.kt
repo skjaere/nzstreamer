@@ -1,5 +1,8 @@
 package io.skjaere.usenet.app.download
 
+import io.skjaere.usenet.app.casting.CastLink
+import io.skjaere.usenet.app.link.PlayTarget
+import io.skjaere.usenet.app.link.TvState
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
@@ -7,10 +10,12 @@ import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.data.WatchState
+import io.skjaere.usenet.link.KeyId
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.util.Locale
+import kotlin.random.Random
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
@@ -100,6 +105,23 @@ class DownloadsShowTest {
     }
 
     /** C4, L415: with Delete once watched on, an episode going tomorrow says so on its own line, under its size and length. */
+    /**
+     * L418, L470: Resume and an episode's tap play where a download row plays: the Cast device chosen, connected or
+     * connecting, its name in Resume's face and TalkBack's action; This phone with This phone or a TV chosen, as now.
+     */
+    @Test
+    fun `Resume and an episode's tap say the Cast device chosen, and This phone with a TV chosen`() {
+        val tv = PlayTarget.Tv(KeyId.of(Random.nextBytes(91)), "Living room TV", TvState.Ready)
+        val kitchen = PlayTarget.Cast("route-1", "Kitchen display", CastLink.Connected)
+        val connecting = kitchen.copy(link = CastLink.Connecting)
+        // Resume's PlayOnPrimary is given where the row plays: a TV read as This phone.
+        assertEquals(listOf(PlayTarget.Phone, PlayTarget.Phone, kitchen, connecting), listOf(PlayTarget.Phone, tv, kitchen, connecting).map(DownloadsPage::playsOn))
+        assertEquals(
+            listOf("Play", "Play", "Play on Kitchen display", "Play on Kitchen display"),
+            listOf(PlayTarget.Phone, tv, kitchen, connecting).map(DownloadsShow::playAction),
+        )
+    }
+
     @Test
     fun `an episode going tomorrow says Deleting tomorrow`() {
         val row = episode(1, 1)

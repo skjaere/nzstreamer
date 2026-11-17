@@ -43,38 +43,92 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.traversalIndex
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
  * Back arrow + title row used at the top of secondary screens. A TV shows no arrow: the remote's
  * Back does that, and an arrow there would be one more stop for the focus, where a stray OK leaves.
+ *
+ * [stacked] is an opt-in, the Downloads pages' alone (L470): where the title can't share the row with the arrow and the
+ * [actions] on one line (large text, more buttons), the arrow and the actions keep the row and the title gets a line of
+ * its own under them, whole, rather than breaking beside them. TalkBack reads it in the row's order all the same.
  */
 @Composable
-fun TopBar(title: String, onBack: (() -> Unit)?, subtitle: String? = null, actions: @Composable RowScope.() -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+fun TopBar(title: String, onBack: (() -> Unit)?, subtitle: String? = null, stacked: Boolean = false, actions: @Composable RowScope.() -> Unit = {}) {
+    val back = @Composable { modifier: Modifier ->
         if (onBack != null && LocalFormFactor.current != FormFactor.Tv) {
-            IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
+            IconButton(onClick = onBack, modifier = modifier.size(48.dp)) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = colors.text)
             }
         } else {
-            Box(Modifier.size(12.dp))
+            Box(modifier.size(12.dp))
         }
-        Column(Modifier.weight(1f)) {
+    }
+    val titles = @Composable { modifier: Modifier ->
+        Column(modifier) {
             Text(title, style = if (subtitle == null) AppType.screenTitle else AppType.cardTitle, color = colors.text)
             subtitle?.let { Text(it, style = AppType.secondary, color = colors.muted) }
         }
-        actions()
+    }
+    val padding = Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 8.dp, bottom = 8.dp)
+    if (!stacked) {
+        Row(padding, verticalAlignment = Alignment.CenterVertically) {
+            back(Modifier)
+            titles(Modifier.weight(1f))
+            actions()
+        }
+        return
+    }
+    Layout(
+        content = {
+            back(Modifier.semantics { traversalIndex = 0f })
+            titles(Modifier.semantics { traversalIndex = 1f })
+            Row(Modifier.semantics { traversalIndex = 2f }, verticalAlignment = Alignment.CenterVertically, content = actions)
+        },
+        modifier = padding.semantics { isTraversalGroup = true },
+    ) { (arrow, words, buttons), constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val width = constraints.maxWidth
+        val a = arrow.measure(loose)
+        val b = buttons.measure(loose)
+        val beside = (width - a.width - b.width).coerceAtLeast(0)
+        // Whether the title fits beside them on one line, as wide as its words are unbroken.
+        if (words.maxIntrinsicWidth(Constraints.Infinity) <= beside) {
+            val t = words.measure(loose.copy(maxWidth = beside))
+            val height = maxOf(a.height, b.height, t.height)
+            layout(width, height) {
+                a.placeRelative(0, (height - a.height) / 2)
+                t.placeRelative(a.width, (height - t.height) / 2)
+                b.placeRelative(width - b.width, (height - b.height) / 2)
+            }
+        } else {
+            val inset = STACKED_TITLE_INSET.roundToPx()
+            val t = words.measure(loose.copy(maxWidth = (width - inset).coerceAtLeast(0)))
+            val row = maxOf(a.height, b.height)
+            layout(width, row + t.height) {
+                a.placeRelative(0, (row - a.height) / 2)
+                b.placeRelative(width - b.width, (row - b.height) / 2)
+                t.placeRelative(inset, row)
+            }
+        }
     }
 }
+
+/** Where a stacked title starts, in from the bar's edge: under the back arrow's icon. */
+private val STACKED_TITLE_INSET = 12.dp
 
 /** A section's header, in capitals; [top] above it (a padding [modifier] adds to it, never takes it away). */
 @Composable

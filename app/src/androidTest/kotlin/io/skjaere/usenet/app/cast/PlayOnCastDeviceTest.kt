@@ -80,6 +80,7 @@ import io.skjaere.usenet.app.ui.AppTheme
 import io.skjaere.usenet.core.FileCandidate
 import io.skjaere.usenet.core.UsenetUris
 import io.skjaere.usenet.data.AppSettings
+import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.EpisodeRef
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
@@ -283,6 +284,7 @@ class PlayOnCastDeviceTest {
             override fun resume(state: WatchState, origin: PlayOrigin) = throw AssertionError("nothing plays here")
             override fun play(request: PlayRequest, origin: PlayOrigin): Deferred<PlayOutcome> = throw AssertionError("nothing plays here")
             override fun castFile(nzbId: String, file: FileCandidate, origin: PlayOrigin) = throw AssertionError("nothing plays here")
+            override fun castDownload(row: Download, origin: PlayOrigin) = throw AssertionError("nothing plays here")
         }
         val router = PlayRouter(
             PlayRouterDeps(
@@ -453,6 +455,7 @@ class PlayOnCastDeviceTest {
             override fun resume(state: WatchState, origin: PlayOrigin) = throw AssertionError("not this play")
             override fun play(request: PlayRequest, origin: PlayOrigin): Deferred<PlayOutcome> = throw AssertionError("not this play")
             override fun castFile(nzbId: String, file: FileCandidate, origin: PlayOrigin) = throw AssertionError("not this play")
+            override fun castDownload(row: Download, origin: PlayOrigin) = throw AssertionError("not this play")
         }
         val app = PlayRouterDeps.of(container)
         val router = PlayRouter(

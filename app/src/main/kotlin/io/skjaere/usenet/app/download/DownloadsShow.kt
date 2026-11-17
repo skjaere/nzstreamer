@@ -1,6 +1,9 @@
 package io.skjaere.usenet.app.download
 
 import io.skjaere.usenet.app.collection.mmss
+import io.skjaere.usenet.app.link.PlayTarget
+import io.skjaere.usenet.app.link.deviceName
+import io.skjaere.usenet.app.link.onTvLine
 import io.skjaere.usenet.core.formatSize
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadKind
@@ -47,6 +50,9 @@ object DownloadsShow {
         is ShowNext.Resume -> "Resume ${DownloadsPage.label(next.row)} · ${mmss(next.positionMs)}"
         is ShowNext.Play -> "Play ${DownloadsPage.label(next.row)}"
     }
+
+    /** An episode row's action for TalkBack (L470): "Play", and "Play on Kitchen display" with a Cast device chosen. */
+    fun playAction(target: PlayTarget): String = DownloadsPage.playsOn(target).deviceName?.let { "Play ${onTvLine(it)}" } ?: "Play"
 
     /** "Season 1"; season 0's are TMDB's specials. */
     fun seasonTitle(number: Int): String = if (number == 0) "Specials" else "Season $number"

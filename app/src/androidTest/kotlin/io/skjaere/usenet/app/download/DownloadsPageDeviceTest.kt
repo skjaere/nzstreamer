@@ -2,17 +2,35 @@ package io.skjaere.usenet.app.download
 
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isEnabled
 import androidx.compose.ui.test.isHeading
+import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import io.skjaere.usenet.app.cast.CastFakes
+import io.skjaere.usenet.app.cast.CastSeams
+import io.skjaere.usenet.app.cast.FakeConnector
+import io.skjaere.usenet.app.cast.FakeLauncher
+import io.skjaere.usenet.app.cast.FakeRoutes
+import io.skjaere.usenet.app.cast.castRoute
+import io.skjaere.usenet.app.casting.CastLink
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.ATMOS
@@ -30,8 +48,23 @@ import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.scrolledTo
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.show
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.waitFor
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.waitTill
+import io.skjaere.usenet.app.everyStep
+import io.skjaere.usenet.app.link.CastButtonLook
+import io.skjaere.usenet.app.link.FakeTv
+import io.skjaere.usenet.app.link.PlayChoice
+import io.skjaere.usenet.app.link.PlayOnHost
+import io.skjaere.usenet.app.link.PlayTarget
+import io.skjaere.usenet.app.link.SheetPlace
+import io.skjaere.usenet.app.link.THIS_PHONE
+import io.skjaere.usenet.app.link.TITLE_PAGE_LINE
+import io.skjaere.usenet.app.link.inventedTvName
+import io.skjaere.usenet.app.onMainThread
+import io.skjaere.usenet.app.play.PlayState
+import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.MovieMark
+import io.skjaere.usenet.data.RememberedRelease
+import io.skjaere.usenet.player.PlayUris
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
@@ -45,6 +78,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * The Downloads page on a phone (item 19; L372, L380, L381), its rows seeded through the app's own storage and shown over
@@ -61,6 +95,14 @@ import org.junit.runner.RunWith
  * - With nothing, the empty page.
  * - With Delete once watched on, a film marked watched says "Deleting tomorrow" on its row, whole at twice the font size,
  *   and nothing does once it is off (C4, L415); the settings and the mark put back after.
+ * - The bar (L453): Downloads, then Select, the Cast button and the gear; no Cast button in select mode. At twice the
+ *   text size "Downloads" stays whole, on a line of its own under the buttons where it can't share their row (L470).
+ * - With a TV chosen, downloads play here: the button says this phone, and Play on opened from the page ticks This phone
+ *   and greys the TV "Plays from the title's page" (L418, L453).
+ * - With Kitchen display connected (Cast's fakes, L73), a film's ▶ is read with the device's name, and its tap casts the
+ *   film's file there through the launcher (L418, L470), nothing played here.
+ *
+ * Where a case chose a device or paired a TV, Play on is put back to This phone, the TV forgotten and Cast's seams reset.
  */
 @RunWith(AndroidJUnit4::class)
 class DownloadsPageDeviceTest {
@@ -72,11 +114,33 @@ class DownloadsPageDeviceTest {
     private val seeds = DownloadsPageSeeds(context, container)
     private var settings = 0
 
+    // Play on's and Cast's, where a case chose a device or paired a TV: put back after.
+    private val routes = FakeRoutes()
+    private val connector = FakeConnector()
+    private val launcher = FakeLauncher()
+    private val kitchen = castRoute("Kitchen display")
+    private var cast = false
+    private var tv: FakeTv? = null
+
     @Before
     fun setUp() = seeds.before()
 
     @After
-    fun tearDown() = seeds.after()
+    fun tearDown() = runBlocking<Unit> {
+        everyStep(
+            { if (cast || tv != null) compose.runOnUiThread { container.playOn.closeSheet() } },
+            { if (cast) onMainThread { container.playback.cancel() } },
+            { if (cast || tv != null) container.playOn.choose(PlayChoice.Phone) },
+            {
+                tv?.let {
+                    it.close()
+                    container.data.link.forgetTv(it.key.id)
+                }
+            },
+            { if (cast) CastFakes.reset() },
+            { seeds.after() },
+        )
+    }
 
     @Test
     fun eachStateShowsInItsWordsWithTheStripAndTheLines() {
@@ -268,8 +332,155 @@ class DownloadsPageDeviceTest {
         }
     }
 
-    private fun show(deps: DownloadsDeps, fontScale: Float = 1f) {
-        compose.show(context, fontScale) { DownloadsScreen(deps, onBack = {}, onSettings = { settings++ }, onShow = {}, onOpenMovie = {}) }
+    /**
+     * L453: the bar says Downloads beside the back arrow, then Select, the Cast button (this
+     * phone's) and the gear last; select mode's own bar has no Cast button.
+     */
+    @Test
+    fun theBarHasSelectThenTheCastButtonThenTheGearAndNoCastButtonWhileSelecting() {
+        seeds.seed(film())
+        show(seeds.deps())
+        compose.waitFor(hasText("Copper Crown"))
+        val select = bounds(hasContentDescription(DownloadsPage.SELECT) and hasClickAction())
+        val button = bounds(castButton)
+        val gear = bounds(hasContentDescription(DownloadsPage.SETTINGS))
+        assertTrue("Select at $select, the Cast button at $button, the gear at $gear", select.left < button.left && button.left < gear.left)
+        assertEquals("where Play goes", listOf("Play on: this phone"), castWords())
+        // At this size the title shares the row: beside the back arrow, not under it.
+        val back = bounds(hasContentDescription("Back"))
+        val title = bounds(hasText(DownloadsPage.TITLE))
+        assertTrue("the title at $title, the back arrow at $back", title.center.y in back.top..back.bottom && title.left >= back.right - 1f)
+        compose.onNode(hasContentDescription(DownloadsPage.SELECT) and hasClickAction()).performClick()
+        compose.waitFor(hasText(DownloadsPage.selected(0)))
+        assertFalse("no Cast button while selecting", exists(castButton))
+    }
+
+    /**
+     * L470: at twice the text size "Downloads" stays whole, never broken beside Select, the Cast
+     * button and the gear. Where it can't share their row (a page 360 dp wide) it gets a line of its own under the back
+     * arrow and the buttons. On phone34's own 411 dp it may share the row: Android 14 scales large text by less than
+     * twice (its nonlinear font scaling), and there it fits beside them.
+     */
+    @Test
+    fun atTwiceTheTextSizeDownloadsStaysWholeWithALineOfItsOwnWhereItCantShareTheRow() {
+        seeds.seed(film())
+        var narrow by mutableStateOf(false)
+        compose.show(context, fontScale = 2f) {
+            Box(if (narrow) Modifier.width(NARROW) else Modifier.fillMaxWidth()) {
+                DownloadsScreen(seeds.deps(), onBack = {}, onSettings = { settings++ }, onShow = {}, onOpenMovie = {})
+            }
+        }
+        compose.waitFor(castButton)
+        val screen = context.resources.displayMetrics.widthPixels
+        compose.assertWhole(DownloadsPage.TITLE, screen)
+        val title = bounds(hasText(DownloadsPage.TITLE))
+        val select = bounds(hasContentDescription(DownloadsPage.SELECT) and hasClickAction())
+        assertTrue("the title at $title, beside or under Select at $select", title.right <= select.left + 1f || title.top >= select.bottom - 1f)
+        narrow = true
+        compose.waitForIdle()
+        compose.assertWhole(DownloadsPage.TITLE, screen)
+        val back = bounds(hasContentDescription("Back"))
+        val under = bounds(hasText(DownloadsPage.TITLE))
+        val buttons = listOf(bounds(hasContentDescription(DownloadsPage.SELECT) and hasClickAction()), bounds(castButton), bounds(hasContentDescription(DownloadsPage.SETTINGS)))
+        assertTrue("the title at $under, under the back arrow at $back", under.top >= back.bottom - 1f)
+        buttons.forEach { assertTrue("the title at $under, under the button at $it", under.top >= it.bottom - 1f) }
+        // The buttons keep the arrow's row, the gear last at its end.
+        buttons.forEach { assertTrue("the button at $it, in the arrow's row at $back", it.center.y in back.top..back.bottom) }
+    }
+
+    /**
+     * L418, L453, W59: with your TV chosen, downloads play on this phone, so the page's button
+     * says this phone, and Play on opened from it ticks This phone and greys the TV with where it plays from, not to be
+     * chosen here.
+     */
+    @Test
+    fun withATvChosenPlayOnOpenedFromThePageTicksThisPhoneAndGreysTheTv() {
+        seeds.seed(film())
+        castStarted()
+        val fake = pairedTv()
+        container.playOn.choose(PlayChoice.Tv(fake.key.id))
+        compose.waitTill("the TV chosen") { container.playOn.target.value is PlayTarget.Tv }
+        show(seeds.deps(), playOn = true)
+        compose.waitFor(castButton and hasClickAction())
+        assertEquals("downloads play here", listOf("Play on: this phone"), castWords())
+        compose.onNode(castButton and hasClickAction()).performClick()
+        compose.waitFor(hasText(TITLE_PAGE_LINE))
+        assertEquals("opened as a screen whose Play plays here", SheetPlace.PhoneOnly, container.playOn.sheet.value)
+        compose.waitFor(hasText(fake.name))
+        val tvRow = hasText(fake.name) and hasClickAction()
+        assertFalse("the TV can't be chosen from here", exists(tvRow and isEnabled()))
+        assertFalse("nor is it ticked", exists(tvRow and isSelected()))
+        assertTrue("This phone ticked", exists(hasText(THIS_PHONE) and isSelected()))
+        assertEquals("the TV still chosen", PlayChoice.Tv(fake.key.id), container.playOn.chosen.value)
+    }
+
+    /**
+     * L418, L470: with Kitchen display connected, the button shows it, a film's ▶ is read "Play
+     * Copper Crown on Kitchen display", and its tap casts the film's file there: the launch handed to the device is the
+     * download's, nothing played here.
+     */
+    @Test
+    fun withKitchenDisplayConnectedAFilmsPlayIsReadWithItAndCastsItsFile() {
+        val film = seeds.seed(castable(film()))
+        connectKitchen()
+        show(seeds.deps().copy(play = DownloadsDeps.of(container, context).play))
+        compose.waitFor(hasContentDescription("Play Copper Crown on Kitchen display") and hasClickAction())
+        assertEquals(listOf("Play on: Kitchen display"), castWords())
+        assertFalse("no ▶ read as this phone's", exists(hasContentDescription("Play Copper Crown")))
+        compose.onNode(hasContentDescription("Play Copper Crown on Kitchen display") and hasClickAction()).performClick()
+        compose.waitTill("the file handed to Kitchen display", 30_000) { launcher.loads.isNotEmpty() }
+        val launch = launcher.loads.single()
+        assertEquals(PlayUris.download(film.id), launch.uri)
+        assertEquals("Kitchen display", launch.cast?.name)
+        launcher.plays()
+        compose.waitTill("the sheet closed", 10_000) { container.playback.state.value == PlayState.Idle }
+    }
+
+    private val castButton = SemanticsMatcher.keyIsDefined(CastButtonLook)
+
+    /** What TalkBack reads of the Cast button now. */
+    private fun castWords(): List<String>? = compose.onAllNodes(castButton).fetchSemanticsNodes().singleOrNull()?.config?.getOrNull(SemanticsProperties.ContentDescription)
+
+    private fun bounds(matcher: SemanticsMatcher) = compose.onAllNodes(matcher).fetchSemanticsNodes().firstOrNull()?.boundsInRoot ?: throw AssertionError("not shown: ${matcher.description}")
+
+    /** [row] with a release kept as Resolve keeps one, so its file can be cast. */
+    private fun castable(row: Download): Download {
+        val name = "Copper.Crown.2022.1080p.WEB-DL-KESTREL.mkv"
+        return row.copy(release = RememberedRelease("dl-page-a", "cc", name.removeSuffix(".mkv"), null, 0, "nzb-cc", name, row.size), fileName = name)
+    }
+
+    /** Cast's fakes started: Play services there, this phone looking for Cast devices, Google's software unstarted (L73). */
+    private fun castStarted() {
+        cast = true
+        CastFakes.started(routes, connector, CopyOnWriteArrayList())
+        CastSeams.launcher = { launcher }
+    }
+
+    /** Kitchen display's session connected and the device chosen in Play on, with nothing left over in the coordinator. */
+    private fun connectKitchen() {
+        castStarted()
+        CastFakes.connected(kitchen, connector)
+        container.playOn.choose(PlayChoice.Cast(kitchen.id, kitchen.name))
+        compose.waitTill("Kitchen display connected") { container.playOn.target.value == PlayTarget.Cast(kitchen.id, kitchen.name, CastLink.Connected, kitchen.facts) }
+        onMainThread { container.playback.withdraw() }
+    }
+
+    /** One of your TVs, paired in the link store (its identity made first, so a list's first read doesn't wipe it). */
+    private fun pairedTv(): FakeTv = runBlocking {
+        val link = container.data.link
+        val phone = link.identity().identity.key.id
+        FakeTv(context, inventedTvName("Living room TV"), paired = setOf(phone), advertised = false).also { fake ->
+            tv = fake
+            assertTrue(link.addTv(fake.key.id, fake.name, fake.address.hostAddress!!, fake.port))
+        }
+    }
+
+    private fun show(deps: DownloadsDeps, fontScale: Float = 1f, playOn: Boolean = false) {
+        compose.show(context, fontScale) {
+            DownloadsScreen(deps, onBack = {}, onSettings = { settings++ }, onShow = {}, onOpenMovie = {})
+            // Play on's sheet, as the app's shell draws it over every screen.
+            if (playOn) PlayOnHost(onAddTv = {}, onPairAgain = {}, onPrivacy = {})
+        }
     }
 
     private fun exists(matcher: SemanticsMatcher) = compose.exists(matcher)
@@ -278,5 +489,8 @@ class DownloadsPageDeviceTest {
 
     private companion object {
         const val SEEDING_MILLIS = 60_000L
+
+        /** A page narrower than phone34's 411 dp, as the narrowest phones are. */
+        val NARROW = 360.dp
     }
 }

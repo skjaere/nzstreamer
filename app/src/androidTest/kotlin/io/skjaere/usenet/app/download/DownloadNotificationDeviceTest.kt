@@ -28,7 +28,16 @@ import io.skjaere.usenet.app.ImmersiveHintSeen
 import io.skjaere.usenet.app.MainActivity
 import io.skjaere.usenet.app.PlayerActivity
 import io.skjaere.usenet.app.R
+import io.skjaere.usenet.app.cast.CastFakes
+import io.skjaere.usenet.app.cast.CastSeams
+import io.skjaere.usenet.app.cast.FakeConnector
+import io.skjaere.usenet.app.cast.FakeLauncher
+import io.skjaere.usenet.app.cast.FakeRoutes
+import io.skjaere.usenet.app.cast.castRoute
+import io.skjaere.usenet.app.casting.CastLink
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.link.PlayChoice
+import io.skjaere.usenet.app.link.PlayTarget
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.waitFor
 import io.skjaere.usenet.core.FetchException
@@ -69,6 +78,7 @@ import org.junit.runner.RunWith
 import java.io.File
 import java.nio.ByteBuffer
 import java.time.LocalDate
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -85,6 +95,8 @@ import java.util.concurrent.atomic.AtomicInteger
  *   downloads (L437, L445), those downloads already on top too.
  * - MainActivity's download extras: a resume without the app's token only opens the page, and resumes nothing; the app's
  *   own resumes.
+ * - With Kitchen display connected (Cast's fakes, L73), a film's Finished notification's Play and a show's reach the
+ *   cast's launcher with the download's file (L418), nothing played here; Play on put back to This phone after.
  *
  * The rows are seeded through the runner (their folders and markers made) and put back after, with every notification
  * the test made. The app's POST_NOTIFICATIONS is granted for it, as it is left after. The shows are invented. Where the
@@ -120,6 +132,10 @@ class DownloadNotificationDeviceTest {
     private val grabs = AtomicInteger()
     private val played = mutableListOf<Download>()
 
+    // Cast's, where a case chose Kitchen display: put back after.
+    private val kitchen = castRoute("Kitchen display")
+    private var cast = false
+
     @Before
     fun setUp() {
         shell("pm grant ${context.packageName} ${Manifest.permission.POST_NOTIFICATIONS}")
@@ -137,6 +153,10 @@ class DownloadNotificationDeviceTest {
         finishAll<PlayerActivity>()
         finishAll<MainActivity>()
         container.playback.cancel()
+        if (cast) {
+            container.playOn.choose(PlayChoice.Phone)
+            CastFakes.reset()
+        }
         played.forEach { row ->
             try {
                 // The player saves where it was as it closes: let it, before its marks are taken back.
@@ -392,6 +412,56 @@ class DownloadNotificationDeviceTest {
         assertEquals("indexer grabs", 0, grabs.get())
     }
 
+    /**
+     * L418: a film's Finished notification's Play, with Kitchen display connected, opens the Downloads page, which casts the
+     * film's file there: the launch the cast's launcher is handed is the download's, nothing played here or grabbed.
+     */
+    @Test
+    fun aFilmsPlayWithKitchenDisplayConnectedCastsItsFile() = runBlocking<Unit> {
+        quiet()
+        val film = finishedFilm()
+        val launcher = connectKitchen()
+        val play = notifications.build(DownloadNotices.finished(film)).actions.single()
+        assertEquals("Play", play.title.toString())
+        tap(play.actionIntent)
+        val main = waitFor("the app opened by its Play") { resumed<MainActivity>() }
+        assertEquals(DownloadAsk.Play(film.id), onMain { main.downloadAsked })
+        waitFor("the film's file handed to Kitchen display", READY_MILLIS) { launcher.loads.firstOrNull() }
+        val launch = launcher.loads.single()
+        assertEquals(PlayUris.download(film.id), launch.uri)
+        assertEquals("Kitchen display", launch.cast?.name)
+        assertNull("nothing played here", resumed<PlayerActivity>())
+        assertEquals("indexer grabs", 0, grabs.get())
+        launcher.plays()
+    }
+
+    /**
+     * L418, L437: the show's Finished notification's Play, with Kitchen display connected, opens the show's downloads,
+     * which cast its next downloaded episode's file there (S01E01, nothing watched), nothing played here or grabbed.
+     */
+    @Test
+    fun theShowsPlayWithKitchenDisplayConnectedCastsItsNextDownloadedEpisode() = runBlocking<Unit> {
+        quiet()
+        val e1 = underWay(1)
+        val e2 = underWay(2)
+        waitFor("both under way in the runner's state") { container.downloads.state.value.count { it.row.id in setOf(e1.id, e2.id) && it.row.state == DownloadState.Running }.takeIf { it == 2 } }
+        delay(500)
+        val first = written(e1)
+        val latest = written(e2)
+        val shown = waitFor("the show's notification") { shown(PLAYED)?.takeIf { title(it) == "$PLAYED_NAME · 2 of 2 downloaded" } }
+        val launcher = connectKitchen()
+        tap(shown.notification.actions.single().actionIntent)
+        val main = waitFor("the app opened by its Play") { resumed<MainActivity>() }
+        assertEquals(DownloadAsk.PlayShow(latest.id), onMain { main.downloadAsked })
+        waitFor("the episode's file handed to Kitchen display", READY_MILLIS) { launcher.loads.firstOrNull() }
+        val launch = launcher.loads.single()
+        assertEquals(PlayUris.download(first.id), launch.uri)
+        assertEquals("Kitchen display", launch.cast?.name)
+        assertNull("nothing played here", resumed<PlayerActivity>())
+        assertEquals("indexer grabs", 0, grabs.get())
+        launcher.plays()
+    }
+
     @Test
     fun aResumeWithoutTheAppsTokenOnlyOpensThePageAndTheAppsOwnResumes() = runBlocking<Unit> {
         val id = seed(4, DownloadState.Paused)
@@ -462,6 +532,36 @@ class DownloadNotificationDeviceTest {
         made += row.id
         container.downloadStorage.add(row)
         return row
+    }
+
+    /** Copper Crown downloaded, its row Done with its release kept as Resolve keeps one, as the runner leaves one (no file: it is only cast's fakes'). */
+    private suspend fun finishedFilm(): Download {
+        val name = "Copper.Crown.2022.720p.WEB.h264-WREN.mkv"
+        val now = System.currentTimeMillis()
+        val row = Download(
+            id = Download.newId(), watchKey = WatchKey.movie(FILM), kind = DownloadKind.Movie, title = "Copper Crown", subtitle = "2022", movieTmdbId = FILM,
+            year = 2022, state = DownloadState.Done, position = 0, release = RememberedRelease("idx-notify", "cc-2022", name.removeSuffix(".mkv"), null, 0, "nzb-cc-2022", name, SIZE),
+            fileName = name, size = SIZE, indexerSize = SIZE, safeOffset = SIZE, createdAt = now, completedAt = now, updatedAt = now,
+        )
+        made += row.id
+        container.downloadStorage.add(row)
+        waitFor("the film among the finished downloads") { container.downloads.done.value[row.watchKey]?.takeIf { it.id == row.id } }
+        return row
+    }
+
+    /** Kitchen display's session connected and the device chosen in Play on (Cast's fakes); the launcher the cast is handed to. */
+    private suspend fun connectKitchen(): FakeLauncher {
+        cast = true
+        val launcher = FakeLauncher()
+        val connector = FakeConnector()
+        CastFakes.started(FakeRoutes(), connector, CopyOnWriteArrayList())
+        CastSeams.launcher = { launcher }
+        CastFakes.connected(kitchen, connector)
+        container.playOn.choose(PlayChoice.Cast(kitchen.id, kitchen.name))
+        val connected = PlayTarget.Cast(kitchen.id, kitchen.name, CastLink.Connected, kitchen.facts)
+        waitFor("Kitchen display connected") { Unit.takeIf { container.playOn.target.value == connected } }
+        onMain { container.playback.withdraw() }
+        return launcher
     }
 
     /** [row]'s file written whole (the device tests' chapters.mkv) and renamed done, then its row Done, as the writer leaves one. */
@@ -574,6 +674,9 @@ class DownloadNotificationDeviceTest {
         /** The invented show whose notification's Play the test sends. */
         const val PLAYED = 900_773
         const val PLAYED_NAME = "Quiet Meridian"
+
+        /** The invented film whose notification's Play the test sends. */
+        const val FILM = 900_774
 
         /** The device tests' film with chapters: six minutes at 10 fps, 0.7 MB. */
         const val MEDIA = "chapters.mkv"

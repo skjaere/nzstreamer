@@ -19,6 +19,9 @@ import io.skjaere.usenet.app.play.WatchTarget
 import io.skjaere.nzbstreamer.stream.StreamableFile
 import io.skjaere.usenet.core.FileCandidate
 import io.skjaere.usenet.data.CollectedShow
+import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadKind
+import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.LinkFile
 import io.skjaere.usenet.data.LinkStore
 import io.skjaere.usenet.data.WatchKey
@@ -97,6 +100,7 @@ class PlayRouterTest {
             return CompletableDeferred(PlayOutcome.Launched)
         }
         override fun castFile(nzbId: String, file: FileCandidate, origin: PlayOrigin) { here += "file ${file.name} of $nzbId${from(origin)}" }
+        override fun castDownload(row: Download, origin: PlayOrigin) { here += "download ${row.title}${from(origin)}" }
     }
 
     private val ep = EpisodePlay(
@@ -446,6 +450,7 @@ class PlayRouterTest {
                     override fun resume(state: WatchState, origin: PlayOrigin) { origins += origin }
                     override fun play(request: PlayRequest, origin: PlayOrigin): Deferred<PlayOutcome> = CompletableDeferred(PlayOutcome.Launched).also { origins += origin }
                     override fun castFile(nzbId: String, file: FileCandidate, origin: PlayOrigin) { origins += origin }
+                    override fun castDownload(row: Download, origin: PlayOrigin) { origins += origin }
                 },
                 tv = PlayOnTv { _, _, _, _ -> error("never a TV") },
                 watch = { null }, episode = { error("not looked up") }, movie = { _, _ -> error("not looked up") }, now = { now },
@@ -503,6 +508,72 @@ class PlayRouterTest {
         }
         assertEquals(2, sheets)
         assertTrue(here.isEmpty())
+    }
+
+    /** A finished download of Copper Crown, as the Downloads pages, Home's rows and the notifications play one (L418). */
+    private val downloaded = Download(
+        id = "dl-copper", watchKey = WatchKey.movie(7_808), kind = DownloadKind.Movie, title = "Copper Crown", movieTmdbId = 7_808, year = 2022,
+        state = DownloadState.Done, position = 0, createdAt = 1, completedAt = 2, updatedAt = 2,
+    )
+
+    /** L418, W108: a download's row plays here with This phone or a TV chosen: a TV never gets this phone's file. */
+    @Test
+    fun `a download's row plays here with This phone or a TV chosen`() {
+        var played = 0
+        router.playDownload(downloaded) { played++ }
+        tvChosen()
+        router.playDownload(downloaded) { played++ }
+        tvChosen(TvState.NotOpen)
+        router.playDownload(downloaded) { played++ }
+        assertEquals(3, played)
+        assertTrue(here.isEmpty() && onTv.isEmpty() && asks.isEmpty() && asked.isEmpty())
+        assertEquals(0, sheets)
+        assertEquals(0, grabs.get())
+    }
+
+    /** L418, L447: with a Cast device connected, a download's row casts its file from the cast origin, nothing streamed. */
+    @Test
+    fun `a download's row casts its file to the connected Cast device`() {
+        castChosen()
+        router.playDownload(downloaded) { throw AssertionError("never here") }
+        assertEquals(listOf("download Copper Crown cast to Kitchen display"), here)
+        assertEquals(0, grabs.get())
+    }
+
+    /** While the device connects or reconnects, a download's row plays nowhere and the list opens, where it says so. */
+    @Test
+    fun `a download's row plays nowhere while the Cast device connects, and the list opens`() {
+        for (link in listOf(CastLink.Connecting, CastLink.Reconnecting)) {
+            castChosen(link)
+            router.playDownload(downloaded) { throw AssertionError("never here") }
+        }
+        assertEquals(2, sheets)
+        assertTrue(here.isEmpty())
+    }
+
+    /**
+     * W50, L122: a download's row to a speaker asks first and plays nothing until it is answered: Cancel plays nothing;
+     * Play on this phone chooses This phone and plays it here; Cast anyway casts the file there.
+     */
+    @Test
+    fun `a download's row to a speaker asks first, and each answer plays it where it says`() {
+        speakerChosen()
+        router.playDownload(downloaded) { throw AssertionError("never here before the answer") }
+        assertEquals("Hallway speaker", soundOnly().name)
+        assertTrue(here.isEmpty() && sheets == 0)
+        soundOnly().answered(PlayOnAsk.SoundOnly.Answer.Cancel)
+        assertTrue(here.isEmpty())
+        speakerChosen()
+        var played = 0
+        router.playDownload(downloaded) { played++ }
+        soundOnly().answered(PlayOnAsk.SoundOnly.Answer.PlayHere)
+        assertEquals(1, played)
+        assertEquals(1, phoneChosen)
+        speakerChosen()
+        router.playDownload(downloaded) { throw AssertionError("never here") }
+        soundOnly().answered(PlayOnAsk.SoundOnly.Answer.CastAnyway)
+        assertEquals(listOf("download Copper Crown cast to Hallway speaker"), here)
+        assertEquals(3, asked.size)
     }
 
     @Test

@@ -66,6 +66,7 @@ import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.EpisodeRef
+import io.skjaere.usenet.data.MovieMark
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchTitle
@@ -114,6 +115,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * - Offline, a file the device can't fully play asks the pre-check over it, the file held past the hook's 30 s by the
  *   cast's own hold (C1); Play on this phone plays it here, held for its launch.
  * - Try again after the device couldn't reach the phone loads the file again with no provider or service.
+ * - Where download rows play (L418): the Downloads page's film row, a show's downloads' Resume (its next episode) and
+ *   Home's Downloads row, with Kitchen display connected, each cast their file, nothing grabbed; from the page, a file
+ *   the device can't fully play asks the pre-check even online, starting no stream (L447).
  *
  * The session's picture is never fetched from TMDB's image host: an address is answered with none.
  *
@@ -207,6 +211,7 @@ class DownloadCastDeviceTest {
             // Unwatched again, the releases a cast's saves kept for them forgotten.
             { container.library.markEpisodes((1..EPISODES).map { EpisodeRef(SHOW, 1, it, WatchTitle.episode(NAME, 1, it)) }, watched = false) },
             { made.forEach { row -> row.release?.let { container.library.forgetRelease(row.watchKey, it) } } },
+            { container.library.markMovies(listOf(MovieMark(FILM, FILM_NAME)), watched = false) },
             { saved?.let { container.settings.restore(it) } },
             { tmdb?.close() },
             { waitFor("the cast service gone", 30_000) { Unit.takeIf { !serviceRunning() } } },
@@ -507,6 +512,93 @@ class DownloadCastDeviceTest {
         end(item)
     }
 
+    /**
+     * L418, L447: the Downloads page's film row with Kitchen display connected (its deps' play,
+     * which the row's tap and its ▶ call) casts the film's file: the one-step sheet, the LOAD serving the file, nothing
+     * grabbed or looked up, with no provider or service usable.
+     */
+    @Test
+    fun theDownloadsPagesFilmRowCastsItsFile() = runBlocking<Unit> {
+        val row = finishedFilm()
+        nothingToStreamFrom()
+        castsTheFile(row) { DownloadsDeps.of(container, context).play(row) }
+    }
+
+    /**
+     * L418, L372: a show's downloads' Resume with Kitchen display connected casts what it
+     * plays, the next downloaded episode (S01E02, S01E01 watched), through the deps' play its button calls.
+     */
+    @Test
+    fun aShowsDownloadsResumeCastsTheNextEpisodesFile() = runBlocking<Unit> {
+        val rows = listOf(finished(1), finished(2))
+        container.library.markEpisodes(listOf(EpisodeRef(SHOW, 1, 1, WatchTitle.episode(NAME, 1, 1))), watched = true)
+        nothingToStreamFrom()
+        val states = waitFor("S01E01 watched") { runBlocking { container.library.episodeStates(SHOW).first() }.takeIf { it[1 to 1]?.watched == true } }
+        val next = checkNotNull(DownloadsShow.next(rows, states)) { "nothing for Resume" }
+        assertEquals(rows[1].id, next.row.id)
+        castsTheFile(rows[1]) { DownloadsDeps.of(container, context).play(next.row) }
+    }
+
+    /**
+     * L418 (added by the checks): Home's Downloads row of a film with Kitchen display connected (DownloadsDeps.play, which
+     * Home's row calls) casts its file, nothing grabbed.
+     */
+    @Test
+    fun homesDownloadsRowCastsTheFileWithNothingGrabbed() = runBlocking<Unit> {
+        val row = finishedFilm()
+        nothingToStreamFrom()
+        castsTheFile(row) { DownloadsDeps.play(container, row) }
+    }
+
+    /**
+     * L447, L473: from the Downloads pages a file Kitchen display can't fully play asks the
+     * pre-check over the file even online, where a title's Play would stream for the device: Play on this phone, Cast
+     * anyway and Cancel, never a compatible release. Nothing sent, nothing grabbed, no stream started; Cancel ends it.
+     */
+    @Test
+    fun aMissFromThePageAsksThePrecheckOnlineAndStartsNoStream() = runBlocking<Unit> {
+        val row = finished(2, tracks = SILENT)
+        nothingToStreamFrom()
+        container.offlineOverride.value = false
+        waitFor("online") { Unit.takeIf { !container.offline.value } }
+        val loads = remote!!.loads.size
+        onMainThread { DownloadsDeps.of(container, context).play(row) }
+        val asking = waitFor("the pre-check", LOAD_MILLIS) { container.playback.state.value as? PlayState.Prechecking }
+        assertEquals("No sound on ${kitchen.name}", asking.precheck.headline)
+        assertEquals(listOf(CastPrecheck.Button.PlayHere, CastPrecheck.Button.CastAnyway, CastPrecheck.Button.Cancel), asking.precheck.buttons())
+        assertEquals("nothing sent", loads, remote!!.loads.size)
+        onMainThread { container.playback.precheck(CastPrecheck.Button.Cancel) }
+        waitFor("the sheet closed", LOAD_MILLIS) { Unit.takeIf { container.playback.state.value == PlayState.Idle } }
+        assertEquals("nothing sent", loads, remote!!.loads.size)
+        assertEquals("grabs", 0, grabs.get())
+        assertEquals("TMDB asked", 0, tmdb!!.lookups.get())
+    }
+
+    /**
+     * [play], with Kitchen display connected, casts [row]'s file: "Starting on Kitchen display" with no release steps, the
+     * LOAD's address serving the file from its head, the device playing it, and the sheet closed; nothing grabbed or
+     * looked up.
+     */
+    private suspend fun castsTheFile(row: Download, play: () -> Unit) {
+        val loads = remote!!.loads.size
+        onMainThread(play)
+        val item = waitFor("the LOAD", LOAD_MILLIS) { remote!!.loads.drop(loads).lastOrNull() }
+        val starting = container.playback.state.value as? PlayState.Running ?: throw AssertionError("not starting: ${container.playback.state.value}")
+        assertEquals(StepStatus.Running(), starting.castStep)
+        assertEquals("no release steps", emptyMap<Any, Any>(), starting.steps)
+        standIn(item)
+        val head = receiver.ask(0) ?: throw AssertionError("the head's request unanswered")
+        assertEquals(206, head.status)
+        assertEquals("bytes 0-${film.size - 1}/${film.size}", head.header("content-range"))
+        head.toEnd()
+        plays(item)
+        waitFor("the sheet closed", LOAD_MILLIS) { Unit.takeIf { container.playback.state.value == PlayState.Idle } }
+        assertEquals("the download's file there", PlayUris.download(row.id), Casting.feed.value?.launch?.uri)
+        assertEquals("grabs", 0, grabs.get())
+        assertEquals("TMDB asked", 0, tmdb!!.lookups.get())
+        end(item)
+    }
+
     // The download, the cast and the device.
 
     /**
@@ -517,17 +609,39 @@ class DownloadCastDeviceTest {
         val id = Download.newId()
         val name = "Quiet.Meridian.S01E0$number.720p.WEB.h264-KESTREL.mkv"
         val size = film.size.toLong()
-        val row = Download(
-            id = id, watchKey = WatchKey.episode(SHOW, 1, number), kind = DownloadKind.Episode, title = NAME, subtitle = "S01E0$number · ${NAMES[number - 1]}",
-            showTmdbId = SHOW, season = 1, episode = number, seasonEpisodes = EPISODES, episodeName = NAMES[number - 1], posterPath = POSTER,
-            stillPath = STILL, state = DownloadState.Done, position = -1_000L + number,
-            release = RememberedRelease(INDEXER, "qm-s01e0$number", name.removeSuffix(".mkv"), null, 0, "nzb-qm-$number", name, size),
-            fileName = name, size = size, indexerSize = size, safeOffset = size, gaps = gaps, relativePath = "downloads/$id/v.mkv",
-            tracks = tracks?.let { json.encodeToString(ProbedTracksSerializer, it) }, createdAt = 1, completedAt = 2, updatedAt = 2,
+        return seeded(
+            Download(
+                id = id, watchKey = WatchKey.episode(SHOW, 1, number), kind = DownloadKind.Episode, title = NAME, subtitle = "S01E0$number · ${NAMES[number - 1]}",
+                showTmdbId = SHOW, season = 1, episode = number, seasonEpisodes = EPISODES, episodeName = NAMES[number - 1], posterPath = POSTER,
+                stillPath = STILL, state = DownloadState.Done, position = -1_000L + number,
+                release = RememberedRelease(INDEXER, "qm-s01e0$number", name.removeSuffix(".mkv"), null, 0, "nzb-qm-$number", name, size),
+                fileName = name, size = size, indexerSize = size, safeOffset = size, gaps = gaps, relativePath = "downloads/$id/v.mkv",
+                tracks = tracks?.let { json.encodeToString(ProbedTracksSerializer, it) }, createdAt = 1, completedAt = 2, updatedAt = 2,
+            ),
         )
+    }
+
+    /** Copper Crown as a finished download is left, as [finished] leaves an episode: its row, then chapters.mkv as its file. */
+    private fun finishedFilm(): Download {
+        val id = Download.newId()
+        val name = "Copper.Crown.2022.720p.WEB.h264-KESTREL.mkv"
+        val size = film.size.toLong()
+        return seeded(
+            Download(
+                id = id, watchKey = WatchKey.movie(FILM), kind = DownloadKind.Movie, title = FILM_NAME, subtitle = "2022", movieTmdbId = FILM, year = 2022,
+                runtimeMinutes = 6, posterPath = POSTER, state = DownloadState.Done, position = -2_000L,
+                release = RememberedRelease(INDEXER, "cc-2022", name.removeSuffix(".mkv"), null, 0, "nzb-cc-2022", name, size),
+                fileName = name, size = size, indexerSize = size, safeOffset = size, relativePath = "downloads/$id/v.mkv", createdAt = 1, completedAt = 2,
+                updatedAt = 2,
+            ),
+        )
+    }
+
+    /** [row] seeded with its marker (as DownloadsPageSeeds seeds one), then the device tests' chapters.mkv as its file, where storage keeps it. */
+    private fun seeded(row: Download): Download {
         seeds.seed(row)
         made += row
-        val folder = checkNotNull(storage.videoFolder(id)) { "no primary volume" }
+        val folder = checkNotNull(storage.videoFolder(row.id)) { "no primary volume" }
         folder.mkdirs()
         File(folder, "v.mkv").writeBytes(film)
         return row
@@ -652,6 +766,10 @@ class DownloadCastDeviceTest {
         const val SHOW = 900_271
         const val NAME = "Quiet Meridian"
         const val EPISODES = 4
+
+        /** An invented film nothing real or fake knows. */
+        const val FILM = 900_272
+        const val FILM_NAME = "Copper Crown"
         val NAMES = listOf("First Light", "Pilot Boat", "The Sandbar", "Salt Road")
         const val INDEXER = "download-cast-device-test"
         const val POSTER = "/quiet-meridian.jpg"

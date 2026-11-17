@@ -1,5 +1,8 @@
 package io.skjaere.usenet.app.download
 
+import io.skjaere.usenet.app.link.PlayTarget
+import io.skjaere.usenet.app.link.deviceName
+import io.skjaere.usenet.app.link.onTvLine
 import io.skjaere.usenet.app.play.Replay
 import io.skjaere.usenet.core.formatSize
 import io.skjaere.usenet.data.Download
@@ -267,6 +270,16 @@ data class DownloadsPage(
 
         /** Choose release's title for [row]: "Download S02E04", "Download Copper Crown", as the list in download mode says it. */
         fun choosing(row: Download): String = "Download ${label(row) ?: row.title}"
+
+        /**
+         * Where a download row's play goes with [target] chosen in Play on (L418): the Cast device chosen, connected or
+         * connecting; This phone for This phone or a TV, which never gets this phone's file (W108), as the pages' Cast
+         * button and Play on opened from them read it (SheetPlace.PhoneOnly).
+         */
+        fun playsOn(target: PlayTarget): PlayTarget = if (target is PlayTarget.Tv) PlayTarget.Phone else target
+
+        /** A film row's ▶ for TalkBack (L470): "Play Copper Crown", and "Play Copper Crown on Kitchen display" with a Cast device chosen. */
+        fun playLabel(name: String, target: PlayTarget): String = playsOn(target).deviceName?.let { "Play $name ${onTvLine(it)}" } ?: "Play $name"
 
         /** "S02E04": an episode's season and number; null for a film. */
         fun label(row: Download): String? {

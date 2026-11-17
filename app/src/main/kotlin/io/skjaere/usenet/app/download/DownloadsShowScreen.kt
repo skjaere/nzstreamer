@@ -13,15 +13,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -49,9 +46,11 @@ import io.skjaere.usenet.app.collection.TopPill
 import io.skjaere.usenet.app.collection.UndoBar
 import io.skjaere.usenet.app.collection.cardSegment
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.link.CastButton
+import io.skjaere.usenet.app.link.PlayOnPrimary
+import io.skjaere.usenet.app.link.SheetPlace
 import io.skjaere.usenet.app.ui.AppType
 import io.skjaere.usenet.app.ui.LocalFormFactor
-import io.skjaere.usenet.app.ui.PrimaryButton
 import io.skjaere.usenet.app.ui.SectionHeader
 import io.skjaere.usenet.app.ui.TopBar
 import io.skjaere.usenet.app.ui.colors
@@ -62,9 +61,10 @@ import io.skjaere.usenet.data.WatchState
  * A show's downloads (L372), opened from its row on the Downloads page: its finished episodes by season, Resume at the
  * top (the episode begun, or the next not watched), each row's size and length, what is left of one begun, ✓ once
  * watched, its parts missing, and "Deleting tomorrow" while Delete once watched has it going (L415); a tap plays the
- * file, online or not. Each row's ⋮: Remove download (with Undo), Mark watched or unwatched, and Open the show's page
- * ([onOpenShow]). Select with Delete, as on the Downloads page. Its names are the rows', so it works offline (L368).
- * Phones and tablets alone (W108, L369). Once every episode is gone, and no Undo waits or was taken, it closes.
+ * file where Play on points (L418), online or not. Each row's ⋮: Remove download (with Undo), Mark watched or unwatched,
+ * and Open the show's page ([onOpenShow]). Select with Delete, as on the Downloads page, then the Cast button (L453).
+ * Its names are the rows', so it works offline (L368). Phones and tablets alone (W108, L369). Once every episode is
+ * gone, and no Undo waits or was taken, it closes.
  */
 @Composable
 fun DownloadsShowScreen(showTmdbId: Int, onBack: () -> Unit, onOpenShow: (showTmdbId: Int) -> Unit, play: Boolean = false, ask: String? = null) {
@@ -101,6 +101,10 @@ internal fun DownloadsShowScreen(
     val offer by vm.edits.offer.collectAsStateWithLifecycle()
     val keepFor = undoTimeout(vm.undoMillis)
     val compact = compactBar()
+    val container = LocalContext.current.container
+    val playOn by container.playOn.target.collectAsStateWithLifecycle()
+    // Where its rows play (L418): a Cast device chosen, else this phone, a TV chosen read as This phone.
+    val playsOn = DownloadsPage.playsOn(playOn)
     // The show's name, kept while its last episodes wait on Undo.
     var named by remember { mutableStateOf("") }
     val title = episodes?.firstOrNull()?.title ?: named
@@ -121,19 +125,18 @@ internal fun DownloadsShowScreen(
                     onDelete = { vm.edits.remove(chosen, keepFor) },
                 )
             } else {
-                TopBar(title, onBack, subtitle = if (rows.isEmpty()) null else DownloadsPage.showSub(rows)) {
+                TopBar(title, onBack, subtitle = if (rows.isEmpty()) null else DownloadsPage.showSub(rows), stacked = true) {
                     if (rows.isNotEmpty()) TopPill(DownloadsPage.SELECT, Icons.Filled.CheckCircle, compact, onClick = { vm.edits.startSelect() })
+                    CastButton(playOn, { container.playOn.openSheet(SheetPlace.PhoneOnly) }, place = SheetPlace.PhoneOnly)
                 }
             }
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = if (offer != null) 76.dp else 16.dp)) {
                 val next = DownloadsShow.next(rows, states)
                 if (selected == null && next != null) {
                     item(key = "resume") {
+                        // The Cast device's icon and "on Kitchen display" under its words, greyed while it connects (L470).
                         Box(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-                            PrimaryButton(
-                                DownloadsShow.button(next), { vm.play(next.row) },
-                                leading = { Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.padding(end = 6.dp).size(24.dp)) },
-                            )
+                            PlayOnPrimary(DownloadsShow.button(next), playsOn, { vm.play(next.row) })
                         }
                     }
                 }
@@ -146,6 +149,7 @@ internal fun DownloadsShowScreen(
                         EpisodeItem(
                             row, states[row.season!! to row.episode!!], DownloadsShow.deleting(row, deleting), first = at == 0, last = at == season.episodes.lastIndex,
                             selected = selected?.let { row.id in it },
+                            playAction = DownloadsShow.playAction(playOn),
                             onPlay = { vm.play(row) },
                             onSelect = { if (selected == null) vm.edits.startSelect(row.id) else vm.edits.toggle(row.id) },
                             onRemove = { vm.edits.remove(listOf(row), keepFor) },
@@ -166,7 +170,8 @@ internal fun DownloadsShowScreen(
 /**
  * An episode downloaded, in the Show page's phone look: its number, its name, its size and length (and its parts
  * missing), what is left of it begun with its 2 dp bar, [going] ("Deleting tomorrow") under them, ✓ once watched, and its
- * ⋮ beside it. A tap plays it; a long press starts select mode with it, where a tap selects it.
+ * ⋮ beside it. A tap plays it, read as [playAction] (the Cast device it plays on, L470); a long press starts select mode
+ * with it, where a tap selects it.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -177,6 +182,7 @@ private fun EpisodeItem(
     first: Boolean,
     last: Boolean,
     selected: Boolean?,
+    playAction: String,
     onPlay: () -> Unit,
     onSelect: () -> Unit,
     onRemove: () -> Unit,
@@ -189,7 +195,7 @@ private fun EpisodeItem(
         Modifier.toggleable(value = selected, role = Role.Checkbox, onValueChange = { onSelect() })
             .semantics { stateDescription = if (selected) "Selected" else "Not selected" }
     } else {
-        Modifier.combinedClickable(onClickLabel = "Play", onClick = onPlay, onLongClick = onSelect)
+        Modifier.combinedClickable(onClickLabel = playAction, onClick = onPlay, onLongClick = onSelect)
     }
     Row(
         Modifier.cardSegment(first, last, if (selected == true) colors.rowSelected else colors.surface)
