@@ -722,6 +722,11 @@ class PlayPipeline(
      * no release ([AttemptSteps.named]).
      */
     private val named: (PlayCandidate) -> String = PlayCandidate::title,
+    /**
+     * How its log lines say an attempt's failure: in its own words, as a play's do; a download's by its kind alone, as the
+     * words can name a file (one left out, one no longer there).
+     */
+    private val failureWords: (AttemptFailure) -> String = AttemptFailure::text,
 ) {
     private val log = LoggerFactory.getLogger(PlayPipeline::class.java)
 
@@ -766,7 +771,7 @@ class PlayPipeline(
                 true
             }
             is AttemptResult.Failure -> {
-                log.info("play_pipeline: {} failed: {}", named(candidate), result.failure.text)
+                log.info("play_pipeline: {} failed: {}", named(candidate), failureWords(result.failure))
                 val on = (result.failure as? AttemptFailure.MissingArticles)?.missingOn
                 if (on != null && result.wholeRelease) remembered("remember") { tried.missing(candidate, on) }
                 if (result.failure == AttemptFailure.Passworded) remembered("remember") { tried.passwordNeeded(candidate) }
@@ -928,7 +933,7 @@ class PlayPipeline(
         override suspend fun send(event: PipelineEvent.Step) = scope.send(event)
 
         override suspend fun retrying(failure: AttemptFailure) {
-            log.info("play_pipeline: {} failed: {}; trying it another way", named(candidate), failure.text)
+            log.info("play_pipeline: {} failed: {}; trying it another way", named(candidate), failureWords(failure))
             scope.send(PipelineEvent.Retrying(candidate, failure))
         }
 

@@ -77,6 +77,9 @@ object DownloadHostRules {
     /** A release's search and Resolve's first step (L338). */
     const val FINDING_RELEASES = "Finding releases…"
 
+    /** An imported file's Resolve (L454): nothing is searched for it, so its NZB's fetch and open say this alone. */
+    const val OPENING = "Opening…"
+
     /** The service waits in place for its need this long, then stops (L334): an hour. */
     const val SERVICE_WAIT_CAP_MILLIS = 60 * 60_000L
 

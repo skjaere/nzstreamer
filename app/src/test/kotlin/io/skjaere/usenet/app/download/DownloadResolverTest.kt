@@ -12,6 +12,8 @@ import io.skjaere.nzbstreamer.nzb.FilenameResolver
 import io.skjaere.nzbstreamer.nzb.NzbDocument
 import io.skjaere.nzbstreamer.nzb.NzbParser
 import io.skjaere.nzbstreamer.stream.StreamableFile
+import io.skjaere.usenet.app.play.IMPORTED
+import io.skjaere.usenet.app.play.IMPORT_GONE
 import io.skjaere.usenet.app.play.MissingReleases
 import io.skjaere.usenet.app.play.PlayingPack
 import io.skjaere.usenet.app.play.VideoTiming
@@ -275,7 +277,7 @@ class DownloadResolverTest {
      * them as the app's Resolve reads it. Download size is [cap] GB an hour, none when null; a prepare held for a season's
      * copy is handed back as the app's Resolve hands it back ([PlayingPack.preparer]), over the same fake prepare. The turn's
      * search asks [searchIndexers] (those the walk keeps out left out) and finds [finds], each indexer saying [findReports],
-     * in the room the storage gives; the walk's memory of limits is [limits].
+     * in the room the storage gives; the walk's memory of limits is [limits]. Its grabs are [fetchNzb]: the fake indexers'.
      */
     private fun resolver(
         attempts: Int = 10,
@@ -285,6 +287,7 @@ class DownloadResolverTest {
         cap: Int? = null,
         limits: DownloadSearch.Limits = DownloadSearch.Limits.None,
         searchIndexers: List<IndexerConfig> = listOf(indexer),
+        fetchNzb: suspend (IndexerConfig, NewznabItem) -> NzbDownload = { from, item -> grab(item, from) },
     ) = DownloadResolver(
         downloads = dao,
         storage = storage,
@@ -293,7 +296,7 @@ class DownloadResolverTest {
         store = store,
         probe = probe,
         indexers = { listOf(indexer, other) },
-        fetchNzb = { from, item -> grab(item, from) },
+        fetchNzb = fetchNzb,
         tried = remembered?.let(DownloadResolver::remembered) ?: { _, _, _ -> tried },
         attempts = { attempts },
         providersChecked = { providers },
@@ -2017,6 +2020,217 @@ class DownloadResolverTest {
         assertEquals(listOf(key(single)), probed)
     }
 
+    /** [fake]'s NZB as Import opened it: its id, the SHA-256 of its bytes. */
+    private fun nzbIdOf(fake: Fake) = PreparedNzb.idFor(fake.nzb)
+
+    /** The key of Import's own release of [fake]'s NZB: its rows' one candidate, and what its copy is kept under (L423). */
+    private fun importKey(fake: Fake) = ReleaseKey.of(IMPORTED, nzbIdOf(fake))
+
+    /**
+     * File [name] of [fake]'s NZB, opened on Import and queued as enqueueImport queues it (L423): a Release row [id] whose one
+     * candidate is Import's release of the NZB and whose pick is the file at [index] (Import's place for it) of [size]
+     * bytes; with [copy], the NZB kept in `.packs/` with the password typed for it, [password].
+     */
+    private suspend fun imported(
+        fake: Fake,
+        name: String,
+        id: String = ID,
+        index: Int = fake.files.indexOfFirst { it.first == name },
+        size: Long = fake.files.toMap().getValue(name),
+        copy: Boolean = true,
+        password: String? = TYPED,
+    ): Download {
+        fakes[fake.guid] = fake
+        val nzbId = nzbIdOf(fake)
+        val target = DownloadTarget.release(nzbId, index, name, fake.title)
+        val candidate = DownloadCandidate(IMPORTED, nzbId, fake.title, size = size)
+        val row = Download(
+            id = id, watchKey = target.watchKey, kind = DownloadKind.Release, title = target.title, subtitle = target.subtitle, position = 0,
+            candidates = listOf(candidate), indexerSize = size, pick = DownloadColumns.text(DownloadPick(index, name, size, nzbId)), createdAt = 0, updatedAt = 0,
+        )
+        dao.insert(row)
+        if (copy) storage.packs.write(DownloadNzbs.Meta.imported(candidate), fake.nzb, password)
+        return row
+    }
+
+    /** The grab of an imported file's resolve: none may be asked, as no indexer has its NZB. */
+    private val unasked: suspend (IndexerConfig, NewznabItem) -> NzbDownload = { from, _ -> throw AssertionError("a grab asked of ${from.id}") }
+
+    /** As the runner's Try again puts a failed row back: queued, its tries and reason gone, its candidate and pick kept. */
+    private suspend fun triedAgain() = dao.update(stored().copy(state = DownloadState.Queued, reason = null, tried = emptyList()))
+
+    /**
+     * L423, L457: a file of an NZB opened on Import resolves from the NZB's copy in `.packs/`, its grab, as no indexer has
+     * it: nothing asked of an indexer, nothing searched. Then the full path, as any release's: the file's volumes checked once
+     * the NZB is open, prepared with the password typed on Import, and probed. Its release is Import's, and the NZB and the
+     * password are its own until it is written, as any row's; the copy stays for the NZB's other files.
+     */
+    @Test
+    fun `an imported file resolves from its NZB's copy with no indexer asked, its volumes checked, opened with its password and probed`() = runBlocking<Unit> {
+        imported(pack, E03)
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver(fetchNzb = unasked).resolve(ID))
+        assertEquals(E03, ready.file.name)
+        assertEquals(1_000_000_003L, ready.file.size)
+        assertEquals(emptyList(), asks)
+        assertEquals<List<Pair<String, String?>>>(listOf(pack.guid to TYPED), opened)
+        assertEquals(listOf("${pack.guid}/$E03@fake"), checked)
+        assertEquals(listOf(importKey(pack)), probed)
+        val kept = stored()
+        assertEquals(IMPORTED, kept.release?.indexerId)
+        assertEquals(nzbIdOf(pack), kept.release?.guid)
+        assertEquals(E03, kept.fileName)
+        assertEquals(1_000_000_003L, kept.size)
+        assertEquals(listOf(importKey(pack)), kept.tried)
+        assertContentEquals(pack.nzb, storage.sources[ID]?.nzb)
+        assertEquals(TYPED, storage.sources[ID]?.password)
+        assertNotNull(storage.packs.find(importKey(pack)))
+        assertEquals(0, storage.packWrites)
+    }
+
+    /**
+     * L454: nothing is searched for an imported file, so its row says "Opening…" from its start and through its NZB's fetch
+     * and open, which say nothing else; then the play's words for the check and the probe. Its volumes are checked once the
+     * NZB is open, a pack's as an NZB of one file's: nothing tells the one from the other before.
+     */
+    @Test
+    fun `an imported file says Opening through its NZB's fetch and open, then the check's and the probe's words`() = runBlocking<Unit> {
+        listOf(pack to E03, single to "a8f3c1.mkv").forEach { (fake, name) ->
+            reset()
+            imported(fake, name)
+            assertIs<DownloadResolver.Resolution.Ready>(resolver(fetchNzb = unasked).resolve(ID), name)
+            assertEquals<List<String?>>(listOf("Opening…", "Checking availability", "Checking audio and video"), dao.reasons, name)
+            assertTrue(dao.states.all { it == DownloadState.Resolving }, name)
+        }
+    }
+
+    /**
+     * L457: an imported file is the one chosen on Import, picked in its NZB by its name and size wherever the NZB lists it now
+     * (Import's place for it may hold another here). One no longer there by both fails its attempt, and so the download: never
+     * another file of the NZB, as the largest video would be, written under the chosen file's watch key. Nothing else is
+     * tried, as its NZB is its one release.
+     */
+    @Test
+    fun `an imported file is picked by its name and size, and one missing from its NZB fails, never taking the largest`() = runBlocking<Unit> {
+        imported(pack, E03, index = 0)
+        assertEquals(E03, assertIs<DownloadResolver.Resolution.Ready>(resolver(fetchNzb = unasked).resolve(ID)).file.name)
+
+        // Not in the pack; there by its name at another size; in an NZB of one video, another name.
+        listOf(
+            Triple(pack, "Harbor.Lights.S02E09.1080p.WEB.h264-GRP.mkv", 1_000_000_009L),
+            Triple(pack, E03, 1_000_000_033L),
+            Triple(single, "b5e2d7.mkv", 1_200_000_000L),
+        ).forEach { (fake, name, size) ->
+            reset()
+            imported(fake, name, index = 2, size = size)
+            val failed = assertIs<DownloadResolver.Resolution.Failed>(resolver(fetchNzb = unasked).resolve(ID), "$name of $size")
+            assertEquals("Couldn't open the release", failed.reason, "$name of $size")
+            assertEquals(DownloadState.Failed, stored().state, "$name of $size")
+            assertEquals<List<Pair<String, String?>>>(listOf(fake.guid to TYPED), opened, "$name of $size")
+            assertEquals(emptyList(), checked, "$name of $size")
+            assertEquals(emptyList(), probed, "$name of $size")
+            assertNull(stored().release, "$name of $size")
+            assertEquals(listOf(importKey(fake)), stored().tried, "$name of $size")
+        }
+    }
+
+    /**
+     * C3 of DN2: an imported file whose attempt failed for its release (the probe couldn't read it) is tried again from its
+     * NZB's copy on Try again: the NZB kept for the attempt went with its answer, and no indexer has it.
+     */
+    @Test
+    fun `a failed imported file tried again resolves from its NZB's copy again`() = runBlocking<Unit> {
+        imported(pack, E03)
+        probeAnswer = { ProbeResult.Failed(UsenetError.Timeout("No track list within 20 s")) }
+        assertIs<DownloadResolver.Resolution.Failed>(resolver(fetchNzb = unasked).resolve(ID))
+        assertNull(storage.grabs[ID])
+
+        triedAgain()
+        probeAnswer = { null }
+        assertEquals(E03, assertIs<DownloadResolver.Resolution.Ready>(resolver(fetchNzb = unasked).resolve(ID)).file.name)
+        assertEquals(emptyList(), asks)
+        assertEquals<List<Pair<String, String?>>>(listOf(pack.guid to TYPED, pack.guid to TYPED), opened)
+        assertEquals(listOf(importKey(pack)), stored().tried)
+    }
+
+    /**
+     * L457, L469: an imported file whose NZB's copy is gone (it went with the NZB's last download) has nothing to open, and no
+     * indexer has it, so none is asked. It fails in Import's words for an NZB no longer kept, its one try counted once; Try
+     * again fails so again.
+     */
+    @Test
+    fun `an imported file whose NZB's copy is gone fails in Import's words, counted once, with no indexer asked`() = runBlocking<Unit> {
+        imported(pack, E03, copy = false)
+        repeat(2) { time ->
+            if (time > 0) triedAgain()
+            val failed = assertIs<DownloadResolver.Resolution.Failed>(resolver(fetchNzb = unasked).resolve(ID), "resolve ${time + 1}")
+            assertEquals(IMPORT_GONE, failed.reason, "resolve ${time + 1}")
+            assertEquals(DownloadState.Failed, stored().state, "resolve ${time + 1}")
+            assertEquals(IMPORT_GONE, stored().reason, "resolve ${time + 1}")
+            assertEquals(listOf(importKey(pack)), stored().tried, "resolve ${time + 1}")
+        }
+        assertEquals(emptyList(), asks)
+        assertEquals(emptyList(), opened)
+    }
+
+    /**
+     * L457: the memory of releases found missing never skips or records an imported NZB's release. Remembered as missing on
+     * the provider in use, it is tried all the same; found whole, or found missing as it is checked, nothing of it is
+     * remembered or forgotten.
+     */
+    @Test
+    fun `an imported file remembered as missing is still tried, and nothing of it is remembered`() = runBlocking<Unit> {
+        val provider = ProviderConfig("p-wren", "", "reader.wren.invalid", 563, "", "", useTls = true)
+        val table = TriedTable(NOW)
+        val remembered = MissingReleases(table, inUse = { listOf(provider) }, checkedInUse = { listOf(provider) }, now = { NOW })
+        table.record(IMPORTED, nzbIdOf(pack), listOf(ReleaseChecks.provider(provider.id, provider.host, provider.port)), incomplete = false)
+        val before = table.entries.toMap()
+        imported(pack, E03)
+        assertIs<DownloadResolver.Resolution.Ready>(resolver(remembered = remembered, fetchNzb = unasked).resolve(ID))
+        assertEquals(before, table.entries)
+
+        // Its one file found missing on the provider as it is checked: nothing remembered of it either.
+        val gone = Fake("qm-s01e02-wren", "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN", listOf("Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv" to 1_300_000_000L), gone = true)
+        reset()
+        imported(gone, "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv")
+        val failed = assertIs<DownloadResolver.Resolution.Failed>(resolver(remembered = remembered, fetchNzb = unasked).resolve(ID))
+        assertEquals("Release incomplete", failed.reason)
+        assertEquals(before, table.entries)
+    }
+
+    /**
+     * L457: an imported NZB's next file in this process takes the prepare held from the one before, as a season pack's next
+     * row does: one prepare of the NZB in all, each file from its copy. Resolve writes no copy of it: the import wrote it.
+     */
+    @Test
+    fun `an imported NZB's second file takes the prepare held from its first, one prepare in all`() = runBlocking<Unit> {
+        imported(pack, E02, id = E1)
+        imported(pack, E03, id = E2)
+        val resolver = resolver(fetchNzb = unasked)
+        assertEquals(E02, assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(E1)).file.name)
+        dao.setState(E1, DownloadState.Done, null, NOW)
+        assertEquals(E03, assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(E2)).file.name)
+        assertEquals<List<Pair<String, String?>>>(listOf(pack.guid to TYPED), opened)
+        assertEquals(listOf("${pack.guid}/$E02@fake", "${pack.guid}/$E03@fake"), checked)
+        assertEquals(emptyList(), asks)
+        assertEquals(0, storage.packWrites)
+    }
+
+    /**
+     * An imported file's lines, Resolve's and its pipeline's, name the download by its id and its release by its place: never
+     * the file, the NZB's title or id, or the password typed for it. Here a file missing from its NZB, whose failure's own
+     * words name it.
+     */
+    @Test
+    fun `an imported file's lines never name the file, its NZB or its password`() = runBlocking<Unit> {
+        val from = LogBuffer.snapshot().lastOrNull()?.seq ?: 0L
+        imported(pack, "Harbor.Lights.S02E09.1080p.WEB.h264-GRP.mkv", index = 8, size = 1_000_000_009L)
+        assertIs<DownloadResolver.Resolution.Failed>(resolver(fetchNzb = unasked).resolve(ID))
+        val lines = LogBuffer.snapshot().filter { it.seq > from }.map { it.message }
+        val secret = listOf("S02E09", "Harbor", pack.title, nzbIdOf(pack), TYPED)
+        assertEquals(emptyList(), lines.filter { line -> secret.any { it in line } })
+        assertTrue(lines.any { "play_pipeline: download $ID, release 1 failed" in it }, lines.toString())
+    }
+
     /** The turn's lines, the pack's attempt and a release passed over among them, name the row by its id: no release, key or title. */
     @Test
     fun `a turn's lines name the row by its id, never a release, a key or the show`() = runBlocking<Unit> {
@@ -2219,6 +2433,13 @@ class DownloadResolverTest {
 
         /** An article the providers lack. */
         const val GONE = "gone-"
+
+        /** The pack's second and third episodes' files. */
+        const val E02 = "Harbor.Lights.S02E02.1080p.WEB.h264-GRP.mkv"
+        const val E03 = "Harbor.Lights.S02E03.1080p.WEB.h264-GRP.mkv"
+
+        /** The archive password typed on Import for an NZB it opened, kept in the NZB's copy (L423). */
+        const val TYPED = "typed-on-import"
 
         /** A posted file's obfuscated name, as a release may post one. */
         const val OBFUSCATED = "5d41402abc4b2a76b9719d911017c592.mkv"

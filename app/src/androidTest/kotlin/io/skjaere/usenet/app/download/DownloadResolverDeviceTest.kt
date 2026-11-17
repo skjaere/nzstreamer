@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.download
 
+import android.os.Build
 import android.os.Bundle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -9,6 +10,7 @@ import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.download.DownloadFixtures.Packing
 import io.skjaere.usenet.app.engineSetup
 import io.skjaere.usenet.app.mockOnEngine
+import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.waitFor
 import io.skjaere.usenet.core.EnginePrepareBackend
@@ -65,8 +67,11 @@ import java.util.concurrent.atomic.AtomicInteger
  * only on a queue with nothing else to finish (a run cut short before its tearDown can leave some): it would take those
  * up first, and change them.
  *
- * The rows, their folders, the season's copy and what the releases' checks left in the memory of releases found missing
- * are put back as they were; the server ends with its articles.
+ * An NZB opened on Import (L423, L457, M-imp): two files of one NZB queued as Import's Download queues them, both resolved
+ * from the NZB's one copy, prepared once, with the archive password typed for it.
+ *
+ * The rows, their folders, the season's and the import's copies and what the releases' checks left in the memory of
+ * releases found missing are put back as they were, and the downloads' jobs cancelled; the server ends with its articles.
  */
 @RunWith(AndroidJUnit4::class)
 class DownloadResolverDeviceTest {
@@ -87,6 +92,9 @@ class DownloadResolverDeviceTest {
 
     /** The season pack's guid, this run's own: a copy a run cut short left under another can never be served to this one. */
     private var seasonPack: String? = null
+
+    /** The imported NZB's copy's key: Import's release of it, by the NZB's id, this run's own as its bytes are. */
+    private var importKey: String? = null
 
     @Before
     fun setUp() = runBlocking<Unit> {
@@ -109,6 +117,8 @@ class DownloadResolverDeviceTest {
         row?.let { storage.delete(it.id) }
         made.forEach { storage.delete(it) }
         seasonPack?.let { storage.packs.folder(ReleaseKey.of(INDEXER.id, it)).deleteRecursively() }
+        importKey?.let { storage.packs.folder(it).deleteRecursively() }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) DownloadJobService.scheduler(context).cancelAll()
         container.library.clearTriedReleases()
         container.library.restoreTriedReleases(remembered)
         fixtures.close()
@@ -260,6 +270,78 @@ class DownloadResolverDeviceTest {
         assertNull(storage.packs.find(ReleaseKey.of(INDEXER.id, pack)))
     }
 
+    /**
+     * L423, L457: an NZB opened on Import, Quiet Meridian season 1 as one release of two episodes, each a split RAR4 set as
+     * season packs post them, fresh bytes under ids no run used; both files queued as Import's Download queues them
+     * ([DownloadRunner.enqueueImport]), with the archive password typed for the NZB, and run by the app's runner over the
+     * app's Resolve. Both resolve from the NZB's one copy, with nothing asked of an indexer (the coordinator's grab seam
+     * counts none): prepared once in all, the second taking the prepare held from the first, and the password handed to
+     * prepare through Resolve's prepare seam. Each file is whole, its one try Import's release, its watch key the NZB's
+     * file's; the copy goes once both are done (C11).
+     *
+     * M-imp: the prepares of the NZB, said through the instrumentation's status.
+     */
+    @Test
+    fun anImportedPackOfTwoFilesResolvesBothFromOneCopyWithOnePrepareAndThePasswordTyped() = runBlocking<Unit> {
+        // Rows an earlier run left to finish would be walked first, and changed: none may be there.
+        val left = container.data.downloads.queue().first().filter { it.state in DownloadRunner.GOING_ON }.map { it.id }
+        assertTrue("Downloads an earlier run left to finish, ${left.size}: $left", left.isEmpty())
+        val salt = System.nanoTime()
+        val files = (1..2).map { e ->
+            fixtures.post(Packing.Rar4, "Quiet.Meridian.S01E%02d.1080p.WEB.h264-WREN".format(e), DownloadFixtures.seeded(16 * DownloadFixtures.MB, salt + e), salt = "$salt")
+        }
+        val nzb = fixtures.local.nzb(*files.flatMap { it.posted }.toTypedArray())
+        val nzbId = PreparedNzb.idFor(nzb)
+        val key = ReleaseKey.of(IMPORTED, nzbId).also { importKey = it }
+
+        // The engine's prepare, counted, and the password each prepare was handed.
+        val prepares = AtomicInteger()
+        val passwords = CopyOnWriteArrayList<String?>()
+        val engine = EnginePrepareBackend(container.engine)
+        val counted = object : PrepareBackend {
+            override suspend fun prepare(nzbBytes: ByteArray, password: String?) = engine.prepare(nzbBytes, password).also {
+                prepares.incrementAndGet()
+                passwords += password
+            }
+
+            override suspend fun streamableFiles(metadata: ExtractedMetadata) = engine.streamableFiles(metadata)
+        }
+        val resolver = DownloadResolver.of(container, storage, indexers = { listOf(INDEXER) }, attempts = { 3 }, probe = TrackProbe.None, prepareBackend = counted)
+        val runner = DownloadRunner(DownloadRunnerDeps.of(container, context, storage, DownloadDebug.On(fixtures.file("debug"), Clock.System), resolve = resolver::resolve), scope)
+        val ids = files.mapIndexed { index, file ->
+            val queued = runner.enqueueImport(
+                DownloadTarget.release(nzbId, index, file.fileName, IMPORT_TITLE),
+                DownloadCandidate(IMPORTED, nzbId, IMPORT_TITLE, size = file.size),
+                DownloadPick(index, file.fileName, file.size, nzbId),
+                DownloadStorage.Source(nzb, PASSWORD),
+            ) ?: throw AssertionError("file $index not queued")
+            made += queued.id
+            queued.id
+        }
+        scope.launch { runner.run(DownloadHost.Job) }
+
+        val done = ids.map { id ->
+            waitFor("download $id done", 120_000) { runner.state.value.firstOrNull { it.row.id == id }?.row?.takeIf { it.state == DownloadState.Done || it.state == DownloadState.Failed } }
+                .also { assertEquals("${it.state}, ${it.reason}", DownloadState.Done, it.state) }
+        }
+        InstrumentationRegistry.getInstrumentation().sendStatus(STATUS, Bundle().apply { putString(M_IMP, "prepares of the imported NZB of two files: ${prepares.get()}") })
+        assertEquals(emptyList<String>(), grabbed)
+        assertEquals("prepares", 1, prepares.get())
+        assertEquals(listOf<String?>(PASSWORD), passwords)
+        done.forEachIndexed { i, row ->
+            assertEquals(DownloadKind.Release, row.kind)
+            assertEquals(WatchKey.release(nzbId, i), row.watchKey)
+            assertEquals(files[i].fileName, row.fileName)
+            assertEquals(listOf(key), row.tried)
+            assertEquals(IMPORTED, row.release?.indexerId)
+            assertEquals(files[i].sha256, DownloadFixtures.sha256(storage.file(row) ?: throw AssertionError("no file for ${row.id}")))
+        }
+        // Both done: the copy, with the password typed for it, went with the last.
+        val copy = storage.packs.folder(key)
+        waitFor("the imported NZB's copy gone", 10_000) { true.takeIf { !copy.exists() } }
+        assertNull(storage.packs.find(key))
+    }
+
     /** [data] posted as the file [name], its articles' ids a digest of its name, bytes and part size, as the fixtures' are. */
     private fun post(name: String, data: ByteArray): LocalNntp.Posted {
         val digest = MessageDigest.getInstance("SHA-256").apply {
@@ -286,6 +368,15 @@ class DownloadResolverDeviceTest {
 
         /** Its key for M-pack. */
         const val M_PACK = "m-pack"
+
+        /** Its key for M-imp. */
+        const val M_IMP = "m-imp"
+
+        /** The imported NZB's title, as Import names it. */
+        const val IMPORT_TITLE = "Quiet.Meridian.S01.1080p.WEB.h264-WREN"
+
+        /** The archive password typed on Import for it. */
+        const val PASSWORD = "typed-on-import"
 
         /** Never asked: the grabs come through the coordinator's seam. */
         val INDEXER = IndexerConfig("dl-resolver-test", "Test indexer", "http://indexer.invalid/api", "test-key")

@@ -2,6 +2,8 @@ package io.skjaere.usenet.app.download
 
 import android.annotation.SuppressLint
 import io.skjaere.usenet.app.AppContainer
+import io.skjaere.usenet.app.play.IMPORTED
+import io.skjaere.usenet.app.play.IMPORT_GONE
 import io.skjaere.usenet.app.play.MissingReleases
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.play.PlayingPack
@@ -122,8 +124,15 @@ import kotlin.time.Duration.Companion.seconds
  * handed back for that NZB rather than prepared again ([heldPreparer]); a new process prepares it again, from the copy or
  * from a row's own NZB as it opens again, once, with no grab.
  *
+ * A file of an NZB the user opened on Import (a Release row, L423, L457) has no search and no indexer: its one release is
+ * Import's, whose NZB, with the password typed for it, its copy in `.packs/` gives as its grab. Its file is the one chosen on
+ * Import, picked by its name and size, never another of the NZB; its row says "Opening…" until the file is checked; a copy
+ * gone fails in Import's words, with nothing asked of an indexer; the memory of releases found missing neither skips nor
+ * records it; and the NZB's next file in this process takes the prepare held for it ([keepPack]).
+ *
  * Its log lines, the pipeline's and the memory of releases tried's among them (which name a play's release by its title),
- * name the download by its id and a release by its place among the row's ([naming]), never by the release's name.
+ * name the download by its id and a release by its place among the row's ([naming]), never by the release's name; the
+ * pipeline says an attempt's failure by its kind alone, as its words can name a file.
  */
 class DownloadResolver(
     private val downloads: DownloadDao,
@@ -492,10 +501,14 @@ class DownloadResolver(
             said = words
             downloads.setState(id, DownloadState.Resolving, words, clock.now())
         }
-        say(DownloadHostRules.FINDING_RELEASES)
+        // Nothing is searched for an imported file (L454): its NZB is opened, which its row says until its file is checked.
+        val opening = row.kind == DownloadKind.Release
+        say(if (opening) DownloadHostRules.OPENING else DownloadHostRules.FINDING_RELEASES)
         providersReady(id)?.let { return Pass.Ended(it) }
         val byKey = items.associateBy { it.key }
         val newznab = byKey.mapValues { it.value.item }
+        // Import's own releases of NZBs the user opened (L457): their copy is their one source, and no indexer has them.
+        val imported = items.filter { it.item.indexerId == IMPORTED }.mapTo(HashSet()) { it.key }
         val configs = indexers().associateBy { it.id }
         // Whether this attempt's last grab failed for an outage on the indexer's side (out of reach, a 5xx): no NZB came,
         // nothing spent. An attempt whose grab never reached an indexer (none set up for it) had no outage.
@@ -541,6 +554,8 @@ class DownloadResolver(
                     storage.keepGrab(id, candidate.id, copy.source.nzb, copy.source.password)
                     return FetchedNzb(copy.source.nzb, copy.source.password)
                 }
+                // An imported NZB's copy gone with its last download: nothing has it now, so nothing is asked.
+                if (candidate.id in imported) throw FetchException(IMPORT_GONE)
                 return grabs.fetchWithPassword(candidate).also { storage.keepGrab(id, candidate.id, it.bytes, it.password) }
             }
         }
@@ -555,8 +570,11 @@ class DownloadResolver(
                 throw e
             }
         }
+        // An imported NZB's release is never skipped as found missing, nor remembered so (L457): it is the file the user chose,
+        // and nothing else has it.
+        val remembered = tried(newznab.filterKeys { it !in imported }, { indexerId -> configs[indexerId]?.name }, namedCandidate)
         val pipeline = PlayPipeline(
-            { usenet }, probing, maxAttempts = left, tried = tried(newznab, { indexerId -> configs[indexerId]?.name }, namedCandidate), named = namedCandidate,
+            { usenet }, probing, maxAttempts = left, tried = remembered, named = namedCandidate, failureWords = { it::class.simpleName ?: "Failure" },
         )
         // Counted across its resolves: the second release in all is "release 2", whichever resolve tries it.
         val before = counted.size
@@ -598,7 +616,9 @@ class DownloadResolver(
                         count(id, counting)
                     }
                     is PipelineEvent.Step -> when (val status = event.status) {
-                        is StepStatus.Running -> say(DownloadHostRules.resolving(STEP_LABELS.getValue(event.step), attempt, of))
+                        is StepStatus.Running -> say(
+                            if (opening && event.step in OPENS) DownloadHostRules.OPENING else DownloadHostRules.resolving(STEP_LABELS.getValue(event.step), attempt, of),
+                        )
                         is StepStatus.Failed -> when (val failure = status.failure) {
                             // The providers failing is no answer about the release, nor a connection lost.
                             is AttemptFailure.Provider -> Unit
@@ -649,7 +669,7 @@ class DownloadResolver(
         }
         return when (val end = ended) {
             is PipelineEvent.Succeeded -> resolved(id, end, byKey, end.target.candidate.id in copied, named)
-            is PipelineEvent.Exhausted -> exhausted(id, end, counting, skipped, indexerOutages > 0, refusals > 0)
+            is PipelineEvent.Exhausted -> exhausted(id, end, counting, skipped, indexerOutages > 0, refusals > 0, imported)
             else -> Pass.Failed(NO_OTHER_RELEASE)
         }
     }
@@ -722,9 +742,14 @@ class DownloadResolver(
      * season is still to finish, for which the copy is written now from [nzb]; otherwise it would have no use. A copy kept
      * already of that same NZB (taken again from what its attempt kept of it) stays as it was written. Either way the pack
      * as it was [prepared] is held for the season's next row. The copy leads when it isn't above Download size ([leads]).
-     * Nothing of this fails the resolve: a copy that can't be kept costs the next row a grab.
+     * Nothing of this fails the resolve: a copy that can't be kept costs the next row a grab. An imported file's NZB was
+     * kept as it was queued (L423): taken from that copy, its prepare alone is held, for the NZB's next file (L457).
      */
     private suspend fun keepPack(row: Download, item: RankedItem, prepared: PreparedNzb, nzb: ByteArray, password: String?, copied: Boolean) {
+        if (row.kind == DownloadKind.Release) {
+            if (copied) storage.holdPrepare(item.key, prepared)
+            return
+        }
         val show = row.showTmdbId ?: return
         val season = row.season ?: return
         if (row.kind != DownloadKind.Episode || !(copied || item.offersFileChoice)) return
@@ -797,9 +822,11 @@ class DownloadResolver(
      * counted, and the download waits for them. Releases left untried behind an indexer's download limit ([limited], L399):
      * the others' are tried next, never the outage's backoff, which would ask the limited indexer again every few seconds.
      * Else it fails, in the last failure's words, or, every release left passed over as found missing before, in the play
-     * sheet's words for those.
+     * sheet's words for those; an [imported] NZB's release that had no NZB, in Import's words for its copy gone (L457).
      */
-    private suspend fun exhausted(id: String, ended: PipelineEvent.Exhausted, counted: List<String>, skipped: List<String>, indexerOut: Boolean, limited: Boolean): Pass {
+    private suspend fun exhausted(
+        id: String, ended: PipelineEvent.Exhausted, counted: List<String>, skipped: List<String>, indexerOut: Boolean, limited: Boolean, imported: Set<String>,
+    ): Pass {
         val last = ended.failedAttempts.lastOrNull()
             ?: return Pass.Failed(skipped.takeIf { it.isNotEmpty() }?.let(::skippedNotice) ?: NO_OTHER_RELEASE)
         val (candidate, failure) = last
@@ -811,7 +838,7 @@ class DownloadResolver(
         // Releases left untried for want of their NZBs: the indexers are asked again once the wait is over (L382).
         if (indexerOut) return Pass.Out
         log.info("download {}: {} release{} tried, the last failing as {}", id, counted.size, if (counted.size == 1) "" else "s", failure::class.simpleName)
-        return Pass.Failed(reason(failure))
+        return Pass.Failed(if (failure is AttemptFailure.FetchFailed && candidate.id in imported) IMPORT_GONE else reason(failure))
     }
 
     /**
@@ -896,9 +923,19 @@ class DownloadResolver(
      * (Replay.picker), so a file chosen while streaming a pack is picked again with no question (L402). A file chosen by
      * hand in the pack (Choose file, L403) wins: in that NZB, the row's kept grab, it is picked with no question, by its
      * name and size, as a remembered file is ([RememberedFile]); where it is no longer there, the episode's, else that
-     * attempt fails (L339). Its pack, the row's first release, isn't checked whole: the chosen file's volumes are.
+     * attempt fails (L339). Its pack, the row's first release, isn't checked whole: the chosen file's volumes are. A file
+     * of an NZB opened on Import is the one chosen there, by its name and size alone: one no longer there fails the attempt,
+     * never taking another of the NZB under its watch key (L457), and its NZB isn't checked whole either.
      */
     private suspend fun picker(row: Download): FilePicker {
+        if (row.kind == DownloadKind.Release) {
+            val pick = DownloadColumns.pick(row)
+            log.info("download {}: its file chosen on Import, picked by its name and size", row.id)
+            // No NZB id and nothing wanted besides: the file named so is picked in whatever its NZB lists, else none.
+            return RememberedFile(
+                pick?.index ?: -1, FilePicker.Largest, release = row.candidates.firstOrNull()?.title, name = pick?.name, size = pick?.size, wanted = null,
+            )
+        }
         val season = row.season
         val episode = row.episode
         val (base, watch) = if (row.kind == DownloadKind.Episode && season != null && episode != null) {
@@ -953,6 +990,9 @@ class DownloadResolver(
          * IOException Media3 meets as it reads says Network, whatever it was.
          */
         private val READS_PROVIDERS = setOf(PipelineStep.CheckAvailability, PipelineStep.Open)
+
+        /** The steps an imported file's row says "Opening…" for (L454): its NZB's fetch, from its copy, and its open. */
+        private val OPENS = setOf(PipelineStep.FetchNzb, PipelineStep.Open)
 
         /** An indexer out of reach, or failing on its side (a 5xx): no answer about the release, nor a refusal of the account. */
         internal fun NewznabError.isOutage() = this is NewznabError.Network || this is NewznabError.Timeout || this is NewznabError.Server
