@@ -363,7 +363,11 @@ class DownloadCastDeviceTest {
         assertEquals("the LOAD's picture, TMDB's", TmdbImages.still(STILL), image)
     }
 
-    /** L413, L417: a row Delete once watched has taken can't be held: the cast fails as for a file gone, and nothing is sent. */
+    /**
+     * L413, L417: a row Delete once watched has taken can't be held: the cast fails as for a file gone, and nothing is sent.
+     * The row and its file are put back under the same id after the run deleted them, so the file is there to serve: only
+     * the refused hold keeps it from the device, and the row isn't failed as one whose file is gone.
+     */
     @Test
     fun aRowDeleteOnceWatchedHasTakenIsRefusedWithNothingSent() = runBlocking<Unit> {
         val row = finished(3)
@@ -376,10 +380,15 @@ class DownloadCastDeviceTest {
         }
         assertEquals(listOf(row.id), container.downloads.deleteWatched(System.currentTimeMillis() + DAY + MINUTE).filter { it == row.id })
         assertFalse("a hold refused", container.downloads.hold(Any(), row.id))
+        // Taken for good (the runner keeps it so for the process's life), though its row and file are back.
+        seeded(row)
+        assertFalse("a hold refused with its file back", container.downloads.hold(Any(), row.id))
         val loads = remote!!.loads.size
         val failed = withTimeout(LOAD_MILLIS) { cast(row).await() } as? MoveOutcome.Failed ?: throw AssertionError("the cast didn't fail")
         assertEquals(DownloadStorage.FILE_GONE, failed.failure.reason)
         assertEquals("nothing sent", loads, remote!!.loads.size)
+        delay(SETTLE_MILLIS)
+        assertEquals("failed as a file gone", DownloadState.Done, dao.get(row.id)?.state)
     }
 
     /**
