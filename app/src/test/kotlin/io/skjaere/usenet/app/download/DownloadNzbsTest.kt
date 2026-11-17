@@ -185,6 +185,33 @@ class DownloadNzbsTest {
         assertNull(old.nzb)
     }
 
+    /**
+     * L456, L423: an imported NZB's copy is the one source of each of its files still to download or failed. Another of
+     * its files queued, or one put back, with the same NZB and the password typed for it, leaves the copy as it was
+     * written, never taken away for a moment to be written again: a write that failed part way, or a process that died in
+     * it, would leave those files with no copy. Asked for with another password, it is written again.
+     */
+    @Test
+    fun `an imported NZB's copy kept already is left as it was written for another of its files`() = runBlocking<Unit> {
+        packs.write(imported, IMPORT_NZB, TYPED)
+        // Anything written now fails part way: where the NZB is written whole, a folder is in the way.
+        val inTheWay = File(packs.folder(importKey), DownloadNzbs.NZB + ".tmp").apply { mkdirs() }
+        val second = DownloadNzbs.Meta.imported(importCandidate.copy(size = 1_400_000_000))
+        val wrote = runCatching { packs.write(second, IMPORT_NZB, TYPED) }
+        assertTrue(wrote.isSuccess, "written again: ${wrote.exceptionOrNull()}")
+        val copy = assertNotNull(packs.find(importKey), "the copy taken away")
+        assertEquals(imported, copy.meta)
+        assertContentEquals(IMPORT_NZB, copy.source.nzb)
+        assertEquals(TYPED, copy.source.password)
+        assertEquals(listOf(imported), packs.copies.value)
+
+        assertTrue(inTheWay.delete())
+        packs.write(second, IMPORT_NZB, "typed-again")
+        val again = assertNotNull(packs.find(importKey))
+        assertEquals(second, again.meta)
+        assertEquals("typed-again", again.source.password)
+    }
+
     /** L423: a season's later rows never take an imported NZB's copy as their season's pack, whatever its files are. */
     @Test
     fun `a season's copies never include an imported NZB's`() = runBlocking<Unit> {

@@ -102,10 +102,21 @@ class DownloadNzbs(
     /** Copy [key]'s folder: the key's SHA-256, in hex. */
     fun folder(key: String): File = File(dir, digest(key))
 
-    /** Keeps [nzb] and its [password] (none: no file) as the copy [meta] says, in place of one kept before under its key. */
+    /**
+     * Keeps [nzb] and its [password] (none: no file) as the copy [meta] says, in place of one kept before under its key. One
+     * kept already of that same NZB with that same password is left as it was written (L456): another file of an imported
+     * NZB queued, or one put back, would otherwise take away for a moment, while it is written again, the copy the NZB's
+     * other downloads still to finish or failed open, and a write that failed part way, or a process that died in it, would
+     * leave them none.
+     */
     suspend fun write(meta: Meta, nzb: ByteArray, password: String?): Unit = turns.withLock {
         withContext(io) {
             val folder = folder(meta.key)
+            kept(folder, meta.key, nzb, password)?.let { kept ->
+                _copies.update { copies -> if (copies.any { it.key == kept.key }) copies else copies + kept }
+                log.info("{} {}: kept as it was", what(kept), short(folder.name))
+                return@withContext
+            }
             if (!folder.isDirectory && !folder.mkdirs()) {
                 throw IOException("Couldn't make ${if (meta.nzb == null) "season pack" else "imported NZB copy"} ${short(folder.name)}'s folder")
             }
@@ -196,6 +207,14 @@ class DownloadNzbs(
 
     /** The last copy's prepare while its copy lasts; null when there is none, as in a new process. */
     fun held(): PreparedNzb? = held?.prepared
+
+    /** [folder]'s copy of [key] where it holds one, readable, of [nzb] with [password]: its meta; else null. */
+    private fun kept(folder: File, key: String, nzb: ByteArray, password: String?): Meta? {
+        val meta = meta(folder)?.takeIf { it.key == key } ?: return null
+        if (File(folder, PASSWORD).takeIf { it.isFile }?.readText() != password) return null
+        val kept = File(folder, NZB).takeIf { it.isFile && it.length() == nzb.size.toLong() } ?: return null
+        return meta.takeIf { kept.readBytes().contentEquals(nzb) }
+    }
 
     /** [folder]'s meta; null where it has none or it can't be read. */
     private fun meta(folder: File): Meta? = try {
