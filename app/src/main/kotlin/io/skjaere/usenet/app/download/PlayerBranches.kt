@@ -1,9 +1,11 @@
 package io.skjaere.usenet.app.download
 
 import androidx.media3.common.C
+import io.skjaere.usenet.app.play.PlayerLaunch
 import io.skjaere.usenet.app.play.Prefetch
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.player.PlayUris
 
 /**
@@ -11,9 +13,10 @@ import io.skjaere.usenet.player.PlayUris
  * take, each keyed on the launch's URI naming one ([isDownload]). A file on this device is no stream: the player keeps the
  * CPU awake but holds no Wi-Fi lock, watches no stream's speed, logs no stream's cost, and remembers nothing as missing on
  * the providers, which its play never asked. What needs the network, the title's stream ([Other.StreamInstead]) and
- * TheIntroDB, is offered or asked only while the device's network is validated. Its Cast button shows as for any play,
- * as a cast serves its file (W121 c, L417). The next episode's line on the card comes from the downloads, with no search
- * ([nextStatus]). A cast of its file offers what [other] says too (L449).
+ * TheIntroDB, is offered or asked only while the device's network is validated, the stream only for a title that has
+ * one (not a file opened on Import, [titleStreams]). Its Cast button shows as for any play, as a cast serves its file
+ * (W121 c, L417). The next episode's line on the card comes from the downloads, with no search ([nextStatus]). A cast of
+ * its file offers what [other] says too (L449).
  */
 internal object PlayerBranches {
     /** Whether [uri] names a finished download's file: `download://<id>` ([PlayUris.Target.Download]). */
@@ -42,14 +45,21 @@ internal object PlayerBranches {
 
     /**
      * What is offered in place of the play, here or on a Cast device (L449): for a download, its title by its stream path
-     * ("Stream instead"), only while [online], as it has no request behind it to try another release of; else another
-     * release while [canTryAnother].
+     * ("Stream instead"), only while [online] and where it has a title that streams ([titleStreams]: not a file opened on
+     * Import, L454), as it has no request behind it to try another release of; else another release while [canTryAnother].
      */
-    fun other(download: Boolean, online: Boolean, canTryAnother: Boolean): Other = when {
-        download -> if (online) Other.StreamInstead else Other.None
+    fun other(download: Boolean, online: Boolean, canTryAnother: Boolean, titleStreams: Boolean): Other = when {
+        download -> if (online && titleStreams) Other.StreamInstead else Other.None
         canTryAnother -> Other.TryAnother
         else -> Other.None
     }
+
+    /**
+     * Whether [launch]'s title can stream in place of its download's file: an episode's or a film's, never a file opened on
+     * Import (L454), whose watch is the release's own, with no title to search for. A play the player has no launch of is
+     * as before.
+     */
+    fun titleStreams(launch: PlayerLaunch?): Boolean = launch?.watch?.kind != WatchKind.Release
 
     /**
      * Whether the next episode is looked for as online ([nextStatus], [OfflineNext.next]): a download's play while the

@@ -295,6 +295,27 @@ class FileDetailsTest {
     }
 
     /**
+     * L454: a file opened on Import has a launch once it is downloaded (and when Import casts it), its release Import's own
+     * ([IMPORTED], no indexer of the user's): it says it was opened from an NZB file, never "An indexer since removed",
+     * whether the indexers are read yet or not. Its download's Source says where it came from, as any download's.
+     */
+    @Test
+    fun `a file opened on Import and downloaded says it was opened from an NZB file`() {
+        val file = "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv"
+        val opened = SavedRelease(IMPORTED, nzbId, "Quiet.Meridian.S01.1080p.WEB.h264-WREN", null, 1, nzbId, file, 1_300_000_000)
+        val uri = PlayUris.download("7c1d2e3f-0a1b-4c2d-8e3f-405162738495")
+        val launch = launch(opened).copy(uri = uri, watchKey = "release:$nzbId:1", watch = WatchTarget(WatchKind.Release, file))
+        val downloaded = FileDetails(FileOrigin.of(launch, uri, null, SourceNames(indexers), providers, 6, downloaded = FileOrigin.Downloaded(at = null)), shield)
+        assertEquals("Source" to listOf("Indexer: Opened from an NZB file", "Downloaded: To this phone (plays from the file, not streamed)"), rows(downloaded).last())
+        assertEquals("Quiet.Meridian.S01.1080p.WEB.h264-WREN" to file, downloaded.release to downloaded.fileName)
+        // The indexers not read yet: the same.
+        assertEquals("Opened from an NZB file", row(FileDetails(FileOrigin.of(launch, uri, null, null, providers, 6, downloaded = FileOrigin.Downloaded())), "Indexer")?.value)
+        // Import's cast of it, streamed: the same, with the providers it streams from.
+        val streamed = FileDetails(origin(launch(opened)))
+        assertEquals("Opened from an NZB file", row(streamed, "Indexer")?.value)
+    }
+
+    /**
      * L354: a download's Source, the indexer as for any play, then where it came from, in the
      * providers' place (none are used, so none are named, nor their connections): when it finished, to this phone, played
      * from the file, not streamed; and the parts no provider had, skipped as it plays. The rest reads the file as a stream's.

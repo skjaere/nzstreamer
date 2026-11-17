@@ -144,6 +144,15 @@ class CastMissingPartsTest {
         g.pass(6_000)
         assertNull(g.prompt, "5 s of playing")
         assertEquals(emptyList(), g.streamed + g.tried)
+
+        // A file opened on Import and downloaded has no title to stream (L454): the count alone, online too.
+        val h = Fixture(this)
+        val imported = downloaded.copy(watchKey = WatchKey.release("a1b2c3", 1), watch = WatchTarget(WatchKind.Release, "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv"))
+        h.device(CastPlayerState.Playing, 1_900_000, gaps = three, played = imported)
+        h.pass(500)
+        assertEquals(CastPrompt(3, tryAnother = false, stuck = false, device = "Kitchen display"), h.prompt)
+        assertEquals(emptyList(), h.streamed + h.tried)
+        assertEquals(0, h.asked, "the coordinator asked for another release")
     }
 
     @Test

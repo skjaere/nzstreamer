@@ -516,6 +516,24 @@ class CastStartTest {
         assertEquals(listOf(CastButton.Close), CastStart.buttons(downloadFailed(gone, online = false)))
     }
 
+    /**
+     * L449, L454: a file opened on Import and downloaded has no title to stream: its cast's failure offers no Stream
+     * instead, online too, nor another release; Play on this phone where the device couldn't play it, Close alone where
+     * its file couldn't be read.
+     */
+    @Test
+    fun `an imported file's download offers no Stream instead after its cast fails, online too`() {
+        val file = "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv"
+        val imported = downloaded.copy(watchKey = WatchKey.release("a1b2c3", 1), watch = WatchTarget(WatchKind.Release, file))
+        fun failed(failure: CastLoadFailure) = assertIs<PlayState.Failed>(
+            CastStart.after(CastLoadOutcome.Failed(failure), imported, CastStart.loading(running), 30_000, canTryAnother = true, online = true),
+        ).castFailed()
+        val decode = failed(CastLoadFailure(CastFailKind.CouldNotPlay, DECODE, format = true))
+        assertEquals(CastFailed.Another.None, decode.another)
+        assertEquals(listOf(CastButton.PlayHere, CastButton.Close), CastStart.buttons(decode))
+        assertEquals(listOf(CastButton.Close), CastStart.buttons(failed(CastLoadFailure(CastFailKind.CouldNotPlay, "The downloaded file is gone", fileUnreadable = true))))
+    }
+
     @Test
     fun `a service Android wouldn't start fails the play before anything is searched`() {
         val failed = CastStart.notStarted("Harbor Lights", "S02E04 · Low Water", kitchen)

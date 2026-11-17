@@ -228,8 +228,9 @@ object CastStart {
      * The sheet once [launch]'s load came out ([outcome]), [millis] after it was handed over: closed as the device plays;
      * else its failure, over [running]. Try another release is offered for a failure on the device while the play has
      * another release to try ([canTryAnother]). A download's file has none: its title's stream is offered in its place
-     * while the app is [online], as the player offers it ([PlayerBranches.other], L449), and nothing offline; this phone,
-     * which would read the same file, isn't offered after the file couldn't be read.
+     * while the app is [online], as the player offers it ([PlayerBranches.other], L449), and nothing offline, nor for a
+     * file opened on Import, which has no title (L454); this phone, which would read the same file, isn't offered after the
+     * file couldn't be read.
      */
     fun after(outcome: CastLoadOutcome, launch: PlayerLaunch, running: PlayState.Running, millis: Long, canTryAnother: Boolean, online: Boolean = true): PlayState {
         val failure = (outcome as? CastLoadOutcome.Failed)?.failure ?: return PlayState.Idle
@@ -237,7 +238,7 @@ object CastStart {
         // Can't reach has no card: the release list and its step say what happened, as the sheet does.
         val reason = failure.reason ?: cannotReach(device.name)
         val step = StepStatus.Failed(millis, AttemptFailure.Elsewhere(if (failure.kind == CastFailKind.CannotReach) CAST_NO_REQUEST else reason))
-        val another = when (PlayerBranches.other(PlayerBranches.isDownload(launch.uri), online, canTryAnother)) {
+        val another = when (PlayerBranches.other(PlayerBranches.isDownload(launch.uri), online, canTryAnother, PlayerBranches.titleStreams(launch))) {
             PlayerBranches.Other.TryAnother -> CastFailed.Another.Again
             PlayerBranches.Other.StreamInstead -> CastFailed.Another.StreamInstead
             PlayerBranches.Other.None -> CastFailed.Another.None

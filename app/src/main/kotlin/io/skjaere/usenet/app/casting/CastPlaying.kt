@@ -459,11 +459,12 @@ class CastPlaying(private val scope: CoroutineScope, private val deps: CastPlayi
 
     /**
      * What the prompt offers beside Keep watching for [launch]'s play: another release while there is one; for a download's
-     * file its title's stream, only while online, the coordinator never asked for another (L449).
+     * file its title's stream, only while online and never for a file opened on Import (L454), the coordinator never asked
+     * for another (L449).
      */
     private fun other(launch: PlayerLaunch): PlayerBranches.Other {
         val download = PlayerBranches.isDownload(launch.uri)
-        return PlayerBranches.other(download, deps.online(), !download && deps.canTryAnother(launch))
+        return PlayerBranches.other(download, deps.online(), !download && deps.canTryAnother(launch), PlayerBranches.titleStreams(launch))
     }
 
     /**

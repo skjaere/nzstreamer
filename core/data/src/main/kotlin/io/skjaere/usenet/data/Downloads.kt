@@ -13,8 +13,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
 import java.util.UUID
 
-/** What a download is of: an episode of a TMDB show or a TMDB film. */
-enum class DownloadKind { Episode, Movie }
+/**
+ * What a download is of: an episode of a TMDB show, a TMDB film, or a file of an NZB the user opened on Import ([Release],
+ * L423), which has no TMDB title. Stored by its name, so a kind added later needs no migration.
+ */
+enum class DownloadKind { Episode, Movie, Release }
 
 /**
  * Where a download is. [Queued] waits for its turn; [Resolving] finds its release (grab, check, prepare, probe); [Running]
@@ -47,12 +50,14 @@ data class DownloadCandidate(
 data class DownloadGap(val first: Long, val last: Long)
 
 /**
- * An episode or a film saved on this device, or on its way (L351). A device's own, as [TriedRelease] is: never synced, no
- * tombstone; a removed download's row is deleted. [id] is random, of RFC 3986's unreserved characters ([newId]): its
- * `download://` URI's and its folders' name, never the release's. The names are kept with it, so the Downloads page works
- * offline (L368): [title] (the show's or the film's), [subtitle], and for an episode its [season], [episode], [episodeName]
- * and the season's episode count ([seasonEpisodes], from the sheet's request, for the next episode offline), for a film its
- * [year] and [runtimeMinutes]. It plays as [watchKey] ([WatchKey.episode] or [WatchKey.movie]).
+ * An episode, a film or an imported file saved on this device, or on its way (L351). A device's own, as [TriedRelease] is:
+ * never synced, no tombstone; a removed download's row is deleted. [id] is random, of RFC 3986's unreserved characters
+ * ([newId]): its `download://` URI's and its folders' name, never the release's. The names are kept with it, so the
+ * Downloads page works offline (L368): [title] (the show's or the film's), [subtitle], and for an episode its [season],
+ * [episode], [episodeName] and the season's episode count ([seasonEpisodes], from the sheet's request, for the next episode
+ * offline), for a film its [year] and [runtimeMinutes]. It plays as [watchKey] ([WatchKey.episode] or [WatchKey.movie]). A
+ * file opened on Import ([DownloadKind.Release], L423) keeps the file's name as its [title] and the NZB's as its
+ * [subtitle], and plays as [WatchKey.release] (the NZB's id and the file's place in it), so its progress is saved there.
  *
  * The queue is the rows by [position] ([DownloadDao.queue]); [state], with [reason] in the row's words where it says one.
  * [candidates]: up to 10 releases in download order (L338); [tried]: the ones tried so far, by their search result's key

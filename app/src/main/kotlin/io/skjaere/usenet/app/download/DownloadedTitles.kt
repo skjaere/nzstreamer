@@ -52,5 +52,6 @@ object DownloadedTitles {
     private fun titleOf(row: Download): TitleKey? = when (row.kind) {
         DownloadKind.Episode -> row.showTmdbId?.let(TitleKey::show)
         DownloadKind.Movie -> row.movieTmdbId?.let(TitleKey::movie)
+        DownloadKind.Release -> null
     }
 }

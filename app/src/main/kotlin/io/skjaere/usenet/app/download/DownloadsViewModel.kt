@@ -170,10 +170,12 @@ data class DownloadsDeps(
                     val target = MovieTarget(row.movieTmdbId ?: return, row.title, row.year, imdb = null, runtimeMinutes = row.runtimeMinutes)
                     container.playback.playMovie(target, PlayOrigin.Here)
                 }
+                // An imported file has no title whose play the hook turns to its file (L423): nothing here plays it.
+                DownloadKind.Release -> Unit
             }
         }
 
-        /** Marks [row]'s episode or film [watched] or not, as the Show and Movie pages do. */
+        /** Marks [row]'s episode or film [watched] or not, as the Show and Movie pages do. An imported file has no Mark watched (L454). */
         private suspend fun mark(container: AppContainer, row: Download, watched: Boolean) {
             when (row.kind) {
                 DownloadKind.Episode -> {
@@ -183,6 +185,7 @@ data class DownloadsDeps(
                     container.library.markEpisodes(listOf(EpisodeRef(show, season, episode, WatchTitle.episode(row.title, season, episode))), watched)
                 }
                 DownloadKind.Movie -> container.library.markMovies(listOf(MovieMark(row.movieTmdbId ?: return, row.title)), watched)
+                DownloadKind.Release -> Unit
             }
         }
 

@@ -73,6 +73,23 @@ class DownloadedTitlesTest {
         assertEquals(emptyMap(), DownloadedTitles.of(emptyList()))
     }
 
+    /**
+     * L423: a file opened on Import and downloaded has no TMDB title, so no Collection chip or row counts it; Up next's row of
+     * the same file, by its `release:` key, has the mark, as the file plays from its row.
+     */
+    @Test
+    fun `an imported file's download marks no title, and its watch key is marked`() {
+        val file = "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv"
+        val imported = Download(
+            id = "imp", watchKey = WatchKey.release("nzb-qm", 1), kind = DownloadKind.Release, title = file, subtitle = "Quiet.Meridian.S01.1080p.WEB.h264-WREN",
+            state = DownloadState.Done, position = 0, release = release("imp", nzbId = "nzb-qm"), size = 1_300_000_000, indexerSize = 1_300_000_000,
+            createdAt = 1, completedAt = 2, updatedAt = 2,
+        )
+        val rows = listOf(imported, film(10))
+        assertEquals(mapOf(TitleKey.movie(10) to Downloaded(1, 4_100_000_000)), DownloadedTitles.of(rows))
+        assertEquals(setOf(imported.watchKey, WatchKey.movie(10)), DownloadedTitles.keys(rows.associateBy { it.watchKey }))
+    }
+
     /** L411: Up next's downloaded row draws its download's stored poster, found by its watch key among those that count. */
     @Test
     fun `each watch key with a finished download that plays names that download`() {

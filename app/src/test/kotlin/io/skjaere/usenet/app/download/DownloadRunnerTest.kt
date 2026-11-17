@@ -7,6 +7,7 @@ import io.skjaere.nzbstreamer.metadata.NzbMetadataResponse
 import io.skjaere.nzbstreamer.nzb.NzbDocument
 import io.skjaere.nzbstreamer.stream.StreamableFile
 import io.skjaere.usenet.app.download.DownloadResolver.Resolution
+import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.MissingReleases
 import io.skjaere.usenet.core.DownloadWriter
 import io.skjaere.usenet.core.FileCandidate
@@ -97,6 +98,7 @@ class DownloadRunnerTest {
         size: Int = SIZE,
         val oneVideo: Boolean = true,
         val password: String? = null,
+        val indexer: String = INDEXER,
     ) {
         val data: ByteArray = Random(guid.hashCode()).nextBytes(size)
         val size: Long get() = data.size.toLong()
@@ -108,8 +110,8 @@ class DownloadRunnerTest {
             listOf(FileCandidate(0, StreamableFile(fileName, size.toLong(), 0, 0, 0, 0))),
         )
         val file: FileCandidate get() = prepared.candidates.single()
-        val candidate get() = DownloadCandidate(INDEXER, guid, title, size = size, passworded = password != null)
-        val key: String get() = ReleaseKey.of(INDEXER, guid)
+        val candidate get() = DownloadCandidate(indexer, guid, title, size = size, passworded = password != null)
+        val key: String get() = ReleaseKey.of(indexer, guid)
 
         var missing: List<LongRange> = emptyList()
         var hold: Long? = null
@@ -167,8 +169,8 @@ class DownloadRunnerTest {
 
     private val fakes = mutableMapOf<String, Fake>()
 
-    private fun fake(guid: String, size: Int = SIZE, oneVideo: Boolean = true, password: String? = null) =
-        Fake(guid, "Harbor.Lights.S02E04.1080p.WEB.h264-${guid.uppercase().replace("-", "")}", size, oneVideo, password).also { fakes[guid] = it }
+    private fun fake(guid: String, size: Int = SIZE, oneVideo: Boolean = true, password: String? = null, indexer: String = INDEXER) =
+        Fake(guid, "Harbor.Lights.S02E04.1080p.WEB.h264-${guid.uppercase().replace("-", "")}", size, oneVideo, password, indexer).also { fakes[guid] = it }
 
     /**
      * Where the runner, its hosts and the streams' fake providers run: the test's own, so its virtual time runs them all
@@ -1262,6 +1264,41 @@ class DownloadRunnerTest {
         host(runner)
         advanceUntilIdle()
         assertEquals(listOf(single.guid to listOf("provider-1")), recorded)
+    }
+
+    /**
+     * L457: the release of a file opened on Import ([IMPORTED]: no indexer) is never remembered as missing on the providers
+     * in use, so a later Download again of it is never passed over untried: the user opened that file. An indexer's
+     * release of one video is remembered, as the case above.
+     */
+    @Test
+    fun `an imported file's release found missing isn't remembered`() = test {
+        val imported = fake("qm-import", indexer = IMPORTED).apply { missing = listOf(SIZE / 2L until SIZE) }
+        val runner = runner()
+        val target = DownloadTarget.release(imported.guid, 1, imported.fileName, imported.title)
+        val id = assertNotNull(runner.enqueue(target, listOf(imported.candidate))).id
+        host(runner)
+        advanceUntilIdle()
+        assertEquals(listOf(0L), imported.opens.take(1), "its file was written")
+        assertEquals(DownloadState.Failed, stored(id).state, "given up for its gap, with no other release")
+        assertEquals(emptyList(), recorded)
+    }
+
+    /**
+     * L423: an imported file's target is named by the file and its NZB, which no log line or trace says: its toString names
+     * neither, only its kind and watch key (the NZB's SHA-256 and the file's place). Nor does an episode's or a film's name
+     * its title.
+     */
+    @Test
+    fun `a target's toString names no file, NZB or title`() {
+        val file = "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv"
+        val target = DownloadTarget.release(NZB_SHA, 3, file, "Quiet.Meridian.S01.1080p.WEB.h264-WREN")
+        assertEquals(DownloadKind.Release, target.kind)
+        assertEquals(WatchKey.release(NZB_SHA, 3), target.watchKey)
+        assertEquals(file to "Quiet.Meridian.S01.1080p.WEB.h264-WREN", target.title to target.subtitle)
+        val said = listOf(target, target(4), DownloadTarget.movie(MOVIE, "Copper Crown", 2022, subtitle = "2022")).map { it.toString() }
+        assertEquals(emptyList(), said.filter { line -> listOf("Quiet", "Meridian", "WREN", ".mkv", "Harbor", "Low Water", "Copper").any { it in line } })
+        assertEquals("DownloadTarget(Release, ${WatchKey.release(NZB_SHA, 3)})", said[0])
     }
 
     /**
@@ -2467,7 +2504,7 @@ class DownloadRunnerTest {
                 counted.copy(safeOffset = 0, gaps = emptyList(), relativePath = null)
             }
             val resolved = base.copy(
-                release = RememberedRelease(INDEXER, fake.guid, fake.title, null, 0, fake.prepared.id, fake.fileName, fake.size),
+                release = RememberedRelease(fake.indexer, fake.guid, fake.title, null, 0, fake.prepared.id, fake.fileName, fake.size),
                 fileName = fake.fileName, size = fake.size, oneVideo = fake.oneVideo, updatedAt = clock.now(),
             )
             dao.update(resolved)
@@ -2723,5 +2760,8 @@ class DownloadRunnerTest {
         const val PAUSED = "dl-paused"
         const val FILM = "dl-film"
         const val MOVIE = 990_719
+
+        /** An imported NZB's id: the SHA-256 of its bytes. */
+        const val NZB_SHA = "5b1c9d0e7f3a2b4c6d8e0f1a3b5c7d9e1f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c"
     }
 }

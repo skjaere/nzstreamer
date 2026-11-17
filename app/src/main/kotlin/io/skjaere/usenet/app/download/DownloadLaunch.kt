@@ -26,10 +26,11 @@ internal object DownloadLaunch {
 
     /**
      * [row]'s launch: its file by its `download://` URI, under the row's names and watch key, with the watch target a stream
-     * of the title has (so progress and Up next are the same either way), the release its file came from with the file's
-     * name and exact size, no request behind it (nothing to try another release from), from where the title's progress
-     * says, and what Resolve's probe read of the video and its tracks (none where that can't be read). Null for a row with
-     * no release kept, which no finished download is: the play then streams.
+     * of the title has (so progress and Up next are the same either way; an imported file's is a release's, so its progress
+     * saves under its `release:` key, L423), the release its file came from with the file's name and exact size, no
+     * request behind it (nothing to try another release from), from where the title's progress says, and what Resolve's
+     * probe read of the video and its tracks (none where that can't be read). Null for a row with no release kept, which no
+     * finished download is: the play then streams.
      */
     fun of(row: Download): PlayerLaunch? {
         val release = row.release ?: return null
@@ -42,6 +43,9 @@ internal object DownloadLaunch {
                 showTmdbId = row.showTmdbId, season = season, episode = episode,
             )
             DownloadKind.Movie -> WatchTarget(WatchKind.Movie, row.title, movieTmdbId = row.movieTmdbId)
+            // A file opened on Import (L423): no TMDB title, so its watch is the release's, named by the file. Never an Import
+            // stream's launch, which saves nothing.
+            DownloadKind.Release -> WatchTarget(WatchKind.Release, row.title)
         }
         return PlayerLaunch(
             uri = PlayUris.download(row.id),

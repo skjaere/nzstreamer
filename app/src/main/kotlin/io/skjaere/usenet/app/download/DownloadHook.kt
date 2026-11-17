@@ -8,6 +8,7 @@ import io.skjaere.usenet.app.play.PlayOrigin
 import io.skjaere.usenet.app.play.PlayerLaunch
 import io.skjaere.usenet.data.CastDeviceMemory
 import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -27,7 +28,8 @@ import org.slf4j.LoggerFactory
  * Cast devices' memory ([devices]) and the app's offline signal ([offline]), as [CastDownloadPlan.of] says from a title's
  * page, and hands it to the coordinator's cast of the file ([cast]). Where the plan streams the title for the device (a
  * file it can't fully play or open, online), the hook passes and the title streams as before; so does a download not
- * finished, never cast as its `.part`, and any before the devices' memory is read.
+ * finished, never cast as its `.part`, and any before the devices' memory is read. A file opened on Import has no title
+ * to stream (L473): its cast is always taken, the file judged once the device's profile is read.
  *
  * The file it launches or casts is held for the play's first [LAUNCH_HOLD_MILLIS] ([holds], the runner's), so a Remove,
  * Delete all or Delete once watched as its player opens, or its cast starts, waits for it (L413); the player, or the
@@ -70,12 +72,15 @@ internal class DownloadHook(
     /**
      * Whether a title's Play to the Cast device [to] casts [row]'s file (L446): a finished one alone, never a `.part`
      * holding zeros where nothing is written yet; judged by the device's profile with no wait, so not before the Cast
-     * devices' memory is read (a moment at a cold start); and not where the plan streams the title for the device.
+     * devices' memory is read (a moment at a cold start); and not where the plan streams the title for the device. An
+     * imported file's always (L473): with no title to stream, the coordinator's cast judges it once it has the profile.
      */
     private fun casts(row: Download, launch: PlayerLaunch, to: CastTo): Boolean {
         if (row.state != DownloadState.Done) return false
-        val profile = CastProfiles(devices() ?: return false).of(to.device, to.model)
-        return CastDownloadPlan.of(launch.release.fileName, launch.tracks, profile, offline(), CastDownloadPlan.Place.Title) != CastDownloadPlan.Plan.Stream
+        val release = row.kind == DownloadKind.Release
+        val profile = CastProfiles(devices() ?: return release).of(to.device, to.model)
+        val plan = CastDownloadPlan.of(launch.release.fileName, launch.tracks, profile, offline(), CastDownloadPlan.Place.Title, release)
+        return plan != CastDownloadPlan.Plan.Stream
     }
 
     /**

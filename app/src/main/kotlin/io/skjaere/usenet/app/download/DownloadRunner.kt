@@ -6,6 +6,7 @@ import android.database.sqlite.SQLiteFullException
 import android.os.Build
 import io.skjaere.usenet.app.AppContainer
 import io.skjaere.usenet.app.download.DownloadResolver.Resolution
+import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.MissingReleases
 import io.skjaere.usenet.app.play.Replay
 import io.skjaere.usenet.core.BackoffWakes
@@ -63,8 +64,9 @@ import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
 /**
- * What a download is of, as the Download sheet names it: an episode of a TMDB show ([episode]) or a TMDB film ([movie]),
- * with the names its row keeps, so the Downloads page works offline (L368).
+ * What a download is of, as the Download sheet names it: an episode of a TMDB show ([episode]), a TMDB film ([movie]), or
+ * a file of an NZB the user opened on Import ([release], L423), with the names its row keeps, so the Downloads page works
+ * offline (L368).
  */
 data class DownloadTarget(
     val kind: DownloadKind,
@@ -80,15 +82,23 @@ data class DownloadTarget(
     val runtimeMinutes: Int? = null,
     val posterPath: String? = null,
     val stillPath: String? = null,
+    /** An imported file's NZB: its id, the SHA-256 of its bytes. */
+    val nzbId: String? = null,
+    /** An imported file's place in its NZB, as Import lists it. */
+    val fileIndex: Int? = null,
 ) {
-    /** What it plays as: [WatchKey.episode] or [WatchKey.movie]. */
+    /** What it plays as: [WatchKey.episode], [WatchKey.movie], or an imported file's [WatchKey.release]. */
     val watchKey: String = when (kind) {
         DownloadKind.Episode -> WatchKey.episode(
             requireNotNull(showTmdbId) { "An episode's show" }, requireNotNull(season) { "An episode's season" },
             requireNotNull(episode) { "An episode's number" },
         )
         DownloadKind.Movie -> WatchKey.movie(requireNotNull(movieTmdbId) { "A film's id" })
+        DownloadKind.Release -> WatchKey.release(requireNotNull(nzbId) { "An imported file's NZB" }, requireNotNull(fileIndex) { "An imported file's place" })
     }
+
+    // Its names (a title, an imported file's and its NZB's) are never in a log line or a trace: its kind and key say which.
+    override fun toString() = "DownloadTarget($kind, $watchKey)"
 
     companion object {
         /**
@@ -108,6 +118,13 @@ data class DownloadTarget(
             DownloadTarget(
                 DownloadKind.Movie, title, subtitle, movieTmdbId = tmdbId, year = year, runtimeMinutes = runtimeMinutes, posterPath = posterPath,
             )
+
+        /**
+         * The file [fileName] at [fileIndex] in the NZB [nzbId] the user opened on Import, titled [nzbTitle] (L423): no TMDB
+         * title, so the row is named by the file and its NZB.
+         */
+        fun release(nzbId: String, fileIndex: Int, fileName: String, nzbTitle: String) =
+            DownloadTarget(DownloadKind.Release, fileName, nzbTitle, nzbId = nzbId, fileIndex = fileIndex)
     }
 }
 
@@ -1490,13 +1507,14 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /**
      * Download [id]'s release given up [why] as it was written: remembered as missing on the providers [asked] when it is
      * its release's one video (L342; a pack's other videos may be whole), as a play remembers it. A damaged one isn't
-     * missing anything.
+     * missing anything, and a file opened on Import is never remembered (L457): the user opened that file, so a Download
+     * again tries it whatever its providers said before.
      */
     private suspend fun remember(id: String, why: DownloadWriter.GiveUp, asked: List<ProviderConfig>) {
         log.info("download {}: its release given up ({})", id, why)
         if (why == DownloadWriter.GiveUp.Corrupt) return
         val row = dao.get(id) ?: return
-        val release = row.release?.takeIf { row.oneVideo } ?: return
+        val release = row.release?.takeIf { row.oneVideo && it.indexerId != IMPORTED } ?: return
         try {
             deps.missing(release, asked, DownloadResolver.naming(row)(Replay.key(release)))
         } catch (e: CancellationException) {

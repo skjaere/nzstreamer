@@ -3,6 +3,7 @@ package io.skjaere.usenet.app.download
 import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.datasource.DataSourceException
+import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.PlayerCast
 import io.skjaere.usenet.app.play.Prefetch
 import io.skjaere.usenet.app.play.STREAM_INSTEAD
@@ -50,6 +51,14 @@ class PlayerBranchesTest {
 
     private val next = WatchKey.episode(900002, 1, 6)
 
+    /** A file of an NZB opened on Import, downloaded (L423): no TMDB title, its watch the release's. */
+    private val importedRow = Download(
+        id = "7c1d2e3f", watchKey = WatchKey.release("a1b2c3", 1), kind = DownloadKind.Release, title = "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv",
+        subtitle = "Quiet.Meridian.S01.1080p.WEB.h264-WREN", state = DownloadState.Done, position = 0,
+        release = RememberedRelease(IMPORTED, "a1b2c3", "Quiet.Meridian.S01.1080p.WEB.h264-WREN", null, 1, "a1b2c3", "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv", 1_300_000_000),
+        size = 1_300_000_000, indexerSize = 1_300_000_000, safeOffset = 1_300_000_000, relativePath = "downloads/7c1d2e3f/v.mkv", createdAt = 1, completedAt = 2, updatedAt = 2,
+    )
+
     @Test
     fun `a download is a launch whose URI names one, and nothing else is`() {
         assertTrue(PlayerBranches.isDownload(download))
@@ -95,14 +104,31 @@ class PlayerBranchesTest {
 
     @Test
     fun `a download offers Stream instead in Try another release's place, only while online`() {
-        assertEquals(PlayerBranches.Other.StreamInstead, PlayerBranches.other(download = true, online = true, canTryAnother = false))
-        assertEquals(PlayerBranches.Other.None, PlayerBranches.other(download = true, online = false, canTryAnother = false))
+        assertEquals(PlayerBranches.Other.StreamInstead, PlayerBranches.other(download = true, online = true, canTryAnother = false, titleStreams = true))
+        assertEquals(PlayerBranches.Other.None, PlayerBranches.other(download = true, online = false, canTryAnother = false, titleStreams = true))
         // Whatever the coordinator would say of another release: a download has no request behind it.
-        assertEquals(PlayerBranches.Other.None, PlayerBranches.other(download = true, online = false, canTryAnother = true))
-        assertEquals(PlayerBranches.Other.TryAnother, PlayerBranches.other(download = false, online = false, canTryAnother = true))
-        assertEquals(PlayerBranches.Other.None, PlayerBranches.other(download = false, online = true, canTryAnother = false))
+        assertEquals(PlayerBranches.Other.None, PlayerBranches.other(download = true, online = false, canTryAnother = true, titleStreams = true))
+        assertEquals(PlayerBranches.Other.TryAnother, PlayerBranches.other(download = false, online = false, canTryAnother = true, titleStreams = true))
+        assertEquals(PlayerBranches.Other.None, PlayerBranches.other(download = false, online = true, canTryAnother = false, titleStreams = true))
         assertEquals("Stream instead", STREAM_INSTEAD)
         assertEquals("Try another release", TRY_ANOTHER)
+    }
+
+    /**
+     * L454: a file opened on Import and downloaded has no title to stream, only the file: neither Stream instead, online
+     * too, nor another release, as a download has no request behind it. Its launch says so by its watch, a release's; an
+     * episode's or a film's download streams its title as before, and so does a launch the player has none of.
+     */
+    @Test
+    fun `an imported file's download offers no Stream instead, online too`() {
+        val imported = DownloadLaunch.of(importedRow)!!
+        assertFalse(PlayerBranches.titleStreams(imported))
+        assertEquals(PlayerBranches.Other.None, PlayerBranches.other(download = true, online = true, canTryAnother = true, titleStreams = false))
+        assertEquals(PlayerBranches.Other.None, PlayerBranches.other(download = true, online = false, canTryAnother = false, titleStreams = false))
+        assertTrue(PlayerBranches.titleStreams(DownloadLaunch.of(row(5))))
+        assertTrue(PlayerBranches.titleStreams(null))
+        // A stream's play is as before, whatever its watch: Import's own stream of the file offers another release where it can.
+        assertEquals(PlayerBranches.Other.TryAnother, PlayerBranches.other(download = false, online = true, canTryAnother = true, titleStreams = false))
     }
 
     @Test
@@ -233,6 +259,10 @@ class PlayerBranchesTest {
                 """val missingParts = failure\?\.missingParts == true\s*return streamInstead\(PlayerBranches\.streamLeavesOut\(missingParts, failure\?\.releaseAtFault == true\), missingParts\)""",
             ),
             "Stream instead from the prompt for its missing parts" to Regex("""if \(playingDownload\) return streamInstead\(leaveOut = true, missingParts = true\)"""),
+            "Stream instead on the stopped panel only for a title that streams" to Regex("""PlayerBranches\.other\(f\.download, online, f\.canTryAnother, f\.titleStreams\)"""),
+            "the stopped panel's title known by the launch" to Regex("""failed\.releaseAtFault, failed\.missingParts, titleStreams = PlayerBranches\.titleStreams\(l\),"""),
+            "Stream instead in the missing-parts prompt only for a title that streams" to
+                Regex("""PlayerBranches\.other\(\s*download, online = download && online\(\), canTryAnother = [^\n]*,\s*titleStreams = PlayerBranches\.titleStreams\(l\),\s*\)"""),
         ).filterValues { !it.containsMatchIn(source) }.keys
         val once = mapOf(
             "PlayerFactory.create(" to count("PlayerFactory.create("),

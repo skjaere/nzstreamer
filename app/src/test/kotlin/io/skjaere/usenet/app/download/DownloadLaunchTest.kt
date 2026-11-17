@@ -2,6 +2,7 @@ package io.skjaere.usenet.app.download
 
 import io.skjaere.usenet.app.link.TvArt
 import io.skjaere.usenet.app.play.CastTo
+import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.play.PlayOrigin
 import io.skjaere.usenet.app.play.PlayerLaunch
@@ -13,6 +14,7 @@ import io.skjaere.usenet.app.play.WatchTarget
 import io.skjaere.usenet.core.ProbedTrack
 import io.skjaere.usenet.core.ProbedTracks
 import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
@@ -64,6 +66,15 @@ class DownloadLaunchTest {
         createdAt = 3, completedAt = 4, updatedAt = 4,
     )
 
+    private val imported = Download(
+        id = "7c1d2e3f-0a1b-4c2d-8e3f-405162738495", watchKey = WatchKey.release(NZB_SHA, 1), kind = DownloadKind.Release, title = FILE_NAME,
+        subtitle = "Quiet.Meridian.S01.1080p.WEB.h264-WREN", state = DownloadState.Done, position = 2,
+        candidates = listOf(DownloadCandidate(IMPORTED, NZB_SHA, "Quiet.Meridian.S01.1080p.WEB.h264-WREN", size = 1_300_000_000)),
+        release = RememberedRelease(IMPORTED, NZB_SHA, "Quiet.Meridian.S01.1080p.WEB.h264-WREN", null, 1, NZB_SHA, FILE_NAME, 1_300_000_000),
+        fileName = FILE_NAME, size = 1_300_000_000, indexerSize = 1_300_000_000, safeOffset = 1_300_000_000,
+        relativePath = "downloads/7c1d2e3f-0a1b-4c2d-8e3f-405162738495/v.mkv", createdAt = 5, completedAt = 6, updatedAt = 6,
+    )
+
     @Test
     fun `an episode's launch plays its file by the row's names and watch key`() {
         val launch = assertNotNull(DownloadLaunch.of(episode))
@@ -101,6 +112,29 @@ class DownloadLaunchTest {
         assertEquals(launch.watchKey, launch.watch.rememberedKey)
         assertEquals(2, launch.release.fileIndex)
         assertEquals("Copper.Crown.2019.1080p.WEB.h264-WREN.mkv" to 4_100_000_000L, launch.release.fileName to launch.release.fileSize)
+    }
+
+    /**
+     * L423: a file of an NZB opened on Import and downloaded plays as Import's own release of it ([IMPORTED], the NZB's id),
+     * under its `release:` key, the NZB's SHA-256 and the file's place, with a release's watch named by the file: so its
+     * progress saves, never as an Import stream's, which saves none, and Up next names it by the file. It has no picture.
+     */
+    @Test
+    fun `an imported file's launch plays its file under its release key, saving its progress`() {
+        val launch = assertNotNull(DownloadLaunch.of(imported))
+        assertEquals(PlayUris.download(imported.id), launch.uri)
+        assertEquals(WatchKey.release(NZB_SHA, 1), launch.watchKey)
+        assertEquals("release:$NZB_SHA:1", launch.watchKey)
+        assertEquals(WatchTarget(WatchKind.Release, FILE_NAME), launch.watch)
+        // A release's watch is keyed by the NZB and the file, the same key either way.
+        assertEquals(launch.watchKey, launch.watch.key(launch.release.nzbId, launch.release.fileIndex))
+        assertEquals(FILE_NAME to "Quiet.Meridian.S01.1080p.WEB.h264-WREN", launch.title to launch.subtitle)
+        assertEquals(SavedRelease(IMPORTED, NZB_SHA, "Quiet.Meridian.S01.1080p.WEB.h264-WREN", null, 1, NZB_SHA, FILE_NAME, 1_300_000_000), launch.release)
+        assertFalse(launch.imported, "saved as an Import stream, which saves nothing")
+        assertNull(launch.requestId)
+        assertTrue(DownloadLaunch.accepts(imported))
+        assertEquals(launch, PlayerLaunch.decode(launch.encode()))
+        assertNull(DownloadLaunch.art(imported))
     }
 
     @Test
@@ -225,5 +259,11 @@ class DownloadLaunchTest {
         assertEquals(TvArt("/cc.jpg", poster = true), DownloadLaunch.art(film.copy(stillPath = "/cc-still.jpg", posterPath = "/cc.jpg")))
         assertNull(DownloadLaunch.art(episode.copy(stillPath = null, posterPath = null)))
         assertNull(DownloadLaunch.art(film.copy(posterPath = null)))
+    }
+
+    private companion object {
+        /** The imported NZB's id: the SHA-256 of its bytes, as Import names it. */
+        const val NZB_SHA = "5b1c9d0e7f3a2b4c6d8e0f1a3b5c7d9e1f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c"
+        const val FILE_NAME = "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv"
     }
 }

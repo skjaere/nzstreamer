@@ -15,7 +15,8 @@ import org.junit.runner.RunWith
 /**
  * This device's downloads as the library stores them (L351): the queue in its order and a move in it, the finished ones
  * by watch key, a show's and a film's, the progress record written whole, a row read back as it was written (version 15's
- * search facts, file chosen by hand and limit's wait among it), a season's rows written in one transaction, and a delete.
+ * search facts, file chosen by hand and limit's wait among it), an imported file's row of its own kind, a season's rows
+ * written in one transaction, and a delete.
  */
 @RunWith(AndroidJUnit4::class)
 class DownloadDaoTest {
@@ -170,6 +171,44 @@ class DownloadDaoTest {
         downloads.update(waiting)
         downloads.setState("a", DownloadState.Queued, null, 40)
         assertEquals(waiting.copy(state = DownloadState.Queued, reason = null, updatedAt = 40), downloads.get("a"))
+    }
+
+    /**
+     * L423: a file of an NZB opened on Import is a row of its own kind, stored by the kind's name, with no TMDB ids: named by
+     * the file and its NZB, keyed by the NZB's id and the file's place, its one release Import's own with the file chosen
+     * in it. Read back as written, found by its watch key once finished, and in the queue as any row before.
+     */
+    @Test
+    fun anImportedFilesRowIsWrittenAndReadBackAsItsOwnKind() = runBlocking<Unit> {
+        val nzb = "5b1c9d0e7f3a2b4c6d8e0f1a3b5c7d9e1f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c"
+        val file = "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv"
+        val row = Download(
+            id = "7c1d2e3f-0a1b-4c2d-8e3f-405162738495",
+            watchKey = WatchKey.release(nzb, 1),
+            kind = DownloadKind.Release,
+            title = file,
+            subtitle = "Quiet.Meridian.S01.1080p.WEB.h264-WREN",
+            position = 0,
+            candidates = listOf(DownloadCandidate("import", nzb, "Quiet.Meridian.S01.1080p.WEB.h264-WREN", size = 1_300_000_000)),
+            indexerSize = 1_300_000_000,
+            createdAt = 10,
+            updatedAt = 10,
+            pick = """{"index":1,"name":"$file","size":1300000000,"nzbId":"$nzb"}""",
+        )
+        downloads.insert(row)
+        assertEquals(row, downloads.get(row.id))
+        assertEquals(listOf(row), downloads.queue().first())
+        assertEquals(DownloadKind.Release, downloads.all().first().single().kind)
+
+        val done = row.copy(
+            state = DownloadState.Done,
+            release = RememberedRelease("import", nzb, "Quiet.Meridian.S01.1080p.WEB.h264-WREN", null, 1, nzb, file, 1_300_000_000),
+            fileName = file, size = 1_300_000_000, safeOffset = 1_300_000_000, relativePath = "downloads/${row.id}/v.mkv", pick = null, completedAt = 20,
+            updatedAt = 20,
+        )
+        downloads.update(done)
+        assertEquals(done, downloads.doneFor("release:$nzb:1"))
+        assertEquals(emptyList<Download>(), downloads.queue().first())
     }
 
     /**

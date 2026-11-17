@@ -4,6 +4,7 @@ import androidx.media3.common.MimeTypes
 import io.skjaere.usenet.app.casting.CastLauncher
 import io.skjaere.usenet.app.casting.CastLoad
 import io.skjaere.usenet.app.play.CastTo
+import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.Launching
 import io.skjaere.usenet.app.play.PlayInFlight
 import io.skjaere.usenet.app.play.PlayOrigin
@@ -47,6 +48,7 @@ import org.junit.jupiter.api.Test
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -270,6 +272,59 @@ class DownloadHookTest {
         assertFalse(hook.play(row.watchKey, PlayOrigin(cast = cast)))
         assertEquals(emptyList(), casts)
         assertEquals(emptySet(), holds.held())
+    }
+
+    /** A file of an NZB opened on Import, downloaded (L423): played by its `release:` key, its watch the release's. */
+    private val imported = row.copy(
+        id = "7c1d2e3f-0a1b-4c2d-8e3f-405162738495", watchKey = WatchKey.release("a1b2c3", 1), kind = DownloadKind.Release,
+        title = "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv", subtitle = "Quiet.Meridian.S01.1080p.WEB.h264-WREN", showTmdbId = null, season = null, episode = null,
+        release = RememberedRelease(IMPORTED, "a1b2c3", "Quiet.Meridian.S01.1080p.WEB.h264-WREN", null, 1, "a1b2c3", "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv", 1_300_000_000),
+        fileName = "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv", size = 1_300_000_000, relativePath = "downloads/7c1d2e3f-0a1b-4c2d-8e3f-405162738495/v.mkv",
+    )
+
+    /**
+     * L423, L458: Up next's Resume of a file opened on Import and downloaded (its row's `release:` key, which the coordinator's
+     * resume asks the hook by) plays the file here, held 30 s as any launch, with nothing searched.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `an imported file's finished download plays from Resume by its release key, held 30 seconds`() = runTest {
+        done[imported.watchKey] = imported
+        val launches = FakeHolds()
+        assertTrue(hook(launches, backgroundScope).play(imported.watchKey, PlayOrigin.Here))
+        val launch = assertNotNull(inFlight.launches.tryReceive().getOrNull())
+        assertEquals(DownloadLaunch.of(imported), launch)
+        assertEquals(WatchKind.Release, launch.watch.kind)
+        assertEquals(setOf(imported.id), launches.held())
+        advanceTimeBy(DownloadHook.LAUNCH_HOLD_MILLIS)
+        runCurrent()
+        assertEquals(emptySet(), launches.held())
+    }
+
+    /**
+     * L473: an imported file has no title to stream for a Cast device, so its cast is always taken: one the device can't
+     * fully play asks over the file, online too, and before the Cast devices' memory is read its cast judges the file once
+     * it has the device's profile, rather than streaming. Held as any cast's file; nothing played here.
+     */
+    @Test
+    fun `an imported file's download is cast however its tracks or the profiles stand, never streamed`() = runBlocking<Unit> {
+        val deaf = imported.copy(tracks = silent.tracks)
+        done[imported.watchKey] = deaf
+        val origin = PlayOrigin(cast = cast)
+        assertTrue(hook.play(imported.watchKey, origin), "online, a miss from a title streams the title: there is none")
+        devices = null
+        assertTrue(hook.play(imported.watchKey, origin), "the profiles not read: taken all the same")
+        assertEquals(listOf(Triple(deaf, DownloadLaunch.of(deaf)!!, origin), Triple(deaf, DownloadLaunch.of(deaf)!!, origin)), casts)
+        assertEquals(setOf(imported.id), holds.held())
+        assertTrue(inFlight.launches.tryReceive().isFailure, "something was launched here")
+        // Still a finished file alone, and never one Delete once watched has taken.
+        casts.clear()
+        done[imported.watchKey] = deaf.copy(state = DownloadState.Running)
+        assertFalse(hook.play(imported.watchKey, origin))
+        done[imported.watchKey] = deaf
+        holds.going = setOf(imported.id)
+        assertFalse(hook.play(imported.watchKey, origin))
+        assertEquals(emptyList(), casts)
     }
 
     /** L413, L447: the file a cast takes is held for 30 s as a launch's, until the cast's own hold has it. */

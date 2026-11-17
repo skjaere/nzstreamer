@@ -868,7 +868,7 @@ class PlayerActivity : ComponentActivity() {
                     failure?.let { f ->
                         // A download's Stream instead comes and goes with the network as the panel shows (L354).
                         val online = if (f.download) container.validatedNetwork.collectAsStateWithLifecycle().value else false
-                        val other = PlayerBranches.other(f.download, online, f.canTryAnother)
+                        val other = PlayerBranches.other(f.download, online, f.canTryAnother, f.titleStreams)
                         PlaybackFailedPanel(
                             f.reason, other != PlayerBranches.Other.None, onTryAnother = ::tryAnother, onClose = ::finish,
                             onDetails = { openPanel(Panel.Details, failureView, controls = false) }, details = failureDetails,
@@ -2903,7 +2903,10 @@ class PlayerActivity : ComponentActivity() {
             val l = launch
             val waiting = failure != null || nextCard != null || skipShown != null || windowScene().unseen
             // A download's prompt offers its stream, only while online; a stream's another release, as before (L354).
-            val other = PlayerBranches.other(download, online = download && online(), canTryAnother = !download && l != null && container.playback.canTryAnother(l))
+            val other = PlayerBranches.other(
+                download, online = download && online(), canTryAnother = !download && l != null && container.playback.canTryAnother(l),
+                titleStreams = PlayerBranches.titleStreams(l),
+            )
             val state = missingParts.update(p.currentPosition, waiting, tryAnother = other != PlayerBranches.Other.None)
             if (state.notice) say(MISSING_PART_SKIPPED, forMs = NOTICE_MS)
             if (state.timedOut) log.info("Missing parts: the prompt went unanswered; watching on ({} so far)", missingParts.count)
@@ -3926,7 +3929,7 @@ class PlayerActivity : ComponentActivity() {
         // A download has no request to try another release of: it offers its stream instead, while online (L354).
         failure = Failure(
             failed.reason, failed.remote, canTryAnother = !download && l != null && container.playback.canTryAnother(l, stops), stops, download,
-            failed.releaseAtFault, failed.missingParts,
+            failed.releaseAtFault, failed.missingParts, titleStreams = PlayerBranches.titleStreams(l),
         )
         sessionPlayer?.failed = true
         updateControlsUse()
@@ -3989,8 +3992,9 @@ class PlayerActivity : ComponentActivity() {
 
     /**
      * The panel's [reason], and [remote], the same in the words a paired phone is told it (L37); [stops], the routes it
-     * stopped; [download], a finished download's play, which offers its stream instead (L354), leaving its release out
-     * where it is at fault ([releaseAtFault]) or [missingParts].
+     * stopped; [download], a finished download's play, which offers its stream instead (L354) where it has a title that
+     * streams ([titleStreams]: not a file opened on Import, L454), leaving its release out where it is at fault
+     * ([releaseAtFault]) or [missingParts].
      */
     private data class Failure(
         val reason: String,
@@ -4000,6 +4004,7 @@ class PlayerActivity : ComponentActivity() {
         val download: Boolean = false,
         val releaseAtFault: Boolean = false,
         val missingParts: Boolean = false,
+        val titleStreams: Boolean,
     )
 
     /**

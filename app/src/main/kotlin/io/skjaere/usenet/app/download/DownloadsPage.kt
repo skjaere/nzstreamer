@@ -3,6 +3,7 @@ package io.skjaere.usenet.app.download
 import io.skjaere.usenet.app.link.PlayTarget
 import io.skjaere.usenet.app.link.deviceName
 import io.skjaere.usenet.app.link.onTvLine
+import io.skjaere.usenet.app.play.ReleaseName
 import io.skjaere.usenet.app.play.Replay
 import io.skjaere.usenet.core.formatSize
 import io.skjaere.usenet.data.Download
@@ -262,10 +263,14 @@ data class DownloadsPage(
         /** What deleting [row] gives back: its file's whole size once it is made (allocated whole, C8); nothing before. */
         fun held(row: Download): Long = if (row.relativePath != null) row.size ?: row.indexerSize else 0
 
-        /** "S02E04 · Low Water" under an episode's show; a film's year. */
+        /**
+         * "S02E04 · Low Water" under an episode's show; a film's year; under an imported file, what its name says, as Up next
+         * names it (L472): its episode's tag, else its year.
+         */
         fun sub(row: Download): String? = when (row.kind) {
             DownloadKind.Episode -> listOfNotNull(label(row), row.episodeName).joinToString(" · ").ifEmpty { null }
             DownloadKind.Movie -> row.year?.toString()
+            DownloadKind.Release -> ReleaseName(row.title).tag
         }
 
         /** Choose release's title for [row]: "Download S02E04", "Download Copper Crown", as the list in download mode says it. */

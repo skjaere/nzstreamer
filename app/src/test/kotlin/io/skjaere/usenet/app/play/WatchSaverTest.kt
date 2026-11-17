@@ -1,8 +1,11 @@
 package io.skjaere.usenet.app.play
 
+import io.skjaere.nzbstreamer.stream.StreamableFile
 import io.skjaere.usenet.app.debrid.DebridListingStore
 import io.skjaere.usenet.app.debrid.ServiceFiles
 import io.skjaere.usenet.app.debrid.ServiceTarget
+import io.skjaere.usenet.app.download.DownloadLaunch
+import io.skjaere.usenet.core.FileCandidate
 import io.skjaere.usenet.core.PlayCandidate
 import io.skjaere.usenet.core.UsenetUris
 import io.skjaere.usenet.debrid.InfoHash
@@ -11,7 +14,11 @@ import io.skjaere.usenet.debrid.ServiceListing
 import io.skjaere.usenet.newznab.NewznabItem
 import io.skjaere.usenet.releases.Availability
 import io.skjaere.usenet.releases.ReleaseFacts
+import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadKind
+import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.LibraryRepository
+import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.data.WatchState
@@ -65,6 +72,32 @@ class WatchSaverTest {
     fun `a file Import opened saves nothing`() {
         assertNull(WatchSaver.of(launch.copy(imported = true), positionMs = 1_930_000, durationMs = 3_120_000, releaseFailed = false))
         assertNull(WatchSaver.of(launch.copy(imported = true), positionMs = 3_120_000, durationMs = 3_120_000, releaseFailed = true))
+    }
+
+    /**
+     * L423 (C2): a file opened on Import and then downloaded saves its progress under its `release:` key, the NZB's SHA-256
+     * and the file's place, as a release played without TMDB, named by the file; Import's own stream of it still saves
+     * nothing.
+     */
+    @Test
+    fun `an imported file's download saves its progress, and Import's stream of it still saves nothing`() {
+        val nzb = "5b1c9d0e7f3a2b4c6d8e0f1a3b5c7d9e1f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c"
+        val file = "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv"
+        val row = Download(
+            id = "7c1d2e3f", watchKey = WatchKey.release(nzb, 1), kind = DownloadKind.Release, title = file, subtitle = "Quiet.Meridian.S01.1080p.WEB.h264-WREN",
+            state = DownloadState.Done, position = 0,
+            release = RememberedRelease(IMPORTED, nzb, "Quiet.Meridian.S01.1080p.WEB.h264-WREN", null, 1, nzb, file, 1_300_000_000),
+            fileName = file, size = 1_300_000_000, indexerSize = 1_300_000_000, relativePath = "downloads/7c1d2e3f/v.mkv", createdAt = 1, completedAt = 2, updatedAt = 2,
+        )
+        val downloaded = assertNotNull(DownloadLaunch.of(row), "no launch for the download")
+        val save = assertNotNull(WatchSaver.of(downloaded, positionMs = 600_000, durationMs = 2_700_000, releaseFailed = false), "nothing saved")
+        assertEquals(WatchState(key = "release:$nzb:1", kind = WatchKind.Release, title = file, updatedAt = 0), save.template)
+        assertEquals(row.release, save.release)
+
+        // Import's stream of the same file, as Import plays it here or casts it: nothing.
+        val stream = importedLaunch(nzb, FileCandidate(1, StreamableFile(file, 1_300_000_000, 0, 0, 0, 0)), importRequest("Quiet.Meridian.S01.1080p.WEB.h264-WREN"), "play-2")
+        assertEquals(save.template.key, stream.watchKey)
+        assertNull(WatchSaver.of(stream, positionMs = 600_000, durationMs = 2_700_000, releaseFailed = false))
     }
 
     /** Without a length nothing is saved: neither the 90 % rule nor a place in the film can be worked out. */

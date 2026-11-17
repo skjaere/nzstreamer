@@ -100,11 +100,11 @@ data class FileOrigin(
          * by the NZB's title). The file's name and size are the launch's release's, else the URI's ([PlayUris]), else
          * those of the file in [listing], the release's files as its source keeps them (a Usenet play's prepared NZB;
          * null when no longer held). Nothing comes from the indexer's search item, which a Resume doesn't have: it reads
-         * as the play from search did. The indexer is named from [names]' indexers of the release's source (a torrent's
-         * from the torrent indexers), disabled ones included (null until they are read); one no longer there is said to be
-         * removed. A debrid play names the service of the [account] its listing came from in place of the providers; a
-         * finished download's what is [downloaded] of it (when, and the parts missing; nothing known, none), as no
-         * providers are used (L354).
+         * as the play from search did. A file opened on Import says so, downloaded or cast too ([IMPORTED]). The indexer is
+         * named from [names]' indexers of the release's source (a torrent's from the torrent indexers), disabled ones
+         * included (null until they are read); one no longer there is said to be removed. A debrid play names the service
+         * of the [account] its listing came from in place of the providers; a finished download's what is [downloaded] of
+         * it (when, and the parts missing; nothing known, none), as no providers are used (L354).
          */
         fun of(
             launch: PlayerLaunch?, uri: String, listing: FileListing<*>?, names: SourceNames?, providers: List<ProviderConfig>, connections: Int?, account: String? = null,
@@ -117,7 +117,8 @@ data class FileOrigin(
             val stored = if (name != null && size != null) null else listing?.find(release?.fileIndex ?: target?.fileIndex ?: 0, name, size)
             val torrent = release?.source.let { it != null && it != PlayCandidate.USENET }
             val indexer = when {
-                launch == null -> OPENED_FILE
+                // Import's own release of a file it opened (L454), played or downloaded: no indexer of the user's.
+                launch == null || launch.release.indexerId == IMPORTED -> OPENED_FILE
                 names == null -> null
                 torrent -> names.torrentIndexers.firstOrNull { it.id == launch.release.indexerId }?.name ?: REMOVED
                 else -> names.indexers.firstOrNull { it.id == launch.release.indexerId }?.name ?: REMOVED

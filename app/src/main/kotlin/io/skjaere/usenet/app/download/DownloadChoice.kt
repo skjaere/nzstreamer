@@ -66,7 +66,8 @@ class DownloadChoice(
 
     /** Opens the list for [row]: an episode looked up on TMDB first, then searched; a film searched as its row names it. */
     fun open(row: Download) {
-        if (!can(row, online.value, _needsConnection.value)) return
+        // A file opened on Import is its own release: nothing is chosen for it (L454).
+        if (row.kind == DownloadKind.Release || !can(row, online.value, _needsConnection.value)) return
         close()
         _state.value = State.LookingUp(row)
         job = scope.launch {
@@ -118,6 +119,8 @@ class DownloadChoice(
             MovieTarget(requireNotNull(row.movieTmdbId) { "A film's id" }, row.title, row.year, imdb = null, runtimeMinutes = row.runtimeMinutes),
             row.posterPath,
         )
+        // Never asked: [open] passes over it.
+        DownloadKind.Release -> error("An imported file's download has no release to choose")
     }
 
     companion object {

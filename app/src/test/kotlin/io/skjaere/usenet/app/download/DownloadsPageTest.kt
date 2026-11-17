@@ -487,6 +487,25 @@ class DownloadsPageTest {
         assertEquals(DownloadChoice.State.None, choice.state.value)
     }
 
+    /**
+     * L454, L472: a file opened on Import is named by what its name says, as Up next names a release played without TMDB:
+     * under its title its episode's tag, or its year; nothing where its name says neither. Nothing is chosen for it: the
+     * file is the release, so Choose release opens no list for it and asks nothing of TMDB or a search.
+     */
+    @Test
+    fun `an imported file's row says its tag or year, and Choose release opens nothing for it`() = runTest {
+        assertEquals("S01E02", DownloadsPage.sub(imported("Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv")))
+        assertEquals("2019", DownloadsPage.sub(imported("Copper.Crown.2019.1080p.WEB.h264-WREN.mkv")))
+        assertNull(DownloadsPage.sub(imported("quiet_meridian_extras.mkv")))
+
+        val fakes = Fakes()
+        val choice = fakes.choice(this)
+        choice.open(imported("Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv", DownloadState.Failed))
+        runCurrent()
+        assertEquals(emptyList(), fakes.calls)
+        assertEquals(DownloadChoice.State.None, choice.state.value)
+    }
+
     @Test
     fun `Choose release is greyed offline, and where TMDB failed until the network comes back`() = runTest {
         val fakes = Fakes()
@@ -624,6 +643,13 @@ class DownloadsPageTest {
             id = id, watchKey = WatchKey.movie(film), kind = DownloadKind.Movie, title = title, movieTmdbId = film, year = 2022, runtimeMinutes = 112,
             state = state, position = 9, size = 5_500_000_000, indexerSize = 5_500_000_000, gaps = (0 until gaps).map { DownloadGap(it * 100L, it * 100L + 9) },
             relativePath = if (state == DownloadState.Done) "downloads/$id/v.mkv" else null, createdAt = 1, completedAt = completedAt, updatedAt = 1,
+        )
+
+        /** A file named [file] of an NZB opened on Import (L423): titled by the file, no TMDB ids. */
+        fun imported(file: String, state: DownloadState = DownloadState.Done) = Download(
+            id = "imp-${file.length}", watchKey = WatchKey.release("nzb-qm", file.length), kind = DownloadKind.Release, title = file,
+            subtitle = "Quiet.Meridian.S01.1080p.WEB.h264-WREN", state = state, position = 4, size = 1_300_000_000, indexerSize = 1_300_000_000,
+            relativePath = if (state == DownloadState.Done) "downloads/imp-${file.length}/v.mkv" else null, createdAt = 1, updatedAt = 1,
         )
 
         fun watched(season: Int, episode: Int) = WatchState(
