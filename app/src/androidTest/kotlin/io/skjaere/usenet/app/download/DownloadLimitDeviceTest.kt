@@ -59,9 +59,9 @@ import java.util.concurrent.CopyOnWriteArrayList
  *
  * The first episode's turn searches, writes what it found and is refused its grab: it waits "Your indexer's limit is
  * reached", the Downloads page naming the indexer and its download limit under it, with Resume; nothing counted, no
- * episode failed. The walk goes on (L399b): the others' turns search and, with only that indexer's releases found, wait
- * as its limit with no grab asked, the indexer kept out of the walk's grabs (L443); then its walk and its job end. Resume
- * on the page asks again at once: refused again, the same waits, their releases tried none, nothing searched again. And a
+ * episode failed. The walk goes on (L399b): the indexer, kept out of the walk's grabs (L443), is kept out of the others'
+ * searches too, and being the only one, their turns ask nothing and wait as its limit, still to be searched; then its
+ * walk and its job end. Resume on the page asks again at once: refused again, the same waits, nothing tried. And a
  * download the season's copy of its pack serves runs while the one before it waits on the limit (L399b, L431). No Wi-Fi
  * is toggled.
  *
@@ -203,13 +203,14 @@ class DownloadLimitDeviceTest {
         assertNull("a download limit comes with no end", wait.until)
         assertEquals("one grab asked: the indexer refuses its others alike", listOf(waiting.candidates.first().guid), refused.toList())
 
-        // The walk goes on (L399b): S01E02's and S01E03's turns search, find only that indexer's releases, and wait as its
-        // limit, the indexer kept out of the walk's grabs (L443): no grab asked for them.
+        // The walk goes on (L399b): S01E02's and S01E03's turns leave the indexer, kept out of the walk's grabs (L443), out
+        // of their searches too, its releases being of no use until its limit ends; the only indexer, so they ask nothing
+        // and wait as its limit, still to be searched at a later turn.
         val others = listOf(e2, e3).map { id ->
             val other = waitFor("download $id waiting on the indexer's limit", SEARCH_MILLIS) { limited(id) }
             assertEquals("nothing counted", emptyList<String>(), other.tried)
-            assertTrue("what its turn found", other.candidates.isNotEmpty())
-            assertEquals("searched once", true, DownloadColumns.search(other)?.searched)
+            assertEquals("nothing found, as nothing was asked", emptyList<DownloadCandidate>(), other.candidates)
+            assertEquals("still to be searched", false, DownloadColumns.search(other)?.searched)
             assertEquals("the limit its refusal began", wait, DownloadColumns.limitWait(other))
             other
         }
@@ -233,7 +234,8 @@ class DownloadLimitDeviceTest {
         assertEquals(LimitWait.Kind.Download, DownloadColumns.limitWait(again)?.kind)
         others.forEach { other ->
             val later = waitFor("download ${other.id} waiting again", SEARCH_MILLIS) { limited(other.id)?.takeIf { it.updatedAt > before.getValue(other.id) } }
-            assertEquals("its releases as its turn found them", other.candidates, later.candidates)
+            assertEquals("nothing asked of the limited indexer again", emptyList<DownloadCandidate>(), later.candidates)
+            assertEquals(false, DownloadColumns.search(later)?.searched)
             assertEquals(emptyList<String>(), later.tried)
         }
         waitFor("the walk and its job ended again", 30_000) { if (!container.downloads.walking.value && starts() == 0) Unit else null }

@@ -29,9 +29,11 @@ import java.time.Duration
  *   as its releases, with what the first needs (a season pack's share of the episode) and its facts as searched: a
  *   process that dies after it resolves from that list, with no second search.
  * - Found, and none fits: [Searched.WontFit].
- * - Nothing found while an indexer is limited, answering so now or kept out of the walk's searches ([Limits]): a wait
- *   ([Searched.Limited]) for the limit that ends first, never the outage's backoff, which would ask it again every few
- *   seconds (L443).
+ * - An indexer the walk keeps out of its searches or its grabs ([Limits]) isn't asked (L399b, L443): one refused a grab
+ *   for its download limit too, as none of its releases could be grabbed meanwhile and they would crowd the others' out
+ *   of those kept.
+ * - Nothing found while an indexer is limited, answering so now or kept out ([Limits]): a wait ([Searched.Limited]) for
+ *   the limit that ends first, never the outage's backoff, which would ask it again every few seconds (L443).
  * - Nothing found, an indexer out of reach or failing (a 5xx): [Searched.Out], backed off from as a grab's outage is.
  * - Nothing found, every indexer answered: [Searched.NoneFound] (L398).
  *
@@ -113,8 +115,11 @@ class DownloadSearch(
         downloads.setState(row.id, DownloadState.Resolving, DownloadHostRules.FINDING_RELEASES, clock.now())
         val at = clock.now()
         val all = indexers()
-        // Those the walk keeps out for their limits aren't asked: each request would be refused, and count against them.
-        val keptOut = limits.keptOut(all, at)
+        // Those the walk keeps out for their limits aren't asked: a search limit's would refuse each request and count it
+        // against them; a download limit's releases couldn't be grabbed, and would only take the others' places. Each kept
+        // out until the later of its limits ends.
+        val keptOut = (limits.keptOut(all, at).entries + limits.grabsKeptOut(all, at).entries)
+            .groupBy({ it.key }, { it.value }).mapValues { (_, waits) -> waits.maxBy { it.end() } }
         val asked = all.filter { it.id !in keptOut }
         log.info("download {}: searching for its releases, {} indexer{} asked, {} kept out", row.id, asked.size, if (asked.size == 1) "" else "s", keptOut.size)
         val result = if (asked.isEmpty()) {
@@ -133,7 +138,7 @@ class DownloadSearch(
             val wait = (met + keptOut.values).minByOrNull { it.end() }
             return when {
                 wait != null -> {
-                    log.info("download {}: nothing found, an indexer's search limit reached", row.id)
+                    log.info("download {}: nothing found, an indexer's limit reached", row.id)
                     Searched.Limited(wait)
                 }
                 reports.any { it.error?.isOutage() == true } -> {

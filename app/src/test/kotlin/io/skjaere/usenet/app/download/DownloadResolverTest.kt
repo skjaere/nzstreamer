@@ -1444,6 +1444,36 @@ class DownloadResolverTest {
     }
 
     /**
+     * L399b: a season row after another row's grab was refused for an indexer's download limit leaves that indexer out of
+     * its search too, asking it nothing, so its releases, which couldn't be grabbed meanwhile, crowd none of the others' out
+     * of those kept: it takes another indexer's release, and with nothing found elsewhere waits as that limit, unasked.
+     */
+    @Test
+    fun `a season row behind an indexer's download limit searches the others alone and takes theirs, asking the limited one nothing`() = runBlocking<Unit> {
+        val refusal = LimitWait(INDEXER, LimitWait.Kind.Download, NOW - 60_000, null)
+        val memory = DownloadLimits().apply { refused(indexer, refusal) }
+        val elsewhere = Fake("hl-s02e04-other", "Harbor.Lights.S02E04.1080p.WEB.h264-WREN", listOf("o1.mkv" to 1_100_000_000L))
+        finds = listOf(elsewhere)
+        listedBy[elsewhere.guid] = OTHER_INDEXER
+        findReports = listOf(IndexerReport(other, "TVDB id"))
+        row { it.withFacts() }
+        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver(limits = memory, searchIndexers = listOf(indexer, other)).resolve(ID))
+        assertEquals(elsewhere.guid, ready.row.release?.guid)
+        assertEquals(listOf(listOf(OTHER_INDEXER)), searchedAt, "the limited indexer left out of the search")
+        assertEquals(listOf(elsewhere.guid), asks)
+
+        // Nothing found at the others: a wait for the limited indexer's download limit, as it refused.
+        reset()
+        findReports = listOf(IndexerReport(other, "TVDB id"))
+        row { it.withFacts() }
+        val waiting = assertIs<DownloadResolver.Resolution.Waiting>(resolver(limits = memory, searchIndexers = listOf(indexer, other)).resolve(ID))
+        assertEquals(DownloadHostRules.LIMIT_REACHED, waiting.reason)
+        assertEquals(listOf(listOf(OTHER_INDEXER)), searchedAt)
+        assertEquals(refusal, DownloadColumns.limitWait(stored()))
+        assertEquals(emptyList(), asks)
+    }
+
+    /**
      * A grab that never reached an indexer (one no longer set up) is no outage of it, whatever the grab before it met: its
      * release is counted, as a play counts it, while the one whose indexer was out isn't.
      */
