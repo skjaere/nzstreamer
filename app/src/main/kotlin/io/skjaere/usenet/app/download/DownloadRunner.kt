@@ -264,8 +264,11 @@ class DownloadRunnerDeps(
  * deleted meanwhile goes once its last hold ends.
  */
 interface DownloadHolds {
-    /** [owner] holds download [id]'s file. */
-    fun hold(owner: Any, id: String)
+    /**
+     * [owner] holds download [id]'s file; whether it does: not one Delete once watched has begun to delete, whose file is
+     * going, so nothing launches a play from it.
+     */
+    fun hold(owner: Any, id: String): Boolean
 
     /** [owner] lets go of download [id]'s file. */
     fun release(owner: Any, id: String)
@@ -467,6 +470,13 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      */
     private val holders = HashMap<Any, Set<String>>()
 
+    /**
+     * The downloads Delete once watched has taken to delete (L413, L414), under [holders]' lock: none of them is held from
+     * then on, so no play begins from a file going. Kept for the process's life, as the finished ones' map ([done]) lists
+     * one a moment after its row has gone; each id is a deleted download's, never made again.
+     */
+    private val going = HashSet<String>()
+
     private val _held = MutableStateFlow<Set<String>>(emptySet())
 
     /**
@@ -558,8 +568,17 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         return changes.withLock {
             val since = AutoDelete.since(deps.prefs.first()) ?: return@withLock emptyList()
             // Its row read again: one removed, or left Deleting by Delete all, after the library joined it goes as that says.
-            val gone = AutoDelete.due(deps.watched.first(), since, now, ::isHeld).filter { dao.get(it)?.state == DownloadState.Done }
-            gone.forEach { delete(it) }
+            val due = AutoDelete.due(deps.watched.first(), since, now, ::isHeld).filter { dao.get(it)?.state == DownloadState.Done }
+            // Each taken as its turn comes, in one step with the holds: a play begun meanwhile holds it first and keeps it,
+            // to go as that hold ends, and once taken none can (L413).
+            val gone = buildList {
+                for (id in due) {
+                    if (take(id)) {
+                        delete(id)
+                        add(id)
+                    }
+                }
+            }
             if (gone.isNotEmpty()) log.info("Downloads: {} deleted a day after they were watched: {}", gone.size, gone.joinToString())
             gone
         }
@@ -742,14 +761,22 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         indexerSize = need, search = search?.let(::searchText), createdAt = at, updatedAt = at,
     )
 
-    /** [owner] holds download [id]'s file while it plays it (L413); held again by the same owner, nothing changes. */
-    override fun hold(owner: Any, id: String) = changeHolds(owner) { it + id }
+    /**
+     * [owner] holds download [id]'s file while it plays it (L413); held again by the same owner, nothing changes. Whether it
+     * holds it: not one Delete once watched has taken ([going]), nor on a TV.
+     */
+    override fun hold(owner: Any, id: String): Boolean {
+        var taken = runs
+        changeHolds(owner) { holds -> if (id in going) holds.also { taken = false } else holds + id }
+        return taken
+    }
 
     /**
      * [owner]'s holds become download [id]'s alone, in one step (L413): a player's lease as another launch comes to it, the
-     * new download held before the one before is let go, and the same one, launched again, never let go.
+     * new download held before the one before is let go, and the same one, launched again, never let go. One Delete once
+     * watched has taken isn't held: the owner holds nothing then.
      */
-    fun holdOnly(owner: Any, id: String) = changeHolds(owner) { setOf(id) }
+    fun holdOnly(owner: Any, id: String) = changeHolds(owner) { if (id in going) emptySet() else setOf(id) }
 
     /** [owner] lets go of download [id]'s file; one removed or deleted meanwhile goes once no hold is left on it (L413). */
     override fun release(owner: Any, id: String) = changeHolds(owner) { it - id }
@@ -773,6 +800,19 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
     /** Whether download [id]'s file is held now (L413). */
     private fun isHeld(id: String): Boolean = id in _held.value
+
+    /**
+     * Download [id] taken for Delete once watched (L413), in one step with the holds: unless it is held now, it is [going],
+     * and nothing holds it from then on. Whether it was taken.
+     */
+    private fun take(id: String): Boolean = synchronized(holders) {
+        if (id in _held.value) {
+            false
+        } else {
+            going += id
+            true
+        }
+    }
 
     /**
      * The last hold on [ids] has ended (L413): those that waited for it go now, in the crash-safe order: removed while they

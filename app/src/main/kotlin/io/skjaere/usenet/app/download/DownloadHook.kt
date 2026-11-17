@@ -19,6 +19,7 @@ import org.slf4j.LoggerFactory
  *
  * The file it launches is held for the launch's first [LAUNCH_HOLD_MILLIS] ([holds], the runner's), so a Remove, Delete
  * all or Delete once watched as its player opens waits for it (L413); the player holds it under its own lease from then on.
+ * One Delete once watched has begun to delete can't be held: its play goes as any other title's, never from a file going.
  */
 internal class DownloadHook(
     private val inFlight: PlayInFlight,
@@ -34,20 +35,20 @@ internal class DownloadHook(
         if (watchKey == null || !DownloadLaunch.looks(origin, television())) return false
         val row = done()[watchKey] ?: return false
         val launch = DownloadLaunch.of(row) ?: return false
+        if (!hold(row.id)) return false
         log.info("play: download {} plays from its file, with nothing searched", row.id)
-        hold(row.id)
         inFlight.launchNow(launch, origin)
         return true
     }
 
     /**
      * Holds download [id]'s file for its launch's first [LAUNCH_HOLD_MILLIS]: each launch its own hold, so one ending never
-     * lets go of a later one's.
+     * lets go of a later one's. Whether it holds it: not one being deleted.
      */
-    private fun hold(id: String) {
+    private fun hold(id: String): Boolean {
         val launch = Any()
         val holds = holds()
-        holds.hold(launch, id)
+        if (!holds.hold(launch, id)) return false
         scope.launch {
             try {
                 delay(LAUNCH_HOLD_MILLIS)
@@ -55,6 +56,7 @@ internal class DownloadHook(
                 holds.release(launch, id)
             }
         }
+        return true
     }
 
     companion object {

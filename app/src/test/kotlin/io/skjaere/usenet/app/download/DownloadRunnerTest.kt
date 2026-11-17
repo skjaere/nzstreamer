@@ -2157,6 +2157,46 @@ class DownloadRunnerTest {
         assertTrue(gone(A), "as its play ended")
     }
 
+    /**
+     * L413: the run never deletes a file a play holds, though the play began as it ran. A Play of the next due download,
+     * taken while the run deletes the one before, holds it before the run comes to it, and the run leaves it to go as that
+     * hold ends; one the run has taken can't be held, so no play is launched from a file going, nor handed to a player.
+     */
+    @Test
+    fun `a play begun as the run deletes is never deleted from under it`() = test {
+        val runner = runner()
+        val first = finished(A, 1, completedAt = NOW - 3 * DAY)
+        val next = finished(B, 2, completedAt = NOW - 3 * DAY)
+        deleteOnceWatched(NOW - 4 * DAY)
+        watched.value = listOf(watchedAt(first, NOW - 2 * DAY), watchedAt(next, NOW - 2 * DAY))
+        runCurrent()
+        val deleting = CompletableDeferred<Unit>()
+        val begun = CompletableDeferred<Unit>()
+        storage.onDelete = { id ->
+            if (id == A) {
+                begun.complete(Unit)
+                deleting.await()
+            }
+        }
+        val run = async { runner.deleteWatched(NOW) }
+        runCurrent()
+        assertTrue(begun.isCompleted, "deleting the first")
+        // A Play of the one being deleted: not held, whoever asks.
+        assertFalse(runner.hold(Any(), A), "held as it is deleted")
+        runner.holdOnly("player:lease", A)
+        assertEquals(emptySet(), runner.held.value)
+        // A Play of the next, tapped meanwhile: its hold taken before the run comes to it.
+        assertTrue(runner.hold("player:lease", B))
+        deleting.complete(Unit)
+        assertEquals(listOf(A), run.await())
+        assertTrue(gone(A))
+        assertEquals(DownloadState.Done, stored(B).state, "held as the run came to it")
+        assertTrue(storage.video(B).isFile)
+        // Gone, the first is never held again, though the finished ones' map lists it a moment longer.
+        assertFalse(runner.hold("player:lease", A))
+        assertEquals(setOf(B), runner.held.value)
+    }
+
     /** W108, L441: on a TV nothing is deleted or said, whatever the setting and the marks. */
     @Test
     fun `delete once watched deletes nothing and says nothing on a TV`() = test {
@@ -2579,8 +2619,12 @@ class DownloadRunnerTest {
             listOf("nzb", "password", DownloadStorage.GRAB, DownloadStorage.GRAB_PASSWORD, DownloadStorage.GRAB_KEY).forEach { File(bookkeeping(id), it).delete() }
         }
 
+        /** Called as a delete begins, before anything of it goes: a case's wait in the middle of a run's deletes. */
+        var onDelete: suspend (id: String) -> Unit = {}
+
         override suspend fun delete(id: String) {
             events += "delete $id"
+            onDelete(id)
             dao.setState(id, DownloadState.Deleting, null, clock.now())
             if (!there) return
             videoFolder(id).deleteRecursively()

@@ -218,6 +218,20 @@ class DownloadHookTest {
     }
 
     /**
+     * L413: a download Delete once watched has begun to delete can't be held, so the hook launches nothing from its file:
+     * the play goes as any other title's, the play in flight left alone.
+     */
+    @Test
+    fun `a download being deleted by Delete once watched isn't launched from its file`() = runBlocking<Unit> {
+        done[row.watchKey] = row
+        holds.going = setOf(row.id)
+        assertFalse(hook.play(row.watchKey, PlayOrigin.Here))
+        assertTrue(inFlight.launches.tryReceive().isFailure, "something was launched")
+        assertNull(playerInFront.launching.value)
+        assertEquals(emptySet(), holds.held())
+    }
+
+    /**
      * The coordinator's entry points that play a title (Play on the Show and Movie pages, an episode by its numbers from Up
      * next, Resume) ask the hook before their sheet opens; a release chosen by hand never does (L353).
      */
@@ -237,13 +251,18 @@ class DownloadHookTest {
         assertEquals(4, Regex("""downloadHook\.play\(""").findAll(source).count())
     }
 
-    /** The runner's holds as the hook takes them: each owner's ids. */
+    /** The runner's holds as the hook takes them: each owner's ids; none of those [going] (Delete once watched's). */
     private class FakeHolds : DownloadHolds {
         private val owners = mutableMapOf<Any, MutableSet<String>>()
 
+        @Volatile
+        var going = emptySet<String>()
+
         @Synchronized
-        override fun hold(owner: Any, id: String) {
+        override fun hold(owner: Any, id: String): Boolean {
+            if (id in going) return false
             owners.getOrPut(owner) { mutableSetOf() } += id
+            return true
         }
 
         @Synchronized
