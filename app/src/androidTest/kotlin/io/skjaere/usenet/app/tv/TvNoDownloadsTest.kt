@@ -57,7 +57,9 @@ import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.data.EpisodeRef
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.data.WatchTitle
 import io.skjaere.usenet.metadata.Episode
 import io.skjaere.usenet.metadata.EpisodeSummary
 import io.skjaere.usenet.metadata.ExternalIds
@@ -93,7 +95,8 @@ import java.time.LocalDate
  * as a test leaves them (nothing on a TV makes one): in the TV's layout and in a phone's layout on it,
  * - the episode ⋮ offers no download, and no row has a mark or a line; the season has no Download beside Mark season,
  *   and its sheet, asked for all the same, ends at once; the Movie page and Search's movie card have no Download; Home
- *   has no Downloads section; Settings has no Downloads row;
+ *   has no Downloads section; Settings has no Downloads row, nor After watching;
+ * - with Delete once watched on and the finished episode marked watched, nothing is said to go or goes;
  * - and once the app is opened as a TV opens it, no permission is asked, no job waits in the downloads' namespace or as
  *   the service's watchdog, the boot receiver is off, and no download notification shows; the rows are as they were.
  *
@@ -287,6 +290,40 @@ class TvNoDownloadsTest {
         assertEquals(emptyList<Any>(), container.downloads.state.value)
     }
 
+    /**
+     * L441: Delete once watched does nothing on a TV. Switched on (as a settings file brought from a phone could have it)
+     * with the finished episode marked watched, the run deletes nothing even a day and more after the mark, nothing says
+     * it goes, and Settings in either layout has no After watching to switch it from.
+     */
+    @Test
+    fun deleteOnceWatchedOnDeletesNothingAndSaysNothingAndSettingsHasNoAfterWatching() = runBlocking<Unit> {
+        val saved = container.settings.settings.first()
+        val done = seeded.single { it.state == DownloadState.Done }
+        val ref = EpisodeRef(SHOW, 1, 2, WatchTitle.episode("Harbor Lights", 1, 2))
+        try {
+            container.settings.setDownloadsDeleteOnceWatched(true)
+            container.library.markEpisodes(listOf(ref), watched = true)
+            assertEquals(emptyList<String>(), container.downloads.deleteWatched(System.currentTimeMillis() + 10 * DAY))
+            assertEquals(DownloadState.Done, container.data.downloads.get(done.id)?.state)
+            assertEquals(emptySet<String>(), container.downloads.deletingTomorrow.value)
+            compose.setContent {
+                AppTheme(formFactor = layout) {
+                    SettingsScreen(onBack = null, onProviders = {}, onIndexers = {}, onMetadata = {}, onPlayback = {}, onCache = {}, onLogs = {}, onDownloads = {})
+                }
+            }
+            listOf(FormFactor.Tv, FormFactor.Phone).forEach { form ->
+                layout = form
+                compose.waitUntil(10_000) { exists(hasText(HubRow.Providers.title)) }
+                listOf("After watching", "Delete once watched", "Deleting tomorrow").forEach { words ->
+                    assertFalse("'$words' in the $form layout's Settings", exists(hasText(words, substring = true, ignoreCase = true)))
+                }
+            }
+        } finally {
+            container.settings.restore(saved)
+            container.library.markEpisodes(listOf(ref), watched = false)
+        }
+    }
+
     @Test
     fun openedAsATvOpensItNothingOfDownloadsIsAskedScheduledSwitchedOnOrPosted() = runBlocking<Unit> {
         val asked = container.settings.downloads.first().notificationsAsked
@@ -358,6 +395,7 @@ class TvNoDownloadsTest {
         const val SHOW = 990_731
         const val MOVIE = 990_732
         const val SEEDING_MILLIS = 60_000L
+        const val DAY = 24 * 60 * 60_000L
 
         /** Long enough for the start's schedule, and anything that would follow it, to have run. */
         const val SETTLE_MILLIS = 3_000L

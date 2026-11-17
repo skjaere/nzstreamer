@@ -23,10 +23,12 @@ import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadDao
 import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
+import io.skjaere.usenet.data.DownloadPrefs
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.ReleaseChecks
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.data.WatchedDownload
 import io.skjaere.usenet.logging.LogBuffer
 import io.skjaere.usenet.newznab.IndexerConfig
 import io.skjaere.usenet.releases.ReleaseKey
@@ -201,6 +203,10 @@ class DownloadRunnerTest {
 
     /** Whether Android calls the network validated: the one flow the deps give the runner and its writer, as the app's container does. */
     private val network = MutableStateFlow(true)
+
+    /** The finished downloads whose titles are marked watched, as the library's join gives them (L412), and Settings › Downloads. */
+    private val watched = MutableStateFlow<List<WatchedDownload>>(emptyList())
+    private val prefs = MutableStateFlow(DownloadPrefs())
     private val traced get() = File(dir, "debug/${DownloadDebug.TRACE}").takeIf { it.isFile }?.readLines().orEmpty()
 
     /**
@@ -223,6 +229,7 @@ class DownloadRunnerTest {
                 inUse = { providers }, lastExit = { exit }, television = television, host = { host }, network = network,
                 receiverSwitch = { switches += it }, debug = DownloadDebug.On(File(dir, "debug"), clock), longGapBytes = LONG_GAP, clock = clock,
                 timeSource = testScheduler.timeSource, io = StandardTestDispatcher(testScheduler), undoMillis = DownloadRunner.UNDO_MILLIS, limits = limits,
+                watched = watched, prefs = prefs,
             ),
             work,
         )
@@ -1977,6 +1984,167 @@ class DownloadRunnerTest {
     }
 
     /**
+     * A finished download of episode [episode] as a past process left it, finished at [completedAt] (by the test's clock):
+     * its row Done, its marker, and a small file where the runner keeps one.
+     */
+    private suspend fun finished(id: String, episode: Int, completedAt: Long): Download {
+        val row = row(id, episode, 0, fake("hl-$id")) { it.copy(state = DownloadState.Done, completedAt = completedAt, relativePath = "downloads/$id/v.mkv", size = 1_024) }
+        storage.videoFolder(id).mkdirs()
+        storage.video(id).writeBytes(ByteArray(1_024))
+        return row
+    }
+
+    /** [row]'s title marked watched at [at], as the library's join gives it. */
+    private fun watchedAt(row: Download, at: Long) = WatchedDownload(row.id, row.watchKey, row.completedAt!!, at)
+
+    /** Delete once watched switched on at [since]. */
+    private fun deleteOnceWatched(since: Long) {
+        prefs.value = DownloadPrefs(deleteOnceWatched = true, deleteOnceWatchedSince = since)
+    }
+
+    private fun gone(id: String): Boolean = dao.rows.value[id] == null && !storage.videoFolder(id).exists() && !storage.bookkeeping(id).exists()
+
+    /**
+     * W111, L412, L413: the run deletes each finished download due, a day after its watched mark, in the crash-safe order
+     * (storage's delete alone: hidden, then its files, then its row), with no Undo; it leaves one a play holds, one not due
+     * yet, one queued and one removed while its Undo can still bring it back, whatever the join says of them. Their count
+     * and ids are what it returns.
+     */
+    @Test
+    fun `deleteWatched deletes each due download not held in the crash-safe order, and leaves the rest`() = test {
+        val runner = runner()
+        val done = finished(A, 1, completedAt = NOW - 3 * DAY)
+        val held = finished(B, 2, completedAt = NOW - 3 * DAY)
+        val ahead = finished(C, 3, completedAt = NOW - 3 * DAY)
+        val removed = finished(OTHER, 4, completedAt = NOW - 3 * DAY)
+        val queued = row(QUEUED, 5, 1, fake("hl-q"))
+        runner.remove(listOf(removed.id))
+        runner.hold("player:lease", held.id)
+        deleteOnceWatched(NOW - 4 * DAY)
+        watched.value = listOf(
+            watchedAt(done, NOW - 2 * DAY), watchedAt(held, NOW - 2 * DAY), watchedAt(ahead, NOW - HOUR), watchedAt(removed, NOW - 2 * DAY),
+            WatchedDownload(queued.id, queued.watchKey, NOW - 3 * DAY, NOW - 2 * DAY),
+        )
+        runCurrent()
+        val before = storage.events.size
+
+        assertEquals(listOf(A), runner.deleteWatched(NOW))
+        assertTrue(gone(A), "the due one, row, file and bookkeeping")
+        assertEquals(listOf("delete $A"), storage.events.drop(before), "storage's delete alone, its crash-safe order")
+        assertEquals(DownloadState.Done, stored(B).state)
+        assertTrue(storage.video(B).isFile, "the one a play holds")
+        assertEquals(DownloadState.Done, stored(C).state)
+        assertTrue(storage.video(C).isFile, "the one watched an hour ago")
+        assertEquals(DownloadState.Deleting, stored(OTHER).state, "removed, its Undo still to come")
+        assertEquals(DownloadState.Queued, stored(QUEUED).state)
+        // No Undo: nothing brings it back.
+        runner.undoRemove(listOf(A))
+        assertNull(dao.get(A))
+        // Again, nothing more is due.
+        assertEquals(emptyList(), runner.deleteWatched(NOW))
+        // Off, nothing goes, the one held let go of or not.
+        prefs.value = DownloadPrefs()
+        runner.release("player:lease")
+        runCurrent()
+        assertEquals(emptyList(), runner.deleteWatched(NOW + 10 * DAY))
+        assertEquals(DownloadState.Done, stored(B).state)
+    }
+
+    /**
+     * L414, L444: the app's start's run waits two minutes, as a player made again after a process death takes its hold
+     * first: a download due already reads as a plain one meanwhile, and goes then; one ahead says "Deleting tomorrow" and
+     * goes at its own time while the process lives, and says nothing more once gone. Mark unwatched keeps one.
+     */
+    @Test
+    fun `the start's run waits two minutes, then deletes each download at its due time while the process lives`() = test {
+        val runner = runner()
+        val due = finished(A, 1, completedAt = NOW - 3 * DAY)
+        val ahead = finished(B, 2, completedAt = NOW - 3 * DAY)
+        val unmarked = finished(C, 3, completedAt = NOW - 3 * DAY)
+        deleteOnceWatched(NOW - 4 * DAY)
+        watched.value = listOf(watchedAt(due, NOW - 2 * DAY), watchedAt(ahead, NOW - DAY + 30 * MINUTE), watchedAt(unmarked, NOW - DAY + 40 * MINUTE))
+        work.launch { runner.autoDelete() }
+        runCurrent()
+        assertEquals(setOf(B, C), runner.deletingTomorrow.value, "the due one says nothing more")
+
+        advanceTimeBy(2 * MINUTE - 1)
+        runCurrent()
+        assertEquals(DownloadState.Done, stored(A).state, "in the start's two minutes")
+        advanceTimeBy(1)
+        runCurrent()
+        assertTrue(gone(A), "two minutes after the start")
+        assertEquals(setOf(B, C), runner.deletingTomorrow.value)
+
+        // Marked unwatched: kept, and it says nothing more.
+        watched.value = watched.value.filter { it.id != C }
+        runCurrent()
+        assertEquals(setOf(B), runner.deletingTomorrow.value)
+
+        advanceTimeBy(30 * MINUTE - 2 * MINUTE - 1)
+        runCurrent()
+        assertEquals(DownloadState.Done, stored(B).state, "a moment before its time")
+        advanceTimeBy(1)
+        runCurrent()
+        assertTrue(gone(B), "at its time")
+        assertEquals(emptySet(), runner.deletingTomorrow.value)
+        advanceTimeBy(DAY)
+        runCurrent()
+        assertEquals(DownloadState.Done, stored(C).state, "marked unwatched")
+    }
+
+    /**
+     * L413, L414: a due download a play holds is left by the run, and goes as its hold ends; one let go of in the start's
+     * two minutes waits for them.
+     */
+    @Test
+    fun `a due download a play holds goes as its hold ends, once the start's two minutes are over`() = test {
+        val runner = runner()
+        val playing = finished(A, 1, completedAt = NOW - 3 * DAY)
+        val launched = finished(B, 2, completedAt = NOW - 3 * DAY)
+        deleteOnceWatched(NOW - 4 * DAY)
+        watched.value = listOf(watchedAt(playing, NOW - 2 * DAY), watchedAt(launched, NOW - 2 * DAY))
+        runner.hold("player:lease", playing.id)
+        val launch = Any()
+        runner.hold(launch, launched.id)
+        work.launch { runner.autoDelete() }
+        runCurrent()
+
+        advanceTimeBy(MINUTE)
+        runner.release(launch)
+        runCurrent()
+        assertEquals(DownloadState.Done, stored(B).state, "let go of in the start's two minutes")
+        assertEquals(emptySet(), runner.deletingTomorrow.value, "due, it says nothing more")
+        advanceTimeBy(MINUTE)
+        runCurrent()
+        assertTrue(gone(B))
+        assertEquals(DownloadState.Done, stored(A).state, "while it plays")
+        assertTrue(storage.video(A).isFile)
+
+        advanceTimeBy(HOUR)
+        runCurrent()
+        assertEquals(DownloadState.Done, stored(A).state, "still while it plays")
+        runner.release("player:lease")
+        runCurrent()
+        assertTrue(gone(A), "as its play ended")
+    }
+
+    /** W108, L441: on a TV nothing is deleted or said, whatever the setting and the marks. */
+    @Test
+    fun `delete once watched deletes nothing and says nothing on a TV`() = test {
+        val tv = runner(television = true)
+        finished(A, 1, completedAt = NOW - 3 * DAY)
+        deleteOnceWatched(NOW - 4 * DAY)
+        watched.value = listOf(WatchedDownload(A, WatchKey.episode(SHOW, 2, 1), NOW - 3 * DAY, NOW - 2 * DAY))
+        work.launch { tv.autoDelete() }
+        advanceTimeBy(DAY)
+        runCurrent()
+        assertEquals(emptyList(), tv.deleteWatched(NOW + 10 * DAY))
+        assertEquals(DownloadState.Done, stored(A).state)
+        assertTrue(storage.video(A).isFile)
+        assertEquals(emptySet(), tv.deletingTomorrow.value)
+    }
+
+    /**
      * L394, C1: a season pack's copy is held while a row of its show and season is still to finish, read from the rows, and
      * goes at the season's last end, whichever end it is: Done; failed by Resolve itself, which fails no row through the
      * runner's own failed(); cancelled; deleted after a Remove; Delete all; failed by the runner as it is written.
@@ -2425,6 +2593,7 @@ class DownloadRunnerTest {
         const val NOW = 1_800_000_000_000L
         const val MINUTE = 60_000L
         const val HOUR = 60 * MINUTE
+        const val DAY = 24 * HOUR
         const val AT = NOW - 60_000
 
         /** A release's file: 256 KiB, sent in 16 KiB pieces. */

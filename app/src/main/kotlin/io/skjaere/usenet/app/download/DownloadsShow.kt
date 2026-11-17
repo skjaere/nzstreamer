@@ -63,6 +63,9 @@ object DownloadsShow {
         return listOfNotNull(formatSize(row.size ?: row.indexerSize), minutes?.let(DownloadsPage::duration)).joinToString(" · ")
     }
 
+    /** "Deleting tomorrow" under an episode going tomorrow, among the runner's [deleting] (L415); null for one not going. */
+    fun deleting(row: Download, deleting: Set<String>): String? = AutoDelete.DELETING_TOMORROW.takeIf { row.id in deleting }
+
     /** "32:00 left" of an episode begun and not watched, as its row on the Show page says it; null otherwise. */
     fun left(state: WatchState?): String? = begun(state)?.let { "${mmss(it.durationMs - it.positionMs)} left" }
 

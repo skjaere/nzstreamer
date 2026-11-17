@@ -253,7 +253,8 @@ data class CachePrefs(
  * [whileCharging]: "Only while charging", off until switched on (L365). [sizeCapGbPerHour]: "Download size", one of
  * [DOWNLOAD_SIZES_GB_PER_HOUR] in GB an hour of video, or null when not set (L371); releases above it are tried last.
  * [notificationsAsked]: Android was asked whether the app may show notifications, at the first Download, so it is asked
- * once.
+ * once. [deleteOnceWatched]: "Delete once watched", off until switched on (W111), and [deleteOnceWatchedSince], when it was
+ * last switched on (null while off): a download's day starts no earlier (L412).
  */
 @Serializable
 data class DownloadPrefs(
@@ -261,6 +262,8 @@ data class DownloadPrefs(
     val whileCharging: Boolean = false,
     val sizeCapGbPerHour: Int? = null,
     val notificationsAsked: Boolean = false,
+    val deleteOnceWatched: Boolean = false,
+    val deleteOnceWatchedSince: Long? = null,
     val updatedAt: Long = 0,
 ) {
     companion object {

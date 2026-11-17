@@ -60,10 +60,10 @@ import io.skjaere.usenet.data.WatchState
 /**
  * A show's downloads (L372), opened from its row on the Downloads page: its finished episodes by season, Resume at the
  * top (the episode begun, or the next not watched), each row's size and length, what is left of one begun, ✓ once
- * watched, and its parts missing; a tap plays the file, online or not. Each row's ⋮: Remove download (with Undo), Mark
- * watched or unwatched, and Open the show's page ([onOpenShow]). Select with Delete, as on the Downloads page. Its names
- * are the rows', so it works offline (L368). Phones and tablets alone (W108, L369). Once every episode is gone, and no Undo
- * waits or was taken, it closes.
+ * watched, its parts missing, and "Deleting tomorrow" while Delete once watched has it going (L415); a tap plays the
+ * file, online or not. Each row's ⋮: Remove download (with Undo), Mark watched or unwatched, and Open the show's page
+ * ([onOpenShow]). Select with Delete, as on the Downloads page. Its names are the rows', so it works offline (L368).
+ * Phones and tablets alone (W108, L369). Once every episode is gone, and no Undo waits or was taken, it closes.
  */
 @Composable
 fun DownloadsShowScreen(showTmdbId: Int, onBack: () -> Unit, onOpenShow: (showTmdbId: Int) -> Unit) {
@@ -83,6 +83,7 @@ internal fun DownloadsShowScreen(deps: DownloadsDeps, showTmdbId: Int, onBack: (
     val vm: DownloadsShowViewModel = viewModel(key = "downloads-show-$showTmdbId") { DownloadsShowViewModel(deps, showTmdbId) }
     val episodes by vm.episodes.collectAsStateWithLifecycle()
     val states by vm.states.collectAsStateWithLifecycle()
+    val deleting by vm.deleting.collectAsStateWithLifecycle()
     val selection by vm.edits.selection.collectAsStateWithLifecycle()
     val offer by vm.edits.offer.collectAsStateWithLifecycle()
     val keepFor = undoTimeout(vm.undoMillis)
@@ -130,7 +131,7 @@ internal fun DownloadsShowScreen(deps: DownloadsDeps, showTmdbId: Int, onBack: (
                     }
                     itemsIndexed(season.episodes, key = { _, it -> it.id }) { at, row ->
                         EpisodeItem(
-                            row, states[row.season!! to row.episode!!], first = at == 0, last = at == season.episodes.lastIndex,
+                            row, states[row.season!! to row.episode!!], DownloadsShow.deleting(row, deleting), first = at == 0, last = at == season.episodes.lastIndex,
                             selected = selected?.let { row.id in it },
                             onPlay = { vm.play(row) },
                             onSelect = { if (selected == null) vm.edits.startSelect(row.id) else vm.edits.toggle(row.id) },
@@ -151,14 +152,15 @@ internal fun DownloadsShowScreen(deps: DownloadsDeps, showTmdbId: Int, onBack: (
 
 /**
  * An episode downloaded, in the Show page's phone look: its number, its name, its size and length (and its parts
- * missing), what is left of it begun with its 2 dp bar, ✓ once watched, and its ⋮ beside it. A tap plays it; a long press
- * starts select mode with it, where a tap selects it.
+ * missing), what is left of it begun with its 2 dp bar, [going] ("Deleting tomorrow") under them, ✓ once watched, and its
+ * ⋮ beside it. A tap plays it; a long press starts select mode with it, where a tap selects it.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun EpisodeItem(
     row: Download,
     state: WatchState?,
+    going: String?,
     first: Boolean,
     last: Boolean,
     selected: Boolean?,
@@ -198,6 +200,7 @@ private fun EpisodeItem(
                         color = colors.accent, trackColor = colors.divider, drawStopIndicator = {},
                     )
                 }
+                going?.let { Text(it, style = AppType.small, color = colors.muted) }
             }
             if (watched) Text("✓", style = AppType.bodyStrong, color = colors.good)
         }

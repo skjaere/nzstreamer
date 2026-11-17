@@ -1018,6 +1018,54 @@ class SettingsRepositoryTest {
         assertEquals(PlaybackPrefs(), repository.playback.first())
     }
 
+    /**
+     * W111, L412: Delete once watched is off until switched on. Switched on, it keeps when, as a download's day starts no
+     * earlier; on again while on, that time stays; off, it is forgotten, and on again later starts a new day. Saved like
+     * the rest, touching nothing else.
+     */
+    @Test
+    fun `delete once watched keeps when it was switched on, and forgets it switched off`() = runBlocking<Unit> {
+        suspend fun saved() = File(dir, "settings.json").inputStream().use { JsonFileSerializer(AppSettings.serializer(), AppSettings()).readFrom(it).downloads }
+        assertFalse(repository.downloads.first().deleteOnceWatched)
+        assertNull(repository.downloads.first().deleteOnceWatchedSince)
+
+        time = 5_000
+        repository.setDownloadsDeleteOnceWatched(true)
+        val on = repository.downloads.first()
+        assertTrue(on.deleteOnceWatched)
+        assertEquals(5_000L, on.deleteOnceWatchedSince)
+        assertEquals(on, saved())
+        // Switched on again while on (a page restored, a second save): the time it was switched on stays.
+        time = 9_000
+        repository.setDownloadsDeleteOnceWatched(true)
+        assertEquals(5_000L, repository.downloads.first().deleteOnceWatchedSince)
+
+        time = 12_000
+        repository.setDownloadsDeleteOnceWatched(false)
+        assertEquals(DownloadPrefs(updatedAt = repository.downloads.first().updatedAt), repository.downloads.first())
+        assertNull(saved().deleteOnceWatchedSince)
+        time = 20_000
+        repository.setDownloadsDeleteOnceWatched(true)
+        assertEquals(20_000L, repository.downloads.first().deleteOnceWatchedSince)
+        // None of it touches the other download settings, or another part of the settings.
+        assertEquals(DownloadPrefs(deleteOnceWatched = true, deleteOnceWatchedSince = 20_000, updatedAt = repository.downloads.first().updatedAt), repository.downloads.first())
+        assertEquals(PlaybackPrefs(), repository.playback.first())
+    }
+
+    /** W111: a settings file saved before Delete once watched existed reads it off, with no time, and the rest as it was. */
+    @Test
+    fun `a settings file from before delete once watched reads it off`() = runBlocking<Unit> {
+        val older = """{"schemaVersion":3,"downloads":{"unmeteredOnly":false,"whileCharging":true,"sizeCapGbPerHour":4,"notificationsAsked":true,"updatedAt":7}}"""
+        val read = JsonFileSerializer(AppSettings.serializer(), AppSettings()).readFrom(older.byteInputStream())
+        assertEquals(
+            DownloadPrefs(unmeteredOnly = false, whileCharging = true, sizeCapGbPerHour = 4, notificationsAsked = true, deleteOnceWatched = false, deleteOnceWatchedSince = null, updatedAt = 7),
+            read.downloads,
+        )
+        File(dir, "settings.json").writeText(older)
+        assertFalse(repository.downloads.first().deleteOnceWatched)
+        assertNull(repository.downloads.first().deleteOnceWatchedSince)
+    }
+
     /** L371: the download size is one of Settings' cells or not set; any other is refused, and the one saved stays. */
     @Test
     fun `a download size no cell offers is refused, and the size saved stays`() = runBlocking<Unit> {

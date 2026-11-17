@@ -925,8 +925,11 @@ class UsenetApplication : Application(), SingletonImageLoader.Factory {
         // Before any activity starts: the first one counts.
         registerActivityLifecycleCallbacks(container.inFront)
         // Before a host goes on with them: the downloads' folders and rows in step, and those the user stopped from
-        // Android held until Resume (L359).
-        container.appScope.launch { saveOrLog("reconcile the downloads") { container.downloads.reconcile() } }
+        // Android held until Resume (L359). Then Delete once watched, two minutes on, for the process's life (L414).
+        container.appScope.launch {
+            saveOrLog("reconcile the downloads") { container.downloads.reconcile() }
+            saveOrLog("delete the downloads watched a day ago") { container.downloads.autoDelete() }
+        }
         if (BuildConfig.SEED_DEV_SETTINGS) {
             container.appScope.launch {
                 try {

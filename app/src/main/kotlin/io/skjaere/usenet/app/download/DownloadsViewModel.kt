@@ -58,7 +58,8 @@ import org.slf4j.LoggerFactory
  * runner's calls and the marks run, so one asked as the page goes (Back as a download stops at its safe offset) is still
  * made, as the title pages' are. [undoMillis]: the Undo bar's time before TalkBack's own (L379). [packs]: the season packs'
  * copies kept, which the page's queued season rows and the row written from one say (L406). [indexers]: the names of the
- * indexers set up now, by id, by which a download waiting on an indexer's limit names it (L434).
+ * indexers set up now, by id, by which a download waiting on an indexer's limit names it (L434). [deleting]: the finished
+ * downloads Delete once watched deletes tomorrow, which their rows say (L415).
  */
 data class DownloadsDeps(
     val items: Flow<List<DownloadRunner.Item>>,
@@ -87,6 +88,7 @@ data class DownloadsDeps(
     val undoMillis: Long = UNDO_MS,
     val packs: Flow<DownloadRunner.Packs> = flowOf(DownloadRunner.Packs()),
     val indexers: Flow<Map<String, String>> = flowOf(emptyMap()),
+    val deleting: Flow<Set<String>> = flowOf(emptySet()),
 ) {
     /**
      * The Download sheet's deps for a choice that replaces [row]'s releases: its search, the room free with [row]'s own
@@ -141,6 +143,7 @@ data class DownloadsDeps(
             work = container.appScope,
             packs = container.downloads.packs,
             indexers = container.settings.indexers.map { records -> records.associate { it.id to it.name } }.distinctUntilChanged(),
+            deleting = container.downloads.deletingTomorrow,
         )
 
         /**
@@ -280,8 +283,10 @@ class DownloadsViewModel(
         .flatMapLatest { shows -> if (shows.isEmpty()) flowOf(emptyMap()) else combine(shows.map { id -> deps.episodeStates(id).map { id to it } }) { it.toMap() } }
 
     /** The rows, once the runner has said: null before. */
-    val page: StateFlow<DownloadsPage?> = combine(items, episodeStates, deps.movieWatches, deps.packs, deps.indexers) { items, episodes, films, packs, indexers ->
-        DownloadsPage.of(items, episodes, films.associateBy { it.movieTmdbId }, packs, indexers)
+    val page: StateFlow<DownloadsPage?> = combine(
+        items, episodeStates, deps.movieWatches, combine(deps.packs, deps.indexers, ::Pair), deps.deleting,
+    ) { items, episodes, films, (packs, indexers), deleting ->
+        DownloadsPage.of(items, episodes, films.associateBy { it.movieTmdbId }, packs, indexers, deleting = deleting)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /** What downloads hold and what is free, read again as the rows change; null until first read. */
@@ -367,6 +372,9 @@ class DownloadsShowViewModel(private val deps: DownloadsDeps, val showTmdbId: In
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     val states: StateFlow<Map<Pair<Int, Int>, WatchState>> = deps.episodeStates(showTmdbId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** The finished downloads going tomorrow, whose rows say so (L415). */
+    val deleting: StateFlow<Set<String>> = deps.deleting.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
     /**
      * Whether nothing is left to show, so the page closes: every episode gone, no Undo waiting, and none taken whose

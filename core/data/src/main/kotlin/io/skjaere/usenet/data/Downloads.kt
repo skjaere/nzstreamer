@@ -176,3 +176,32 @@ interface DownloadDao {
     @Query("DELETE FROM download WHERE id = :id")
     suspend fun delete(id: String)
 }
+
+/**
+ * A finished download whose title is marked watched (L412): download [id], of [watchKey], finished at [completedAt], and
+ * when its watch state was last written while watched ([watchedAt]): its mark, or a play's last save since.
+ */
+data class WatchedDownload(val id: String, val watchKey: String, val completedAt: Long, val watchedAt: Long)
+
+/**
+ * Delete once watched's clock (L412): the finished downloads joined with their titles' watch states, a query of the two
+ * tables Room has, so no column is added to the synced watch states and [DownloadDao]'s fakes stay as they are. Its own
+ * DAO for the same reason.
+ */
+@Dao
+interface DownloadWatchDao {
+    /**
+     * Each finished download whose title's watch state is watched and not a tombstone, written after the download
+     * finished: one marked before it finished (a title downloaded again after it was watched) isn't watched as far as its
+     * download goes. Room runs it again on a write to either table, so a mark, a play's save or a removal is seen.
+     */
+    @Query(
+        """
+        SELECT d.id AS id, d.watchKey AS watchKey, d.completedAt AS completedAt, w.updatedAt AS watchedAt
+        FROM download d JOIN watch_state w ON w.`key` = d.watchKey
+        WHERE d.state = 'Done' AND w.watched = 1 AND w.deleted = 0 AND w.updatedAt > d.completedAt
+        ORDER BY d.completedAt, d.createdAt
+        """,
+    )
+    fun watched(): Flow<List<WatchedDownload>>
+}

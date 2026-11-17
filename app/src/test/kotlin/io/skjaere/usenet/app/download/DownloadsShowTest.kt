@@ -99,6 +99,15 @@ class DownloadsShowTest {
         assertEquals("3 parts missing", DownloadsPage.missing(row.copy(gaps = (0..2).map { DownloadGap(it * 10L, it * 10L + 1) })))
     }
 
+    /** C4, L415: with Delete once watched on, an episode going tomorrow says so on its own line, under its size and length. */
+    @Test
+    fun `an episode going tomorrow says Deleting tomorrow`() {
+        val row = episode(1, 1)
+        assertEquals("Deleting tomorrow", DownloadsShow.deleting(row, setOf(row.id, "other")))
+        assertNull(DownloadsShow.deleting(row, setOf("other")))
+        assertNull(DownloadsShow.deleting(row, emptySet()))
+    }
+
     private companion object {
         const val GB = 1_000_000_000L
         const val HL = 990_617

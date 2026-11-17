@@ -20,14 +20,17 @@ import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadDao
 import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
+import io.skjaere.usenet.data.DownloadPrefs
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.data.WatchedDownload
 import io.skjaere.usenet.releases.ReleaseKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
@@ -42,10 +45,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -183,6 +188,10 @@ class DownloadRunnerDeps(
     val undoMillis: Long = DownloadRunner.UNDO_MILLIS,
     /** The walk's memory of the indexers' limits (L443), which Resolve's turns read and the runner's Resume forgets. */
     val limits: DownloadLimits = DownloadLimits(),
+    /** The finished downloads whose titles are marked watched ([io.skjaere.usenet.data.DownloadWatchDao.watched]). */
+    val watched: Flow<List<WatchedDownload>> = flowOf(emptyList()),
+    /** Settings › Downloads, whose Delete once watched the runner follows. */
+    val prefs: Flow<DownloadPrefs> = flowOf(DownloadPrefs()),
 ) {
     /** The writer (item 6), over [opener], following [network] as the runner does. */
     val writer = DownloadWriter(
@@ -196,7 +205,8 @@ class DownloadRunnerDeps(
          * is left out of the engine), both following the device's validated network, the container's one flow of it (L381);
          * the memory of releases found missing, the process's last exit, and the host by the API level and the debug
          * override, and the boot and update receiver switched as it says (L375); the walk's memory of the indexers' limits,
-         * which Resolve's turns keep ([limits], L443). A test gives its own [resolve] and [debug], and the writer's
+         * which Resolve's turns keep ([limits], L443); the library's finished downloads marked watched and Settings ›
+         * Downloads, which Delete once watched reads (L412). A test gives its own [resolve] and [debug], and the writer's
          * [longGapBytes] given small.
          */
         fun of(
@@ -223,6 +233,8 @@ class DownloadRunnerDeps(
             longGapBytes = longGapBytes,
             providersLeftOut = { container.engine.leftOut.value.isNotEmpty() },
             limits = limits,
+            watched = container.data.downloadWatches.watched(),
+            prefs = container.settings.downloads,
         )
 
         /**
@@ -280,6 +292,9 @@ interface DownloadHolds {
  * - Remove hides a download at once and deletes it once its Undo has gone (L379); Cancel deletes it at once.
  * - Nothing is deleted while it plays (L413): a download's file is held by what plays it ([hold], [holdOnly], [release]),
  *   and one removed or deleted meanwhile is hidden at once and goes as its last hold ends.
+ * - Delete once watched (W111, L412-L416): with it on, a finished download goes a day after its title is marked watched
+ *   ([deleteWatched]), in this process alone, with no job ([autoDelete], L414): two minutes after the app's start, at each
+ *   one's due time while the process lives, and as a hold ends. [deletingTomorrow] says which will go.
  * - A season is queued at once, all or none, a failed episode's row put back rather than queued twice ([enqueueAll],
  *   L392, L396). Its rows' turns search for their releases and take a copy of their season's pack first (Resolve's);
  *   [packs] says which copies are kept, for the Downloads page's words (L406).
@@ -493,6 +508,89 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         deps.storage.copies.map(Packs::of).stateIn(scope, SharingStarted.Eagerly, Packs())
     }
 
+    /**
+     * Delete once watched's clock (L412, L414): the finished downloads marked watched since they finished and the setting,
+     * as of [AutoDelete.Now.at], told again as either changes and at each one's due time while the process lives. Its waits
+     * are a minute at most at a time: the coroutines' clock stops while the device sleeps, the wall clock doesn't, so a due
+     * time passed asleep is seen within a minute of waking. Null until first told; none on a TV.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val autoDeleteClock: StateFlow<AutoDelete.Now?> = if (!runs) {
+        MutableStateFlow(null)
+    } else {
+        combine(deps.prefs.map(AutoDelete::since).distinctUntilChanged(), deps.watched.distinctUntilChanged()) { since, rows -> since to rows }
+            .transformLatest { (since, rows) ->
+                while (true) {
+                    val at = now()
+                    emit(AutoDelete.Now(rows, since, at))
+                    val next = AutoDelete.nextAt(rows, since, at) ?: break
+                    delay((next - at).coerceAtMost(CLOCK_STEP_MILLIS))
+                }
+            }
+            .stateIn(scope, SharingStarted.Eagerly, null)
+    }
+
+    /**
+     * The finished downloads Delete once watched will delete and that aren't due yet, by id (L415): those whose pages say
+     * "Deleting tomorrow". One due, in the start's two minutes or held by a play, isn't among them (L444). None on a TV.
+     */
+    val deletingTomorrow: StateFlow<Set<String>> = if (!runs) {
+        MutableStateFlow(emptySet())
+    } else {
+        autoDeleteClock.map { now -> now?.let { AutoDelete.tomorrow(it.rows, it.since, it.at) }.orEmpty() }.distinctUntilChanged()
+            .stateIn(scope, SharingStarted.Eagerly, emptySet())
+    }
+
+    /** Whether the start's run has begun ([autoDelete]): only then does a hold's end delete what is due. */
+    @Volatile
+    private var autoDeleting = false
+
+    /**
+     * Deletes the finished downloads Delete once watched has due by [now] (W111, L412), under the queue's lock: each one
+     * the library still has finished, marked watched a day ago, not held by a play (L413, one held goes as its hold ends),
+     * in the crash-safe order (storage's delete: hidden, then its files, then its row). No Undo and no notification; their
+     * count and ids go to the log. Returns their ids; none while the setting is off, and none on a TV. [now] is the
+     * caller's: the app's own runs give the device's clock, a device test a time a day ahead.
+     */
+    suspend fun deleteWatched(now: Long): List<String> {
+        if (!runs) return emptyList()
+        return changes.withLock {
+            val since = AutoDelete.since(deps.prefs.first()) ?: return@withLock emptyList()
+            // Its row read again: one removed, or left Deleting by Delete all, after the library joined it goes as that says.
+            val gone = AutoDelete.due(deps.watched.first(), since, now, ::isHeld).filter { dao.get(it)?.state == DownloadState.Done }
+            gone.forEach { delete(it) }
+            if (gone.isNotEmpty()) log.info("Downloads: {} deleted a day after they were watched: {}", gone.size, gone.joinToString())
+            gone
+        }
+    }
+
+    /**
+     * Delete once watched in this process (L414), with no job: [START_WAIT_MILLIS] after the app's start (as a player made
+     * again after a process death takes its hold first, as DebridAdds' start sweep waits), then at each download's due time
+     * while the process lives ([deleteWatched]); from then on a hold's end deletes too ([holdsEnded]). Returns only as its
+     * caller's scope ends: the app's start calls it once, after reconcile. Returns at once on a TV.
+     */
+    suspend fun autoDelete() {
+        if (!runs) return
+        delay(START_WAIT_MILLIS)
+        autoDeleting = true
+        autoDeleteClock.filterNotNull().collect { clock ->
+            val at = now()
+            if (AutoDelete.due(clock.rows, clock.since, at, ::isHeld).isNotEmpty()) deleteWatchedOrLog(at)
+        }
+    }
+
+    /** [deleteWatched], whose failure is logged by its kind and waits for the next due time or hold's end. */
+    private suspend fun deleteWatchedOrLog(now: Long) {
+        try {
+            deleteWatched(now)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("Couldn't delete the downloads watched a day ago: {}", e::class.simpleName)
+        }
+    }
+
     /** The finished downloads by watch key, the latest finished for each: what a play hook and the player ask (items 14, 15). */
     val done: StateFlow<Map<String, Download>> = if (!runs) {
         MutableStateFlow(emptyMap())
@@ -663,7 +761,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /**
      * The last hold on [ids] has ended (L413): those that waited for it go now, in the crash-safe order: removed while they
      * played, their Undo's time over, or left by Delete all, both still Deleting. One whose Undo can still bring it back is
-     * left to its own timer, and one held again since stays.
+     * left to its own timer, and one held again since stays. Once the start's run has begun, Delete once watched deletes
+     * what is due and no longer held (L414).
      */
     private suspend fun holdsEnded(ids: Set<String>) {
         changes.withLock {
@@ -672,6 +771,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             gone.forEach { delete(it) }
             if (gone.isNotEmpty()) log.info("Downloads: {} deleted as their play ended: {}", gone.size, gone.joinToString())
         }
+        if (autoDeleting) deleteWatchedOrLog(now())
     }
 
     /**
@@ -1418,6 +1518,12 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     companion object {
         /** How long a removed download can be brought back: the Undo bar's 10 s (L379). */
         const val UNDO_MILLIS = 10_000L
+
+        /** How long after the app's start Delete once watched first deletes (L414): a player made again holds its file first. */
+        const val START_WAIT_MILLIS = 2 * 60_000L
+
+        /** The longest of Delete once watched's clock's waits, as the device's sleep stops it ([autoDeleteClock]). */
+        private const val CLOCK_STEP_MILLIS = 60_000L
 
         /** The releases a download keeps to try, in download order (L338). */
         const val MAX_CANDIDATES = 10

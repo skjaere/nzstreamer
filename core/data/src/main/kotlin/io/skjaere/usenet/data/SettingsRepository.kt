@@ -421,6 +421,22 @@ class SettingsRepository(
         updateDownloads { it.copy(sizeCapGbPerHour = gbPerHour) }
     }
 
+    /**
+     * "Delete once watched" (W111, L412): switched on, when it was, as a download's day starts no earlier (on again while on
+     * keeps that time); switched off, none, so switching it on later starts a new day.
+     */
+    suspend fun setDownloadsDeleteOnceWatched(on: Boolean) {
+        val at = clock.now()
+        updateDownloads { prefs ->
+            val since = when {
+                !on -> null
+                prefs.deleteOnceWatched -> prefs.deleteOnceWatchedSince ?: at
+                else -> at
+            }
+            prefs.copy(deleteOnceWatched = on, deleteOnceWatchedSince = since)
+        }
+    }
+
     /** Android was asked whether the app may show notifications (at the first Download), or not yet. */
     suspend fun setDownloadNotificationsAsked(asked: Boolean) = updateDownloads { it.copy(notificationsAsked = asked) }
 

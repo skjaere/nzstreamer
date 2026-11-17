@@ -95,9 +95,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
- * Settings › Downloads' words and rules (item 20; W110, L365, L371), DN1's rows: the hub row's line, Download size's cells
- * and its explanation, the SD card's cell, On this phone's lines, Delete all's confirm and the Notifications row's line.
- * Pure, so the JVM reads every case; the screen only draws them. "After watching" is DN2's.
+ * Settings › Downloads' words and rules (item 20; W110, L365, L371): the hub row's line, Download size's cells and its
+ * explanation, After watching's switch (W111), the SD card's cell, On this phone's lines, Delete all's confirm and the
+ * Notifications row's line. Pure, so the JVM reads every case; the screen only draws them.
  */
 object DownloadSettings {
     const val TITLE = "Downloads"
@@ -118,6 +118,12 @@ object DownloadSettings {
             "Releases above this size are tried last.",
         example(gbPerHour = 2, minutes = 45),
     )
+    const val AFTER_WATCHING = "After watching"
+    const val DELETE_ONCE_WATCHED = "Delete once watched"
+
+    /** Delete once watched's line (W111): when a download goes, and what the Downloads pages say meanwhile (L415). */
+    const val DELETE_ONCE_WATCHED_DETAIL =
+        "A day after an episode or film is marked watched, its download is deleted, never while it plays. Downloads shows “Deleting tomorrow” until then."
     const val SAVE_TO = "Save downloads to"
     const val THIS_PHONE = "This phone"
     const val SD_CARD = "SD card"
@@ -239,6 +245,7 @@ data class DownloadSettingsDeps(
     val setUnmetered: suspend (Boolean) -> Unit,
     val setCharging: suspend (Boolean) -> Unit,
     val setSizeCap: suspend (Int?) -> Unit,
+    val setDeleteOnceWatched: suspend (Boolean) -> Unit,
     val deleteAll: suspend () -> Unit,
     val notificationsOn: () -> Boolean,
     val sdCard: () -> Boolean,
@@ -254,6 +261,7 @@ data class DownloadSettingsDeps(
             setUnmetered = container.settings::setDownloadsUnmeteredOnly,
             setCharging = container.settings::setDownloadsWhileCharging,
             setSizeCap = container.settings::setDownloadSizeCap,
+            setDeleteOnceWatched = container.settings::setDownloadsDeleteOnceWatched,
             deleteAll = container.downloads::deleteAll,
             notificationsOn = { notificationsOn(context) },
             sdCard = { DownloadSettings.sdCardShown(volumes(context)) },
@@ -280,7 +288,8 @@ data class DownloadSettingsDeps(
  * Settings › Downloads' state and actions: the settings, the rows, the space read again as the rows change (a Delete all
  * among them), and Android's answers read again as the page comes to the front ([shown]). A changed switch is saved,
  * and nothing more: the app's own listener asks for the host as the needs change, from the app in front (L335's
- * exception), once; a second ask would stop a running download a second time. Download size is the ranking's alone.
+ * exception), once; a second ask would stop a running download a second time. Download size is the ranking's alone, and
+ * Delete once watched the runner's clock's.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class DownloadSettingsModel(private val deps: DownloadSettingsDeps, private val scope: CoroutineScope) {
@@ -315,6 +324,9 @@ class DownloadSettingsModel(private val deps: DownloadSettingsDeps, private val 
 
     fun setSizeCap(gbPerHour: Int?): Job = scope.launch { logged("save the download size") { deps.setSizeCap(gbPerHour) } }
 
+    /** Delete once watched (W111), saved with when it was switched on: the runner's clock reads it, and no download's needs change. */
+    fun setDeleteOnceWatched(on: Boolean): Job = scope.launch { logged("save Delete once watched") { deps.setDeleteOnceWatched(on) } }
+
     /**
      * Delete all, once its confirm is answered (L379): every download, the one under way stopped. In the app's scope, so
      * Back at once (the one under way can take a moment to stop) leaves nothing half deleted.
@@ -330,10 +342,11 @@ class DownloadSettingsViewModel(deps: DownloadSettingsDeps) : ViewModel() {
 }
 
 /**
- * Settings › Downloads (item 20; DN1's rows), on phones and tablets alone: its route is in the phone's graph only while
- * downloads show (L369). The two switches and the one-at-a-time line; Download size in Maximum bitrate's grid with its
- * explanation; Save downloads to (this phone; the SD card greyed, only while one is in); what stays where; On this phone
- * with Delete all, asked first as Cache's clears are; and Notifications, which opens Android's page for them.
+ * Settings › Downloads (item 20), on phones and tablets alone: its route is in the phone's graph only while downloads
+ * show (L369). The two switches and the one-at-a-time line; Download size in Maximum bitrate's grid with its
+ * explanation; After watching, with Delete once watched and its line (W111); Save downloads to (this phone; the SD card
+ * greyed, only while one is in); what stays where; On this phone with Delete all, asked first as Cache's clears are; and
+ * Notifications, which opens Android's page for them.
  */
 @Composable
 fun DownloadSettingsScreen(onBack: () -> Unit) {
@@ -371,6 +384,12 @@ internal fun DownloadSettingsScreen(onBack: () -> Unit, deps: DownloadSettingsDe
                 label = DownloadSettings::label, onPick = model::setSizeCap,
             )
             Footnote(DownloadSettings.SIZE_EXPLANATION)
+            SectionHeader(DownloadSettings.AFTER_WATCHING, Heading, top = 6.dp)
+            GroupCard {
+                SwitchRow(
+                    DownloadSettings.DELETE_ONCE_WATCHED, p.deleteOnceWatched, model::setDeleteOnceWatched, detail = DownloadSettings.DELETE_ONCE_WATCHED_DETAIL,
+                )
+            }
         }
 
         val measured = space

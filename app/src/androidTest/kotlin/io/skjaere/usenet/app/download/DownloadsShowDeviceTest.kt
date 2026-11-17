@@ -26,6 +26,7 @@ import io.skjaere.usenet.data.WatchState
 import io.skjaere.usenet.data.WatchTitle
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -43,9 +44,11 @@ import org.junit.runner.RunWith
  * - Resume and a row's tap play the downloads' files (a seam: no player).
  * - Remove download with its Undo; Mark watched; Open Harbor Lights.
  * - At twice the font size, nothing cut off.
+ * - With Delete once watched on, Season 1's watched episodes say "Deleting tomorrow", whole at twice the font size too,
+ *   and nothing does once it is off (C4, L415).
  *
  * Its rows are deleted after each case, and the show's watch states put back unwatched, as the downloads' other tests
- * leave theirs. The show and its episodes are invented.
+ * leave theirs, and the settings a case took as they were. The show and its episodes are invented.
  */
 @RunWith(AndroidJUnit4::class)
 class DownloadsShowDeviceTest {
@@ -140,6 +143,25 @@ class DownloadsShowDeviceTest {
     }
 
     @Test
+    fun withDeleteOnceWatchedOnTheWatchedSayDeletingTomorrowAndNothingDoesOnceItIsOff() = runBlocking<Unit> {
+        withTimeout(SEEDING_MILLIS) { container.devSettingsSaved.await() }
+        val saved = container.settings.settings.first()
+        try {
+            container.settings.setDownloadsDeleteOnceWatched(true)
+            show(fontScale = 2f)
+            compose.waitFor(hasText(AutoDelete.DELETING_TOMORROW))
+            assertEquals("Season 1's three watched", 3, compose.onAllNodes(hasText(AutoDelete.DELETING_TOMORROW), useUnmergedTree = true).fetchSemanticsNodes().size)
+            compose.assertWhole(AutoDelete.DELETING_TOMORROW, context.resources.displayMetrics.widthPixels)
+            // Under its size and length, in its row: TalkBack hears it with the row.
+            assertTrue(compose.scrolledTo(hasText(AutoDelete.DELETING_TOMORROW, substring = true) and hasText("First Light", substring = true)))
+            container.settings.setDownloadsDeleteOnceWatched(false)
+            compose.waitTill("nothing says it goes once it is off") { !compose.exists(hasText(AutoDelete.DELETING_TOMORROW, substring = true)) }
+        } finally {
+            container.settings.restore(saved)
+        }
+    }
+
+    @Test
     fun atTwiceTheFontSizeNothingIsCutOff() {
         show(fontScale = 2f)
         compose.waitFor(hasText("Resume S02E01 · 20:00"))
@@ -158,6 +180,7 @@ class DownloadsShowDeviceTest {
     }
 
     private companion object {
+        const val SEEDING_MILLIS = 60_000L
         val REFS = listOf(1 to 1, 1 to 2, 1 to 3, 2 to 1, 2 to 2, 2 to 3).map { (s, e) -> EpisodeRef(HL, s, e, WatchTitle.episode("Harbor Lights", s, e)) }
     }
 }

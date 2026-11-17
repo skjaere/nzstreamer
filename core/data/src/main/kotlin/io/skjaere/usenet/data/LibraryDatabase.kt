@@ -404,6 +404,7 @@ abstract class LibraryDatabase : RoomDatabase() {
     abstract fun triedReleases(): TriedReleaseDao
     abstract fun upNextRemovals(): UpNextRemovalDao
     abstract fun downloads(): DownloadDao
+    abstract fun downloadWatches(): DownloadWatchDao
 
     companion object {
         /** Version 2 adds each show's audio and subtitles ([ShowTrackChoice]); every version 1 row stays. */

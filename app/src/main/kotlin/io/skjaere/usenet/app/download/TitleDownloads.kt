@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -22,7 +23,8 @@ import kotlinx.coroutines.launch
  * A title's download as its pages show it (L384, L356): the Show page's episode rows, the Movie page's button and Search's
  * movie card. Only what they say, so a page draws again only when that changes: its [state] and [reason] as the runner
  * keeps them, how far it is ([percent], once its file is made), its file's [size] (exact once resolved, else the
- * indexer's), how many parts it lacks ([partsMissing]) and how many releases were [tried]; [id] for the runner's calls.
+ * indexer's), how many parts it lacks ([partsMissing]) and how many releases were [tried]; finished, whether Delete once
+ * watched will delete it and it isn't due yet ([deleting], L415); [id] for the runner's calls.
  */
 data class TitleDownload(
     val id: String,
@@ -32,14 +34,18 @@ data class TitleDownload(
     val size: Long = 0,
     val partsMissing: Int = 0,
     val tried: Int = 0,
+    val deleting: Boolean = false,
 ) {
     companion object {
-        /** [item] as its title's page says it: the live write's bytes where it is being written, else its safe offset. */
-        fun of(item: DownloadRunner.Item): TitleDownload {
+        /**
+         * [item] as its title's page says it: the live write's bytes where it is being written, else its safe offset; and,
+         * finished, whether it is among those going tomorrow ([deleting], the runner's [DownloadRunner.deletingTomorrow]).
+         */
+        fun of(item: DownloadRunner.Item, deleting: Boolean = false): TitleDownload {
             val row = item.row
             val total = row.size ?: row.indexerSize
             val percent = if (row.relativePath != null && total > 0) (item.written.coerceIn(0, total) * 100 / total).toInt() else null
-            return TitleDownload(row.id, row.state, row.reason, percent, total, row.gaps.size, row.tried.size)
+            return TitleDownload(row.id, row.state, row.reason, percent, total, row.gaps.size, row.tried.size, deleting && row.state == DownloadState.Done)
         }
     }
 }
@@ -90,12 +96,17 @@ object TitleDownloads {
     const val FAILED = "Download failed"
     private const val WAITING = "Waiting"
     private const val TRYING = "Trying release"
+    private const val SEP = " · "
+
+    /** "Deleting tomorrow" as TalkBack hears it after "Downloaded": in the row's state's sentence. */
+    private const val DELETING_SPOKEN = "deleting tomorrow"
 
     /**
      * The episode row's line under the date (DlPhoneEpisodeRow): "Downloaded · 1.3 GB", "Downloaded · 2 parts missing" (what
      * is missing in the warning colour), "Downloading · 42%", "Queued for download", "Paused · 18%", "Download failed",
      * "Finding releases…", "Trying release 2 of 3", "Waiting for Wi-Fi"; and, not drawn, the other waits, a stop by Android
-     * and the provider out of reach as it is written, in the Downloads page's words.
+     * and the provider out of reach as it is written, in the Downloads page's words. A finished one going tomorrow ends
+     * " · Deleting tomorrow" (L415).
      */
     fun line(download: TitleDownload): List<PageLine> = when (download.state) {
         DownloadState.Queued -> listOf(PageLine(QUEUED, Tone.Muted))
@@ -104,8 +115,13 @@ object TitleDownloads {
         DownloadState.Paused -> listOf(PageLine(far(PAUSED, download), Tone.Muted))
         DownloadState.Stopped -> listOf(PageLine(far(DownloadHostRules.STOPPED_BY_ANDROID, download), Tone.WarnStrong))
         DownloadState.Waiting -> listOf(PageLine(download.reason ?: WAITING, if (holdsOnNeed(download)) Tone.Muted else Tone.Warn))
-        DownloadState.Done -> missing(download)?.let { listOf(PageLine("$DOWNLOADED · ", Tone.Muted), PageLine(it, Tone.Warn)) }
-            ?: listOf(PageLine("$DOWNLOADED · ${formatSize(download.size)}", Tone.Muted))
+        DownloadState.Done -> {
+            val going = if (download.deleting) "$SEP${AutoDelete.DELETING_TOMORROW}" else ""
+            when (val missing = missing(download)) {
+                null -> listOf(PageLine("$DOWNLOADED$SEP${formatSize(download.size)}$going", Tone.Muted))
+                else -> listOfNotNull(PageLine("$DOWNLOADED$SEP", Tone.Muted), PageLine(missing, Tone.Warn), PageLine(going, Tone.Muted).takeIf { going.isNotEmpty() })
+            }
+        }
         DownloadState.Failed -> listOf(PageLine(FAILED, Tone.Warn))
         DownloadState.Deleting -> emptyList()
     }
@@ -120,7 +136,7 @@ object TitleDownloads {
             DownloadState.Paused -> percent("Download paused")
             DownloadState.Stopped -> percent(DownloadHostRules.STOPPED_BY_ANDROID)
             DownloadState.Waiting -> download.reason ?: WAITING
-            DownloadState.Done -> missing(download)?.let { "$DOWNLOADED, $it" } ?: DOWNLOADED
+            DownloadState.Done -> listOfNotNull(DOWNLOADED, missing(download), DELETING_SPOKEN.takeIf { download.deleting }).joinToString(", ")
             DownloadState.Failed -> FAILED
             DownloadState.Deleting -> ""
         }
@@ -155,8 +171,9 @@ object TitleDownloads {
     /**
      * The Movie page's and Search's card's Download (DlPhoneMovie): "Download"; "Queued for download"; "Finding releases…";
      * "Downloading" with "42% of 4.2 GB" or "Trying release 2 of 3"; "Queued for download" with "Waiting for Wi-Fi";
-     * "Paused" with "42% of 4.2 GB"; "Downloaded" with "4.2 GB" or "2 parts missing"; "Download failed" with "3 releases
-     * tried". The detail muted, but in the warning colour where something went wrong.
+     * "Paused" with "42% of 4.2 GB"; "Downloaded" with "4.2 GB" or "2 parts missing", or "Deleting tomorrow" while it is
+     * going (L415); "Download failed" with "3 releases tried". The detail muted, but in the warning colour where something
+     * went wrong.
      */
     fun button(download: TitleDownload?): DownloadButtonWords {
         if (download == null || download.state == DownloadState.Deleting) return DownloadButtonWords(DownloadEntry.Download.label, null, DownloadMark.Download)
@@ -170,7 +187,15 @@ object TitleDownloads {
             DownloadState.Waiting -> DownloadButtonWords(QUEUED, PageLine(download.reason ?: WAITING, if (holdsOnNeed(download)) Tone.Muted else Tone.Warn), mark)
             DownloadState.Paused -> DownloadButtonWords(PAUSED, far, mark)
             DownloadState.Stopped -> DownloadButtonWords(DownloadHostRules.STOPPED_BY_ANDROID, far, mark)
-            DownloadState.Done -> DownloadButtonWords(DOWNLOADED, missing(download)?.let { PageLine(it, Tone.Warn) } ?: PageLine(formatSize(download.size), Tone.Muted), mark)
+            DownloadState.Done -> DownloadButtonWords(
+                DOWNLOADED,
+                if (download.deleting) {
+                    PageLine(AutoDelete.DELETING_TOMORROW, Tone.Muted)
+                } else {
+                    missing(download)?.let { PageLine(it, Tone.Warn) } ?: PageLine(formatSize(download.size), Tone.Muted)
+                },
+                mark,
+            )
             DownloadState.Failed -> DownloadButtonWords(
                 FAILED, download.tried.takeIf { it > 0 }?.let { PageLine("$it release${if (it == 1) "" else "s"} tried", Tone.Warn) }, mark,
             )
@@ -187,11 +212,14 @@ object TitleDownloads {
      */
     fun offered(shown: Boolean, usenet: Boolean, download: TitleDownload?): Boolean = shown && (usenet || download != null)
 
-    /** A show's downloads ([items], the runner's, by season and episode) by episode: the latest added where one has two. */
-    fun byEpisode(items: List<DownloadRunner.Item>): Map<Pair<Int, Int>, TitleDownload> = items
+    /**
+     * A show's downloads ([items], the runner's, by season and episode) by episode: the latest added where one has two, each
+     * finished one among [deleting] going tomorrow.
+     */
+    fun byEpisode(items: List<DownloadRunner.Item>, deleting: Set<String> = emptySet()): Map<Pair<Int, Int>, TitleDownload> = items
         .filter { it.row.season != null && it.row.episode != null }
         .sortedBy { it.row.createdAt }
-        .associate { (it.row.season!! to it.row.episode!!) to TitleDownload.of(it) }
+        .associate { (it.row.season!! to it.row.episode!!) to TitleDownload.of(it, it.row.id in deleting) }
 
     /** "Trying release 2 of 3" from Resolve's "Trying release 2 of 3 · Checking availability"; null on its first release. */
     private fun trying(download: TitleDownload): String? = download.reason?.takeIf { it.startsWith(TRYING) }?.substringBefore(" · ")
@@ -218,13 +246,19 @@ object TitleDownloads {
 fun usenetUsable(settings: SettingsRepository): Flow<Boolean> =
     settings.providersWithPasswords.map { providers -> providers.any { it.record.enabled && it.password != null } }.distinctUntilChanged()
 
-/** Show [showTmdbId]'s downloads by episode, as its page's rows say them, at most four times a second ([TitleDownloads.byEpisode]). */
+/**
+ * Show [showTmdbId]'s downloads by episode, as its page's rows say them, at most four times a second, each finished one
+ * the runner says goes tomorrow so marked ([TitleDownloads.byEpisode], L415).
+ */
 fun showDownloads(container: AppContainer, showTmdbId: Int): Flow<Map<Pair<Int, Int>, TitleDownload>> =
-    container.downloads.forShow(showTmdbId).atMostEvery(PROGRESS_REDRAW_MILLIS).map(TitleDownloads::byEpisode).distinctUntilChanged()
+    combine(container.downloads.forShow(showTmdbId).atMostEvery(PROGRESS_REDRAW_MILLIS), container.downloads.deletingTomorrow, TitleDownloads::byEpisode)
+        .distinctUntilChanged()
 
-/** Film [movieTmdbId]'s download, as its Download button says it, at most four times a second. */
+/** Film [movieTmdbId]'s download, as its Download button says it, at most four times a second, going tomorrow or not (L415). */
 fun movieDownload(container: AppContainer, movieTmdbId: Int): Flow<TitleDownload?> =
-    container.downloads.forMovie(movieTmdbId).atMostEvery(PROGRESS_REDRAW_MILLIS).map { it?.let(TitleDownload::of) }.distinctUntilChanged()
+    combine(container.downloads.forMovie(movieTmdbId).atMostEvery(PROGRESS_REDRAW_MILLIS), container.downloads.deletingTomorrow) { item, deleting ->
+        item?.let { TitleDownload.of(it, it.row.id in deleting) }
+    }.distinctUntilChanged()
 
 /**
  * At most one value each [millis], the latest: the writer says each chunk it writes (about 30 times a second), and a page

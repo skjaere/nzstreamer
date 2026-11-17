@@ -243,6 +243,53 @@ class LibraryRepositoryTest {
         assertFalse(library.episodeStates(900002).first().getValue(1 to 3).watched)
     }
 
+    /**
+     * Delete once watched's clock reads a watched title's last write (L412), so it moves whenever a mark is made or a play
+     * saved: a play's save at its 90 % marks it watched as of then, and a replay's save under a minute keeps it watched with
+     * a later time (which only delays a deletion); Mark watched, and Mark season watched (L416), as of then; and an Undo of a
+     * mark as of its own time. A mark that changes nothing leaves the time it had.
+     */
+    @Test
+    fun aWatchedTitlesTimeMovesWithEachMarkAndPlaySavedNotWithAMarkThatChangesNothing() = runBlocking<Unit> {
+        val key = WatchKey.episode(900002, 1, 1)
+        suspend fun saved() = db.watchStates().get(key)!!
+        time = 1_000
+        library.recordProgress(episode(1, 1), positionMs = 1_350_000, durationMs = 2_700_000)
+        assertEquals(false to 1_000L, saved().watched to saved().updatedAt)
+        time = 2_000
+        library.recordProgress(episode(1, 1), positionMs = 2_500_000, durationMs = 2_700_000)
+        assertEquals("past 90 %: watched as of then", true to 2_000L, saved().watched to saved().updatedAt)
+        time = 3_000
+        library.recordProgress(episode(1, 1), positionMs = 20_000, durationMs = 2_700_000)
+        assertEquals("a replay's first seconds: still watched, later", true to 3_000L, saved().watched to saved().updatedAt)
+
+        time = 4_000
+        library.markEpisodes(listOf(EpisodeRef(900002, 1, 1, "E1")), watched = true)
+        assertEquals(true to 4_000L, saved().watched to saved().updatedAt)
+        // Marked watched as it is: through the shows' mark, nothing changes, its time with it.
+        time = 5_000
+        library.markShows(listOf(ShowMark(900002, "Harbor Lights", listOf(1 to 1))), watched = true)
+        assertEquals(true to 4_000L, saved().watched to saved().updatedAt)
+        // Mark season watched: a season's episodes as of then (L416).
+        time = 5_500
+        library.markEpisodes((1..3).map { EpisodeRef(900002, 2, it, "E$it") }, watched = true)
+        assertEquals(listOf(5_500L, 5_500L, 5_500L), (1..3).map { db.watchStates().get(WatchKey.episode(900002, 2, it))!!.updatedAt })
+
+        // A film marked, then the mark undone: the state before comes back as of the Undo's time.
+        val film = WatchKey.movie(900011)
+        time = 6_000
+        library.recordProgress(movie(900011), positionMs = 600_000, durationMs = 6_000_000)
+        time = 7_000
+        val snapshot = library.markMovies(listOf(MovieMark(900011, "Copper Crown")), watched = true)
+        assertEquals(true to 7_000L, db.watchStates().get(film)!!.watched to db.watchStates().get(film)!!.updatedAt)
+        time = 8_000
+        library.markMovies(listOf(MovieMark(900011, "Copper Crown")), watched = true)
+        assertEquals("marked again as it is: no new time", 7_000L, db.watchStates().get(film)!!.updatedAt)
+        time = 9_000
+        assertEquals(1, library.undoMarks(snapshot))
+        assertEquals(false to 9_000L, db.watchStates().get(film)!!.watched to db.watchStates().get(film)!!.updatedAt)
+    }
+
     @Test
     fun releaseOnlyEntriesArePrunedEpisodesAreNot() = runBlocking {
         library.recordProgress(episode(1, 1), positionMs = 600_000, durationMs = 2_700_000)

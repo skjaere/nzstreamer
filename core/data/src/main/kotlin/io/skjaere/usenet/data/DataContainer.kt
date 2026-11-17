@@ -37,6 +37,9 @@ class DataContainer(context: Context, scope: CoroutineScope, clock: Clock = Cloc
     /** This device's downloads (L351), in the library's database. */
     val downloads: DownloadDao = database.downloads()
 
+    /** This device's finished downloads whose titles are marked watched: Delete once watched's clock (L412). */
+    val downloadWatches: DownloadWatchDao = database.downloadWatches()
+
     companion object {
         /** The secrets file under filesDir; the app's backup and data extraction rules exclude it by this path. */
         const val SECRETS_PATH = "datastore/secrets.json"

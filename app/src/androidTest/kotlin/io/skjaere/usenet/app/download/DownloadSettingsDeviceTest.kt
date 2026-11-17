@@ -66,6 +66,8 @@ import kotlin.math.abs
  * - each switch is saved, and the host is asked for once with its new needs, whether it waits or runs (L335's exception),
  *   as the debug build's trace records the app's schedules (L391);
  * - Download size's cells are a true grid, two full rows of four, at twice the font size too, and the one picked is saved;
+ * - After watching's Delete once watched is off on a new install, and saved with when it was switched on, asking for no
+ *   host (it changes no download's needs);
  * - Save downloads to is this phone, the SD card greyed "Later" only while one is in;
  * - Delete all asks first, as Cache's clears do, then deletes every download, file and all, and the page reads empty;
  * - Notifications says whether Android shows them, and opens Android's page for the app's notifications;
@@ -191,10 +193,9 @@ class DownloadSettingsDeviceTest {
         assertTrue(exists(hasText(DownloadSettings.UNMETERED_DETAIL)))
         assertTrue(exists(hasText(DownloadSettings.CHARGING_DETAIL)))
         assertTrue(exists(hasText(DownloadSettings.ONE_AT_A_TIME)))
-        // A new install's: Wi-Fi or Ethernet only (W110), not only while charging (L365); no After watching in DN1.
+        // A new install's: Wi-Fi or Ethernet only (W110), not only while charging (L365).
         compose.onNode(wifi).assertIsOn()
         compose.onNode(charging).assertIsOff()
-        assertFalse(exists(hasText("After watching", ignoreCase = true)))
 
         // Each change saved, and the host asked for once under its new needs (L335's exception): two asks would stop a
         // running download twice.
@@ -215,6 +216,40 @@ class DownloadSettingsDeviceTest {
         saved("Wi-Fi or Ethernet only") { it.unmeteredOnly }
         askedOnce("on Wi-Fi or Ethernet again", from)
         assertNull("Download size untouched", settings.downloads.first().sizeCapGbPerHour)
+    }
+
+    /**
+     * W111: After watching comes after Download size's explanation, a heading, with Delete once watched off on a new
+     * install and its line. Switched on, it is saved with when it was, and off again with none; the host is never asked
+     * for, as it changes no download's needs.
+     */
+    @Test
+    fun afterWatchingsSwitchIsSavedWithWhenItWasSwitchedOnAndAsksForNoHost() = runBlocking<Unit> {
+        page(deps())
+        val from = traced().size
+        val switched = hasText(DownloadSettings.DELETE_ONCE_WATCHED) and switch
+        compose.onNode(switched).performScrollTo()
+        assertTrue("a heading", exists(hasText(DownloadSettings.AFTER_WATCHING, ignoreCase = true) and isHeading()))
+        assertTrue(exists(hasText(DownloadSettings.DELETE_ONCE_WATCHED_DETAIL)))
+        // After Download size's explanation, before Save downloads to.
+        assertTrue(top(hasText(DownloadSettings.SIZE_EXPLANATION[1])) < top(hasText(DownloadSettings.AFTER_WATCHING, ignoreCase = true)))
+        assertTrue(top(switched) < top(hasText(DownloadSettings.SAVE_TO, ignoreCase = true)))
+        compose.onNode(switched).assertIsOff()
+
+        val before = System.currentTimeMillis()
+        compose.onNode(switched).performClick()
+        saved("Delete once watched on") { it.deleteOnceWatched }
+        val since = checkNotNull(settings.downloads.first().deleteOnceWatchedSince)
+        assertTrue("switched on at $since, the test's click at $before", since >= before && since <= System.currentTimeMillis())
+        compose.onNode(switched).assertIsOn()
+
+        compose.onNode(switched).performClick()
+        saved("Delete once watched off") { !it.deleteOnceWatched && it.deleteOnceWatchedSince == null }
+        compose.onNode(switched).assertIsOff()
+        SystemClock.sleep(ANOTHER_ASK_MILLIS)
+        assertEquals("the host asked for", 0, switchSchedules(from))
+        // The other switches as they were.
+        assertEquals(DownloadPrefs(updatedAt = settings.downloads.first().updatedAt), settings.downloads.first())
     }
 
     @Test
@@ -248,7 +283,8 @@ class DownloadSettingsDeviceTest {
         val width = context.resources.displayMetrics.widthPixels
         listOf(
             DownloadSettings.UNMETERED, DownloadSettings.UNMETERED_DETAIL, DownloadSettings.CHARGING_DETAIL, DownloadSettings.ONE_AT_A_TIME,
-            DownloadSettings.SIZE_EXPLANATION[0], DownloadSettings.SIZE_EXPLANATION[1], DownloadSettings.STAYS, DownloadSettings.LATER,
+            DownloadSettings.SIZE_EXPLANATION[0], DownloadSettings.SIZE_EXPLANATION[1], DownloadSettings.DELETE_ONCE_WATCHED,
+            DownloadSettings.DELETE_ONCE_WATCHED_DETAIL, DownloadSettings.STAYS, DownloadSettings.LATER,
             DownloadSettings.NO_DOWNLOADS, "50.0 GB free", DownloadSettings.notificationsLine(on = false),
         ).forEach { compose.assertWhole(it, width) }
     }

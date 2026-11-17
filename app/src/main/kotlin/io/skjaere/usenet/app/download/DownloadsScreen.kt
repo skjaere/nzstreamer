@@ -339,7 +339,10 @@ private fun ShowRow(row: DownloadsRow.Show, first: Boolean, last: Boolean, selec
     }
 }
 
-/** A finished film: its year, length and size, its missing parts; Play, and its ⋮. A tap plays it. */
+/**
+ * A finished film: its year, length and size, its missing parts, and "Deleting tomorrow" while Delete once watched has it
+ * going (L415); Play, and its ⋮. A tap plays it.
+ */
 @Composable
 private fun FilmRow(
     row: DownloadsRow.Film,
@@ -367,6 +370,7 @@ private fun FilmRow(
     ) {
         Text(DownloadsPage.filmSub(row.row), style = AppType.secondary, color = colors.muted)
         DownloadsPage.missing(row.row)?.let { MissingLine(it) }
+        DownloadsPage.going(row)?.let { Text(it, style = AppType.secondary, color = colors.muted) }
     }
 }
 

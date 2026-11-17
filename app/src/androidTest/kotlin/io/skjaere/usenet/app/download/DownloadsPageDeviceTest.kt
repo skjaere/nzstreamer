@@ -16,6 +16,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.ATMOS
+import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.CC
+import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.assertWhole
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.GB
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.HL
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.KESTREL
@@ -29,8 +31,12 @@ import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.show
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.waitFor
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.waitTill
 import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.data.MovieMark
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -53,6 +59,8 @@ import org.junit.runner.RunWith
  *   running one's releases.
  * - Choose release is greyed "Needs a connection" offline and where TMDB failed.
  * - With nothing, the empty page.
+ * - With Delete once watched on, a film marked watched says "Deleting tomorrow" on its row, whole at twice the font size,
+ *   and nothing does once it is off (C4, L415); the settings and the mark put back after.
  */
 @RunWith(AndroidJUnit4::class)
 class DownloadsPageDeviceTest {
@@ -236,11 +244,39 @@ class DownloadsPageDeviceTest {
         assertTrue(exists(hasContentDescription(DownloadsPage.SETTINGS)))
     }
 
-    private fun show(deps: DownloadsDeps) {
-        compose.show(context) { DownloadsScreen(deps, onBack = {}, onSettings = { settings++ }, onShow = {}, onOpenMovie = {}) }
+    @Test
+    fun aFilmMarkedWatchedSaysDeletingTomorrowWhileDeleteOnceWatchedIsOn() = runBlocking<Unit> {
+        withTimeout(SEEDING_MILLIS) { container.devSettingsSaved.await() }
+        val saved = container.settings.settings.first()
+        val film = seeds.seed(film())
+        try {
+            container.settings.setDownloadsDeleteOnceWatched(true)
+            container.library.markMovies(listOf(MovieMark(CC, "Copper Crown")), watched = true)
+            show(seeds.deps(), fontScale = 2f)
+            compose.waitFor(hasText("Copper Crown"))
+            assertTrue(compose.scrolledTo(hasText(AutoDelete.DELETING_TOMORROW)))
+            compose.assertWhole(AutoDelete.DELETING_TOMORROW, context.resources.displayMetrics.widthPixels)
+            // In the film's row, with its words: TalkBack hears it with them.
+            assertTrue(exists(hasText(AutoDelete.DELETING_TOMORROW) and hasText("Copper Crown")))
+            assertEquals(DownloadState.Done, seeds.row(film.id)?.state)
+            container.settings.setDownloadsDeleteOnceWatched(false)
+            compose.waitTill("nothing says it goes once it is off") { !exists(hasText(AutoDelete.DELETING_TOMORROW)) }
+            assertTrue(exists(hasText("Copper Crown")))
+        } finally {
+            container.settings.restore(saved)
+            container.library.markMovies(listOf(MovieMark(CC, "Copper Crown")), watched = false)
+        }
+    }
+
+    private fun show(deps: DownloadsDeps, fontScale: Float = 1f) {
+        compose.show(context, fontScale) { DownloadsScreen(deps, onBack = {}, onSettings = { settings++ }, onShow = {}, onOpenMovie = {}) }
     }
 
     private fun exists(matcher: SemanticsMatcher) = compose.exists(matcher)
 
     private fun top(text: String): Float = compose.onAllNodes(hasText(text)).fetchSemanticsNodes().firstOrNull()?.boundsInWindow?.top ?: Float.MAX_VALUE
+
+    private companion object {
+        const val SEEDING_MILLIS = 60_000L
+    }
 }

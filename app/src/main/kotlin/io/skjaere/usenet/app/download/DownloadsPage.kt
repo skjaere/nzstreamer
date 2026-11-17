@@ -98,8 +98,11 @@ sealed interface DownloadsRow {
         override val downloads: List<Download> get() = episodes
     }
 
-    /** A finished film, and whether it is [watched] (its ⋮ marks it the other way). */
-    data class Film(val row: Download, val watched: Boolean = false) : DownloadsRow {
+    /**
+     * A finished film, whether it is [watched] (its ⋮ marks it the other way), and whether Delete once watched deletes it
+     * tomorrow ([deleting], L415).
+     */
+    data class Film(val row: Download, val watched: Boolean = false, val deleting: Boolean = false) : DownloadsRow {
         override val key: String get() = row.id
         override val downloads: List<Download> get() = listOf(row)
         override val title: String get() = row.title
@@ -173,7 +176,7 @@ data class DownloadsPage(
          * ([episodeStates], by show) and the films' ([films], by film): for each show what it plays next, for each film
          * whether it is watched; and for each download still to finish, whether its season's pack serves it, by the copies
          * kept ([packs], L406), and, waiting on its indexer's limit, which indexer's, by the names of those set up now
-         * ([indexers], by id) and the device's clock ([zone], L434).
+         * ([indexers], by id) and the device's clock ([zone], L434); each film among [deleting] going tomorrow (L415).
          */
         fun of(
             items: List<DownloadRunner.Item>,
@@ -182,6 +185,7 @@ data class DownloadsPage(
             packs: DownloadRunner.Packs = DownloadRunner.Packs(),
             indexers: Map<String, String> = emptyMap(),
             zone: ZoneId = ZoneId.systemDefault(),
+            deleting: Set<String> = emptySet(),
         ): DownloadsPage {
             val shown = items.filter { it.row.state != DownloadState.Deleting }
             val active = shown.filter { it.row.state in ACTIVE }
@@ -204,7 +208,9 @@ data class DownloadsPage(
                 val next = DownloadsShow.next(episodes, episodeStates[id].orEmpty())
                 DownloadsRow.Show(id, latest.first().title, latest.firstNotNullOfOrNull { it.posterPath }, episodes, next)
             }
-            val movies = done.filter { it.kind == DownloadKind.Movie }.map { row -> DownloadsRow.Film(row, row.movieTmdbId?.let { films[it] }?.watched == true) }
+            val movies = done.filter { it.kind == DownloadKind.Movie }.map { row ->
+                DownloadsRow.Film(row, row.movieTmdbId?.let { films[it] }?.watched == true, deleting = row.id in deleting)
+            }
             val downloaded = (shows + movies).sortedByDescending { row -> row.downloads.maxOf { it.completedAt ?: it.createdAt } }
             return DownloadsPage(downloading, failed, downloaded)
         }
@@ -346,6 +352,9 @@ data class DownloadsPage(
         /** "2022 · 1 h 52 min · 5.5 GB": a film's year, length and size. */
         fun filmSub(row: Download): String =
             listOfNotNull(row.year?.toString(), row.runtimeMinutes?.takeIf { it > 0 }?.let(::duration), formatSize(row.size ?: row.indexerSize)).joinToString(" · ")
+
+        /** "Deleting tomorrow" under a film going tomorrow (L415); null for one not going. */
+        fun going(row: DownloadsRow.Film): String? = AutoDelete.DELETING_TOMORROW.takeIf { row.deleting }
 
         /** "2 parts missing": what a finished download lacks, where it lacks any. */
         fun missing(row: Download): String? = when (val parts = row.gaps.size) {

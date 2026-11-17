@@ -134,6 +134,18 @@ class DownloadsPageTest {
         assertEquals("Next: S02E01", DownloadsPage.nextLine(assertIs<DownloadsRow.Show>(next.downloaded.single()).next!!))
     }
 
+    /** C4, L415: with Delete once watched on, a film going tomorrow says so on its row; a show's row is its page's to say. */
+    @Test
+    fun `a film going tomorrow says Deleting tomorrow on its row`() {
+        val rows = listOf(film("cc", DownloadState.Done), film("qm", DownloadState.Done, film = FILM + 1, title = "Quiet Meridian"), episode("e1", 1, DownloadState.Done))
+        val page = DownloadsPage.of(rows.map(::item), deleting = setOf("cc", "e1"))
+        assertTrue(assertIs<DownloadsRow.Film>(page.downloaded.single { it.key == "cc" }).deleting)
+        assertFalse(assertIs<DownloadsRow.Film>(page.downloaded.single { it.key == "qm" }).deleting)
+        assertEquals("Deleting tomorrow", DownloadsPage.going(assertIs<DownloadsRow.Film>(page.downloaded.single { it.key == "cc" })))
+        assertNull(DownloadsPage.going(assertIs<DownloadsRow.Film>(page.downloaded.single { it.key == "qm" })))
+        assertFalse(assertIs<DownloadsRow.Film>(DownloadsPage.of(rows.map(::item)).downloaded.single { it.key == "cc" }).deleting)
+    }
+
     @Test
     fun `the strip says what downloads hold, the running one whole, and counts those removed free at once`() {
         val rows = listOf(

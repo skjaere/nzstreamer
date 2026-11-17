@@ -97,6 +97,45 @@ class TitleDownloadsTest {
         assertEquals(listOf(DownloadEntry.Resume, DownloadEntry.Remove, DownloadEntry.OpenDownloads), TitleDownloads.menu(waiting))
     }
 
+    /**
+     * C4, L415: with Delete once watched on, a finished download that will go and isn't due yet says "Deleting tomorrow": on
+     * the episode row after its size (or its missing parts), and TalkBack hears it as part of the row's state; on the Movie
+     * page's and Search's card's button under "Downloaded", in its detail's place. A show's downloads by episode carry it,
+     * a finished one's alone. One not going says what it said before.
+     */
+    @Test
+    fun `a finished download going tomorrow says Deleting tomorrow on its row and its button`() {
+        val done = row("c", 3, DownloadState.Done, size = 1_300_000_000, file = true, offset = 1_300_000_000)
+        val going = TitleDownload.of(DownloadRunner.Item(done, done.safeOffset, null), deleting = true)
+        assertTrue(going.deleting)
+        assertEquals(listOf(PageLine("Downloaded · 1.3 GB · Deleting tomorrow", Tone.Muted)), TitleDownloads.line(going))
+        assertEquals("Downloaded, deleting tomorrow", TitleDownloads.spoken(going))
+        assertEquals(DownloadButtonWords("Downloaded", PageLine("Deleting tomorrow", Tone.Muted), DownloadMark.Done), TitleDownloads.button(going))
+        // Its parts missing still said, in the warning colour, before it.
+        val missing = going.copy(partsMissing = 2)
+        assertEquals(
+            listOf(PageLine("Downloaded · ", Tone.Muted), PageLine("2 parts missing", Tone.Warn), PageLine(" · Deleting tomorrow", Tone.Muted)),
+            TitleDownloads.line(missing),
+        )
+        assertEquals("Downloaded, 2 parts missing, deleting tomorrow", TitleDownloads.spoken(missing))
+        assertEquals(PageLine("Deleting tomorrow", Tone.Muted), TitleDownloads.button(missing).second)
+        // Not going: as before.
+        val kept = TitleDownload.of(DownloadRunner.Item(done, done.safeOffset, null))
+        assertFalse(kept.deleting)
+        assertEquals(listOf(PageLine("Downloaded · 1.3 GB", Tone.Muted)), TitleDownloads.line(kept))
+        assertEquals("Downloaded", TitleDownloads.spoken(kept))
+        assertEquals(PageLine("1.3 GB", Tone.Muted), TitleDownloads.button(kept).second)
+        // Only a finished one is going: one still to finish, said to be, isn't.
+        val queued = row("q", 5, DownloadState.Queued)
+        assertFalse(TitleDownload.of(DownloadRunner.Item(queued, 0, null), deleting = true).deleting)
+
+        val items = listOf(done, queued, row("e6", 6, DownloadState.Done, size = 1_300_000_000, file = true)).map { DownloadRunner.Item(it, it.safeOffset, null) }
+        val byEpisode = TitleDownloads.byEpisode(items, deleting = setOf("c", "q"))
+        assertTrue(byEpisode.getValue(2 to 3).deleting)
+        assertFalse(byEpisode.getValue(2 to 5).deleting)
+        assertFalse(byEpisode.getValue(2 to 6).deleting)
+    }
+
     /** The runner's calls and the host's schedule, as the actions make them, in order. */
     private val calls = mutableListOf<String>()
 

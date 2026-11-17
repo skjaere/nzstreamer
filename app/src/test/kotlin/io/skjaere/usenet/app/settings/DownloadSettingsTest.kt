@@ -100,6 +100,13 @@ class DownloadSettingsTest {
             ),
             DownloadSettings.SIZE_EXPLANATION,
         )
+        // After watching (W111), after Download size's explanation.
+        assertEquals("After watching", DownloadSettings.AFTER_WATCHING)
+        assertEquals("Delete once watched", DownloadSettings.DELETE_ONCE_WATCHED)
+        assertEquals(
+            "A day after an episode or film is marked watched, its download is deleted, never while it plays. Downloads shows “Deleting tomorrow” until then.",
+            DownloadSettings.DELETE_ONCE_WATCHED_DETAIL,
+        )
         assertEquals("Save downloads to", DownloadSettings.SAVE_TO)
         assertEquals("This phone", DownloadSettings.THIS_PHONE)
         assertEquals("SD card", DownloadSettings.SD_CARD)
@@ -243,6 +250,10 @@ class DownloadSettingsTest {
                 events += "size $gb"
                 prefs.value = prefs.value.copy(sizeCapGbPerHour = gb)
             },
+            setDeleteOnceWatched = { on ->
+                events += "delete once watched $on"
+                prefs.value = prefs.value.copy(deleteOnceWatched = on, deleteOnceWatchedSince = if (on) 5 else null)
+            },
             deleteAll = {
                 deleting()
                 events += "delete all"
@@ -285,6 +296,20 @@ class DownloadSettingsTest {
         advanceUntilIdle()
         assertEquals(listOf("unmetered false", "charging true", "size 4", "size null"), seams.events)
         assertEquals(DownloadPrefs(unmeteredOnly = false, whileCharging = true), model.prefs.first { it != null })
+    }
+
+    /** W111: Delete once watched's switch is saved, and asks for no host: it changes no download's needs. */
+    @Test
+    fun `Delete once watched is saved alone, asking for no host`() = test { seams, work ->
+        val model = DownloadSettingsModel(seams.deps, work)
+        model.setDeleteOnceWatched(true)
+        advanceUntilIdle()
+        assertEquals(listOf("delete once watched true"), seams.events)
+        assertTrue(model.prefs.first { it != null }!!.deleteOnceWatched)
+        model.setDeleteOnceWatched(false)
+        advanceUntilIdle()
+        assertEquals(listOf("delete once watched true", "delete once watched false"), seams.events)
+        assertEquals(DownloadPrefs(), model.prefs.first { it != null })
     }
 
     @Test
