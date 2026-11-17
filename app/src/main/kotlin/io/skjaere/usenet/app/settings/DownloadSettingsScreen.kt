@@ -218,14 +218,12 @@ object DownloadSettings {
         return "Deletes $what on this phone: ${count(kept)}. A download running now stops."
     }
 
-    /** "6 episodes and 1 film", "1 episode", "2 films". */
+    /** "6 episodes and 1 film", "1 episode", "2 films"; files of NZBs opened on Import counted as files, "6 episodes, 1 film and 2 files" (L472). */
     private fun count(rows: List<Download>): String {
-        val episodes = rows.count { it.kind == DownloadKind.Episode }
-        val films = rows.count { it.kind == DownloadKind.Movie }
-        return listOfNotNull(
-            episodes.takeIf { it > 0 }?.let { "$it episode${if (it == 1) "" else "s"}" },
-            films.takeIf { it > 0 }?.let { "$it film${if (it == 1) "" else "s"}" },
-        ).joinToString(" and ")
+        val counts = listOf(DownloadKind.Episode to "episode", DownloadKind.Movie to "film", DownloadKind.Release to "file").mapNotNull { (kind, word) ->
+            rows.count { it.kind == kind }.takeIf { it > 0 }?.let { "$it $word${if (it == 1) "" else "s"}" }
+        }
+        return if (counts.size < 2) counts.joinToString() else counts.dropLast(1).joinToString(", ") + " and " + counts.last()
     }
 
     /** The Notifications row's line: whether Android shows the downloads' notifications, and where to allow them. */

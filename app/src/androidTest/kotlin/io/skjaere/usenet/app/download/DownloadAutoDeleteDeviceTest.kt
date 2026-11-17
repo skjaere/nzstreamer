@@ -8,16 +8,21 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.app.ImmersiveHintSeen
 import io.skjaere.usenet.app.PlayerActivity
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.read
 import io.skjaere.usenet.app.waitFor
 import io.skjaere.usenet.data.AppSettings
 import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.EpisodeRef
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.data.WatchKind
+import io.skjaere.usenet.data.WatchState
 import io.skjaere.usenet.data.WatchTitle
+import io.skjaere.usenet.releases.ReleaseKey
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -42,6 +47,8 @@ import java.nio.ByteBuffer
  *   finished.
  * - A title downloaded again after it was marked watched stays.
  * - Switched off, nothing goes and nothing is said.
+ * - A file downloaded from Import, played to its end, goes a day later as any download does, and nothing of its NZB is
+ *   left kept: the copy in `.packs/` goes with the run's sweep.
  *
  * The downloads are seeded as finished ones are left, through the app's own storage. Put back after each, whatever
  * happened: the settings, the rows and their files, the marks (unwatched), the player's seams, the downloads' jobs. The
@@ -85,6 +92,7 @@ class DownloadAutoDeleteDeviceTest {
         PlayerActivity.lookUpSegments = realLookUp
         saved?.let { settings.restore(it) }
         made.forEach { storage.delete(it.id) }
+        storage.packs.folder(ReleaseKey.of(IMPORTED, IMPORTED_NZB)).deleteRecursively()
         container.library.markEpisodes((1..EPISODES).map { EpisodeRef(SHOW, 1, it, WatchTitle.episode(NAME, 1, it)) }, watched = false)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) DownloadJobService.scheduler(context).cancelAll()
     }
@@ -171,11 +179,44 @@ class DownloadAutoDeleteDeviceTest {
     }
 
     /**
+     * L472, W111: a file downloaded from Import has no Mark watched; played to its end, its release's key is watched as its
+     * player saves it, and it goes a day later as any download does: its file, its folders and its row. Its NZB's copy in
+     * `.packs/`, which no download of it holds once done (C11), goes with the run's sweep: nothing of the NZB, nor the
+     * password typed for it, is left kept.
+     */
+    @Test
+    fun aFileFromImportPlayedToItsEndADayAgoGoesWithNothingOfItsNzbLeft() = runBlocking<Unit> {
+        val going = seed(imported())
+        val file = checkNotNull(storage.file(going))
+        val copy = DownloadNzbs.Meta.imported(DownloadCandidate(IMPORTED, IMPORTED_NZB, IMPORTED_TITLE, size = SMALL.toLong()))
+        storage.packs.write(copy, "<nzb/>".toByteArray(), "typed-on-import")
+        settings.setDownloadsDeleteOnceWatched(true)
+        // Played to its end, as its player saves it: watched, with no place in it.
+        container.library.recordProgress(WatchState(going.watchKey, WatchKind.Release, title = going.title, updatedAt = 0), PLAYED_MS, PLAYED_MS, going.release)
+        onlyOursWatched()
+        waitFor("it says it goes tomorrow") { runner.deletingTomorrow.value.takeIf { going.id in it } }
+
+        val deleted = runner.deleteWatched(System.currentTimeMillis() + DAY + MINUTE)
+        assertEquals(listOf(going.id), deleted.filter { id -> made.any { it.id == id } })
+        assertEquals(null, dao.get(going.id))
+        assertFalse("its file", file.exists())
+        assertFalse("its video's folder", storage.videoFolder(going.id)?.exists() ?: false)
+        assertFalse("its bookkeeping", storage.bookkeeping(going.id).exists())
+        waitFor("its NZB's copy gone") { Unit.takeIf { runBlocking { storage.packs.find(copy.key) } == null } }
+        assertFalse(storage.packs.folder(copy.key).exists())
+    }
+
+    /**
      * Episode [number] marked watched now. The run, as of a day ahead, would delete any finished download watched so: only
      * the test's own may be, or it would take another's with them.
      */
     private suspend fun mark(number: Int) {
         container.library.markEpisodes(listOf(EpisodeRef(SHOW, 1, number, WatchTitle.episode(NAME, 1, number))), watched = true)
+        onlyOursWatched()
+    }
+
+    /** Only the test's own finished downloads are watched: the run, as of a day ahead, would delete any other's too. */
+    private suspend fun onlyOursWatched() {
         val others = container.data.downloadWatches.watched().first().filter { row -> made.none { it.id == row.id } }
         if (others.isNotEmpty()) throw AssertionError("${others.size} watched download(s) not the test's, which the run would delete: ${others.map { it.id }}")
     }
@@ -205,6 +246,17 @@ class DownloadAutoDeleteDeviceTest {
         return done
     }
 
+    /** S01E02 of an invented season pack opened on Import, finished (L423): titled by its file, a release's watch key. */
+    private fun imported(): Download {
+        val name = "Quiet.Meridian.S01E02.720p.WEB.h264-KESTREL.mkv"
+        return Download(
+            id = Download.newId(), watchKey = WatchKey.release(IMPORTED_NZB, 1), kind = DownloadKind.Release, title = name, subtitle = IMPORTED_TITLE,
+            state = DownloadState.Done, position = -900, candidates = listOf(DownloadCandidate(IMPORTED, IMPORTED_NZB, IMPORTED_TITLE)),
+            release = RememberedRelease(IMPORTED, IMPORTED_NZB, IMPORTED_TITLE, null, 1, IMPORTED_NZB, name), fileName = name, createdAt = 1, completedAt = 2,
+            updatedAt = 2,
+        )
+    }
+
     private fun episode(number: Int, completedAt: Long = 2): Download {
         val name = "Quiet.Meridian.S01E0$number.720p.WEB.h264-KESTREL.mkv"
         return Download(
@@ -222,6 +274,13 @@ class DownloadAutoDeleteDeviceTest {
         const val NAME = "Quiet Meridian"
         const val EPISODES = 4
         const val INDEXER = "download-auto-delete-device-test"
+
+        /** An invented NZB opened on Import, and its name. */
+        const val IMPORTED_NZB = "download-auto-delete-device-test-nzb"
+        const val IMPORTED_TITLE = "Quiet.Meridian.S01.720p.WEB.h264-KESTREL"
+
+        /** A play's length, saved at its end: watched. */
+        const val PLAYED_MS = 360_000L
 
         /** The device tests' film with chapters: six minutes at 10 fps, 0.7 MB. */
         const val MEDIA = "chapters.mkv"

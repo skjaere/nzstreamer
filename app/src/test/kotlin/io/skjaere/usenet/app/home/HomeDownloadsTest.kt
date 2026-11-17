@@ -118,6 +118,40 @@ class HomeDownloadsTest {
         assertEquals(HomeDownloadOpen.Page, HomeDownloads.of(listOf(item(film("q2", "Copper Crown", DownloadState.Queued))))?.rows?.single()?.opens)
     }
 
+    /**
+     * L472: a file downloaded from Import is named as its Downloads page names it, by what its name says: finished, its
+     * title over "S01E03 · downloaded · 1.3 GB" as an episode's row is worded, and a film's "Downloaded · 1.3 GB" where its
+     * name says no episode; it plays. Still to finish, as an episode's: "S01E03 · downloading 42%", the page opening.
+     */
+    @Test
+    fun `a file downloaded from Import is named as its page names it, finished and still to finish`() {
+        val episode = imported("imp-3", "Quiet.Meridian.S01E03.1080p.WEB-DL.H264-WREN.mkv", DownloadState.Done)
+        assertEquals(
+            HomeDownloadRow("imp-3", "Quiet Meridian", "S01E03 · downloaded · 1.3 GB", Tone.Muted, null, HomeDownloadOpen.Play(episode)),
+            HomeDownloads.of(listOf(item(episode)))?.rows?.single(),
+        )
+        val film = imported("imp-cc", "Copper.Crown.2022.1080p.WEB-DL.H264-WREN.mkv", DownloadState.Done)
+        assertEquals(
+            HomeDownloadRow("imp-cc", "Copper Crown", "Downloaded · 1.3 GB", Tone.Muted, null, HomeDownloadOpen.Play(film)),
+            HomeDownloads.of(listOf(item(film)))?.rows?.single(),
+        )
+        val running = imported("imp-4", "Quiet.Meridian.S01E04.1080p.WEB-DL.H264-WREN.mkv", DownloadState.Running, written = 546_000_000)
+        assertEquals(
+            HomeDownloadRow("imp-4", "Quiet Meridian", "S01E04 · downloading 42%", Tone.Accent, 0.42f, HomeDownloadOpen.Page),
+            HomeDownloads.of(listOf(item(running)))?.rows?.single(),
+        )
+        // Its own row, never a show's: a file has no show.
+        val both = assertNotNull(HomeDownloads.of(listOf(item(episode), item(running))))
+        assertEquals(listOf("imp-4", "imp-3"), both.rows.map { it.key })
+    }
+
+    /** [file], downloaded from an NZB opened on Import (L423), in [state]: its title the file's name, no TMDB ids. */
+    private fun imported(id: String, file: String, state: DownloadState, size: Long = 1_300_000_000, written: Long = if (state == DownloadState.Done) size else 0) = Download(
+        id = id, watchKey = WatchKey.release("nzb-qm", id.length), kind = DownloadKind.Release, title = file, subtitle = "Quiet.Meridian.S01.1080p.WEB-DL.H264-WREN",
+        state = state, position = 1, size = size.takeIf { written > 0 }, indexerSize = size, safeOffset = written,
+        relativePath = if (written > 0) "downloads/$id/v.mkv" else null, createdAt = 1, completedAt = 1L.takeIf { state == DownloadState.Done }, updatedAt = 1,
+    )
+
     @Test
     fun `the header says what downloads hold on the device, the running one whole and a queued one nothing yet`() {
         val queued = episode("hl-5", HL, "Harbor Lights", 2, 5, DownloadState.Queued, size = 2_000_000_000)

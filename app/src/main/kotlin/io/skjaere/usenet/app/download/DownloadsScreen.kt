@@ -106,6 +106,7 @@ import io.skjaere.usenet.app.ui.SectionHeader
 import io.skjaere.usenet.app.ui.TopBar
 import io.skjaere.usenet.app.ui.colors
 import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.metadata.TmdbImages
 
@@ -114,10 +115,11 @@ import io.skjaere.usenet.metadata.TmdbImages
  * ends at once and shows nothing. The bar's Select, the Cast button and its gear to Settings › Downloads ([onSettings],
  * L453), the title on a line of its own where they leave it no room (L470); the space strip, with the lines about mobile
  * data and Android's background limit (L361); Downloading (the row the queue is at, with Pause or Resume, then the queue
- * with Move up and Move down), Failed, and Downloaded, one row per show ([onShow] opens its downloads) and one per film
- * (a tap plays it where Play on points, L418); select mode with Delete and the Undo bar. Choose release and Choose
- * another release show the release list in download mode in the page's place. [onOpenMovie] opens a film's page. A
- * notification's ask comes as [choose] (a download's releases) or [play] (a finished one played), with its own id ([ask]).
+ * with Move up and Move down), Failed, Downloaded, one row per show ([onShow] opens its downloads) and one per film (a
+ * tap plays it where Play on points, L418), and Files, the files of NZBs opened on Import (L424), each playing as a film
+ * does; select mode with Delete and the Undo bar. Choose release and Choose another release show the release list in
+ * download mode in the page's place. [onOpenMovie] opens a film's page. A notification's ask comes as [choose] (a
+ * download's releases) or [play] (a finished one played), with its own id ([ask]).
  */
 @Composable
 fun DownloadsScreen(
@@ -244,6 +246,12 @@ internal fun DownloadsScreen(
                         else -> Unit
                     }
                 }
+                section(DownloadsPage.FILES, p.files) { row, first, last ->
+                    FileRow(
+                        row, first, last, select(row), artwork, DownloadsPage.playLabel(row.named, playOn), onSelect = { pick(row) },
+                        onPlay = { vm.play(row.row) }, onRemove = { vm.edits.remove(row.downloads, keepFor) },
+                    )
+                }
             }
         }
         offer?.let { o ->
@@ -260,7 +268,10 @@ private fun <T : DownloadsRow> LazyListScope.section(title: String, rows: List<T
     itemsIndexed(rows, key = { _, it -> it.key }) { i, it -> row(it, i == 0, i == rows.lastIndex) }
 }
 
-/** The row the queue is at, or one in the queue: its state, its bar and bytes, whether its season's pack serves it, Pause or Resume, and its ⋮. */
+/**
+ * The row the queue is at, or one in the queue: its state, its bar and bytes, whether its season's pack serves it, Pause or
+ * Resume, and its ⋮. A file of an NZB opened on Import has its own name under its tag, and no Choose release (L454).
+ */
 @Composable
 private fun ActiveRow(
     row: DownloadsRow.Active,
@@ -278,11 +289,13 @@ private fun ActiveRow(
 ) {
     val words = DownloadsPage.active(row.item, row.current, row.pack, row.limit)
     val queued = row.row.state == DownloadState.Queued
+    // Nothing is chosen for a file of an NZB opened on Import: the file is the release (L454).
     val choose = MenuEntry(if (row.current) DownloadsPage.CHOOSE_ANOTHER else DownloadsPage.CHOOSE_RELEASE, choosable, onChoose)
+        .takeIf { row.row.kind != DownloadKind.Release }
     val menu = if (queued) {
-        listOf(MenuEntry(DownloadsPage.MOVE_UP, row.up) { onMove(true) }, MenuEntry(DownloadsPage.MOVE_DOWN, row.down) { onMove(false) }, choose)
+        listOfNotNull(MenuEntry(DownloadsPage.MOVE_UP, row.up) { onMove(true) }, MenuEntry(DownloadsPage.MOVE_DOWN, row.down) { onMove(false) }, choose)
     } else {
-        listOf(choose)
+        listOfNotNull(choose)
     } + MenuEntry(DownloadsPage.CANCEL, true, onCancel)
     RowFrame(
         row, first, last, selected, artwork, onClick = null, onSelect = onSelect,
@@ -298,6 +311,7 @@ private fun ActiveRow(
         },
     ) {
         DownloadsPage.sub(row.row)?.let { Text(it, style = AppType.secondary, color = colors.muted) }
+        DownloadsPage.fileName(row.row)?.let { FileLine(it) }
         words.lines.forEach { Text(it.text, style = AppType.small, color = it.tone.color()) }
         words.bar?.let { Bar(it) }
         words.bytes?.let { Text(it, style = AppType.small, color = colors.muted) }
@@ -305,7 +319,10 @@ private fun ActiveRow(
     }
 }
 
-/** A failed download: why, how many releases were tried, Try again and Choose release, and Remove in its ⋮. */
+/**
+ * A failed download: why, how many releases were tried, Try again and Choose release, and Remove in its ⋮. A file of an NZB
+ * opened on Import has its own name under its tag, and Try again alone (L454).
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FailedRow(
@@ -325,15 +342,17 @@ private fun FailedRow(
         end = { MoreMenu(moreFor(row.row), listOf(MenuEntry(DownloadsPage.REMOVE, true, onRemove))) },
     ) {
         DownloadsPage.sub(row.row)?.let { Text(it, style = AppType.secondary, color = colors.muted) }
+        DownloadsPage.fileName(row.row)?.let { FileLine(it) }
         DownloadsPage.failure(row.row).forEachIndexed { i, line ->
             Text(line.text, style = if (i == 0) AppType.secondary else AppType.small, color = line.tone.color())
         }
         if (selected == null) {
+            val chooses = row.row.kind != DownloadKind.Release
             FlowRow(Modifier.offset(x = (-6).dp), horizontalArrangement = Arrangement.spacedBy(10.dp), itemVerticalAlignment = Alignment.CenterVertically) {
                 TextAction(DownloadsPage.TRY_AGAIN, onClick = onRetry)
-                Greyable(DownloadsPage.CHOOSE_RELEASE, choosable, onChoose)
+                if (chooses) Greyable(DownloadsPage.CHOOSE_RELEASE, choosable, onChoose)
             }
-            if (!choosable) Text(DownloadsPage.NEEDS_CONNECTION, style = AppType.small, color = colors.muted)
+            if (chooses && !choosable) Text(DownloadsPage.NEEDS_CONNECTION, style = AppType.small, color = colors.muted)
         }
     }
 }
@@ -392,6 +411,43 @@ private fun FilmRow(
         DownloadsPage.missing(row.row)?.let { MissingLine(it) }
         DownloadsPage.going(row)?.let { Text(it, style = AppType.secondary, color = colors.muted) }
     }
+}
+
+/**
+ * A finished file of an NZB opened on Import (L424, L472): what its name says with its size, the file's own name under it,
+ * its missing parts, and "Deleting tomorrow" while Delete once watched has it going (L415); Play, read as [playLabel] (the
+ * Cast device it plays on, L470), and its ⋮ with Remove download alone (L454). A tap plays it where Play on points (L418).
+ */
+@Composable
+private fun FileRow(
+    row: DownloadsRow.File,
+    first: Boolean,
+    last: Boolean,
+    selected: Boolean?,
+    artwork: Boolean,
+    playLabel: String,
+    onSelect: () -> Unit,
+    onPlay: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    RowFrame(
+        row, first, last, selected, artwork, onClick = onPlay, onSelect = onSelect,
+        end = {
+            PlayCircle(primary = false, label = playLabel, onClick = onPlay)
+            MoreMenu(moreFor(row.row), listOf(MenuEntry(DownloadsPage.REMOVE_DOWNLOAD, true, onRemove)))
+        },
+    ) {
+        Text(DownloadsPage.fileSub(row.row), style = AppType.secondary, color = colors.muted)
+        DownloadsPage.fileName(row.row)?.let { FileLine(it) }
+        DownloadsPage.missing(row.row)?.let { MissingLine(it) }
+        DownloadsPage.going(row)?.let { Text(it, style = AppType.secondary, color = colors.muted) }
+    }
+}
+
+/** A file of an NZB opened on Import's own name, small and muted under what its row is named (L472); it wraps whole. */
+@Composable
+private fun FileLine(name: String) {
+    Text(name, style = AppType.release, color = colors.muted)
 }
 
 /** "Downloaded · 2 parts missing", what is missing in the warning colour. */
@@ -669,8 +725,8 @@ private fun ChoiceList(choice: DownloadChoice.State.Choosing, onBack: () -> Unit
     }
 }
 
-/** "More for Harbor Lights S02E04", "More for Copper Crown": a row's ⋮ for TalkBack. */
-internal fun moreFor(row: Download): String = "More for " + listOfNotNull(row.title, DownloadsPage.label(row)).joinToString(" ")
+/** "More for Harbor Lights S02E04", "More for Copper Crown", "More for Quiet Meridian S01E02": a row's ⋮ for TalkBack. */
+internal fun moreFor(row: Download): String = "More for ${DownloadsPage.named(row)}"
 
 /** The Undo bar's time from [base], longer where TalkBack's settings ask for it, as the Collection's bar takes it. */
 @Composable

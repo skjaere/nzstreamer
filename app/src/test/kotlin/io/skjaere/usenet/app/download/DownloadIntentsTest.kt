@@ -142,6 +142,26 @@ class DownloadIntentsTest {
         assertEquals(2, resumed)
     }
 
+    /**
+     * L454: nothing is chosen for a file from Import, so its Failed notification offers no Choose release; one an older
+     * build posted (an old intent) opens the Downloads page alone, where Try again is, read from the row it names. Any
+     * other download's goes to its list as before.
+     */
+    @Test
+    fun `an old Choose release ask on a file from Import opens the Downloads page alone`() = runBlocking<Unit> {
+        val opened = mutableListOf<String>()
+        val pages = DownloadPages(downloads = { opened += "downloads" }, chooseRelease = { id -> opened += "choose $id" })
+        val imported = row(ID, show = null).copy(
+            watchKey = WatchKey.release("nzb-qm", 1), kind = DownloadKind.Release, title = "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv", movieTmdbId = null,
+            state = DownloadState.Failed,
+        )
+        val rows = mapOf(ID to imported, FILM to row(FILM, show = null).copy(state = DownloadState.Failed))
+        val rowOf: suspend (String) -> Download? = { rows[it] }
+        pages.take(DownloadAsk.Choose(ID), rowOf) {}
+        pages.take(DownloadAsk.Choose(FILM), rowOf) {}
+        assertEquals(listOf("downloads", "choose $FILM"), opened)
+    }
+
     @Test
     fun `the downloads' pages are none where downloads don't show`() {
         var registered = 0

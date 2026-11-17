@@ -44,6 +44,8 @@ import io.skjaere.usenet.app.casting.MoveOutcome
 import io.skjaere.usenet.app.casting.castingTo
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.everyStep
+import io.skjaere.usenet.app.home.HomeDownloadOpen
+import io.skjaere.usenet.app.home.HomeDownloads
 import io.skjaere.usenet.app.link.CastButtonLook
 import io.skjaere.usenet.app.link.PlayChoice
 import io.skjaere.usenet.app.link.PlayTarget
@@ -565,6 +567,21 @@ class DownloadCastDeviceTest {
         nothingToStreamFrom()
         val file = FileCandidate(1, StreamableFile(checkNotNull(row.fileName), film.size.toLong(), 1, 0, 0, 0))
         castsTheFile(row) { container.playRouter.playFile(IMPORT_NZB, file, row) { throw AssertionError("never here") } }
+    }
+
+    /**
+     * L418, L472: Home's Downloads row of a file from Import, which plays (named as its page names it, "S01E02 ·
+     * downloaded"), with Kitchen display connected casts its file (DownloadsDeps.play, which Home's row calls), nothing
+     * grabbed or looked up.
+     */
+    @Test
+    fun homesDownloadsRowOfAFileFromImportCastsItsFile() = runBlocking<Unit> {
+        val row = finishedImport()
+        nothingToStreamFrom()
+        val home = checkNotNull(HomeDownloads.of(listOf(DownloadRunner.Item(row, row.safeOffset, null)))).rows.single()
+        assertEquals("Quiet Meridian", home.title)
+        val plays = home.opens as? HomeDownloadOpen.Play ?: throw AssertionError("Home's row opens ${home.opens}")
+        castsTheFile(row) { DownloadsDeps.play(container, plays.row) }
     }
 
     /**

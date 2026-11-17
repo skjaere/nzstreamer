@@ -101,7 +101,8 @@ data class HomeDownloads(val held: Long, val rows: List<HomeDownloadRow>) {
 
         /**
          * A download still to finish, or failed: "S02E04 · downloading 42%", its episode first, else its state alone as the
-         * Movie page's button says it; the page opens.
+         * Movie page's button says it; the page opens. A file of an NZB opened on Import is named as its Downloads page names
+         * it, with the episode its name says (L472).
          */
         private fun row(item: DownloadRunner.Item): HomeDownloadRow {
             val row = item.row
@@ -118,13 +119,18 @@ data class HomeDownloads(val held: Long, val rows: List<HomeDownloadRow>) {
             val code = DownloadsPage.label(row)
             val status = if (code != null) "$code · ${words.replaceFirstChar { it.lowercase() }}" else words
             val progress = download.percent?.takeIf { row.state == DownloadState.Running && row.reason == null }?.let { it / 100f }
-            return HomeDownloadRow(row.id, row.title, status, tone, progress, HomeDownloadOpen.Page)
+            return HomeDownloadRow(row.id, DownloadsPage.name(row), status, tone, progress, HomeDownloadOpen.Page)
         }
 
-        /** A finished film: "Downloaded · 5.5 GB"; it plays. */
-        private fun film(row: Download) = HomeDownloadRow(
-            row.id, row.title, "${TitleDownloads.DOWNLOADED} · ${formatSize(row.size ?: row.indexerSize)}", Tone.Muted, null, HomeDownloadOpen.Play(row),
-        )
+        /**
+         * A finished film: "Downloaded · 5.5 GB"; it plays. A finished file of an NZB opened on Import too, named as its page
+         * names it, and worded as an episode's row where its name says an episode: "S01E03 · downloaded · 1.3 GB" (L472).
+         */
+        private fun film(row: Download): HomeDownloadRow {
+            val words = "${TitleDownloads.DOWNLOADED} · ${formatSize(row.size ?: row.indexerSize)}"
+            val status = DownloadsPage.label(row)?.let { code -> "$code · ${words.replaceFirstChar { it.lowercase() }}" } ?: words
+            return HomeDownloadRow(row.id, DownloadsPage.name(row), status, Tone.Muted, null, HomeDownloadOpen.Play(row))
+        }
 
         /** A show's finished episodes: "2 episodes · 3.6 GB"; its downloads open. */
         private fun show(showTmdbId: Int, episodes: List<Download>): HomeDownloadRow {

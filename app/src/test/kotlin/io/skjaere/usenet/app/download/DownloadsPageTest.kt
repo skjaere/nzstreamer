@@ -5,6 +5,8 @@ import io.skjaere.usenet.app.casting.CastLink
 import io.skjaere.usenet.app.link.PlayTarget
 import io.skjaere.usenet.app.link.TvState
 import io.skjaere.usenet.app.play.EpisodePlay
+import io.skjaere.usenet.app.play.IMPORTED
+import io.skjaere.usenet.app.play.IMPORT_GONE
 import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.search.MovieFind
 import io.skjaere.usenet.data.Download
@@ -506,6 +508,100 @@ class DownloadsPageTest {
         assertEquals(DownloadChoice.State.None, choice.state.value)
     }
 
+    /**
+     * L424, L472: the files downloaded from Import are a Files group of their own after Downloaded, in their names' natural
+     * order (a pack's parts in their order, "Part 2" before "Part 10"), finished ones alone; select mode counts them and
+     * Delete gives back what they hold. A Files row is named as Up next names a release played without TMDB: its title,
+     * then its tag with its size ("S01E02 · 1.3 GB", the size alone where its name says neither episode nor year), the
+     * file's name under, no poster; "Deleting tomorrow" where Delete once watched has it going. TalkBack hears its ▶ by the
+     * name and tag, with the Cast device chosen.
+     */
+    @Test
+    fun `files downloaded from Import are a group of their own after Downloaded, in their names' natural order`() {
+        val page = DownloadsPage.of(
+            listOf(
+                item(imported("Quiet.Meridian.Part.10.1080p.WEB.h264-WREN.mkv", id = "p10", completedAt = 1)),
+                item(film("cc", DownloadState.Done, completedAt = 5)),
+                item(imported("Quiet.Meridian.Part.2.1080p.WEB.h264-WREN.mkv", id = "p2", completedAt = 9)),
+                item(imported("Quiet.Meridian.Recap.mkv", id = "recap", completedAt = 3)),
+                item(imported("Quiet.Meridian.S01E03.1080p.WEB.h264-WREN.mkv", DownloadState.Running, id = "e3", written = 546_000_000)),
+                item(imported("Quiet.Meridian.S01E04.1080p.WEB.h264-WREN.mkv", DownloadState.Failed, id = "e4")),
+                item(imported("Quiet.Meridian.S01E05.1080p.WEB.h264-WREN.mkv", DownloadState.Deleting, id = "e5")),
+            ),
+            deleting = setOf("p2"),
+        )
+        assertEquals(listOf("p2", "p10", "recap"), page.files.map { it.key })
+        assertEquals(listOf("cc"), page.downloaded.map { it.key }, "Downloaded holds no file")
+        assertEquals(listOf("e3"), page.downloading.map { it.key })
+        assertEquals(listOf("e4"), page.failed.map { it.key })
+        assertEquals(listOf("e3", "e4", "cc", "p2", "p10", "recap"), page.rows.map { it.key }, "what select mode selects from, in order")
+        assertEquals("Select all (6)", DownloadsPage.selectAll(page.rows.size))
+        assertEquals(3_900_000_000, page.files.sumOf { it.held })
+        assertEquals("Delete · 3.9 GB", DownloadsPage.delete(page.files.sumOf { it.held }))
+        assertFalse(DownloadsPage.of(listOf(item(imported("Quiet.Meridian.Part.2.1080p.WEB.h264-WREN.mkv")))).empty)
+
+        val (part2, part10, recap) = page.files
+        assertEquals(AutoDelete.DELETING_TOMORROW, DownloadsPage.going(part2))
+        assertNull(DownloadsPage.going(part10))
+        assertEquals("Quiet.Meridian.Part.2.1080p.WEB.h264-WREN.mkv", DownloadsPage.fileName(part2.row))
+        assertEquals("1.3 GB", DownloadsPage.fileSub(recap.row), "its size alone where its name says neither episode nor year")
+        val e2 = DownloadsRow.File(imported("Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv"))
+        assertEquals("Quiet Meridian", e2.title)
+        assertNull(e2.posterPath, "the plain tile")
+        assertNull(e2.posterRow)
+        assertEquals("S01E02 · 1.3 GB", DownloadsPage.fileSub(e2.row))
+        assertEquals("More for Quiet Meridian S01E02", moreFor(e2.row))
+        assertEquals("2019 · 1.3 GB", DownloadsPage.fileSub(imported("Copper.Crown.2019.1080p.WEB.h264-WREN.mkv")))
+        assertEquals("Play Quiet Meridian S01E02", DownloadsPage.playLabel(e2.named, PlayTarget.Phone))
+        assertEquals("Play Quiet Meridian S01E02 on Kitchen display", DownloadsPage.playLabel(e2.named, PlayTarget.Cast("route-k", "Kitchen display", CastLink.Connected)))
+        // An episode's or a film's row has no file's name under it.
+        assertNull(DownloadsPage.fileName(film("cc", DownloadState.Done)))
+    }
+
+    /**
+     * L454, L472: a file from Import still to finish, or failed, is named as its Files row will be, its file's name under
+     * its tag; queued it says "Queued" alone (nothing is searched for it), its copy of the NZB kept in `.packs/` is no
+     * season's pack (no "From the season pack"), its steps say themselves ("Opening…"), and failed it says why with no
+     * count of releases tried. Its ⋮ is read "More for Quiet Meridian S01E03".
+     */
+    @Test
+    fun `a file from Import still to finish or failed is named by what its name says, with nothing searched or tried said`() {
+        val key = ReleaseKey.of(IMPORTED, "nzb-qm")
+        val packs = DownloadRunner.Packs(keys = setOf(key))
+        val queued = imported("Quiet.Meridian.S01E03.1080p.WEB.h264-WREN.mkv", DownloadState.Queued, id = "e3")
+        val active = DownloadsRow.Active(item(queued), current = false)
+        assertEquals("Quiet Meridian", active.title)
+        assertEquals("S01E03", DownloadsPage.sub(queued))
+        assertEquals("Quiet.Meridian.S01E03.1080p.WEB.h264-WREN.mkv", DownloadsPage.fileName(queued))
+        assertEquals("More for Quiet Meridian S01E03", moreFor(queued))
+        assertFalse(DownloadsPage.fromPack(queued, packs))
+        assertEquals(listOf(PageLine("Queued", Tone.Muted)), DownloadsPage.active(item(queued), current = false).lines)
+        // Written from Import's copy, which is kept for it: no season's pack.
+        val running = queued.copy(state = DownloadState.Running, safeOffset = 546_000_000, relativePath = "downloads/e3/v.mkv", release = RememberedRelease(IMPORTED, "nzb-qm", "Quiet.Meridian.S01.1080p.WEB.h264-WREN", null, 3, "nzb-qm"))
+        assertFalse(DownloadsPage.fromPack(running, packs))
+        assertNull(DownloadsPage.active(item(running), current = true).note)
+        assertEquals(
+            listOf(PageLine(DownloadHostRules.OPENING, Tone.Accent)),
+            DownloadsPage.active(item(queued.copy(state = DownloadState.Resolving, reason = DownloadHostRules.OPENING)), current = true).lines,
+        )
+        val failed = imported("Quiet.Meridian.S01E04.1080p.WEB.h264-WREN.mkv", DownloadState.Failed, id = "e4", reason = IMPORT_GONE, tried = listOf(key))
+        assertEquals(listOf(PageLine("✕ $IMPORT_GONE", Tone.Warn)), DownloadsPage.failure(failed))
+        assertEquals("Quiet Meridian", DownloadsRow.Failed(failed).title)
+        assertEquals("More for Quiet Meridian S01E04", moreFor(failed))
+        // A film still says its tries.
+        assertEquals(2, DownloadsPage.failure(film("cc", DownloadState.Failed).copy(tried = listOf("a", "b"))).size)
+    }
+
+    /** L472: the Undo bar names a file from Import as its row does, with what it gives back. */
+    @Test
+    fun `the Undo bar names a file from Import as its row does`() {
+        val e1 = imported("Quiet.Meridian.S01E01.1080p.WEB.h264-WREN.mkv", id = "e1")
+        val e2 = imported("Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv", id = "e2")
+        assertEquals("Deleted Quiet Meridian S01E02 · 1.3 GB", DownloadsPage.deleted(listOf(e2)))
+        assertEquals("Deleted Quiet Meridian S01E01 and Quiet Meridian S01E02 · 2.6 GB", DownloadsPage.deleted(listOf(e1, e2)))
+        assertEquals("Deleted Copper Crown 2019 · 1.3 GB", DownloadsPage.deleted(listOf(imported("Copper.Crown.2019.1080p.WEB.h264-WREN.mkv"))))
+    }
+
     @Test
     fun `Choose release is greyed offline, and where TMDB failed until the network comes back`() = runTest {
         val fakes = Fakes()
@@ -646,11 +742,19 @@ class DownloadsPageTest {
             relativePath = if (state == DownloadState.Done) "downloads/$id/v.mkv" else null, createdAt = 1, completedAt = completedAt, updatedAt = 1,
         )
 
-        /** A file named [file] of an NZB opened on Import (L423): titled by the file, no TMDB ids. */
-        fun imported(file: String, state: DownloadState = DownloadState.Done) = Download(
-            id = "imp-${file.length}", watchKey = WatchKey.release("nzb-qm", file.length), kind = DownloadKind.Release, title = file,
-            subtitle = "Quiet.Meridian.S01.1080p.WEB.h264-WREN", state = state, position = 4, size = 1_300_000_000, indexerSize = 1_300_000_000,
-            relativePath = if (state == DownloadState.Done) "downloads/imp-${file.length}/v.mkv" else null, createdAt = 1, updatedAt = 1,
+        /**
+         * A file named [file] of an NZB opened on Import (L423): titled by the file, no TMDB ids, its one release Import's
+         * own; [written] of its 1.3 GB where its file is made.
+         */
+        fun imported(
+            file: String, state: DownloadState = DownloadState.Done, id: String = "imp-${file.length}", completedAt: Long? = null,
+            written: Long = if (state == DownloadState.Done) 1_300_000_000 else 0, reason: String? = null, tried: List<String> = emptyList(),
+        ) = Download(
+            id = id, watchKey = WatchKey.release("nzb-qm", file.length), kind = DownloadKind.Release, title = file,
+            subtitle = "Quiet.Meridian.S01.1080p.WEB.h264-WREN", state = state, reason = reason, position = 4, tried = tried, size = 1_300_000_000,
+            indexerSize = 1_300_000_000, safeOffset = written, relativePath = if (written > 0) "downloads/$id/v.mkv" else null,
+            candidates = listOf(DownloadCandidate(IMPORTED, "nzb-qm", "Quiet.Meridian.S01.1080p.WEB.h264-WREN", size = 1_300_000_000)),
+            createdAt = 1, completedAt = completedAt, updatedAt = 1,
         )
 
         fun watched(season: Int, episode: Int) = WatchState(

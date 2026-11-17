@@ -36,7 +36,8 @@ import org.slf4j.LoggerFactory
  * One of the downloads' notifications, as plain data (L358, L380, L387, C4; DlPhoneNotification): what
  * [DownloadNotifications] builds and posts, and what a JVM test reads. [rowId] is the download it is of, which its Cancel,
  * Play and Choose release act on (a show's names its latest finished episode, from which its Play and tap read the show,
- * L445); [title] the show and episode or the film, never the release; [text] its state's words
+ * L445); [title] the show and episode or the film, never the release, or the name of a file the user opened, as its row
+ * says it (L472); [text] its state's words
  * ([DownloadHostRules.words]); [subText] what else is queued; [progress] its bar, if it has one; [actions] in their order;
  * [tap] what a tap on it does; [show] the show a Finished one is of, whose one notification it is (L437).
  */
@@ -182,10 +183,14 @@ object DownloadNotices {
         return DownloadNotice(Kind.Finished, row.id, words.title, words.text, actions = listOf(Action.Play))
     }
 
-    /** [row] failed: why, in technical words, and Choose release, which opens Downloads at its list. */
+    /**
+     * [row] failed: why, in technical words, and Choose release, which opens Downloads at its list. A file of an NZB opened
+     * on Import has no Choose release (nothing is chosen for it, L454): a tap opens Downloads, where Try again is.
+     */
     fun failed(row: Download): DownloadNotice {
         val words = checkNotNull(DownloadHostRules.words(row.copy(state = DownloadState.Failed)))
-        return DownloadNotice(Kind.Failed, row.id, words.title, words.text, actions = listOf(Action.ChooseRelease))
+        val actions = if (row.kind == DownloadKind.Release) emptyList() else listOf(Action.ChooseRelease)
+        return DownloadNotice(Kind.Failed, row.id, words.title, words.text, actions = actions)
     }
 
     /**

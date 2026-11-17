@@ -19,6 +19,7 @@ import io.skjaere.usenet.app.AppContainer
 import io.skjaere.usenet.app.NetworkNow
 import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
 import io.skjaere.usenet.app.play.EpisodePlay
+import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.ui.AppTheme
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
@@ -26,6 +27,7 @@ import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadPrefs
 import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.newznab.NewznabItem
 import io.skjaere.usenet.newznab.TvIds
@@ -201,6 +203,35 @@ internal class DownloadsPageSeeds(private val context: Context, private val cont
                 gaps = (0 until gaps).map { DownloadGap(it * 1_000_000L, it * 1_000_000L + 999) }, createdAt = 1, completedAt = 1, updatedAt = System.currentTimeMillis(),
             )
         }
+
+        /**
+         * A file named [name] of an NZB opened on Import (L423), [nzbId], at [index] in it, of [size] bytes, as Import's
+         * Download leaves one in [state]: titled by the file, its one release Import's own; once done its release kept, so it
+         * plays from its row.
+         */
+        fun imported(
+            name: String,
+            state: DownloadState = DownloadState.Done,
+            nzbId: String = IMPORTED_NZB,
+            index: Int = 0,
+            size: Long = 1_300_000_000,
+            position: Long = 0,
+        ): Download {
+            val id = Download.newId()
+            val done = state == DownloadState.Done
+            return Download(
+                id = id, watchKey = WatchKey.release(nzbId, index), kind = DownloadKind.Release, title = name, subtitle = IMPORTED_TITLE, state = state,
+                position = position, candidates = listOf(DownloadCandidate(IMPORTED, nzbId, IMPORTED_TITLE, size = size)),
+                release = RememberedRelease(IMPORTED, nzbId, IMPORTED_TITLE, null, index, nzbId, name, size).takeIf { done },
+                fileName = name.takeIf { done }, size = size.takeIf { done }, indexerSize = size, safeOffset = if (done) size else 0,
+                relativePath = "downloads/$id/v.mkv".takeIf { done }, pick = DownloadColumns.text(DownloadPick(index, name, size, nzbId)),
+                createdAt = 1, completedAt = 1L.takeIf { done }, updatedAt = System.currentTimeMillis(),
+            )
+        }
+
+        /** The NZB the seeded files from Import are of, invented, and its name. */
+        const val IMPORTED_NZB = "dl-page-imported-nzb"
+        const val IMPORTED_TITLE = "Quiet.Meridian.S01.1080p.WEB-DL.H264-WREN"
 
         /** [title] as the finder found it, ranked [score], of [size] bytes. */
         fun found(title: String, size: Long, score: Double): FoundRelease {

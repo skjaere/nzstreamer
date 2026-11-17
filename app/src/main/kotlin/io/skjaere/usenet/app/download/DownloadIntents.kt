@@ -1,6 +1,7 @@
 package io.skjaere.usenet.app.download
 
 import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadKind
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.io.IOException
@@ -92,7 +93,8 @@ data class DownloadPages(
     /**
      * Takes [ask] where it leads: the page; Resume opens it and [resume]s the queue, from the visible app (C4); a play or a
      * choice of release opens the page while its own way in isn't there. A show's asks read the show from the download
-     * they name ([rowOf], L445): a download gone since, or no show's, opens the page.
+     * they name ([rowOf], L445): a download gone since, or no show's, opens the page. A choice of release for a file of an
+     * NZB opened on Import, which nothing chooses for (L454), opens the page: only an older build's notification asks one.
      */
     suspend fun take(ask: DownloadAsk, rowOf: suspend (id: String) -> Download? = { null }, resume: () -> Unit) {
         when (ask) {
@@ -102,7 +104,7 @@ data class DownloadPages(
                 resume()
             }
             is DownloadAsk.Play -> play?.invoke(ask.id) ?: downloads?.invoke()
-            is DownloadAsk.Choose -> chooseRelease?.invoke(ask.id) ?: downloads?.invoke()
+            is DownloadAsk.Choose -> if (rowOf(ask.id)?.kind == DownloadKind.Release) downloads?.invoke() else chooseRelease?.invoke(ask.id) ?: downloads?.invoke()
             is DownloadAsk.OpenShow -> rowOf(ask.id)?.showTmdbId?.let { id -> show?.invoke(id) } ?: downloads?.invoke()
             is DownloadAsk.PlayShow -> rowOf(ask.id)?.showTmdbId?.let { id -> playShow?.invoke(id) } ?: downloads?.invoke()
         }

@@ -3,6 +3,7 @@ package io.skjaere.usenet.app.download
 import android.annotation.SuppressLint
 import android.app.job.JobParameters
 import io.skjaere.usenet.app.casting.CastWakeLock
+import io.skjaere.usenet.app.play.ReleaseName
 import io.skjaere.usenet.core.formatSize
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadKind
@@ -247,8 +248,12 @@ object DownloadHostRules {
     /** Resolve's [step] on its [attempt] of [of] (L340): "Trying release 2 of 3 · Checking availability" after the first. */
     fun resolving(step: String, attempt: Int, of: Int): String = if (attempt > 1) "Trying release $attempt of $of · $step" else step
 
-    /** "Harbor Lights · S02E04", or the film's title: what the row keeps of its show or film, never its release. */
+    /**
+     * "Harbor Lights · S02E04", or the film's title: what the row keeps of its show or film, never its release. A file of
+     * an NZB opened on Import as its row names it (L472): "Quiet Meridian · S01E02", what its name says, never the whole.
+     */
     private fun title(row: Download): String {
+        if (row.kind == DownloadKind.Release) return ReleaseName(row.title).let { listOfNotNull(it.title, it.tag) }.joinToString(" · ")
         val season = row.season
         val episode = row.episode
         // The code's digits are the same in every language, as a release's are; the title is the row's as it is.

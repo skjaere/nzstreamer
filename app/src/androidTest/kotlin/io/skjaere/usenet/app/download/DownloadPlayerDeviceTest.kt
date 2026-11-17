@@ -37,6 +37,7 @@ import io.skjaere.usenet.app.overlayWords
 import io.skjaere.usenet.app.play.AutoAdvance
 import io.skjaere.usenet.app.play.ControlsPlayer
 import io.skjaere.usenet.app.play.EpisodePlay
+import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.PlayState
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.play.PlayerLaunch
@@ -47,12 +48,14 @@ import io.skjaere.usenet.app.views
 import io.skjaere.usenet.app.waitFor
 import io.skjaere.usenet.core.FetchException
 import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.EpisodeRef
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.data.WatchTitle
 import io.skjaere.usenet.metadata.Episode
 import io.skjaere.usenet.metadata.EpisodeSummary
@@ -191,10 +194,19 @@ class DownloadPlayerDeviceTest {
         }
         back {
             // Unwatched again and out of Up next, the releases the player kept for them forgotten.
-            made.groupBy { it.showTmdbId!! to it.title }.forEach { (show, rows) ->
+            made.filter { it.kind == DownloadKind.Episode }.groupBy { it.showTmdbId!! to it.title }.forEach { (show, rows) ->
                 val refs = (1..EPISODES).map { EpisodeRef(show.first, 1, it, WatchTitle.episode(show.second, 1, it)) }
                 container.library.markEpisodes(refs, watched = false)
                 rows.forEach { row -> row.release?.let { container.library.forgetRelease(row.watchKey, it) } }
+            }
+        }
+        made.filter { it.kind == DownloadKind.Release }.forEach { row ->
+            // A file from Import has no mark: its place played to its end, out of Up next as an episode's unwatched is.
+            back {
+                container.library.state(row.watchKey).first()?.let { state ->
+                    val end = state.durationMs.takeIf { it > 0 } ?: PLAYED_MS
+                    container.library.recordProgress(state, end, end)
+                }
             }
         }
         switchedOff?.let { off ->
@@ -285,6 +297,36 @@ class DownloadPlayerDeviceTest {
         // Not the download's own release, which would meet the same parts missing: neither tried nor played.
         assertTrue("the download's own release streams again", streamed.release.guid != GOOD.guid)
         assertFalse("the download's own release was tried: $tried", GOOD.title in tried)
+    }
+
+    /**
+     * L454, L423: a file downloaded from Import plays from its file as any download does; its three recorded gaps bring the
+     * missing-parts count alone, online too, with no Stream instead (it has no title to stream) and no Try another release;
+     * and its player saves its place under its release's key, a release's watch, so Up next resumes it from the file.
+     */
+    @Test
+    fun anImportedDownloadPlaysWithNoStreamInsteadAndSavesItsPlaceUnderItsReleasesKey() = runBlocking<Unit> {
+        val mkv = DownloadFixtures.media(MEDIA)
+        val gaps = listOf(13, 15, 17).map { clusters(mkv)[it] + 100 }.map { it until it + PART }
+        val row = seed(imported(gaps))
+        waitFor("a validated network", NETWORK_MILLIS) { if (container.validatedNetwork.value) Unit else null }
+        PlayerActivity.timings = PlayerActivity.Timings(missingPartsAnswerForMs = PROMPT_MILLIS, missingPartsCountOnlyForMs = PROMPT_MILLIS)
+        val launch = checkNotNull(DownloadLaunch.of(row)).copy(startPositionMs = GAP_START_MS)
+        ActivityScenario.launch<PlayerActivity>(PlayerActivity.intent(context, launch)).use { scenario ->
+            val count = waitFor("the missing parts counted", 60_000) { scenario.read { a -> overlayWords(a).takeIf { "This release is missing parts (3 so far)" in it } } }
+            assertFalse(count.toString(), "Stream instead" in count || "Try another release" in count)
+            // Online all along: an episode's would ask to stream instead by now.
+            delay(SETTLE_MILLIS)
+            val words = scenario.read { a -> overlayWords(a) }
+            assertFalse(words.toString(), "Stream instead" in words || "Try another release" in words)
+            assertTrue("playing", scenario.read { a -> a.player?.isPlaying == true })
+        }
+        val saved = waitFor("its place saved under its release's key", 30_000) {
+            runBlocking { container.library.state(row.watchKey).first() }?.takeIf { it.positionMs >= GAP_START_MS }
+        }
+        assertEquals(WatchKey.release(IMPORTED_NZB, 1), saved.key)
+        assertEquals(WatchKind.Release, saved.kind)
+        assertEquals(row.title, saved.title)
     }
 
     /**
@@ -654,6 +696,17 @@ class DownloadPlayerDeviceTest {
         )
     }
 
+    /** S01E02 of an invented season pack opened on Import, downloaded with its [gaps] recorded (L423): no TMDB title, a release's watch. */
+    private fun imported(gaps: List<LongRange>): Download {
+        val name = "Quiet.Meridian.S01E02.720p.WEB.h264-KESTREL.mkv"
+        return Download(
+            id = Download.newId(), watchKey = WatchKey.release(IMPORTED_NZB, 1), kind = DownloadKind.Release, title = name, subtitle = IMPORTED_TITLE,
+            state = DownloadState.Done, position = -900, candidates = listOf(DownloadCandidate(IMPORTED, IMPORTED_NZB, IMPORTED_TITLE)),
+            release = RememberedRelease(IMPORTED, IMPORTED_NZB, IMPORTED_TITLE, null, 1, IMPORTED_NZB, name), fileName = name,
+            gaps = gaps.map { DownloadGap(it.first, it.last) }, createdAt = 1, completedAt = 2, updatedAt = 2,
+        )
+    }
+
     /** Episode [number] as TMDB would hand it on: what the next-episode seam answers. */
     private fun play(show: Show, number: Int) = EpisodePlay(
         showTmdbId = show.id, showName = show.name, showYear = 2021, aliases = emptyList(), ids = show.ids, season = 1, episode = number,
@@ -765,6 +818,10 @@ class DownloadPlayerDeviceTest {
         /** Harbor Lights as the fake indexer's catalogue numbers it (mock-seed); nothing real has these ids. */
         val HARBOR = Show(900002, "Harbor Lights", TvIds(tvdb = 900001, tmdb = 900002, imdb = "tt9000003"))
         const val FAKE_INDEXER = "download-player-device-test"
+
+        /** An invented NZB opened on Import, and its name. */
+        const val IMPORTED_NZB = "download-player-device-test-nzb"
+        const val IMPORTED_TITLE = "Quiet.Meridian.S01.720p.WEB.h264-KESTREL"
         const val INDEXER = "download-player-device-test-own"
 
         /** The fake indexer's whole release of Harbor Lights S01E01, as a download of it would have kept it. */

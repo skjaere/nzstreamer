@@ -11,11 +11,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isEnabled
 import androidx.compose.ui.test.isHeading
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onRoot
@@ -44,6 +46,7 @@ import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.episode
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.exists
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.film
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.found
+import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.imported
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.scrolledTo
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.show
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.waitFor
@@ -436,6 +439,62 @@ class DownloadsPageDeviceTest {
         compose.waitTill("the sheet closed", 10_000) { container.playback.state.value == PlayState.Idle }
     }
 
+    /**
+     * L424, L454, L472: the files downloaded from Import are a Files section after Downloaded, a heading, in their names'
+     * order, each named by what its name says: "Quiet Meridian", "S01E01 · 1.3 GB", the file's name under. Its ▶, read
+     * "Play Quiet Meridian S01E01", plays it; its ⋮, read "More for Quiet Meridian S01E02", offers Remove download alone,
+     * which hides it with the Undo bar naming it as its row does, and Undo brings it back. Select mode selects it, Delete
+     * giving back what it holds.
+     */
+    @Test
+    fun theFilesSectionFollowsDownloadedEachFileNamedByItsNameWithPlayAndRemoveDownloadAlone() {
+        val e2 = seeds.seed(imported(E2, index = 2, position = 0))
+        val e1 = seeds.seed(imported(E1, index = 1, position = 1))
+        seeds.seed(film())
+        show(seeds.deps(undoMillis = 60_000))
+        compose.waitFor(hasText("Copper Crown"))
+        assertTrue(compose.scrolledTo(hasText(DownloadsPage.FILES.uppercase()) and isHeading()))
+        listOf("S01E01 · 1.3 GB", "S01E02 · 1.3 GB", E1, E2).forEach { assertTrue("'$it' shown", compose.scrolledTo(hasText(it))) }
+        assertTrue("Files after Downloaded", top(DownloadsPage.FILES.uppercase()) > top(DownloadsPage.DOWNLOADED.uppercase()))
+        assertTrue("in their names' order", top(E1) < top(E2))
+        assertEquals("both named by their names' title", 2, compose.onAllNodes(hasText("Quiet Meridian"), useUnmergedTree = true).fetchSemanticsNodes().size)
+
+        val play = hasContentDescription("Play Quiet Meridian S01E01") and hasClickAction()
+        assertTrue(compose.scrolledTo(play))
+        compose.onNode(play).performClick()
+        compose.waitTill("its file played") { seeds.played == listOf(e1.id) }
+
+        val more = hasContentDescription("More for Quiet Meridian S01E02")
+        assertTrue(compose.scrolledTo(more))
+        compose.onNode(more).performClick()
+        val inMenu = hasClickAction() and hasAnyAncestor(isPopup())
+        compose.waitFor(hasText(DownloadsPage.REMOVE_DOWNLOAD) and inMenu)
+        assertEquals(1, compose.onAllNodes(inMenu).fetchSemanticsNodes().size)
+        compose.onNode(hasText(DownloadsPage.REMOVE_DOWNLOAD) and inMenu).performClick()
+        compose.waitFor(hasText("Deleted Quiet Meridian S01E02 · 1.3 GB"))
+        compose.waitTill("hidden at once") { seeds.row(e2.id)?.state == DownloadState.Deleting }
+        compose.onNode(hasText("Undo") and hasClickAction()).performClick()
+        compose.waitTill("brought back") { seeds.row(e2.id)?.state == DownloadState.Done }
+        compose.waitFor(hasText(E2))
+
+        compose.onNode(hasText(DownloadsPage.SELECT) and hasClickAction()).performClick()
+        assertTrue(compose.scrolledTo(hasText(E1)))
+        compose.onNode(hasText(E1)).performClick()
+        compose.waitFor(hasText(DownloadsPage.selected(1)))
+        assertTrue(exists(hasText("Delete · 1.3 GB")))
+        assertTrue(exists(hasText(DownloadsPage.selectAll(3))))
+    }
+
+    /** L472: at twice the font size a Files row's lines are whole, the file's name wrapping as it must. */
+    @Test
+    fun atTwiceTheFontSizeAFilesRowIsWhole() {
+        seeds.seed(imported(E2, index = 2))
+        show(seeds.deps(), fontScale = 2f)
+        compose.waitFor(hasText("S01E02 · 1.3 GB"))
+        val screen = context.resources.displayMetrics.widthPixels
+        listOf(DownloadsPage.FILES.uppercase(), "Quiet Meridian", "S01E02 · 1.3 GB", E2).forEach { compose.assertWhole(it, screen) }
+    }
+
     private val castButton = SemanticsMatcher.keyIsDefined(CastButtonLook)
 
     /** What TalkBack reads of the Cast button now. */
@@ -492,5 +551,9 @@ class DownloadsPageDeviceTest {
 
         /** A page narrower than phone34's 411 dp, as the narrowest phones are. */
         val NARROW = 360.dp
+
+        /** Two files of an invented season pack opened on Import. */
+        const val E1 = "Quiet.Meridian.S01E01.1080p.WEB-DL.H264-WREN.mkv"
+        const val E2 = "Quiet.Meridian.S01E02.1080p.WEB-DL.H264-WREN.mkv"
     }
 }

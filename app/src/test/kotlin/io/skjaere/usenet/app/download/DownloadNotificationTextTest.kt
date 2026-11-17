@@ -5,6 +5,9 @@ import io.skjaere.usenet.app.download.DownloadNotice.Action
 import io.skjaere.usenet.app.download.DownloadNotice.Kind
 import io.skjaere.usenet.app.download.DownloadNotice.Progress
 import io.skjaere.usenet.app.download.DownloadNotice.Tap
+import io.skjaere.usenet.app.play.IMPORTED
+import io.skjaere.usenet.app.play.IMPORT_GONE
+import io.skjaere.usenet.app.play.ReleaseName
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadGap
@@ -12,6 +15,7 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.releases.ReleaseKey
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -185,6 +189,40 @@ class DownloadNotificationTextTest {
                 listOf("plover", "idx-", "search limit", "download limit").forEach { assertFalse(it in line, "\"$line\" holds \"$it\"") }
             }
         }
+    }
+
+    /**
+     * L472: a file downloaded from Import is named in its notifications as its row names it, "Quiet Meridian · S01E02",
+     * its title alone where its name says neither episode nor year, never its file's or its NZB's whole name; finished it
+     * is a notification of its own with Play, never a show's; failed it offers no Choose release (nothing is chosen for it,
+     * L454), a tap opening the Downloads page, where Try again is. Still on no secure lock screen.
+     */
+    @Test
+    fun `a file from Import is named as its row names it, with no Choose release when it fails`() {
+        val running = ongoing(item(imported(DownloadState.Running)))
+        assertEquals("Quiet Meridian · S01E02", running.title)
+        val done = DownloadNotices.finished(imported(DownloadState.Done))
+        assertEquals("Quiet Meridian · S01E02", done.title)
+        assertEquals(listOf(Action.Play), done.actions)
+        assertNull(done.show)
+        val failed = DownloadNotices.failed(imported(DownloadState.Failed, reason = IMPORT_GONE))
+        assertEquals("Quiet Meridian · S01E02", failed.title)
+        assertEquals("Couldn't download it. $IMPORT_GONE.", failed.text)
+        assertEquals(emptyList(), failed.actions)
+        assertEquals(Tap.Downloads, failed.tap)
+        assertEquals("Copper Crown · 2019", DownloadNotices.finished(imported(DownloadState.Done, "Copper.Crown.2019.1080p.WEB.h264-WREN.mkv")).title)
+        // Its name saying neither: its title alone.
+        assertEquals(ReleaseName("quiet meridian extras.mkv").title, DownloadNotices.finished(imported(DownloadState.Done, "quiet meridian extras.mkv")).title)
+        listOf(running, done, failed).forEach { notice ->
+            assertEquals(NotificationCompat.VISIBILITY_SECRET, notice.visibility)
+            listOf(notice.title, notice.text, notice.subText.orEmpty()).forEach { line ->
+                listOf("WREN", "1080p", "Quiet.Meridian", ".mkv").forEach { assertFalse(it in line, "${notice.kind}: \"$line\" holds \"$it\"") }
+            }
+        }
+        // Its finished one is its own, as a film's: no show's notification gathers it.
+        val watch = DownloadNotices.Watch()
+        watch.next(listOf(imported(DownloadState.Running)))
+        assertEquals(listOf(DownloadNotices.Change.Post(done)), watch.next(listOf(imported(DownloadState.Done))))
     }
 
     @Test
@@ -431,6 +469,15 @@ class DownloadNotificationTextTest {
     }
 
     private fun ongoing(vararg items: DownloadRunner.Item): DownloadNotice = assertNotNull(DownloadNotices.ongoing(items.toList()))
+
+    /** [file] of an NZB opened on Import (L423), 1.3 GB, as its download's row keeps it: titled by the file, no TMDB ids. */
+    private fun imported(state: DownloadState, file: String = "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv", reason: String? = null) = Download(
+        id = "imp", watchKey = WatchKey.release("nzb-qm", 1), kind = DownloadKind.Release, title = file, subtitle = "Quiet.Meridian.S01.1080p.WEB.h264-WREN",
+        state = state, reason = reason, position = 0, candidates = listOf(DownloadCandidate(IMPORTED, "nzb-qm", "Quiet.Meridian.S01.1080p.WEB.h264-WREN", size = 1_300_000_000)),
+        tried = listOf(ReleaseKey.of(IMPORTED, "nzb-qm")).takeIf { state == DownloadState.Failed }.orEmpty(), fileName = file, size = 1_300_000_000,
+        indexerSize = 1_300_000_000, safeOffset = if (state == DownloadState.Done) 1_300_000_000 else HALF, relativePath = "downloads/imp/v.mkv",
+        createdAt = 1, completedAt = 2L.takeIf { state == DownloadState.Done }, updatedAt = 1,
+    )
 
     /** Copper Crown, a film, 1.2 GB, as [episode] has it otherwise. */
     private fun film(state: DownloadState, id: String = "a") = episode(state, id).copy(

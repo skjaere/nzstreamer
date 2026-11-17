@@ -31,6 +31,14 @@ class AutoDeleteTest {
         assertEquals(listOf("a", "b"), AutoDelete.due(listOf(early, late), NOW, NOW + DAY))
     }
 
+    /** L472, W111: a file downloaded from Import, watched to its end, is due a day after as any download is. */
+    @Test
+    fun `a file downloaded from Import is due as any download`() {
+        val file = WatchedDownload("file", WatchKey.release("nzb-qm", 1), completedAt = NOW - 5 * DAY, watchedAt = NOW - 2 * DAY)
+        assertEquals(NOW - DAY, AutoDelete.dueAt(file, NOW - 10 * DAY))
+        assertEquals(listOf("file"), AutoDelete.due(listOf(file), NOW - 10 * DAY, NOW))
+    }
+
     /** L412: a title marked watched before its download finished (downloaded again after it was watched) isn't due. */
     @Test
     fun `a download finished after its title was marked watched is never due`() {

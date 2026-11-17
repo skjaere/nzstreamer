@@ -14,6 +14,7 @@ import io.skjaere.usenet.metadata.EpisodeRef
 import org.junit.jupiter.api.Test
 import kotlin.random.Random
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
@@ -83,6 +84,19 @@ class OfflineHomeTest {
         assertEquals(setOf(meridian.key, lantern.key), home.greyed)
         // On a phone without Play on's choice (Home's own null), as on This phone.
         assertEquals(home, OfflineHome.of(upNext, downloads, downloaded, offline = true, playOn = null))
+    }
+
+    /**
+     * L458, L472: a release played without TMDB and downloaded from Import plays its file offline, so its Up next row isn't
+     * greyed, whatever is chosen: here, cast from the phone, or here with a TV chosen.
+     */
+    @Test
+    fun `an Up next row of a file downloaded from Import is never greyed offline`() {
+        val imported = downloaded + WatchKey.release("n-lantern", 0)
+        listOf(PlayTarget.Phone, cast, tv, null).forEach { playOn ->
+            val home = assertNotNull(OfflineHome.of(upNext, downloads, imported, offline = true, playOn = playOn))
+            assertFalse(lantern.key in home.greyed, "greyed with $playOn")
+        }
     }
 
     @Test

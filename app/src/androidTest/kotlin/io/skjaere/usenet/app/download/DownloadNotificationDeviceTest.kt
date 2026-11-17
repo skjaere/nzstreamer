@@ -18,6 +18,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.core.app.NotificationCompat
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.test.platform.app.InstrumentationRegistry
@@ -38,6 +39,7 @@ import io.skjaere.usenet.app.casting.CastLink
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.link.PlayChoice
 import io.skjaere.usenet.app.link.PlayTarget
+import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.waitFor
 import io.skjaere.usenet.core.FetchException
@@ -436,6 +438,33 @@ class DownloadNotificationDeviceTest {
     }
 
     /**
+     * L418, L472: a file from Import's Finished notification names it as its row does ("Quiet Meridian · S01E02"), a
+     * notification of its own; with Kitchen display connected its Play opens the Downloads page, which casts the file there:
+     * the launch the cast's launcher is handed is the download's, nothing played here or grabbed.
+     */
+    @Test
+    fun aFileFromImportsPlayWithKitchenDisplayConnectedCastsItsFile() = runBlocking<Unit> {
+        quiet()
+        val file = finishedImport()
+        val notice = DownloadNotices.finished(file)
+        assertEquals("Quiet Meridian · S01E02", notice.title)
+        assertEquals(NotificationCompat.VISIBILITY_SECRET, notice.visibility)
+        val launcher = connectKitchen()
+        val play = notifications.build(notice).actions.single()
+        assertEquals("Play", play.title.toString())
+        tap(play.actionIntent)
+        val main = waitFor("the app opened by its Play") { resumed<MainActivity>() }
+        assertEquals(DownloadAsk.Play(file.id), onMain { main.downloadAsked })
+        waitFor("the file handed to Kitchen display", READY_MILLIS) { launcher.loads.firstOrNull() }
+        val launch = launcher.loads.single()
+        assertEquals(PlayUris.download(file.id), launch.uri)
+        assertEquals("Kitchen display", launch.cast?.name)
+        assertNull("nothing played here", resumed<PlayerActivity>())
+        assertEquals("indexer grabs", 0, grabs.get())
+        launcher.plays()
+    }
+
+    /**
      * L418, L437: the show's Finished notification's Play, with Kitchen display connected, opens the show's downloads,
      * which cast its next downloaded episode's file there (S01E01, nothing watched), nothing played here or grabbed.
      */
@@ -546,6 +575,26 @@ class DownloadNotificationDeviceTest {
         made += row.id
         container.downloadStorage.add(row)
         waitFor("the film among the finished downloads") { container.downloads.done.value[row.watchKey]?.takeIf { it.id == row.id } }
+        return row
+    }
+
+    /**
+     * S01E02 of a season pack opened on Import, downloaded, its row Done with Import's release kept as Resolve keeps one
+     * (L423), as the runner leaves one (no file: it is only cast's fakes').
+     */
+    private suspend fun finishedImport(): Download {
+        val name = "Quiet.Meridian.S01E02.720p.WEB.h264-WREN.mkv"
+        val title = "Quiet.Meridian.S01.720p.WEB.h264-WREN"
+        val now = System.currentTimeMillis()
+        val row = Download(
+            id = Download.newId(), watchKey = WatchKey.release(IMPORTED_NZB, 1), kind = DownloadKind.Release, title = name, subtitle = title,
+            state = DownloadState.Done, position = 0, candidates = listOf(DownloadCandidate(IMPORTED, IMPORTED_NZB, title, size = SIZE)),
+            release = RememberedRelease(IMPORTED, IMPORTED_NZB, title, null, 1, IMPORTED_NZB, name, SIZE), fileName = name, size = SIZE, indexerSize = SIZE,
+            safeOffset = SIZE, createdAt = now, completedAt = now, updatedAt = now,
+        )
+        made += row.id
+        container.downloadStorage.add(row)
+        waitFor("the file among the finished downloads") { container.downloads.done.value[row.watchKey]?.takeIf { it.id == row.id } }
         return row
     }
 
@@ -677,6 +726,9 @@ class DownloadNotificationDeviceTest {
 
         /** The invented film whose notification's Play the test sends. */
         const val FILM = 900_774
+
+        /** The invented NZB opened on Import whose file's notification's Play the test sends. */
+        const val IMPORTED_NZB = "download-notification-device-test-nzb"
 
         /** The device tests' film with chapters: six minutes at 10 fps, 0.7 MB. */
         const val MEDIA = "chapters.mkv"

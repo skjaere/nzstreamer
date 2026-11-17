@@ -200,6 +200,27 @@ class DownloadSettingsTest {
         )
     }
 
+    /**
+     * L472: files downloaded from Import are counted as files, after the episodes and the films, in On this phone and in
+     * Delete all's question.
+     */
+    @Test
+    fun `files downloaded from Import are counted as files in On this phone and in Delete all's question`() {
+        val space = DownloadSpace(available = 51_000_000_000, used = 9_800_000_000, queued = 3_000_000_000, deleting = 1_000_000_000)
+        val files = listOf(file("f1", 1_300_000_000), file("f2", 1_300_000_000))
+        val rows = (1..6).map { done("e$it", 1_000_000_000) } + done("cc", 1_200_000_000, movie = true) + files
+        assertEquals(
+            DownloadSettings.Usage("9.8 GB in downloads", "6 episodes, 1 film and 2 files · 48.0 GB free", deletable = true),
+            DownloadSettings.usage(rows, space),
+        )
+        assertEquals(
+            "Deletes the 9.8 GB of downloads on this phone: 6 episodes, 1 film and 2 files. A download running now stops.",
+            DownloadSettings.confirm(rows),
+        )
+        assertEquals(DownloadSettings.Usage("2.6 GB in downloads", "2 files · 48.0 GB free", deletable = true), DownloadSettings.usage(files, space))
+        assertEquals("1 episode and 1 file · 48.0 GB free", DownloadSettings.usage(listOf(done("e1", 1_000_000_000), files.first()), space).line)
+    }
+
     @Test
     fun `Delete all's confirm says what goes, and that a download under way stops`() {
         val rows = (1..6).map { done("e$it", 1_400_000_000) } + done("cc", 4_000_000_000, movie = true)
@@ -373,5 +394,12 @@ class DownloadSettingsTest {
 
         /** A finished download of [size] bytes: an episode, or a film. */
         fun done(id: String, size: Long, movie: Boolean = false): Download = row(id, DownloadState.Done, size, file = true, movie = movie)
+
+        /** A file of an NZB opened on Import (L423), finished, of [size] bytes. */
+        fun file(id: String, size: Long): Download = Download(
+            id = id, watchKey = WatchKey.release("nzb-qm", id.hashCode() and 0xff), kind = DownloadKind.Release, title = "Quiet.Meridian.S01E02.1080p.WEB.h264-WREN.mkv",
+            subtitle = "Quiet.Meridian.S01.1080p.WEB.h264-WREN", state = DownloadState.Done, position = 0, size = size, indexerSize = size,
+            relativePath = "downloads/$id/v.mkv", createdAt = 1, updatedAt = 1,
+        )
     }
 }

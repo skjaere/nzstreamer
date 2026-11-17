@@ -206,6 +206,9 @@ internal class ReleaseName(name: String) {
 
     /** "Northbound 2019", "Harbor Lights S01E02". */
     val query: String get() = listOfNotNull(title, tag).joinToString(" ")
+
+    /** "S01E02" where the name says one episode of one season; null for a season alone, a year or neither. */
+    val episodeTag: String? get() = tag?.takeIf { parsed.seasons.size == 1 && parsed.episodes.size == 1 }
 }
 
 /**

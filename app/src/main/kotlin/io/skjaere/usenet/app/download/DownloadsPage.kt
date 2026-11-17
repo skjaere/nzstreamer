@@ -81,7 +81,7 @@ sealed interface DownloadsRow {
         val row: Download get() = item.row
         override val key: String get() = row.id
         override val downloads: List<Download> get() = listOf(row)
-        override val title: String get() = row.title
+        override val title: String get() = DownloadsPage.name(row)
         override val posterPath: String? get() = row.posterPath
         override val posterRow: Download get() = row
     }
@@ -90,7 +90,7 @@ sealed interface DownloadsRow {
     data class Failed(val row: Download) : DownloadsRow {
         override val key: String get() = row.id
         override val downloads: List<Download> get() = listOf(row)
-        override val title: String get() = row.title
+        override val title: String get() = DownloadsPage.name(row)
         override val posterPath: String? get() = row.posterPath
         override val posterRow: Download get() = row
     }
@@ -122,6 +122,21 @@ sealed interface DownloadsRow {
         override val posterPath: String? get() = row.posterPath
         override val posterRow: Download get() = row
     }
+
+    /**
+     * A finished file of an NZB opened on Import (L424, L472), named as Up next names a release played without TMDB, and
+     * whether Delete once watched deletes it tomorrow ([deleting], L415). The plain tile: it keeps no TMDB picture.
+     */
+    data class File(val row: Download, val deleting: Boolean = false) : DownloadsRow {
+        override val key: String get() = row.id
+        override val downloads: List<Download> get() = listOf(row)
+        override val title: String get() = DownloadsPage.name(row)
+        override val posterPath: String? get() = null
+        override val posterRow: Download? get() = null
+
+        /** "Quiet Meridian S01E02": what TalkBack hears its ▶ play. */
+        val named: String get() = DownloadsPage.named(row)
+    }
 }
 
 /** The space strip's numbers: what downloads [used] (the running one whole) and what is [free] for more. */
@@ -135,16 +150,18 @@ data class StripWords(val held: String?, val free: String)
 
 /**
  * The Downloads page (L372, L379-L381): [downloading] (the row the queue is at first, then the rest in the queue's order),
- * [failed] under it, and [downloaded], one row per show and one per film, the latest finished first. Names come from the
- * rows, so it reads the same offline (L368). Pure, so the JVM reads every case; the screen only draws it.
+ * [failed] under it, [downloaded], one row per show and one per film, the latest finished first, and [files], the files
+ * of NZBs opened on Import, in their names' natural order (L424). Names come from the rows, so it reads the same offline
+ * (L368). Pure, so the JVM reads every case; the screen only draws it.
  */
 data class DownloadsPage(
     val downloading: List<DownloadsRow.Active> = emptyList(),
     val failed: List<DownloadsRow.Failed> = emptyList(),
     val downloaded: List<DownloadsRow> = emptyList(),
+    val files: List<DownloadsRow.File> = emptyList(),
 ) {
     /** Every row, in the page's order: what select mode selects from. */
-    val rows: List<DownloadsRow> get() = downloading + failed + downloaded
+    val rows: List<DownloadsRow> get() = downloading + failed + downloaded + files
 
     val empty: Boolean get() = rows.isEmpty()
 
@@ -155,7 +172,11 @@ data class DownloadsPage(
         const val DOWNLOADING = "Downloading"
         const val FAILED = "Failed"
         const val DOWNLOADED = "Downloaded"
+        const val FILES = "Files"
         const val QUEUED = "Queued · searched when its turn comes"
+
+        /** A file from Import queued: nothing is searched for it (L454). */
+        const val QUEUED_FILE = "Queued"
         const val QUEUED_FROM_PACK = "Queued · from the season pack"
         const val FROM_PACK = "From the season pack"
         const val PAUSED = "Paused"
@@ -190,7 +211,8 @@ data class DownloadsPage(
          * ([episodeStates], by show) and the films' ([films], by film): for each show what it plays next, for each film
          * whether it is watched; and for each download still to finish, whether its season's pack serves it, by the copies
          * kept ([packs], L406), and, waiting on its indexer's limit, which indexer's, by the names of those set up now
-         * ([indexers], by id) and the device's clock ([zone], L434); each film among [deleting] going tomorrow (L415).
+         * ([indexers], by id) and the device's clock ([zone], L434); each film and file among [deleting] going tomorrow
+         * (L415). A finished file of an NZB opened on Import is a Files row, after the rest, by its name (L424).
          */
         fun of(
             items: List<DownloadRunner.Item>,
@@ -226,15 +248,21 @@ data class DownloadsPage(
                 DownloadsRow.Film(row, row.movieTmdbId?.let { films[it] }?.watched == true, deleting = row.id in deleting)
             }
             val downloaded = (shows + movies).sortedByDescending { row -> row.downloads.maxOf { it.completedAt ?: it.createdAt } }
-            return DownloadsPage(downloading, failed, downloaded)
+            // A pack opened by hand then runs in its episodes' order (L424).
+            val files = done.filter { it.kind == DownloadKind.Release }.sortedWith(compareBy(NaturalOrder) { it.title })
+                .map { DownloadsRow.File(it, deleting = it.id in deleting) }
+            return DownloadsPage(downloading, failed, downloaded, files)
         }
 
         /**
          * Whether [row] is its season's pack's (L406), by the copies kept ([packs]): a season row (its search facts kept, no
          * file chosen by hand) queued while a copy of its season leads that it hasn't tried, which its turn takes first
-         * (L431); or one whose release is a copy's, written from it.
+         * (L431); or one whose release is a copy's, written from it. Never a file of an NZB opened on Import, whose NZB's
+         * copy is its own and no season's (L454).
          */
-        fun fromPack(row: Download, packs: DownloadRunner.Packs): Boolean = if (row.state == DownloadState.Queued) {
+        fun fromPack(row: Download, packs: DownloadRunner.Packs): Boolean = if (row.kind == DownloadKind.Release) {
+            false
+        } else if (row.state == DownloadState.Queued) {
             val leading = row.showTmdbId?.let { show -> row.season?.let { packs.leading[show to it] } }.orEmpty()
             DownloadColumns.search(row) != null && DownloadColumns.pick(row) == null && leading.any { it !in row.tried }
         } else {
@@ -273,6 +301,25 @@ data class DownloadsPage(
             DownloadKind.Release -> ReleaseName(row.title).tag
         }
 
+        /**
+         * What [row] is called: its show's name or its film's title; a file of an NZB opened on Import by what its name says,
+         * as Up next names a release played without TMDB (L472): "Quiet Meridian".
+         */
+        fun name(row: Download): String = if (row.kind == DownloadKind.Release) ReleaseName(row.title).title else row.title
+
+        /**
+         * [row] by its own name, as TalkBack's ⋮ and the Undo bar say it: "Harbor Lights S02E04", "Copper Crown"; a file of an
+         * NZB opened on Import its title and tag, "Quiet Meridian S01E02" (L472).
+         */
+        fun named(row: Download): String =
+            if (row.kind == DownloadKind.Release) ReleaseName(row.title).query else listOfNotNull(row.title, label(row)).joinToString(" ")
+
+        /** A Files row's line: what its name says ("S01E02", its year) with its size, "S01E02 · 1.3 GB"; its size alone where it says neither. */
+        fun fileSub(row: Download): String = listOfNotNull(sub(row), formatSize(row.size ?: row.indexerSize)).joinToString(" · ")
+
+        /** The file's own name, small under a file of an NZB opened on Import's other lines (L472); null for any other download. */
+        fun fileName(row: Download): String? = row.title.takeIf { row.kind == DownloadKind.Release }
+
         /** Choose release's title for [row]: "Download S02E04", "Download Copper Crown", as the list in download mode says it. */
         fun choosing(row: Download): String = "Download ${label(row) ?: row.title}"
 
@@ -286,8 +333,9 @@ data class DownloadsPage(
         /** A film row's ▶ for TalkBack (L470): "Play Copper Crown", and "Play Copper Crown on Kitchen display" with a Cast device chosen. */
         fun playLabel(name: String, target: PlayTarget): String = playsOn(target).deviceName?.let { "Play $name ${onTvLine(it)}" } ?: "Play $name"
 
-        /** "S02E04": an episode's season and number; null for a film. */
+        /** "S02E04": an episode's season and number, a file from Import's where its name says one (L472); null for a film. */
         fun label(row: Download): String? {
+            if (row.kind == DownloadKind.Release) return ReleaseName(row.title).episodeTag
             val season = row.season ?: return null
             val episode = row.episode ?: return null
             return "S%02dE%02d".format(Locale.ROOT, season, episode)
@@ -299,7 +347,8 @@ data class DownloadsPage(
          * the row the queue is at ([current]): Pause while it runs or waits for its network or the charger, Resume while
          * it is held, or waits for what only a Resume or a saved provider ends. Where its season's pack serves it ([pack],
          * [fromPack], L406): queued, "Queued · from the season pack"; its file made, "From the season pack" under its bytes.
-         * Waiting on its indexer's limit, the [limit] line ([limitLine], L434) under the wait's words.
+         * Waiting on its indexer's limit, the [limit] line ([limitLine], L434) under the wait's words. A file of an NZB
+         * opened on Import, queued, says "Queued" alone: nothing is searched for it (L454).
          */
         fun active(item: DownloadRunner.Item, current: Boolean, pack: Boolean = false, limit: String? = null): ActiveWords {
             val row = item.row
@@ -311,7 +360,14 @@ data class DownloadsPage(
             val share = (written.toDouble() / total).toFloat()
             val held = if (made) PageBar.Part(share, Tone.Muted) else null
             val words = when (row.state) {
-                DownloadState.Queued -> ActiveWords(listOf(PageLine(if (pack) QUEUED_FROM_PACK else QUEUED, Tone.Muted)), null, null, null)
+                DownloadState.Queued -> {
+                    val words = when {
+                        row.kind == DownloadKind.Release -> QUEUED_FILE
+                        pack -> QUEUED_FROM_PACK
+                        else -> QUEUED
+                    }
+                    ActiveWords(listOf(PageLine(words, Tone.Muted)), null, null, null)
+                }
                 DownloadState.Resolving -> {
                     // "Trying release 2 of 3 · Checking availability": which release, then its step on a line of its own.
                     val step = row.reason ?: DownloadHostRules.FINDING_RELEASES
@@ -352,7 +408,8 @@ data class DownloadsPage(
 
         /**
          * Why [row] failed, in technical words (L366): "✕ Your provider is missing parts of this release" for a release
-         * that lacked parts, else the reason its row keeps; then how many releases were tried, where any were.
+         * that lacked parts, else the reason its row keeps; then how many releases were tried, where any were: never for a
+         * file of an NZB opened on Import, which is its own one release (L454).
          */
         fun failure(row: Download): List<PageLine> {
             val reason = when (row.reason) {
@@ -363,7 +420,7 @@ data class DownloadsPage(
             val tried = row.tried.size
             return listOfNotNull(
                 PageLine("✕ $reason", Tone.Warn),
-                PageLine("$tried release${if (tried == 1) "" else "s"} tried", Tone.Muted).takeIf { tried > 0 },
+                PageLine("$tried release${if (tried == 1) "" else "s"} tried", Tone.Muted).takeIf { tried > 0 && row.kind != DownloadKind.Release },
             )
         }
 
@@ -383,6 +440,9 @@ data class DownloadsPage(
 
         /** "Deleting tomorrow" under a film going tomorrow (L415); null for one not going. */
         fun going(row: DownloadsRow.Film): String? = AutoDelete.DELETING_TOMORROW.takeIf { row.deleting }
+
+        /** "Deleting tomorrow" under a file going tomorrow (L415); null for one not going. */
+        fun going(row: DownloadsRow.File): String? = AutoDelete.DELETING_TOMORROW.takeIf { row.deleting }
 
         /** "2 parts missing": what a finished download lacks, where it lacks any. */
         fun missing(row: Download): String? = when (val parts = row.gaps.size) {
@@ -410,8 +470,8 @@ data class DownloadsPage(
 
         /**
          * The Undo bar's words for [downloads] removed (L379): "Deleted Harbor Lights (6 episodes) and Copper Crown · 16.7 GB".
-         * A show's episodes go together, one named by its code; past three names, how many downloads; the size where they
-         * held any.
+         * A show's episodes go together, one named by its code; a file of an NZB opened on Import as its row names it,
+         * "Quiet Meridian S01E02" (L472); past three names, how many downloads; the size where they held any.
          */
         fun deleted(downloads: List<Download>): String {
             val groups = LinkedHashMap<String, MutableList<Download>>()
@@ -423,7 +483,7 @@ data class DownloadsPage(
                 val first = rows.first()
                 when {
                     first.kind == DownloadKind.Movie -> first.title
-                    rows.size == 1 -> listOfNotNull(first.title, label(first)).joinToString(" ")
+                    rows.size == 1 -> named(first)
                     else -> "${first.title} (${rows.size} episodes)"
                 }
             }
@@ -452,5 +512,24 @@ data class DownloadsPage(
 
         /** A limit's end, "01:00", on the device's clock. */
         private val CLOCK = DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT)
+    }
+}
+
+/** Names in their natural order: runs of digits by their value, the rest as text with no regard to case ("Part 2" before "Part 10"). */
+internal object NaturalOrder : Comparator<String> {
+    private val runs = Regex("""[0-9]+|[^0-9]+""")
+
+    override fun compare(a: String, b: String): Int {
+        val x = runs.findAll(a).map { it.value }.toList()
+        val y = runs.findAll(b).map { it.value }.toList()
+        x.zip(y).forEach { (p, q) ->
+            val order = if (p[0] in '0'..'9' && q[0] in '0'..'9') {
+                compareValuesBy(p.trimStart('0'), q.trimStart('0'), { it.length }, { it })
+            } else {
+                p.compareTo(q, ignoreCase = true)
+            }
+            if (order != 0) return order
+        }
+        return compareValues(x.size, y.size).takeIf { it != 0 } ?: a.compareTo(b)
     }
 }
