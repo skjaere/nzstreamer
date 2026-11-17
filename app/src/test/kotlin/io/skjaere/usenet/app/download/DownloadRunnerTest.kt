@@ -2436,6 +2436,11 @@ class DownloadRunnerTest {
 
     private suspend fun DownloadRunner.import(file: ImportedFile) = enqueueImport(file.target, file.candidate, file.pick, importSource)
 
+    /** [file] where another listing of its NZB puts it: at [at], the same file (its name and size) in another place. */
+    private suspend fun DownloadRunner.import(file: ImportedFile, at: Int) = enqueueImport(
+        DownloadTarget.release(IMPORT_SHA, at, file.name, IMPORT_TITLE), file.candidate, DownloadPick(at, file.name, file.fake.size, IMPORT_SHA), importSource,
+    )
+
     /**
      * L423, L456: a file of an NZB opened on Import is queued as a Release row with no search: Import's release its one
      * candidate, the file chosen as its pick, the file's exact size as what it needs. The NZB and the password typed for it
@@ -2490,6 +2495,38 @@ class DownloadRunnerTest {
         assertEquals(stored(row.id), runner.import(first), "downloaded: kept as it is")
         assertEquals(2, storage.adds.size)
         assertEquals(1, dao.rows.value.values.count { it.watchKey == row.watchKey })
+    }
+
+    /**
+     * L423, L469: Import's listing of an NZB can change between two opens (a file whose first article a provider lacked
+     * left out, another version's listing), and a Release row's watch key keeps the place its file had as it was queued. A
+     * file asked for is its rows' by its name and size, never by its place: another file's row in its place is never taken
+     * for it (nothing is queued, and that row is left as it is); its own row, queued at another place, is kept as it is, or
+     * put back once it failed, never a second.
+     */
+    @Test
+    fun `an imported file is its row's by its name and size, whatever place another listing gives it`() = test {
+        val runner = runner()
+        val e1 = ImportedFile(1)
+        val e2 = ImportedFile(2)
+        // Queued while E01 was left out of the listing: E02 at 0.
+        val row = assertNotNull(runner.import(e2, at = 0))
+        assertEquals(WatchKey.release(IMPORT_SHA, 0), row.watchKey)
+        // Listed again with E01 at 0 and E02 at 1: E01's Download finds E02's row in its place.
+        assertNull(runner.import(e1, at = 0), "another file's row taken for it")
+        assertEquals(row, stored(row.id))
+        assertEquals(listOf(row.id), order())
+        // E02 asked for at its new place: its own row, as it is.
+        assertEquals(stored(row.id), runner.import(e2, at = 1))
+        assertEquals(1, storage.adds.size)
+        // Failed: Download again at its new place puts that row back, its place and pick as they were, still one row.
+        dao.update(stored(row.id).copy(state = DownloadState.Failed, reason = "Couldn't open the release"))
+        val back = assertNotNull(runner.import(e2, at = 1))
+        assertEquals(row.id, back.id)
+        assertEquals(DownloadState.Queued, stored(row.id).state)
+        assertEquals(row.watchKey, stored(row.id).watchKey)
+        assertEquals(DownloadPick(0, e2.name, e2.fake.size, IMPORT_SHA), DownloadColumns.pick(stored(row.id)))
+        assertEquals(listOf(row.id), dao.rows.value.keys.toList())
     }
 
     /**

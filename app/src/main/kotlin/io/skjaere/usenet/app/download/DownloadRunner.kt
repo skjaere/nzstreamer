@@ -797,10 +797,14 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      * password typed for it as [source]: nothing searched or grabbed. The NZB and the password are kept in `.packs/`, keyed
      * by the candidate (so its turn takes them as its grab) and held by that NZB's rows, written with the row in one
      * storage call: the copy, then the row, under the lock the sweeps take (L456). Until Resolve, the row counts the file's
-     * exact size. One row per watch key: one still to finish, or done, is returned as it is, and nothing is written; a
-     * failed one is put back (L469), never a second: its copy written again, its tries, reason and limit's wait gone,
-     * queued at the queue's end, its file and release kept as Try again keeps them. Its log lines name the row by its id:
-     * never the NZB's title, the file's name or the password. Scheduling its host is the visible app's. Null on a TV.
+     * exact size. One row per file, known by its NZB, name and size, never by its place, which another listing of the NZB
+     * may change (a file a provider lacked the first article of left out, another version's listing), while its row keeps,
+     * as its watch key, the place it was queued at: one still to finish, or done, is returned as it is, and nothing is
+     * written; a failed one is put back (L469), never a second: its copy written again, its tries, reason and limit's wait
+     * gone, queued at the queue's end, its place, file and release kept as Try again keeps them. Another file's row in the
+     * place asked for, under the same watch key, is never taken for this file: nothing is queued (null). Its log lines name
+     * the row by its id: never the NZB's title, the file's name or the password. Scheduling its host is the visible app's.
+     * Null on a TV.
      */
     suspend fun enqueueImport(target: DownloadTarget, candidate: DownloadCandidate, pick: DownloadPick, source: DownloadStorage.Source): Download? {
         if (!runs) return null
@@ -809,10 +813,17 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         val copy = DownloadNzbs.Copy(DownloadNzbs.Meta.imported(candidate), source)
         return changes.withLock {
             val rows = dao.all().first()
-            val own = rows.filter { it.watchKey == target.watchKey }
+            val live = rows.filter { it.state != DownloadState.Deleting }
+            val own = live.filter { row ->
+                row.kind == DownloadKind.Release && DownloadColumns.pick(row)?.let { it.nzbId == pick.nzbId && it.name == pick.name && it.size == pick.size } == true
+            }
             own.firstOrNull { it.state in GOING_ON || it.state == DownloadState.Done }?.let { kept ->
                 log.info("download {}: already {}", kept.id, if (kept.state == DownloadState.Done) "downloaded" else "queued")
                 return@withLock kept
+            }
+            live.firstOrNull { it.watchKey == target.watchKey && it !in own }?.let { other ->
+                log.info("download {}: holds that place in its NZB, another file's; nothing queued", other.id)
+                return@withLock null
             }
             val position = (rows.maxOfOrNull { it.position } ?: -1) + 1
             val at = now()
@@ -823,10 +834,10 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 log.info("download {}: queued at {} from an imported NZB", row.id, position)
                 row
             } else {
+                // Its place (its watch key and its pick's index) as it was queued: the file is the same, wherever it is listed now.
                 val back = failed.copy(
                     title = target.title, subtitle = target.subtitle, state = DownloadState.Queued, reason = null, position = position,
-                    candidates = listOf(candidate), tried = emptyList(), indexerSize = pick.size, pick = DownloadColumns.text(pick), limitWait = null,
-                    createdAt = at, updatedAt = at,
+                    candidates = listOf(candidate), tried = emptyList(), indexerSize = pick.size, limitWait = null, createdAt = at, updatedAt = at,
                 )
                 // As a season's put-back: an NZB left from the try it failed with goes first, so its turn opens the copy.
                 deps.storage.dropSource(failed.id)
