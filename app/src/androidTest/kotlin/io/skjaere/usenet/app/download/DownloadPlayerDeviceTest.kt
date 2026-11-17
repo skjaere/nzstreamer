@@ -2,8 +2,10 @@ package io.skjaere.usenet.app.download
 
 import android.app.Activity
 import android.app.NotificationManager
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
@@ -16,6 +18,7 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.lifecycle.Lifecycle
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSpec
 import androidx.media3.ui.PlayerView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -99,7 +102,10 @@ import kotlin.math.abs
  * says so, with Close alone. A downloaded next episode counts down and plays from its file through the coordinator's
  * hook, with no search. Online, the next episode not downloaded is the next even with a later one downloaded, and it is
  * searched for and streamed (the mock and the fake indexer). File details say where the file came from in the providers'
- * place. A file gone says so, with Stream instead offered only once the network is back, which streams the episode.
+ * place. A file gone says so, with Stream instead offered only once the network is back, which streams the episode. And
+ * nothing is deleted while it plays (L413): a download removed, or deleted by Delete all, while its player plays it keeps
+ * its file, still read by the player's source, until the player finishes; a second download launched to the open player
+ * takes the player's hold from the first, and the same one launched again keeps it.
  *
  * The downloads are seeded as a finished one is left, through the app's own storage: the device tests' chapters.mkv
  * written as the file (its recorded gaps as zeros), renamed done, then its row with its marker, Done. The titles, ids and
@@ -118,6 +124,7 @@ class DownloadPlayerDeviceTest {
     private val context = instrumentation.targetContext
     private val container = context.container
     private val storage = container.downloadStorage
+    private val dao = container.data.downloads
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
     private val realFetch = PlaybackCoordinator.fetchNzb
     private val realNext = PlayerActivity.nextEpisode
@@ -492,6 +499,124 @@ class DownloadPlayerDeviceTest {
         assertTrue("the stream starts at $at ms", abs(at - GONE_AT_MS) < PLACE_SLACK_MS)
     }
 
+    /**
+     * L413: a download removed while its player plays it is hidden at once, and past its Undo's time keeps its file while
+     * the player holds it: the player's source still reads it, and a seek far ahead plays on. Once the player finishes, its
+     * file goes, row and all.
+     */
+    @Test
+    fun aDownloadRemovedWhileItPlaysKeepsItsFileUntilThePlayerFinishesThenItGoes() = runBlocking<Unit> {
+        val row = seed(episode(QUIET, 1))
+        val file = checkNotNull(storage.file(row))
+        ActivityScenario.launch<PlayerActivity>(PlayerActivity.intent(context, checkNotNull(DownloadLaunch.of(row)))).use { scenario ->
+            waitFor("the file playing", 30_000) { scenario.read { a -> a.player?.takeIf { it.isPlaying } } }
+            assertTrue("held by its player", row.id in container.downloads.held.value)
+            container.downloads.remove(listOf(row.id), keepFor = UNDO_MILLIS)
+            delay(UNDO_MILLIS + SETTLE_MILLIS)
+            assertEquals("hidden at once", DownloadState.Deleting, dao.get(row.id)?.state)
+            assertTrue("its file, while it plays", file.isFile)
+            assertTrue("the player's source reads it", readsThrough(row.id))
+            scenario.onActivity { it.player!!.seekTo(SEEK_MS) }
+            waitFor("playing on past the seek", 30_000) { scenario.read { a -> a.player?.takeIf { it.isPlaying && it.currentPosition >= SEEK_MS } } }
+            assertFalse("the play stopped", "Playback stopped" in scenario.read(::overlayWords))
+        }
+        waitFor("the download gone with its play", 30_000) { if (runBlocking { dao.get(row.id) } == null && !file.exists()) Unit else null }
+        assertFalse(storage.bookkeeping(row.id).exists())
+        assertFalse("the player's source reads it still", readsThrough(row.id))
+    }
+
+    /**
+     * L413: Delete all while a download plays deletes every other download at once, and leaves the one playing hidden with
+     * its file, which its player's source still reads, until the player finishes; then it goes too.
+     */
+    @Test
+    fun deleteAllDuringAPlayKeepsThePlayingFileUntilThePlayerFinishes() = runBlocking<Unit> {
+        val playing = seed(episode(QUIET, 1))
+        val other = seed(episode(QUIET, 2))
+        val playingFile = checkNotNull(storage.file(playing))
+        val otherFile = checkNotNull(storage.file(other))
+        // Delete all deletes every download on the device: only the test's own may be there.
+        val others = dao.all().first().filter { row -> made.none { it.id == row.id } }
+        if (others.isNotEmpty()) throw AssertionError("${others.size} download(s) not the test's, which Delete all would delete: ${others.map { it.id }}")
+        ActivityScenario.launch<PlayerActivity>(PlayerActivity.intent(context, checkNotNull(DownloadLaunch.of(playing)))).use { scenario ->
+            waitFor("the file playing", 30_000) { scenario.read { a -> a.player?.takeIf { it.isPlaying } } }
+            container.downloads.deleteAll()
+            assertEquals(null, dao.get(other.id))
+            assertFalse(otherFile.exists())
+            assertEquals("hidden at once", DownloadState.Deleting, dao.get(playing.id)?.state)
+            assertTrue("its file, while it plays", playingFile.isFile)
+            assertTrue(storage.bookkeeping(playing.id).isDirectory)
+            assertTrue("the player's source reads it", readsThrough(playing.id))
+            delay(SETTLE_MILLIS)
+            assertTrue(scenario.read { a -> a.player?.isPlaying == true })
+        }
+        waitFor("the download gone with its play", 30_000) { if (runBlocking { dao.get(playing.id) } == null && !playingFile.exists()) Unit else null }
+        assertFalse(storage.bookkeeping(playing.id).exists())
+    }
+
+    /**
+     * L413: a second download launched to the open player (onNewIntent, as a notification's Play reaches a player in
+     * picture-in-picture) takes the player's hold from the first in one step: the first, removed, goes once its Undo's time
+     * is over, while the second, removed, waits for the player. The second launched again keeps its hold, never let go
+     * between (the held ids watched as they change), and plays from its file though it is being deleted; it goes once the
+     * player finishes.
+     */
+    @Test
+    fun aDownloadLaunchedToTheOpenPlayerTakesItsHoldAndTheSameOneLaunchedAgainKeepsIt() = runBlocking<Unit> {
+        val first = seed(episode(QUIET, 1))
+        val second = seed(episode(QUIET, 2))
+        val firstFile = checkNotNull(storage.file(first))
+        val secondFile = checkNotNull(storage.file(second))
+        val secondLaunch = checkNotNull(DownloadLaunch.of(second))
+        // The held ids of the test's two, as they change: an earlier case's launch may still hold its own for a while.
+        val ours = setOf(first.id, second.id)
+        val seen = CopyOnWriteArrayList<Set<String>>()
+        CoroutineScope(Dispatchers.Unconfined).also { watching += it }.launch { container.downloads.held.collect { seen += it intersect ours } }
+        ActivityScenario.launch<PlayerActivity>(PlayerActivity.intent(context, checkNotNull(DownloadLaunch.of(first)))).use { scenario ->
+            waitFor("the first file playing", 30_000) { scenario.read { a -> a.player?.takeIf { it.isPlaying } } }
+            context.startActivity(PlayerActivity.intent(context, secondLaunch).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            val before = waitFor("the second file playing", 30_000) { scenario.read { a -> a.player?.takeIf { it.isPlaying && playsUri(it) == secondLaunch.uri } } }
+            assertEquals(setOf(second.id), container.downloads.held.value intersect ours)
+            assertTrue("the held ids passed through none: $seen", seen.dropWhile { first.id !in it }.all { it.isNotEmpty() })
+
+            // The first, let go of: removed, it goes once its Undo's time is over.
+            container.downloads.remove(listOf(first.id), keepFor = UNDO_MILLIS)
+            waitFor("the first gone at once", 30_000) { if (runBlocking { dao.get(first.id) } == null && !firstFile.exists()) Unit else null }
+            // The second, held: removed, it waits for the player.
+            container.downloads.remove(listOf(second.id), keepFor = UNDO_MILLIS)
+            delay(UNDO_MILLIS + SETTLE_MILLIS)
+            assertEquals(DownloadState.Deleting, dao.get(second.id)?.state)
+            assertTrue("its file, while it plays", secondFile.isFile)
+
+            // Launched again to the open player: its hold kept throughout, and it plays from its file again.
+            val from = seen.size
+            context.startActivity(PlayerActivity.intent(context, secondLaunch).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            waitFor("the second launched again playing", 30_000) { scenario.read { a -> a.player?.takeIf { it !== before && it.isPlaying && playsUri(it) == secondLaunch.uri } } }
+            assertTrue("let go of as it was launched again: ${seen.drop(from)}", seen.drop(from).all { second.id in it })
+            assertEquals(setOf(second.id), container.downloads.held.value intersect ours)
+            assertEquals(DownloadState.Deleting, dao.get(second.id)?.state)
+            assertTrue(secondFile.isFile)
+        }
+        waitFor("the second gone with its play", 30_000) { if (runBlocking { dao.get(second.id) } == null && !secondFile.exists()) Unit else null }
+        assertEquals(emptySet<String>(), container.downloads.held.value intersect ours)
+    }
+
+    /** What [player] plays: its media item's URI. */
+    private fun playsUri(player: Player): String? = player.currentMediaItem?.localConfiguration?.uri?.toString()
+
+    /** Whether the app's own source, the player's, opens download [id]'s file and reads from it. */
+    private fun readsThrough(id: String): Boolean {
+        val source = container.dataSourceFactory.createDataSource()
+        return try {
+            source.open(DataSpec(Uri.parse(PlayUris.download(id))))
+            source.read(ByteArray(4096), 0, 4096) > 0
+        } catch (e: java.io.IOException) {
+            false
+        } finally {
+            runCatching { source.close() }
+        }
+    }
+
     /** [row] as a finished download is left: chapters.mkv written as its file, its gaps as zeros, renamed done, then its row, Done, with its marker. */
     private suspend fun seed(row: Download): Download {
         val bytes = DownloadFixtures.media(MEDIA)
@@ -672,5 +797,11 @@ class DownloadPlayerDeviceTest {
         const val PREVIOUS_AT_MS = 1_500L
         /** How long a card the row stood in for is watched with the network back: several of its ticks. */
         const val STAND_IN_MILLIS = 3_000L
+        /** A removal's Undo time, given short. */
+        const val UNDO_MILLIS = 1_000L
+        /** Long enough for the runner's timer and what it starts to have run. */
+        const val SETTLE_MILLIS = 2_000L
+        /** Far ahead in chapters.mkv's six minutes. */
+        const val SEEK_MS = 200_000L
     }
 }

@@ -290,7 +290,8 @@ class DownloadStorage(
 
     /**
      * Brings the rows and the folders into step, at start and after Delete all (L348, L350, L379):
-     * - a row being deleted is finished: its Undo went with the process that showed it;
+     * - a row being deleted is finished: its Undo went with the process that showed it; but one [held] while it plays,
+     *   whose row and folders stay until its last hold ends (L413);
      * - a row whose marker is missing came from another device (a transfer carries the library, never these folders), and
      *   is dropped; a queued one has its marker from [add], before any NZB, and a finished one keeps it;
      * - a finished row whose file is gone fails, "The downloaded file is gone", holding no file and no progress;
@@ -300,7 +301,7 @@ class DownloadStorage(
      *
      * Files beside the folders stay. While the volume isn't there, no row is taken for gone and its folders stay.
      */
-    suspend fun reconcile(): Unit = changes.withLock {
+    suspend fun reconcile(held: (String) -> Boolean = { false }): Unit = changes.withLock {
         withContext(io) {
             val volume = volumeDir()
             var dropped = 0
@@ -309,7 +310,7 @@ class DownloadStorage(
                 when {
                     // An id no folder can be named by never had one: it came from elsewhere.
                     !ID.matches(row.id) -> downloads.delete(row.id).also { dropped++ }
-                    row.state == DownloadState.Deleting -> deleteRow(row.id)
+                    row.state == DownloadState.Deleting -> if (!held(row.id)) deleteRow(row.id)
                     !File(bookkeeping(row.id), MARKER).isFile -> deleteRow(row.id).also { dropped++ }
                     volume != null && isGone(row, volume) -> {
                         failGone(row)

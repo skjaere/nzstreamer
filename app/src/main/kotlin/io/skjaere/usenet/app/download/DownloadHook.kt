@@ -3,6 +3,9 @@ package io.skjaere.usenet.app.download
 import io.skjaere.usenet.app.play.PlayInFlight
 import io.skjaere.usenet.app.play.PlayOrigin
 import io.skjaere.usenet.data.Download
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
 
 /**
@@ -13,11 +16,18 @@ import org.slf4j.LoggerFactory
  * plain functions on the main thread, so the hook never waits on the library: it asks the runner's map of finished
  * downloads by watch key ([done]), kept in step with the library. A cast's, a paired phone's or a TV's play, Choose
  * release and Search stream as before. Its line names the download by its id alone.
+ *
+ * The file it launches is held for the launch's first [LAUNCH_HOLD_MILLIS] ([holds], the runner's), so a Remove, Delete
+ * all or Delete once watched as its player opens waits for it (L413); the player holds it under its own lease from then on.
  */
 internal class DownloadHook(
     private val inFlight: PlayInFlight,
     private val television: () -> Boolean,
     private val done: () -> Map<String, Download>,
+    /** The runner's holds on the downloads' files (L413). */
+    private val holds: () -> DownloadHolds,
+    /** Where a launch's hold is let go of once its time is over: the coordinator's. */
+    private val scope: CoroutineScope,
 ) {
     /** Plays [watchKey]'s finished download from [origin] when there is one to play from there; whether it did. */
     fun play(watchKey: String?, origin: PlayOrigin): Boolean {
@@ -25,8 +35,31 @@ internal class DownloadHook(
         val row = done()[watchKey] ?: return false
         val launch = DownloadLaunch.of(row) ?: return false
         log.info("play: download {} plays from its file, with nothing searched", row.id)
+        hold(row.id)
         inFlight.launchNow(launch, origin)
         return true
+    }
+
+    /**
+     * Holds download [id]'s file for its launch's first [LAUNCH_HOLD_MILLIS]: each launch its own hold, so one ending never
+     * lets go of a later one's.
+     */
+    private fun hold(id: String) {
+        val launch = Any()
+        val holds = holds()
+        holds.hold(launch, id)
+        scope.launch {
+            try {
+                delay(LAUNCH_HOLD_MILLIS)
+            } finally {
+                holds.release(launch, id)
+            }
+        }
+    }
+
+    companion object {
+        /** How long the hook holds a file it launches: until its player holds it under its own lease, with room to spare. */
+        const val LAUNCH_HOLD_MILLIS = 30_000L
     }
 }
 

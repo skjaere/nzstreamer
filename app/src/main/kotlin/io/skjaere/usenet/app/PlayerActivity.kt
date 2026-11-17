@@ -404,8 +404,9 @@ class PlayerActivity : ComponentActivity() {
     private val playingDownload: Boolean get() = PlayerBranches.isDownload(launch?.uri ?: intent.getStringExtra(EXTRA_URI))
 
     /**
-     * Who holds, for this player, what a debrid play added to the service account (L234): one id, kept as Android makes the
-     * player again, so its lease runs from its launch until it closes ([letGo]) and never ends at onStop.
+     * Who holds, for this player, what a debrid play added to the service account (L234), and a finished download's file
+     * (L413): one id, kept as Android makes the player again, so its lease runs from its launch until it closes ([letGo])
+     * and never ends at onStop; a paused play behind a locked screen holds them.
      */
     private var lease = "player:${UUID.randomUUID()}"
 
@@ -999,6 +1000,9 @@ class PlayerActivity : ComponentActivity() {
         // The new launch's lease in place of the one before's: the same release's (the next episode of a pack) never let go.
         container.debridAdds.release(lease)
         launch = launchOf(intent)
+        // The lease's hold on a download's file becomes the new launch's in one step (L413): another download held before the
+        // one before is let go, the same one launched again never let go; none for a launch of no download.
+        downloadOf(launch?.uri ?: intent.getStringExtra(EXTRA_URI))?.let { container.downloads.holdOnly(lease, it) } ?: container.downloads.release(lease)
         holdLaunch()
         resumePosition = C.TIME_UNSET
         picked = TrackChoice()
@@ -3735,8 +3739,10 @@ class PlayerActivity : ComponentActivity() {
         setupJob?.cancel()
         controlsPlayer?.hold()
         leaving = true
-        // The player closes for good: the grace of what its debrid play added begins (L234, L245).
+        // The player closes for good: the grace of what its debrid play added begins (L234, L245), and a download removed
+        // while it played goes (L413).
         container.debridAdds.release(lease)
+        container.downloads.release(lease)
         // A play a phone asks for from now on isn't this one's to hand over.
         notInFront()
         updatePictureInPicture()
@@ -3761,15 +3767,28 @@ class PlayerActivity : ComponentActivity() {
     override fun onDestroy() {
         if (pictureInPicture) unregisterReceiver(windowPresses)
         // Finished without closing itself (its task removed): its lease goes as letGo's would. One made again keeps it.
-        if (isFinishing) container.debridAdds.release(lease)
+        if (isFinishing) {
+            container.debridAdds.release(lease)
+            container.downloads.release(lease)
+        }
         super.onDestroy()
     }
 
-    /** This player's lease on its launch's debrid listing (L234), held again changing nothing; none for any other launch. */
+    /**
+     * This player's lease on its launch's debrid listing (L234), or on its finished download's file (L413), held again
+     * changing nothing; none for any other launch.
+     */
     private fun holdLaunch() {
         val uri = launch?.uri ?: intent.getStringExtra(EXTRA_URI) ?: return
-        (PlayUris.parse(uri) as? PlayUris.Target.Service)?.let { container.debridAdds.hold(lease, it.listingId) }
+        when (val target = PlayUris.parse(uri)) {
+            is PlayUris.Target.Service -> container.debridAdds.hold(lease, target.listingId)
+            is PlayUris.Target.Download -> container.downloads.hold(lease, target.id)
+            else -> Unit
+        }
     }
+
+    /** The finished download [uri] plays, by its id; null for any other play. */
+    private fun downloadOf(uri: String?): String? = uri?.let { (PlayUris.parse(it) as? PlayUris.Target.Download)?.id }
 
     /**
      * The player made again while its film moves (L124): the new one plays the film here from where this one paused, so

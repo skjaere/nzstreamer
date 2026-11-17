@@ -246,6 +246,19 @@ class DownloadRunnerDeps(
 }
 
 /**
+ * Holds on finished downloads' files while something plays them (L413): [DownloadRunner]'s. An [owner] (the hook's launch,
+ * a player's lease) holds a download by its id; a second hold of one id by one owner changes nothing. A file removed or
+ * deleted meanwhile goes once its last hold ends.
+ */
+interface DownloadHolds {
+    /** [owner] holds download [id]'s file. */
+    fun hold(owner: Any, id: String)
+
+    /** [owner] lets go of download [id]'s file. */
+    fun release(owner: Any, id: String)
+}
+
+/**
  * This device's downloads, one at a time (L335, L337): one per process, beside the play's coordinator. The queue is
  * Room's, in position order; a host (the job, or the service on older Android) lends it a lifetime by calling [run], which
  * walks the queue while the host lives: each item resolved (its release found, item 5), then written (item 6), and on to
@@ -265,14 +278,16 @@ class DownloadRunnerDeps(
  *   goes at the end of the last download of its season still to finish, whichever end it is, one removed counting as
  *   still to finish while its Undo can bring it back (L394, [Storage.sweepPacks]).
  * - Remove hides a download at once and deletes it once its Undo has gone (L379); Cancel deletes it at once.
+ * - Nothing is deleted while it plays (L413): a download's file is held by what plays it ([hold], [holdOnly], [release]),
+ *   and one removed or deleted meanwhile is hidden at once and goes as its last hold ends.
  * - A season is queued at once, all or none, a failed episode's row put back rather than queued twice ([enqueueAll],
  *   L392, L396). Its rows' turns search for their releases and take a copy of their season's pack first (Resolve's);
  *   [packs] says which copies are kept, for the Downloads page's words (L406).
  *
- * Nothing runs on a TV (L369): every call but [reconcile] returns at once there. Its log lines name a download by its id,
- * with sizes and a cause's kind: never its title, release or a host.
+ * Nothing runs on a TV (L369): every call but [reconcile] returns at once there, and nothing is held. Its log lines name a
+ * download by its id, with sizes and a cause's kind: never its title, release or a host.
  */
-class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: CoroutineScope) {
+class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: CoroutineScope) : DownloadHolds {
     /** What the runner keeps in and asks of the downloads' places on the device: [DownloadStorage]'s ([of]). */
     interface Storage {
         /**
@@ -308,8 +323,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         /** Deletes [id], its row, file and bookkeeping, in the crash-safe order. */
         suspend fun delete(id: String)
 
-        /** Brings the rows and folders into step (item 4). */
-        suspend fun reconcile()
+        /** Brings the rows and folders into step (item 4), a row being deleted that is [held] left with its files (L413). */
+        suspend fun reconcile(held: (String) -> Boolean = { false })
 
         /** Whether the primary volume's folder is there. */
         fun volumeThere(): Boolean
@@ -341,7 +356,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 override suspend fun deleteVideo(id: String) = storage.deleteVideo(id)
                 override suspend fun dropSource(id: String) = storage.dropSource(id)
                 override suspend fun delete(id: String) = storage.delete(id)
-                override suspend fun reconcile() = storage.reconcile()
+                override suspend fun reconcile(held: (String) -> Boolean) = storage.reconcile(held)
                 override fun volumeThere() = storage.volumeThere()
                 override suspend fun sweepPacks(removed: Set<String>) = storage.sweepPacks(removed)
                 override val copies = storage.packs.copies
@@ -429,6 +444,21 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
     /** What ends a wait before Resolve is asked again sooner: [retryNow], [resume], and the network's return (L381). */
     private val wakes = BackoffWakes(deps.network)
+
+    /**
+     * Who holds which download's file (L413), by owner: in memory, as what plays it is, so a process that dies holds nothing
+     * and a player made again in the next holds its file again as it is made. Changed under itself, beside [_held].
+     */
+    private val holders = HashMap<Any, Set<String>>()
+
+    private val _held = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * The downloads whose files are held now, by id (L413): what plays them (the hook's launch for its first 30 s, a player
+     * under its lease, a cast's Follow in time). One removed or deleted meanwhile keeps its file until its last hold ends,
+     * and the player's source still finds it ([DownloadPlayFiles]). None on a TV.
+     */
+    val held: StateFlow<Set<String>> = _held.asStateFlow()
 
     /** Every download but those removed, by position, with the live write's bytes and rate (L380's page and notification). */
     val state: StateFlow<List<Item>> = if (!runs) {
@@ -598,6 +628,52 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         indexerSize = need, search = search?.let(::searchText), createdAt = at, updatedAt = at,
     )
 
+    /** [owner] holds download [id]'s file while it plays it (L413); held again by the same owner, nothing changes. */
+    override fun hold(owner: Any, id: String) = changeHolds(owner) { it + id }
+
+    /**
+     * [owner]'s holds become download [id]'s alone, in one step (L413): a player's lease as another launch comes to it, the
+     * new download held before the one before is let go, and the same one, launched again, never let go.
+     */
+    fun holdOnly(owner: Any, id: String) = changeHolds(owner) { setOf(id) }
+
+    /** [owner] lets go of download [id]'s file; one removed or deleted meanwhile goes once no hold is left on it (L413). */
+    override fun release(owner: Any, id: String) = changeHolds(owner) { it - id }
+
+    /** [owner] lets go of every file it holds: a player closing for good (L413). */
+    fun release(owner: Any) = changeHolds(owner) { emptySet() }
+
+    /** [owner]'s holds as [change] makes them, and [held]; those no one holds now go where they wait to ([holdsEnded]). */
+    private fun changeHolds(owner: Any, change: (Set<String>) -> Set<String>) {
+        if (!runs) return
+        val ended = synchronized(holders) {
+            val before = _held.value
+            val now = change(holders[owner].orEmpty())
+            if (now.isEmpty()) holders.remove(owner) else holders[owner] = now
+            val after = holders.values.flatten().toSet()
+            _held.value = after
+            before - after
+        }
+        if (ended.isNotEmpty()) scope.launch { holdsEnded(ended) }
+    }
+
+    /** Whether download [id]'s file is held now (L413). */
+    private fun isHeld(id: String): Boolean = id in _held.value
+
+    /**
+     * The last hold on [ids] has ended (L413): those that waited for it go now, in the crash-safe order: removed while they
+     * played, their Undo's time over, or left by Delete all, both still Deleting. One whose Undo can still bring it back is
+     * left to its own timer, and one held again since stays.
+     */
+    private suspend fun holdsEnded(ids: Set<String>) {
+        changes.withLock {
+            val due = removals.withLock { ids.filter { it !in removed && !isHeld(it) } }
+            val gone = due.filter { dao.get(it)?.state == DownloadState.Deleting }
+            gone.forEach { delete(it) }
+            if (gone.isNotEmpty()) log.info("Downloads: {} deleted as their play ended: {}", gone.size, gone.joinToString())
+        }
+    }
+
     /**
      * Holds the queue (L380): the running item stops at its safe offset, keeping its file and the room it holds, and is
      * Paused; with none running, the next to run is. Nothing else starts until [resume], so the walk ends, and its host.
@@ -690,7 +766,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /**
      * Removes the downloads [ids] (L379): each hidden at once (Deleting), one running stopped first, and deleted, files and
      * all, once the Undo bar's time has gone ([keepFor]: the bar's own, longer with TalkBack), unless [undoRemove] brought it
-     * back. A process that dies meanwhile leaves them Deleting, for the next start's reconcile to finish.
+     * back; one that plays then, once its last hold ends (L413). A process that dies meanwhile leaves them Deleting, for the
+     * next start's reconcile to finish.
      */
     suspend fun remove(ids: Collection<String>, keepFor: Long = deps.undoMillis) {
         if (!runs) return
@@ -714,7 +791,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             changes.withLock {
                 marked.filter { removed[it]?.token === token }.forEach { id ->
                     removals.withLock { removed.remove(id) }
-                    if (dao.get(id)?.state == DownloadState.Deleting) delete(id)
+                    // One that plays now keeps its file: it goes as its last hold ends (L413, holdsEnded).
+                    if (dao.get(id)?.state == DownloadState.Deleting && !isHeld(id)) delete(id)
                 }
                 sweepPacks()
             }
@@ -724,8 +802,9 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /**
      * Deletes every download (Settings › Downloads' Delete all, which asks first; L379): the running one stopped, then each,
      * its NZB first, then its file, bookkeeping and row in the crash-safe order, those removed and waiting for their Undo's
-     * end with them, so their timers find nothing and an Undo brings nothing back. Then the files are brought into step, a
-     * folder no row has deleted too (item 4), and the season packs' copies with them (L394). Nothing is left to run: the
+     * end with them, so their timers find nothing and an Undo brings nothing back. One that plays is hidden, its NZB dropped
+     * and its file kept, and goes as its last hold ends (L413). Then the files are brought into step, a folder no row has
+     * deleted too (item 4), but a held one's, and the season packs' copies with them (L394). Nothing is left to run: the
      * walk ends, and its host.
      */
     suspend fun deleteAll() {
@@ -743,12 +822,14 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 } catch (e: Exception) {
                     log.warn("download {}: couldn't drop its NZB: {}", row.id, e::class.simpleName)
                 }
-                delete(row.id)
+                // One that plays keeps its file until its last hold ends (L413, holdsEnded).
+                if (isHeld(row.id)) dao.setState(row.id, DownloadState.Deleting, null, now()) else delete(row.id)
             }
             rows.size
         }
         try {
-            deps.storage.reconcile()
+            // Told what is held, as it deletes every row being deleted else.
+            deps.storage.reconcile(::isHeld)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -988,7 +1069,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
     private suspend fun reconcileNow() {
         try {
-            deps.storage.reconcile()
+            // Told what is held: a player brought back after a process death may hold its file before the start's reconcile.
+            deps.storage.reconcile(::isHeld)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

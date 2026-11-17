@@ -45,6 +45,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -485,6 +486,133 @@ class DownloadRunnerTest {
         runCurrent()
         assertNull(dao.get(finished))
         assertFalse(storage.videoFolder(finished).exists())
+    }
+
+    /**
+     * L413: a download held while it plays keeps its file. Removed, it is hidden at once, and once its Undo's time is over its
+     * files stay until its last hold ends; then they go, row and all. One owner holding one id twice is one hold, let go of
+     * once. A hold that ends while the Undo can still bring it back leaves it to its timer, as a removal is.
+     */
+    @Test
+    fun `a held download's removal deletes nothing until its last hold ends, then deletes it`() = test {
+        val runner = runner()
+        val first = runner.add(1, fake("hl-a"))
+        val second = runner.add(2, fake("hl-b"))
+        host(runner)
+        advanceUntilIdle()
+        val player = "player:lease"
+        val launch = Any()
+        runner.hold(player, first)
+        runner.hold(player, first)
+        runner.hold(launch, first)
+        assertEquals(setOf(first), runner.held.value)
+
+        runner.remove(listOf(first))
+        advanceTimeBy(DownloadRunner.UNDO_MILLIS + 1)
+        runCurrent()
+        assertEquals(DownloadState.Deleting, stored(first).state)
+        assertTrue(storage.video(first).isFile, "its file, while it plays")
+        assertTrue(storage.bookkeeping(first).isDirectory)
+        assertFalse("delete $first" in storage.events)
+        // The launch's hold ends: the player's still holds it.
+        runner.release(launch, first)
+        runCurrent()
+        assertTrue(storage.video(first).isFile)
+        // The player's, held twice by one owner, ends with one release: then it goes, in the crash-safe order.
+        runner.release(player, first)
+        runCurrent()
+        assertEquals(emptySet(), runner.held.value)
+        assertNull(dao.get(first))
+        assertFalse(storage.videoFolder(first).exists())
+        assertFalse(storage.bookkeeping(first).exists())
+
+        // A hold that ends while the Undo can still bring it back: its timer deletes it, as it would have.
+        runner.hold(player, second)
+        runner.remove(listOf(second))
+        runCurrent()
+        runner.release(player)
+        runCurrent()
+        assertEquals(DownloadState.Deleting, stored(second).state)
+        assertTrue(storage.video(second).isFile)
+        advanceTimeBy(DownloadRunner.UNDO_MILLIS + 1)
+        runCurrent()
+        assertNull(dao.get(second))
+        assertFalse(storage.videoFolder(second).exists())
+    }
+
+    /**
+     * L413: Delete all deletes every download but those held: one playing is hidden at once, its NZB dropped and its file
+     * kept, and its closing reconcile is told it is held, so it leaves it (DownloadStorage's reconcile deletes every row
+     * being deleted). Its files go once its last hold ends.
+     */
+    @Test
+    fun `delete all leaves a held download's files until its hold ends, its reconcile told it is held`() = test {
+        val runner = runner()
+        val playing = runner.add(1, fake("hl-a"))
+        val other = runner.add(2, fake("hl-b"))
+        host(runner)
+        advanceUntilIdle()
+        val queued = runner.add(3, fake("hl-c"))
+        val player = "player:lease"
+        runner.hold(player, playing)
+        storage.reconciledHeld = null
+
+        runner.deleteAll()
+        advanceUntilIdle()
+        assertEquals(DownloadState.Deleting, stored(playing).state)
+        assertTrue(storage.video(playing).isFile, "its file, while it plays")
+        assertTrue("drop source $playing" in storage.events)
+        assertNull(dao.get(other))
+        assertNull(dao.get(queued))
+        val held = assertNotNull(storage.reconciledHeld, "Delete all's reconcile")
+        assertTrue(held(playing))
+        assertFalse(held(other))
+
+        runner.release(player)
+        runCurrent()
+        assertNull(dao.get(playing))
+        assertFalse(storage.videoFolder(playing).exists())
+        assertFalse(storage.bookkeeping(playing).exists())
+    }
+
+    /**
+     * L413: a player's lease is one owner across its launches: as another launch comes to the open player, its hold becomes
+     * the new launch's download in one step ([DownloadRunner.holdOnly]). A different download is held before the one before
+     * is let go, so the held ids never pass through none, and the one before, removed, goes then; the same one launched
+     * again is never let go.
+     */
+    @Test
+    fun `holdOnly hands an owner's hold to another download with no gap, and to the one it holds keeps it`() = test {
+        val runner = runner()
+        val first = runner.add(1, fake("hl-a"))
+        val second = runner.add(2, fake("hl-b"))
+        host(runner)
+        advanceUntilIdle()
+        val seen = mutableListOf<Set<String>>()
+        work.launch(UnconfinedTestDispatcher(testScheduler)) { runner.held.collect { seen += it } }
+        val lease = "player:lease"
+        runner.holdOnly(lease, first)
+        runner.remove(listOf(first))
+        advanceTimeBy(DownloadRunner.UNDO_MILLIS + 1)
+        runCurrent()
+        assertEquals(DownloadState.Deleting, stored(first).state)
+
+        // The same download launched again: never let go.
+        runner.holdOnly(lease, first)
+        runCurrent()
+        assertTrue(storage.video(first).isFile)
+        assertEquals(listOf(emptySet(), setOf(first)), seen)
+
+        // Another: held before the one before is let go, which goes then.
+        runner.holdOnly(lease, second)
+        runCurrent()
+        assertEquals(listOf(emptySet(), setOf(first), setOf(second)), seen)
+        assertNull(dao.get(first))
+        assertFalse(storage.videoFolder(first).exists())
+        assertEquals(DownloadState.Done, stored(second).state)
+        runner.release(lease)
+        runCurrent()
+        assertEquals(emptySet(), runner.held.value)
     }
 
     /**
@@ -1842,6 +1970,10 @@ class DownloadRunnerTest {
         assertEquals(emptyList(), switches)
         tv.reconcile()
         assertEquals(1, storage.reconciles)
+        // Nothing is held there (L413).
+        tv.hold(Any(), QUEUED)
+        tv.holdOnly(Any(), QUEUED)
+        assertEquals(emptySet(), tv.held.value)
     }
 
     /**
@@ -2259,9 +2391,13 @@ class DownloadRunnerTest {
             dao.delete(id)
         }
 
-        override suspend fun reconcile() {
+        /** What the last reconcile was told is held (L413): those it leaves though they are being deleted. */
+        var reconciledHeld: ((String) -> Boolean)? = null
+
+        override suspend fun reconcile(held: (String) -> Boolean) {
             reconciles++
             events += "reconcile"
+            reconciledHeld = held
             // As DownloadStorage's: the season packs' copies swept with the rest.
             packs.sweep(dao.all().first())
         }

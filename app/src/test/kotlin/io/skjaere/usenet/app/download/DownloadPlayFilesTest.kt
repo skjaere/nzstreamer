@@ -67,6 +67,28 @@ class DownloadPlayFilesTest {
         assertEquals(listOf(done.id), told)
     }
 
+    /**
+     * L413: a download removed while it plays is held until the play ends, and its file is served meanwhile, so the play's
+     * next seek still finds it; one being deleted that nothing holds gives none.
+     */
+    @Test
+    fun `a download being deleted is served while it is held, and not after`() {
+        val held = mutableSetOf(done.id)
+        val playing = DownloadPlayFiles(Rows(rows), fileOf = { row -> row.relativePath?.let { File(volume, it) } }, held = { it in held })
+        rows[done.id] = done.copy(state = DownloadState.Deleting)
+        val found = assertNotNull(playing.find(done.id))
+        assertEquals(File(volume, "downloads/3f2c9e1a/v.mkv"), found.file)
+        assertEquals(1_400_000_000, found.size)
+        held.clear()
+        assertNull(playing.find(done.id))
+        // Held or not, only a finished download or one being deleted has a file to serve.
+        held += done.id
+        DownloadState.entries.filter { it != DownloadState.Done && it != DownloadState.Deleting }.forEach { state ->
+            rows[done.id] = done.copy(state = state)
+            assertNull(playing.find(done.id), "$state")
+        }
+    }
+
     @Test
     fun `a download not finished, removed or unknown gives none`() {
         DownloadState.entries.filter { it != DownloadState.Done }.forEach { state ->

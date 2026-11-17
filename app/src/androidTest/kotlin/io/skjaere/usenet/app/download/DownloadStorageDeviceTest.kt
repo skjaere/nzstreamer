@@ -431,6 +431,43 @@ class DownloadStorageDeviceTest {
         assertEquals(emptyList<String>(), File(files, DownloadNzbs.PATH).list()!!.toList())
     }
 
+    /**
+     * L413: a download removed or deleted while it plays is being deleted (hidden) and held: reconcile, after Delete all,
+     * leaves its row, its file and its folders, where it finishes any other row being deleted. Once nothing holds it, the
+     * next reconcile finishes it too.
+     */
+    @Test
+    fun reconcileLeavesAHeldRowBeingDeletedWithItsFilesAndFolders() = runBlocking<Unit> {
+        val storage = storage()
+        listOf("held", "unheld").forEach { id ->
+            storage.add(row(id))
+            storage.open(id, NAME, 4096).close()
+            storage.finish(id, NAME)
+            finished(id, storage)
+            downloads.setState(id, DownloadState.Deleting, null, 30)
+        }
+        val heldFile = storage.file(downloads.get("held")!!)!!
+        val unheldFile = storage.file(downloads.get("unheld")!!)!!
+
+        storage.reconcile(held = { it == "held" })
+
+        assertEquals(DownloadState.Deleting, downloads.get("held")?.state)
+        assertTrue("its file, while it plays", heldFile.isFile)
+        assertTrue(storage.bookkeeping("held").isDirectory)
+        assertTrue(File(storage.bookkeeping("held"), DownloadStorage.MARKER).isFile)
+        assertTrue(storage.videoFolder("held")!!.isDirectory)
+        assertNull(downloads.get("unheld"))
+        assertFalse(unheldFile.exists())
+        assertFalse(storage.bookkeeping("unheld").exists())
+
+        // Its play over: nothing holds it, and the next reconcile finishes it.
+        storage.reconcile()
+        assertNull(downloads.get("held"))
+        assertFalse(heldFile.exists())
+        assertFalse(storage.bookkeeping("held").exists())
+        assertFalse(storage.videoFolder("held")!!.exists())
+    }
+
     /** A season pack of Harbor Lights' [season], kept under its release's key. */
     private fun pack(guid: String, season: Int) = DownloadNzbs.Meta(
         ReleaseKey.of("fake-indexer", guid), "Harbor.Lights.S0$season.1080p.WEB.h264-PACK", DownloadCandidate("fake-indexer", guid, "Harbor.Lights.S0$season.1080p.WEB.h264-PACK", size = 8_400_000_000L),

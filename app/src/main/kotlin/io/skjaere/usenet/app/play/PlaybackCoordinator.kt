@@ -967,9 +967,12 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
 
     /**
      * The hooks (L353): a play asked for on this device of a title with a finished download plays its file at once, from
-     * the runner's map of them, never a wait on the library; never on a TV.
+     * the runner's map of them, never a wait on the library; never on a TV. The file is held for the launch's first 30 s,
+     * until its player holds it (L413).
      */
-    private val downloadHook = DownloadHook(inFlight, television = { container.television }, done = { container.downloads.done.value })
+    private val downloadHook = DownloadHook(
+        inFlight, television = { container.television }, done = { container.downloads.done.value }, holds = { container.downloads }, scope = scope,
+    )
 
     /** Whether the sheet is starting a play now: searching, trying releases, or asking which file plays. */
     val startingPlay: Boolean get() = job?.isActive == true

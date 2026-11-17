@@ -23,6 +23,7 @@ import io.skjaere.usenet.player.PlayUris
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
@@ -30,6 +31,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.AfterEach
@@ -56,7 +60,8 @@ class DownloadHookTest {
     private val inFlight = PlayInFlight(playerInFront) { launcher }
     private var television = false
     private val done = mutableMapOf<String, Download>()
-    private val hook = DownloadHook(inFlight, television = { television }, done = { done.toMap() })
+    private val holds = FakeHolds()
+    private val hook = DownloadHook(inFlight, television = { television }, done = { done.toMap() }, holds = { holds }, scope = scope)
 
     private val row = Download(
         id = "3f2c9e1a-7b4d-4c2e-9a10-5e6f7a8b9c0d", watchKey = WatchKey.episode(900002, 1, 5), kind = DownloadKind.Episode, title = "Harbor Lights",
@@ -182,6 +187,34 @@ class DownloadHookTest {
         assertTrue(inFlight.launches.tryReceive().isFailure, "something was launched")
         assertNull(playerInFront.launching.value)
         assertEquals(0, launcher.stops)
+        assertEquals(emptySet(), holds.held(), "a file held")
+    }
+
+    /**
+     * L413: the hook holds the download it launches for 30 seconds, so a Remove, Delete all or Delete once watched as its
+     * player opens waits for it; the player holds it under its own lease from then on. Each launch holds it on its own, so
+     * the first's end never lets go of a later launch's.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a download's launch holds its file for 30 seconds, each launch its own hold`() = runTest {
+        done[row.watchKey] = row
+        val launches = FakeHolds()
+        val timed = DownloadHook(inFlight, television = { television }, done = { done.toMap() }, holds = { launches }, scope = backgroundScope)
+        assertTrue(timed.play(row.watchKey, PlayOrigin.Here))
+        assertEquals(setOf(row.id), launches.held())
+        advanceTimeBy(10_000)
+        assertTrue(timed.play(row.watchKey, PlayOrigin.Here))
+        advanceTimeBy(DownloadHook.LAUNCH_HOLD_MILLIS - 10_000 - 1)
+        runCurrent()
+        assertEquals(setOf(row.id), launches.held())
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(setOf(row.id), launches.held(), "the second launch's hold went with the first's")
+        assertEquals(1, launches.owners())
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertEquals(emptySet(), launches.held())
     }
 
     /**
@@ -202,6 +235,27 @@ class DownloadHookTest {
         assertEquals("if (downloadHook.play(ep.key, origin)) return", body("fun playEpisode(ep: EpisodePlay"))
         assertFalse("downloadHook" in body("fun play(request: PlayRequest"))
         assertEquals(4, Regex("""downloadHook\.play\(""").findAll(source).count())
+    }
+
+    /** The runner's holds as the hook takes them: each owner's ids. */
+    private class FakeHolds : DownloadHolds {
+        private val owners = mutableMapOf<Any, MutableSet<String>>()
+
+        @Synchronized
+        override fun hold(owner: Any, id: String) {
+            owners.getOrPut(owner) { mutableSetOf() } += id
+        }
+
+        @Synchronized
+        override fun release(owner: Any, id: String) {
+            owners[owner]?.let { ids -> ids -= id; if (ids.isEmpty()) owners -= owner }
+        }
+
+        @Synchronized
+        fun held(): Set<String> = owners.values.flatten().toSet()
+
+        @Synchronized
+        fun owners(): Int = owners.size
     }
 
     /** A Cast device's launcher that counts its stops. */
