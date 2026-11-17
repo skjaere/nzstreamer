@@ -59,6 +59,20 @@ class DownloadPlaySourcesTest {
         assertEquals(emptyList(), sources.filter { (_, text) -> "DownloadsDeps.playHere" in text }.keys.toList())
     }
 
+    /**
+     * L458, L473: a file opened on Import has no title whose play the hook turns to its file, so a finished one plays here
+     * through the hook by its watch key (PlaybackCoordinator.playDownloaded): the pages' rows and their notifications through
+     * playHere's branch for it, and Import's tap through the router, with its finished download, whose here plays it first.
+     */
+    @Test
+    fun `an imported file's finished download plays here through the hook by its watch key, from the pages and from Import`() {
+        val here = assertNotNull(blockIn(source("download/DownloadsViewModel.kt"), "playHere"), "no playHere in DownloadsViewModel.kt")
+        assertTrue(RELEASE_HERE.containsMatchIn(here.text), here.text)
+        val import = source("ImportScreen.kt")
+        assertTrue(IMPORT_TAP.containsMatchIn(import), "Import's tap doesn't hand the router its finished download")
+        assertTrue(IMPORT_HERE.containsMatchIn(import), "Import's here doesn't play the finished download first")
+    }
+
     @Test
     fun `only the two Downloads pages take TopBar's stacked form`() {
         val bar = assertNotNull(blockIn(source("ui/Components.kt"), "TopBar"), "no TopBar")
@@ -78,6 +92,9 @@ class DownloadPlaySourcesTest {
         assertTrue(TAKE.containsMatchIn("fun take(ask: String?, play: Boolean) {"))
         assertTrue(PAST.containsMatchIn("container.playRouter.upNext(row.play)") && PAST.containsMatchIn("container.playback.playMovie(target, origin)"))
         assertFalse(PLAY_HERE_CALL.containsMatchIn("private fun playHere(container: AppContainer, row: Download) {"))
+        assertTrue(RELEASE_HERE.containsMatchIn("DownloadKind.Release -> container.playback.playDownloaded(row.watchKey, PlayOrigin.Here)"))
+        assertTrue(IMPORT_TAP.containsMatchIn("container.playRouter.playFile(ready.nzb.id, file, done) {"))
+        assertTrue(IMPORT_HERE.containsMatchIn("val played = done != null && container.playback.playDownloaded(done.watchKey)"))
         val text = "class A {\n    private fun playHere(c: C) {\n        c.go()\n    }\n}\n"
         assertEquals("private fun playHere(c: C) {\n        c.go()\n    }", blockIn(text, "playHere")?.text)
     }
@@ -137,6 +154,15 @@ class DownloadPlaySourcesTest {
 
         /** A play past the router: the coordinator's title plays, or the router itself. */
         val PAST = Regex("""\bplayback\s*\.\s*play(Episode|Movie)\b|\bplayRouter\b""")
+
+        /** playHere's branch for a file opened on Import: the hook by its watch key. */
+        val RELEASE_HERE = Regex("""\bDownloadKind\.Release\s*->\s*container\.playback\.playDownloaded\s*\(\s*row\.watchKey\b""")
+
+        /** Import's tap, through the router with the file's finished download. */
+        val IMPORT_TAP = Regex("""\bplayRouter\s*\.\s*playFile\s*\(\s*ready\.nzb\.id\s*,\s*file\s*,\s*done\s*\)""")
+
+        /** Import's here: the finished download played first. */
+        val IMPORT_HERE = Regex("""\bplayback\s*\.\s*playDownloaded\s*\(\s*done\.watchKey\b""")
 
         /** TopBar's stacked form taken. */
         val STACKED = Regex("""\bstacked\s*=\s*true\b""")

@@ -15,6 +15,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
+import io.skjaere.nzbstreamer.stream.StreamableFile
 import io.skjaere.usenet.app.FakeTmdb
 import io.skjaere.usenet.app.ImmersiveHintSeen
 import io.skjaere.usenet.app.MainActivity
@@ -50,6 +51,7 @@ import io.skjaere.usenet.app.onMainThread
 import io.skjaere.usenet.app.overlayNodes
 import io.skjaere.usenet.app.play.CastTo
 import io.skjaere.usenet.app.play.EpisodePlay
+import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.PlayState
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.play.ProbedTracksSerializer
@@ -57,11 +59,13 @@ import io.skjaere.usenet.app.read
 import io.skjaere.usenet.app.shell
 import io.skjaere.usenet.app.views
 import io.skjaere.usenet.app.waitFor
+import io.skjaere.usenet.core.FileCandidate
 import io.skjaere.usenet.core.ProbedTrack
 import io.skjaere.usenet.core.ProbedTracks
 import io.skjaere.usenet.core.StepStatus
 import io.skjaere.usenet.data.AppSettings
 import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
@@ -551,6 +555,19 @@ class DownloadCastDeviceTest {
     }
 
     /**
+     * L458, L447, L473: Import's tap on a file whose download is finished, with Kitchen display connected (the router's
+     * play of Import's file, handed its finished download, as Import's row calls it), casts the downloaded file, never the
+     * NZB's stream: the one-step sheet, the LOAD serving the file, nothing grabbed, with no provider or service usable.
+     */
+    @Test
+    fun importsFinishedRowCastsTheDownloadedFile() = runBlocking<Unit> {
+        val row = finishedImport()
+        nothingToStreamFrom()
+        val file = FileCandidate(1, StreamableFile(checkNotNull(row.fileName), film.size.toLong(), 1, 0, 0, 0))
+        castsTheFile(row) { container.playRouter.playFile(IMPORT_NZB, file, row) { throw AssertionError("never here") } }
+    }
+
+    /**
      * L447, L473: from the Downloads pages a file Kitchen display can't fully play asks the
      * pre-check over the file even online, where a title's Play would stream for the device: Play on this phone, Cast
      * anyway and Cancel, never a compatible release. Nothing sent, nothing grabbed, no stream started; Cancel ends it.
@@ -631,6 +648,25 @@ class DownloadCastDeviceTest {
                 id = id, watchKey = WatchKey.movie(FILM), kind = DownloadKind.Movie, title = FILM_NAME, subtitle = "2022", movieTmdbId = FILM, year = 2022,
                 runtimeMinutes = 6, posterPath = POSTER, state = DownloadState.Done, position = -2_000L,
                 release = RememberedRelease(INDEXER, "cc-2022", name.removeSuffix(".mkv"), null, 0, "nzb-cc-2022", name, size),
+                fileName = name, size = size, indexerSize = size, safeOffset = size, relativePath = "downloads/$id/v.mkv", createdAt = 1, completedAt = 2,
+                updatedAt = 2,
+            ),
+        )
+    }
+
+    /**
+     * Quiet Meridian's S01E02 as a file of an NZB opened on Import, finished (L423), as [finished] leaves an episode: its row,
+     * under its release's watch key, then chapters.mkv as its file.
+     */
+    private fun finishedImport(): Download {
+        val id = Download.newId()
+        val name = "Quiet.Meridian.S01E02.720p.WEB.h264-KESTREL.mkv"
+        val size = film.size.toLong()
+        return seeded(
+            Download(
+                id = id, watchKey = WatchKey.release(IMPORT_NZB, 1), kind = DownloadKind.Release, title = name, subtitle = IMPORT_TITLE,
+                state = DownloadState.Done, position = -3_000L, candidates = listOf(DownloadCandidate(IMPORTED, IMPORT_NZB, IMPORT_TITLE, size = size)),
+                release = RememberedRelease(IMPORTED, IMPORT_NZB, IMPORT_TITLE, null, 1, IMPORT_NZB, name, size),
                 fileName = name, size = size, indexerSize = size, safeOffset = size, relativePath = "downloads/$id/v.mkv", createdAt = 1, completedAt = 2,
                 updatedAt = 2,
             ),
@@ -772,6 +808,10 @@ class DownloadCastDeviceTest {
         const val FILM_NAME = "Copper Crown"
         val NAMES = listOf("First Light", "Pilot Boat", "The Sandbar", "Salt Road")
         const val INDEXER = "download-cast-device-test"
+
+        /** An NZB opened on Import, invented: its id, as Import keeps it, and its name. */
+        const val IMPORT_NZB = "download-cast-device-test-nzb"
+        const val IMPORT_TITLE = "Quiet.Meridian.S01.720p.WEB.h264-KESTREL"
         const val POSTER = "/quiet-meridian.jpg"
         const val STILL = "/quiet-meridian-s01e02.jpg"
 

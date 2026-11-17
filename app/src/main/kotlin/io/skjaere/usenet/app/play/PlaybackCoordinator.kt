@@ -1110,6 +1110,13 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
     }
 
     /**
+     * Plays the finished download of [watchKey] from [origin], by the hook alone (L353, L458): a file opened on Import has no
+     * title whose play the hook turns to its file, so its pages, its notification and Import play it by its watch key.
+     * Whether it did: false where none is finished, or it isn't one to play from there (a TV, a paired phone).
+     */
+    fun playDownloaded(watchKey: String, origin: PlayOrigin = PlayOrigin.Here): Boolean = downloadHook.play(watchKey, origin)
+
+    /**
      * The torrent indexers whose "Use with your debrid service" is off, by id, from every one saved, whether a search asks it
      * now or not ([IndexerConfigs.offService]): nothing of theirs goes to a service (L194, DDC-2). Not from
      * container.indexerConfigs(), which lists only what a search asks: a disabled or removed indexer, or one whose key

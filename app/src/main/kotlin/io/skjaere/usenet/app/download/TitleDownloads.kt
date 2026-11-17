@@ -6,6 +6,8 @@ import io.skjaere.usenet.app.collection.UndoTimer
 import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
 import io.skjaere.usenet.core.formatSize
 import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadCandidate
+import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
@@ -25,7 +27,8 @@ import kotlinx.coroutines.launch
  * keeps them, how far it is ([percent], once its file is made), its file's [size] (exact once resolved, else the
  * indexer's), how many parts it lacks ([partsMissing]) and how many releases were [tried]; finished, whether Delete once
  * watched will delete it and it isn't due yet ([deleting], L415), and whether its file plays from the row alone ([plays],
- * as the play hook's launch takes it: what the Show page's line counts, L407); [id] for the runner's calls.
+ * as the play hook's launch takes it: what the Show page's line counts, L407); [id] for the runner's calls. [imported]: a
+ * file of an NZB opened on Import (L454), for which nothing is searched, so its steps say themselves.
  */
 data class TitleDownload(
     val id: String,
@@ -37,6 +40,7 @@ data class TitleDownload(
     val tried: Int = 0,
     val deleting: Boolean = false,
     val plays: Boolean = false,
+    val imported: Boolean = false,
 ) {
     companion object {
         /**
@@ -48,7 +52,10 @@ data class TitleDownload(
             val total = row.size ?: row.indexerSize
             val percent = if (row.relativePath != null && total > 0) (item.written.coerceIn(0, total) * 100 / total).toInt() else null
             val done = row.state == DownloadState.Done
-            return TitleDownload(row.id, row.state, row.reason, percent, total, row.gaps.size, row.tried.size, deleting && done, done && DownloadLaunch.accepts(row))
+            return TitleDownload(
+                row.id, row.state, row.reason, percent, total, row.gaps.size, row.tried.size, deleting && done, done && DownloadLaunch.accepts(row),
+                imported = row.kind == DownloadKind.Release,
+            )
         }
     }
 }
@@ -113,7 +120,7 @@ object TitleDownloads {
      */
     fun line(download: TitleDownload): List<PageLine> = when (download.state) {
         DownloadState.Queued -> listOf(PageLine(QUEUED, Tone.Muted))
-        DownloadState.Resolving -> trying(download)?.let { listOf(PageLine(it, Tone.Accent)) } ?: listOf(PageLine(DownloadHostRules.FINDING_RELEASES, Tone.Muted))
+        DownloadState.Resolving -> trying(download)?.let { listOf(PageLine(it, Tone.Accent)) } ?: listOf(PageLine(finding(download), Tone.Muted))
         DownloadState.Running -> download.reason?.let { listOf(PageLine(far(it, download), Tone.Warn)) } ?: listOf(PageLine(far(DOWNLOADING, download), Tone.Accent))
         DownloadState.Paused -> listOf(PageLine(far(PAUSED, download), Tone.Muted))
         DownloadState.Stopped -> listOf(PageLine(far(DownloadHostRules.STOPPED_BY_ANDROID, download), Tone.WarnStrong))
@@ -134,7 +141,7 @@ object TitleDownloads {
         fun percent(words: String) = download.percent?.let { "$words, $it percent" } ?: words
         return when (download.state) {
             DownloadState.Queued -> QUEUED
-            DownloadState.Resolving -> trying(download) ?: DownloadHostRules.FINDING_RELEASES.removeSuffix("…")
+            DownloadState.Resolving -> trying(download) ?: finding(download).removeSuffix("…")
             DownloadState.Running -> percent(download.reason ?: DOWNLOADING)
             DownloadState.Paused -> percent("Download paused")
             DownloadState.Stopped -> percent(DownloadHostRules.STOPPED_BY_ANDROID)
@@ -185,7 +192,7 @@ object TitleDownloads {
         return when (download.state) {
             DownloadState.Queued -> DownloadButtonWords(QUEUED, null, mark)
             DownloadState.Resolving -> trying(download)?.let { DownloadButtonWords(DOWNLOADING, PageLine(it, Tone.Muted), mark) }
-                ?: DownloadButtonWords(DownloadHostRules.FINDING_RELEASES, null, mark)
+                ?: DownloadButtonWords(finding(download), null, mark)
             DownloadState.Running -> DownloadButtonWords(DOWNLOADING, download.reason?.let { PageLine(it, Tone.Warn) } ?: far, mark)
             DownloadState.Waiting -> DownloadButtonWords(QUEUED, PageLine(download.reason ?: WAITING, if (holdsOnNeed(download)) Tone.Muted else Tone.Warn), mark)
             DownloadState.Paused -> DownloadButtonWords(PAUSED, far, mark)
@@ -237,6 +244,13 @@ object TitleDownloads {
         .sortedBy { it.row.createdAt }
         .associate { (it.row.season!! to it.row.episode!!) to TitleDownload.of(it, it.row.id in deleting) }
 
+    /**
+     * What a download being found says on its first release: "Finding releases…"; for a file opened on Import, which is its
+     * own release and is never searched for (L454), the step Resolve says ("Opening…", "Checking availability").
+     */
+    private fun finding(download: TitleDownload): String =
+        if (download.imported) download.reason ?: DownloadHostRules.OPENING else DownloadHostRules.FINDING_RELEASES
+
     /** "Trying release 2 of 3" from Resolve's "Trying release 2 of 3 · Checking availability"; null on its first release. */
     private fun trying(download: TitleDownload): String? = download.reason?.takeIf { it.startsWith(TRYING) }?.substringBefore(" · ")
 
@@ -245,7 +259,8 @@ object TitleDownloads {
 
     private fun fraction(download: TitleDownload): Float = (download.percent ?: 0) / 100f
 
-    private fun missing(download: TitleDownload): String? = when (val parts = download.partsMissing) {
+    /** "2 parts missing": what a finished download lacks, where it lacks any. */
+    internal fun missing(download: TitleDownload): String? = when (val parts = download.partsMissing) {
         0 -> null
         1 -> "1 part missing"
         else -> "$parts parts missing"
@@ -312,15 +327,41 @@ class TitleDownloadActions(private val deps: Deps, scope: CoroutineScope, privat
         val undoMillis: Long = UNDO_MS,
     ) {
         companion object {
-            /** The app's: its runner, its table and its host's schedule. */
-            fun of(container: AppContainer) = Deps(
+            /**
+             * Import's (L469): [base]'s, but Download again queues a failed file again with the NZB Import holds for it
+             * ([request], by its row; null once Import no longer shows that NZB, when nothing is queued), through the runner's
+             * [enqueueImport], which writes the NZB's copy again and puts the row back. Never the runner's Try again, which
+             * would find the copy gone.
+             */
+            fun importing(
+                base: Deps,
+                request: suspend (Download) -> DownloadRequest.File?,
+                enqueueImport: suspend (DownloadTarget, DownloadCandidate, DownloadPick, DownloadStorage.Source) -> Download?,
+            ) = Deps(
+                get = base.get,
+                pause = base.pause,
+                resume = base.resume,
+                remove = base.remove,
+                undoRemove = base.undoRemove,
+                retry = { id ->
+                    base.get(id)?.let { row -> request(row) }?.let { file -> enqueueImport(file.target, file.candidate, file.pick, file.source) }
+                },
+                schedule = base.schedule,
+                undoMillis = base.undoMillis,
+            )
+
+            /** The app's: its runner, its table and its host's [schedule] (a test's seam where it is given). */
+            fun of(
+                container: AppContainer,
+                schedule: suspend (ScheduleCause) -> Unit = { cause -> container.downloadHosts.schedule(cause) },
+            ) = Deps(
                 get = container.data.downloads::get,
                 pause = container.downloads::pause,
                 resume = container.downloads::resume,
                 remove = { ids, keepFor -> container.downloads.remove(ids, keepFor) },
                 undoRemove = container.downloads::undoRemove,
                 retry = container.downloads::retry,
-                schedule = { cause -> container.downloadHosts.schedule(cause) },
+                schedule = schedule,
             )
         }
     }

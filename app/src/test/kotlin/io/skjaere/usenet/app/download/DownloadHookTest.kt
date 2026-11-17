@@ -385,7 +385,8 @@ class DownloadHookTest {
 
     /**
      * The coordinator's entry points that play a title (Play on the Show and Movie pages, an episode by its numbers from Up
-     * next, Resume) ask the hook before their sheet opens; a release chosen by hand never does (L353).
+     * next, Resume) ask the hook before their sheet opens; a release chosen by hand never does (L353). A file opened on
+     * Import, with no title, is played by the hook alone, by its watch key (playDownloaded, L458): the fifth asking.
      */
     @Test
     fun `the coordinator's four entry points ask the hook first, and a chosen release's play never does`() {
@@ -400,7 +401,8 @@ class DownloadHookTest {
         assertEquals("if (downloadHook.play(target.key, origin)) return", body("fun playEpisode(target: EpisodeTarget"))
         assertEquals("if (downloadHook.play(ep.key, origin)) return", body("fun playEpisode(ep: EpisodePlay"))
         assertFalse("downloadHook" in body("fun play(request: PlayRequest"))
-        assertEquals(4, Regex("""downloadHook\.play\(""").findAll(source).count())
+        assertTrue(Regex("""fun playDownloaded\(watchKey: String, origin: PlayOrigin = PlayOrigin\.Here\): Boolean = downloadHook\.play\(watchKey, origin\)""").containsMatchIn(source))
+        assertEquals(5, Regex("""downloadHook\.play\(""").findAll(source).count())
     }
 
     /** The runner's holds as the hook takes them: each owner's ids; none of those [going] (Delete once watched's). */

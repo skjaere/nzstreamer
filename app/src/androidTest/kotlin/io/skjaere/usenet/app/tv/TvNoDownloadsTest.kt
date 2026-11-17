@@ -28,6 +28,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.app.FakeTmdb
+import io.skjaere.usenet.app.ImportScreen
 import io.skjaere.usenet.app.MainActivity
 import io.skjaere.usenet.app.TvDevice
 import io.skjaere.usenet.app.assumeTv
@@ -40,9 +41,11 @@ import io.skjaere.usenet.app.collection.SHOW_FOOTNOTE_PHONE
 import io.skjaere.usenet.app.collection.ShowScreen
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.download.DownloadBootReceiver
+import io.skjaere.usenet.app.download.DownloadColumns
 import io.skjaere.usenet.app.download.DownloadJobService
 import io.skjaere.usenet.app.download.DownloadMarkLook
 import io.skjaere.usenet.app.download.DownloadNotice
+import io.skjaere.usenet.app.download.DownloadPick
 import io.skjaere.usenet.app.download.DownloadPlaces
 import io.skjaere.usenet.app.download.DownloadRequest
 import io.skjaere.usenet.app.download.DownloadSeasonSheet
@@ -51,7 +54,9 @@ import io.skjaere.usenet.app.download.ServicePlan
 import io.skjaere.usenet.app.download.TitleDownloadActions
 import io.skjaere.usenet.app.download.movieDownloadSlot
 import io.skjaere.usenet.app.home.HomeScreen
+import io.skjaere.usenet.app.link.PlayableFilm
 import io.skjaere.usenet.app.play.EpisodePlay
+import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.search.MovieHeroCard
@@ -62,6 +67,7 @@ import io.skjaere.usenet.app.ui.AppTheme
 import io.skjaere.usenet.app.ui.FormFactor
 import io.skjaere.usenet.app.waitFor
 import io.skjaere.usenet.core.FetchException
+import io.skjaere.usenet.core.PreparedNzb
 import io.skjaere.usenet.data.CollectionViewPrefs
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
@@ -514,6 +520,44 @@ class TvNoDownloadsTest {
         seeded.forEach { row -> assertEquals(row.state, container.data.downloads.get(row.id)?.state) }
     }
 
+    /**
+     * W108, L454: Import on a TV, in either layout, with a film's NZB handed over as another app hands one over and a
+     * finished download of its file in the table as a test leaves one: its file is listed with its size alone, no Download
+     * button, mark or line, so no sheet can open. The film is on the test's own server (PlayableFilm), with nothing asked
+     * of an indexer.
+     */
+    @Test
+    fun importListsItsFilesWithNoDownloadButtonOrLineInEitherLayout() = runBlocking<Unit> {
+        val film = PlayableFilm(IMPORT_FILM, "Copper Crown")
+        try {
+            film.prepare()
+            val nzb = checkNotNull(film.nzb)
+            val nzbId = PreparedNzb.idFor(nzb)
+            val id = Download.newId()
+            seed(
+                Download(
+                    id = id, watchKey = WatchKey.release(nzbId, 0), kind = DownloadKind.Release, title = "chapters.mkv", subtitle = "Copper Crown",
+                    state = DownloadState.Done, position = 0, release = RememberedRelease(IMPORTED, nzbId, "Copper Crown", null, 0, nzbId, "chapters.mkv", 700_000),
+                    size = 700_000, indexerSize = 700_000, safeOffset = 700_000, relativePath = "downloads/$id/v.mkv",
+                    pick = DownloadColumns.text(DownloadPick(0, "chapters.mkv", 700_000, nzbId)), createdAt = 1, completedAt = 1, updatedAt = System.currentTimeMillis(),
+                ),
+            )
+            val opened = container.nzbHandoff.put(Result.success(nzb to "Copper Crown"))
+            compose.setContent { AppTheme(formFactor = layout) { ImportScreen(opened, onBack = {}, onProviders = {}, onDownloads = {}) } }
+            val button = SemanticsMatcher("a Download button") { node ->
+                node.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty().any { it.startsWith("Download ") }
+            }
+            listOf(FormFactor.Tv, FormFactor.Phone).forEach { form ->
+                layout = form
+                compose.waitUntil(60_000) { exists(hasText("chapters.mkv")) }
+                noDownloads("on the $form layout's Import")
+                assertFalse("a Download button on the $form layout's Import", exists(button))
+            }
+        } finally {
+            film.close()
+        }
+    }
+
     private fun row(state: DownloadState, episode: Int?): Download {
         val id = Download.newId()
         val film = episode == null
@@ -560,6 +604,9 @@ class TvNoDownloadsTest {
         /** An invented show and film; nothing real has these ids. */
         const val SHOW = 990_731
         const val MOVIE = 990_732
+
+        /** The film Import opens, as invented: nothing real has its id. */
+        const val IMPORT_FILM = 990_733
         const val SEEDING_MILLIS = 60_000L
         const val DAY = 24 * 60 * 60_000L
 

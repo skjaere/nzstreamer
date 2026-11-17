@@ -18,6 +18,7 @@ import io.skjaere.usenet.app.play.PlayRequest
 import io.skjaere.usenet.app.play.WatchTarget
 import io.skjaere.usenet.core.FileCandidate
 import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.data.WatchState
@@ -236,17 +237,19 @@ class PlayRouter(private val deps: PlayRouterDeps) {
 
     /**
      * Import's Play of [file] in the NZB [nzbId], which Import prepared and stored (L147, W44 (i)): with This phone or a
-     * TV chosen it plays [here], as Import always has (a TV can't play this phone's NZB); on the connected Cast device
-     * from the cast origin, the coordinator's short play of the file. While the device connects nothing plays and the
-     * sheet opens; to a speaker, as the answer to its question says.
+     * TV chosen it plays [here], as Import always has (a TV can't play this phone's NZB), which plays the file's finished
+     * [download] first, offline too (L458); on the connected Cast device from the cast origin, the finished download's
+     * file cast as from a place of files (L447, L473), else the coordinator's short play of the file. While the device
+     * connects nothing plays and the sheet opens; to a speaker, as the answer to its question says.
      */
-    fun playFile(nzbId: String, file: FileCandidate, here: () -> Unit) {
+    fun playFile(nzbId: String, file: FileCandidate, download: Download? = null, here: () -> Unit) {
+        val done = download?.takeIf { it.state == DownloadState.Done }
         when (deps.target()) {
             PlayTarget.Phone, is PlayTarget.Tv -> here()
             is PlayTarget.Cast -> routed { to ->
                 when (to) {
                     Where.Here -> here()
-                    is Where.Cast -> deps.here.castFile(nzbId, file, to.origin)
+                    is Where.Cast -> if (done != null) deps.here.castDownload(done, to.origin) else deps.here.castFile(nzbId, file, to.origin)
                     is Where.Tv, Where.Nowhere -> Unit
                 }
             }

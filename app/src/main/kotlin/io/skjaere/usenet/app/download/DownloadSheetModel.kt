@@ -130,13 +130,16 @@ sealed interface DownloadRequest {
         override fun toString() = "DownloadRequest.File(${file.index}, ${file.size} bytes)"
 
         companion object {
+            /** Whether Import offers [file] of [nzb] a Download: a video, and no file of a copy of a disc (L455). */
+            fun offered(nzb: PreparedNzb, file: FileCandidate): Boolean = file.isVideo && nzb.discCopy() == null
+
             /**
              * [file] of [nzb], prepared on Import from [bytes], as its Download asks for it, with the password it was opened
              * with (what prepare unlocked it with, kept in the prepared NZB); null where Import offers no Download: a file that
              * isn't a video, or any file of a copy of a disc, which plays as no single video (L455).
              */
             fun of(nzb: PreparedNzb, file: FileCandidate, bytes: ByteArray): File? {
-                if (!file.isVideo || nzb.discCopy() != null) return null
+                if (!offered(nzb, file)) return null
                 return File(nzb.id, file, nzb.title, nzb.files.count { it.isVideo }, DownloadStorage.Source(bytes, nzb.metadata.orderedArchiveNzb.password))
             }
         }

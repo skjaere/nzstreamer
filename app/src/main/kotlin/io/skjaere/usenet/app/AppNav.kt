@@ -468,6 +468,8 @@ fun NavGraphBuilder.appGraph(
             opened = screen.toRoute<ImportRoute>().opened,
             onBack = back(screen),
             onProviders = { screen.ifResumed { nav.navigate(ProvidersRoute) } },
+            // Its downloads' menus' Open Downloads (L454): where downloads show alone.
+            onDownloads = downloads.downloads?.let { open -> { screen.ifResumed { open() } } },
         )
     }
 }

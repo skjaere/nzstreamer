@@ -158,7 +158,8 @@ data class DownloadsDeps(
 
         /**
          * Plays [row]'s file here (L353): by its title's own play, which the coordinator's hook turns to the file, so its
-         * progress and Up next are the title's either way. Only the router's here, for This phone or a TV.
+         * progress and Up next are the title's either way; a file opened on Import, which has no title, by the hook alone,
+         * by its watch key (L458), its progress saved under that key. Only the router's here, for This phone or a TV.
          */
         private fun playHere(container: AppContainer, row: Download) {
             when (row.kind) {
@@ -170,8 +171,8 @@ data class DownloadsDeps(
                     val target = MovieTarget(row.movieTmdbId ?: return, row.title, row.year, imdb = null, runtimeMinutes = row.runtimeMinutes)
                     container.playback.playMovie(target, PlayOrigin.Here)
                 }
-                // An imported file has no title whose play the hook turns to its file (L423): nothing here plays it.
-                DownloadKind.Release -> Unit
+                // An imported file has no title whose play the hook turns to its file (L423).
+                DownloadKind.Release -> container.playback.playDownloaded(row.watchKey, PlayOrigin.Here)
             }
         }
 

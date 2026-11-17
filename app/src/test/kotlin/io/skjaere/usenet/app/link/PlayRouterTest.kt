@@ -510,6 +510,35 @@ class PlayRouterTest {
         assertTrue(here.isEmpty())
     }
 
+    /**
+     * L458, L473: Import's tap on a file with a finished download plays that file here with This phone or a TV chosen (the
+     * screen's here, which plays the download first), and casts the file to the connected Cast device as a place of files
+     * does, never the NZB's stream; a file whose download isn't finished streams as before.
+     */
+    @Test
+    fun `Import's tap with a finished download plays or casts the file`() {
+        val done = imported("Copper.Crown.2026.1080p.mkv", DownloadState.Done)
+        var played = 0
+        router.playFile("nzb-copper", imported, done) { played++ }
+        tvChosen()
+        router.playFile("nzb-copper", imported, done) { played++ }
+        assertEquals(2, played)
+        assertTrue(here.isEmpty())
+        castChosen()
+        router.playFile("nzb-copper", imported, done) { throw AssertionError("never here") }
+        assertEquals(listOf("download Copper.Crown.2026.1080p.mkv cast to Kitchen display"), here)
+        here.clear()
+        router.playFile("nzb-copper", imported, done.copy(state = DownloadState.Running)) { throw AssertionError("never here") }
+        assertEquals(listOf("file Copper.Crown.2026.1080p.mkv of nzb-copper cast to Kitchen display"), here)
+        assertEquals(0, grabs.get())
+    }
+
+    /** [name]'s download from Import, of the NZB nzb-copper (L423), in [state]. */
+    private fun imported(name: String, state: DownloadState) = Download(
+        id = "dl-imported", watchKey = WatchKey.release("nzb-copper", 0), kind = DownloadKind.Release, title = name, subtitle = "Copper.Crown.2026.1080p",
+        state = state, position = 0, createdAt = 1, completedAt = 2, updatedAt = 2,
+    )
+
     /** A finished download of Copper Crown, as the Downloads pages, Home's rows and the notifications play one (L418). */
     private val downloaded = Download(
         id = "dl-copper", watchKey = WatchKey.movie(7_808), kind = DownloadKind.Movie, title = "Copper Crown", movieTmdbId = 7_808, year = 2022,

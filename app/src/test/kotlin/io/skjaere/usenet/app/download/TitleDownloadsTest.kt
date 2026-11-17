@@ -1,8 +1,10 @@
 package io.skjaere.usenet.app.download
 
+import io.skjaere.nzbstreamer.stream.StreamableFile
 import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
 import io.skjaere.usenet.app.settings.TestCipher
 import io.skjaere.usenet.app.settings.memorySettings
+import io.skjaere.usenet.core.FileCandidate
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
@@ -199,6 +201,42 @@ class TitleDownloadsTest {
         actions.take(DownloadEntry.OpenDownloads, d(DownloadState.Done), keepFor = 10_000)
         runCurrent()
         assertEquals(listOf("pause", "resume", "schedule ${ScheduleCause.Resume}", "retry a", "schedule ${ScheduleCause.Download}"), calls)
+    }
+
+    /**
+     * L469: on Import, Download again queues the failed file again with the NZB Import holds for it, through the runner's
+     * enqueueImport, which writes its copy again and puts the row back; never the runner's Try again, which would find the
+     * copy gone. Then the host is asked for from here. With Import no longer showing its NZB, nothing is queued.
+     */
+    @Test
+    fun `Download again on Import queues the file again with its NZB through enqueueImport`() = runTest {
+        val source = DownloadStorage.Source("<nzb/>".toByteArray(), "typed-on-import")
+        val file = FileCandidate(1, StreamableFile("Quiet.Meridian.S01E02.1080p.WEB-DL.H264.mkv", 1_300_000_000, 1, 0, 0, 0))
+        val request = DownloadRequest.File("nzb-qm", file, "Quiet.Meridian.S01.1080p.WEB-DL.H264", videos = 2, source)
+        val failed = row("b", 2, DownloadState.Failed)
+        val queued = mutableListOf<String>()
+        var shown: DownloadRequest.File? = request
+        val deps = TitleDownloadActions.Deps.importing(
+            TitleDownloadActions.Deps(
+                get = { if (it == "b") failed else null }, pause = {}, resume = {}, remove = { _, _ -> }, undoRemove = {},
+                retry = { error("Try again finds the copy gone") }, schedule = { cause -> calls += "schedule $cause" },
+            ),
+            request = { row -> shown.takeIf { row.id == "b" } },
+            enqueueImport = { target, candidate, pick, from ->
+                queued += "$target ${candidate.guid} ${pick.index} ${pick.name} ${from.nzb.size} ${from.password}"
+                failed
+            },
+        )
+        val actions = TitleDownloadActions(deps, backgroundScope, backgroundScope)
+        actions.take(DownloadEntry.DownloadAgain, d(DownloadState.Failed).copy(id = "b"), keepFor = 10_000)
+        runCurrent()
+        assertEquals(listOf("${request.target} nzb-qm 1 ${file.name} 6 typed-on-import"), queued)
+        assertEquals(listOf("schedule ${ScheduleCause.Download}"), calls)
+        // Import shows another NZB, or none: nothing is queued.
+        shown = null
+        actions.take(DownloadEntry.DownloadAgain, d(DownloadState.Failed).copy(id = "b"), keepFor = 10_000)
+        runCurrent()
+        assertEquals(1, queued.size)
     }
 
     @Test

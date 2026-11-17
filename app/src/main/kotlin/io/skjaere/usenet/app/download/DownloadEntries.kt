@@ -74,22 +74,25 @@ internal fun DownloadLine(parts: List<PageLine>, modifier: Modifier = Modifier) 
 }
 
 /**
- * A download's 18 dp mark ([DownloadMark], DlPhoneEpisodeRow): the drawn icons, a ring, or ⚠. The same size at any font
- * size, as the ⋮ beside it; TalkBack hears the row's state or the button's words instead.
+ * A download's mark ([DownloadMark], DlPhoneEpisodeRow): the drawn icons, a ring, or ⚠, 18 dp, or [size] where a button
+ * draws it larger (Import's rows, 24 dp). The same size at any font size, as the ⋮ beside it; TalkBack hears the row's
+ * state or the button's words instead. The arrow offered is in the text's colour, or [offered]'s where a button's is the
+ * accent (Import's).
  */
 @Composable
-internal fun DownloadMarkIcon(mark: DownloadMark, modifier: Modifier = Modifier) {
+internal fun DownloadMarkIcon(mark: DownloadMark, modifier: Modifier = Modifier, size: Dp = MARK, offered: Color = colors.text) {
     // Silent itself: the ⚠ and the rings say nothing of their own.
-    val box = modifier.size(MARK).clearAndSetSemantics { this[DownloadMarkLook] = mark }
+    val box = modifier.size(size).clearAndSetSemantics { this[DownloadMarkLook] = mark }
     when (mark) {
-        DownloadMark.Download -> Icon(DownloadIcon, contentDescription = null, tint = colors.text, modifier = box)
+        DownloadMark.Download -> Icon(DownloadIcon, contentDescription = null, tint = offered, modifier = box)
         DownloadMark.Queued -> Icon(DownloadIcon, contentDescription = null, tint = colors.muted, modifier = box)
         DownloadMark.Finding -> CircularProgressIndicator(box.padding(1.dp), color = colors.accent, trackColor = colors.outline, strokeWidth = 2.dp)
         is DownloadMark.Progress -> Ring(mark, box)
         DownloadMark.Done -> Icon(DownloadedIcon, contentDescription = null, tint = colors.textSecondary, modifier = box)
         DownloadMark.Failed -> Box(box, contentAlignment = Alignment.Center) {
-            val size = with(LocalDensity.current) { WARN_GLYPH.toSp() }
-            Text("⚠", style = AppType.body.copy(fontSize = size, lineHeight = size), color = colors.warnStrong)
+            // As drawn at 18 dp, scaled with the mark.
+            val glyph = with(LocalDensity.current) { (WARN_GLYPH * (size / MARK)).toSp() }
+            Text("⚠", style = AppType.body.copy(fontSize = glyph, lineHeight = glyph), color = colors.warnStrong)
         }
     }
 }
