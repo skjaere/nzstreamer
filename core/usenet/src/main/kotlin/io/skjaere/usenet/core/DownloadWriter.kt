@@ -83,8 +83,12 @@ class DownloadWriter(
     /** Whether a provider is left out of the engine now ([UsenetEngine.leftOut]), which may have what reads as missing. */
     private val providersLeftOut: () -> Boolean = { false },
 ) {
-    /** The write under way: [written] bytes of download [id]'s file (forced or not), and whether its provider is out of reach now. */
-    data class Live(val id: String, val written: Long, val unreachable: Boolean)
+    /**
+     * The write under way: [written] bytes of download [id]'s file (forced or not), whether its provider or service is out
+     * of reach now, and whether it waits while something streams ([streamWait], the debrid writer's alone, L471). Both
+     * writers give this one type (L475), so every page reads one place.
+     */
+    data class Live(val id: String, val written: Long, val unreachable: Boolean, val streamWait: Boolean = false)
 
     /** How a write ended. */
     sealed interface Outcome {

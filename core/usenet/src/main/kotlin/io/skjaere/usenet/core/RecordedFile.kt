@@ -58,6 +58,9 @@ class RecordedFile(
     /** Whether the write's source is out of reach now, as its live says; bytes taken clear it. */
     var unreachable = false
 
+    /** Whether the write waits while something streams (L471), as its live says; bytes taken clear it. */
+    var streamWait = false
+
     private var recorded = from
     private var recordedGaps = gaps()
     private var since = timeSource.markNow()
@@ -66,15 +69,16 @@ class RecordedFile(
     suspend fun took(n: Int) {
         writeAt(written, n, advance = true)
         rate.add(n.toLong())
-        // Bytes come: the source is in reach.
+        // Bytes come: the source is in reach, and nothing holds the write.
         unreachable = false
+        streamWait = false
         said()
         if (written - recorded >= recordBytes || since.elapsedNow() >= recordEvery) save()
     }
 
     /** Says where the write is ([live]). */
     fun said() {
-        live(DownloadWriter.Live(id, written, unreachable))
+        live(DownloadWriter.Live(id, written, unreachable, streamWait))
     }
 
     /** Writes [n] bytes of [buffer] at [position]; with [advance], [written] goes on with each part written. */

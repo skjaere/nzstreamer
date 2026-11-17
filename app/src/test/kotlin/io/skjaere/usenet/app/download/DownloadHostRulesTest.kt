@@ -12,6 +12,7 @@ import io.skjaere.usenet.data.DownloadPrefs
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.debrid.ServiceKind
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -125,6 +126,26 @@ class DownloadHostRulesTest {
         assertEquals(listOf("Can't reach your Usenet provider", "Check your Usenet provider", "Can't reach your indexer"), listOf(
             DownloadHostRules.CANT_REACH_PROVIDER, DownloadHostRules.CHECK_PROVIDER, DownloadHostRules.CANT_REACH_INDEXER,
         ))
+    }
+
+    /**
+     * L474: the debrid downloads' waits and failures, which the debrid writer brings in, each as the Usenet one it mirrors
+     * in words that name no service, as the user's account may be any.
+     */
+    @Test
+    fun `the debrid waits and failures are worded as the Usenet ones, naming no service`() {
+        val words = listOf(
+            DownloadHostRules.CANT_REACH_SERVICE, DownloadHostRules.CHECK_SERVICE, DownloadHostRules.SERVICE_LIMIT, DownloadHostRules.SERVICE_KEPT_FAILING,
+            DownloadHostRules.CANT_RESUME, DownloadHostRules.NOT_IN_THIS_VERSION, DownloadHostRules.WAITS_FOR_STREAM,
+        )
+        assertEquals(
+            listOf(
+                "Can't reach your debrid service", "Check your debrid service", "Your debrid service's limit is reached", "Your debrid service kept failing",
+                "Its server can't resume this file", "Not available in this version", "Waits while something streams",
+            ),
+            words,
+        )
+        assertEquals(emptyList(), words.filter { word -> ServiceKind.entries.any { it.displayName in word } })
     }
 
     /**

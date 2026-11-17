@@ -260,6 +260,18 @@ class RecordedFileTest {
         assertEquals(2, lives.size)
     }
 
+    /** L471, L475: the debrid writer's wait while something streams, in the same live as the Usenet writer's. */
+    @Test
+    fun `the live says the write waits while something streams, and bytes taken say it goes on`() = runBlocking<Unit> {
+        val file = file(Disk(MIB), from = 2_000)
+        file.streamWait = true
+        file.said()
+        assertEquals(DownloadWriter.Live(ID, 2_000, unreachable = false, streamWait = true), lives.single())
+        file.take(pattern(3_000), 2_000 until 3_000L)
+        assertFalse(file.streamWait)
+        assertEquals(DownloadWriter.Live(ID, 3_000, unreachable = false, streamWait = false), lives.last())
+    }
+
     @Test
     fun `its rate is the bytes taken a second over the last 5 s`() = runBlocking<Unit> {
         val file = file(Disk(4 * MIB, keep = false))

@@ -69,6 +69,30 @@ object DownloadHostRules {
     /** The provider refused the login, or none is saved (L382). */
     const val CHECK_PROVIDER = "Check your Usenet provider"
 
+    /**
+     * The debrid service out of reach while Android calls the network validated (L474): said while a debrid download backs
+     * off, as [CANT_REACH_PROVIDER] is, and as a wait after an hour of it.
+     */
+    const val CANT_REACH_SERVICE = "Can't reach your debrid service"
+
+    /** The debrid service refused the account's key (L474): a wait until a new key is saved, as [CHECK_PROVIDER] is. */
+    const val CHECK_SERVICE = "Check your debrid service"
+
+    /** The debrid account's limit reached (L461, L474): a wait until its end, as an indexer's ([LIMIT_REACHED]) is. */
+    const val SERVICE_LIMIT = "Your debrid service's limit is reached"
+
+    /** Six fresh links in a row brought nothing (L419, L474): the debrid download fails, as the Usenet writer's six do. */
+    const val SERVICE_KEPT_FAILING = "Your debrid service kept failing"
+
+    /** The file's server answered a resume with another part a second time, having started again from 0 once (L419, L474). */
+    const val CANT_RESUME = "Its server can't resume this file"
+
+    /** A torrent's download in a build that hides debrid (L422, L474): failed, with no call. */
+    const val NOT_IN_THIS_VERSION = "Not available in this version"
+
+    /** A debrid download waiting while something streams on this phone or is cast from it (L471, L474). */
+    const val WAITS_FOR_STREAM = "Waits while something streams"
+
     /** The primary volume's folder isn't there, unmounted (L388): [DownloadStorage.Unavailable]'s words. */
     const val STORAGE_UNAVAILABLE = "Storage isn't available"
 
