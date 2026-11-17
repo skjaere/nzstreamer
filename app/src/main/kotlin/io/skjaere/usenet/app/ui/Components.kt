@@ -64,7 +64,8 @@ import androidx.compose.ui.unit.dp
  *
  * [stacked] is an opt-in, the Downloads pages' alone (L470): where the title can't share the row with the arrow and the
  * [actions] on one line (large text, more buttons), the arrow and the actions keep the row and the title gets a line of
- * its own under them, whole, rather than breaking beside them. TalkBack reads it in the row's order all the same.
+ * its own under them, whole, rather than breaking beside them. TalkBack reads it in the row's order all the same: the
+ * arrow, the titles, then the actions, each a group of its own, so the title under the row isn't read after the buttons.
  */
 @Composable
 fun TopBar(title: String, onBack: (() -> Unit)?, subtitle: String? = null, stacked: Boolean = false, actions: @Composable RowScope.() -> Unit = {}) {
@@ -94,9 +95,22 @@ fun TopBar(title: String, onBack: (() -> Unit)?, subtitle: String? = null, stack
     }
     Layout(
         content = {
+            // A traversal index orders only what is read as one: a group, or a node read by itself. The titles' column and
+            // the actions' row are neither, so each is made a group, else their texts and buttons would go by their places.
             back(Modifier.semantics { traversalIndex = 0f })
-            titles(Modifier.semantics { traversalIndex = 1f })
-            Row(Modifier.semantics { traversalIndex = 2f }, verticalAlignment = Alignment.CenterVertically, content = actions)
+            titles(
+                Modifier.semantics {
+                    isTraversalGroup = true
+                    traversalIndex = 1f
+                },
+            )
+            Row(
+                Modifier.semantics {
+                    isTraversalGroup = true
+                    traversalIndex = 2f
+                },
+                verticalAlignment = Alignment.CenterVertically, content = actions,
+            )
         },
         modifier = padding.semantics { isTraversalGroup = true },
     ) { (arrow, words, buttons), constraints ->

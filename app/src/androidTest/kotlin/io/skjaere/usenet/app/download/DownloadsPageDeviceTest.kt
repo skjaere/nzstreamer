@@ -3,6 +3,7 @@ package io.skjaere.usenet.app.download
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
@@ -362,7 +363,8 @@ class DownloadsPageDeviceTest {
      * L470: at twice the text size "Downloads" stays whole, never broken beside Select, the Cast
      * button and the gear. Where it can't share their row (a page 360 dp wide) it gets a line of its own under the back
      * arrow and the buttons. On phone34's own 411 dp it may share the row: Android 14 scales large text by less than
-     * twice (its nonlinear font scaling), and there it fits beside them.
+     * twice (its nonlinear font scaling), and there it fits beside them. Either way TalkBack reads the title right after
+     * the back arrow, before the buttons, as on every other page.
      */
     @Test
     fun atTwiceTheTextSizeDownloadsStaysWholeWithALineOfItsOwnWhereItCantShareTheRow() {
@@ -379,6 +381,7 @@ class DownloadsPageDeviceTest {
         val title = bounds(hasText(DownloadsPage.TITLE))
         val select = bounds(hasContentDescription(DownloadsPage.SELECT) and hasClickAction())
         assertTrue("the title at $title, beside or under Select at $select", title.right <= select.left + 1f || title.top >= select.bottom - 1f)
+        assertEquals("what TalkBack reads after the back arrow", DownloadsPage.TITLE, readAfterBack())
         narrow = true
         compose.waitForIdle()
         compose.assertWhole(DownloadsPage.TITLE, screen)
@@ -389,6 +392,7 @@ class DownloadsPageDeviceTest {
         buttons.forEach { assertTrue("the title at $under, under the button at $it", under.top >= it.bottom - 1f) }
         // The buttons keep the arrow's row, the gear last at its end.
         buttons.forEach { assertTrue("the button at $it, in the arrow's row at $back", it.center.y in back.top..back.bottom) }
+        assertEquals("what TalkBack reads after the back arrow, the title under it", DownloadsPage.TITLE, readAfterBack())
     }
 
     /**
@@ -502,6 +506,31 @@ class DownloadsPageDeviceTest {
 
     private fun bounds(matcher: SemanticsMatcher) = compose.onAllNodes(matcher).fetchSemanticsNodes().firstOrNull()?.boundsInRoot ?: throw AssertionError("not shown: ${matcher.description}")
 
+    /**
+     * What TalkBack reads after the bar's back arrow, of the title, Select, the Cast button and the gear: as Compose orders
+     * the page for a screen reader (each node's next one, which Compose puts in its accessibility node for tests), with
+     * accessibility on for the read and off again after.
+     */
+    private fun readAfterBack(): String {
+        val back = compose.onAllNodes(hasContentDescription("Back") and hasClickAction()).fetchSemanticsNodes().single()
+        val named = mapOf(
+            DownloadsPage.TITLE to hasText(DownloadsPage.TITLE), DownloadsPage.SELECT to (hasContentDescription(DownloadsPage.SELECT) and hasClickAction()),
+            "the Cast button" to castButton, DownloadsPage.SETTINGS to hasContentDescription(DownloadsPage.SETTINGS),
+        ).mapNotNull { (name, matcher) -> compose.onAllNodes(matcher).fetchSemanticsNodes().firstOrNull()?.let { it.id to name } }.toMap()
+        val root = back.root as ViewRootForTest
+        val after = onMainThread {
+            root.forceAccessibilityForTesting(true)
+            try {
+                val nodes = root.view.accessibilityNodeProvider ?: throw AssertionError("no accessibility nodes")
+                generateSequence(back.id) { id -> nodes.createAccessibilityNodeInfo(id)?.extras?.getInt(TRAVERSAL_BEFORE, -1)?.takeIf { it != -1 } }
+                    .drop(1).take(TRAVERSAL_LOOK).toList()
+            } finally {
+                root.forceAccessibilityForTesting(false)
+            }
+        }
+        return after.firstNotNullOfOrNull { named[it] } ?: throw AssertionError("none of ${named.values} read after the back arrow: $after")
+    }
+
     /** [row] with a release kept as Resolve keeps one, so its file can be cast. */
     private fun castable(row: Download): Download {
         val name = "Copper.Crown.2022.1080p.WEB-DL-KESTREL.mkv"
@@ -551,6 +580,12 @@ class DownloadsPageDeviceTest {
 
         /** A page narrower than phone34's 411 dp, as the narrowest phones are. */
         val NARROW = 360.dp
+
+        /** Where Compose puts, in a node's accessibility info, the id of the node read after it. */
+        const val TRAVERSAL_BEFORE = "android.view.accessibility.extra.EXTRA_DATA_TEST_TRAVERSALBEFORE_VAL"
+
+        /** How many nodes after the back arrow are looked through. */
+        const val TRAVERSAL_LOOK = 8
 
         /** Two files of an invented season pack opened on Import. */
         const val E1 = "Quiet.Meridian.S01E01.1080p.WEB-DL.H264-WREN.mkv"
