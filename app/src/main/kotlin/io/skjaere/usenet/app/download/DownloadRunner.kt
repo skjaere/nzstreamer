@@ -1419,20 +1419,26 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      * build that showed it left still to finish ([DownloadResolver.torrent]: queued, under way, held or waiting) fails "Not
      * available in this version", with no call, its listing's copy gone with its source, so no stored debrid wait shows.
      * One that held the queue (Paused, Stopped) hands the hold on as a cancel does. A finished one plays its file, and a
-     * failed one keeps its reason. Under the queue's lock, the one a walk runs now left to its walk, which fails it so too.
-     * Their ids; none while debrid shows, and none on a TV.
+     * failed one keeps its reason. One that waited on a debrid service for a torrent beside a Usenet release still to try,
+     * or its season's search still to come, is queued again instead, with no debrid word and no limit kept: its turn tries
+     * those, the torrents left out (L460). Under the queue's lock, the one a walk runs now left to its walk, which fails it
+     * so too. The failed ones' ids; none while debrid shows, and none on a TV.
      */
     suspend fun failHiddenTorrents(shown: Boolean = DebridGate.shown): List<String> {
         if (!runs || shown) return emptyList()
         return changes.withLock {
             val live = current?.takeIf { it.job.isActive }?.id
-            val left = dao.queue().first().filter { it.state in GOING_ON && it.id != live && DownloadResolver.torrent(it) }
+            val rows = dao.queue().first().filter { it.state in GOING_ON && it.id != live }
+            val left = rows.filter(DownloadResolver::torrent)
+            val again = rows.filter { it !in left && DownloadResolver.waitsOnService(it) }
             withContext(NonCancellable) {
                 left.forEach { row ->
                     dao.setState(row.id, DownloadState.Failed, DownloadHostRules.NOT_IN_THIS_VERSION, now())
                     deps.storage.dropSource(row.id)
                     deps.leases.release(row.id)
                 }
+                again.forEach { row -> dao.update(row.copy(state = DownloadState.Queued, reason = null, limitWait = null, updatedAt = now())) }
+                if (again.isNotEmpty()) log.info("Downloads: {} waiting on a debrid service queued again for their Usenet releases, debrid hidden in this build", again.size)
                 left.firstOrNull { it.state in HOLDS }?.let { passHold(it) }
                 if (left.isNotEmpty()) {
                     log.info("Downloads: {} torrent download{} failed, debrid hidden in this build: {}", left.size, if (left.size == 1) "" else "s", left.joinToString { it.id })

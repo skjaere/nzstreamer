@@ -1,12 +1,15 @@
 package io.skjaere.usenet.app.debrid
 
 import io.skjaere.usenet.app.BuildConfig
+import io.skjaere.usenet.app.download.DownloadColumns
 import io.skjaere.usenet.app.download.DownloadHost
 import io.skjaere.usenet.app.download.DownloadHostRules
 import io.skjaere.usenet.app.download.DownloadNzbs
 import io.skjaere.usenet.app.download.DownloadRunner
 import io.skjaere.usenet.app.download.DownloadRunnerDeps
 import io.skjaere.usenet.app.download.DownloadStorage
+import io.skjaere.usenet.app.download.LimitWait
+import io.skjaere.usenet.app.download.SeasonSearch
 import io.skjaere.usenet.app.download.ServiceDownloadWriter
 import io.skjaere.usenet.app.home.SetupState
 import io.skjaere.usenet.app.home.SetupStep
@@ -41,6 +44,7 @@ import io.skjaere.usenet.debrid.ServiceFile
 import io.skjaere.usenet.debrid.ServiceKind
 import io.skjaere.usenet.debrid.ServiceListing
 import io.skjaere.usenet.newznab.IndexerKind
+import io.skjaere.usenet.releases.ReleaseKey
 import io.skjaere.usenet.releases.ReleaseReason
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -342,8 +346,10 @@ class DebridHiddenTest {
      * L422: at the app's start in a build that hides debrid, each torrent download a build that showed it left still to
      * finish fails "Not available in this version", with no call of any kind (Resolve, the writer and the services all
      * fail the case if asked): queued, under way, paused (its hold on the queue passed on, as a cancel passes it) and
-     * waiting with each debrid reason, its listing's copy gone. A Usenet row, a finished torrent row and a failed one stay as
-     * they were, and nothing changes while debrid shows.
+     * waiting with each debrid reason, its listing's copy gone; one waiting on a debrid service with every release it has
+     * tried. A row waiting on a debrid service with a Usenet release still to try, or its season's search still to come,
+     * is queued again instead, with no debrid word and no limit kept: its turn tries those. A Usenet row, a finished torrent
+     * row and a failed one stay as they were, and nothing changes while debrid shows.
      */
     @Test
     fun `hidden, the start fails the torrent downloads a shown build left, with no call`() = kotlinx.coroutines.test.runTest {
@@ -367,12 +373,16 @@ class DebridHiddenTest {
         val torrent = DownloadCandidate("t1", "btih:1111111111111111111111111111111111111111", "Quiet.Orbit.S02E05.1080p.WEB.H264-GRP", source = "torrent")
         val usenet = DownloadCandidate("i1", "qo-s02e05", "Quiet.Orbit.S02E05.1080p.WEB.H264-WREN")
         val release = RememberedRelease("t1", torrent.guid, torrent.title, null, 0, torrent.guid, "Quiet.Orbit.S02E05.1080p.WEB.H264-GRP.mkv", 900, source = "torrent")
-        fun row(id: String, position: Long, state: DownloadState, reason: String? = null, candidates: List<DownloadCandidate> = listOf(torrent), resolved: Boolean = false) =
-            Download(
-                id = id, watchKey = "episode:900002:2:$position", kind = DownloadKind.Episode, title = "Quiet Orbit", showTmdbId = 900002,
-                season = 2, episode = position.toInt(), state = state, reason = reason, position = position, candidates = candidates,
-                release = release.takeIf { resolved }, size = 900L.takeIf { resolved }, createdAt = 1, updatedAt = 1,
-            )
+        val usenet2 = DownloadCandidate("i1", "qo-s02e05-kestrel", "Quiet.Orbit.S02E05.720p.WEB.H264-KESTREL")
+        fun row(
+            id: String, position: Long, state: DownloadState, reason: String? = null, candidates: List<DownloadCandidate> = listOf(torrent), resolved: Boolean = false,
+            tried: List<DownloadCandidate> = emptyList(),
+        ) = Download(
+            id = id, watchKey = "episode:900002:2:$position", kind = DownloadKind.Episode, title = "Quiet Orbit", showTmdbId = 900002,
+            season = 2, episode = position.toInt(), state = state, reason = reason, position = position, candidates = candidates,
+            tried = tried.map { ReleaseKey.of(it.indexerId, it.guid) }, release = release.takeIf { resolved }, size = 900L.takeIf { resolved }, createdAt = 1,
+            updatedAt = 1,
+        )
         val left = listOf(
             row("queued", 1, DownloadState.Queued),
             row("running", 2, DownloadState.Running, resolved = true),
@@ -381,6 +391,19 @@ class DebridHiddenTest {
             row("reach", 5, DownloadState.Waiting, DownloadHostRules.CANT_REACH_SERVICE, resolved = true),
             row("limit", 6, DownloadState.Waiting, DownloadHostRules.SERVICE_LIMIT),
             row("stream", 7, DownloadState.Running, DownloadHostRules.WAITS_FOR_STREAM, resolved = true),
+            row("tried", 12, DownloadState.Waiting, DownloadHostRules.CHECK_SERVICE, candidates = listOf(torrent, usenet), tried = listOf(torrent, usenet)),
+        )
+        // The torrent's account stopped it, uncounted, and Usenet's first release failed: its second still to try.
+        val again = listOf(
+            row("mixed", 13, DownloadState.Waiting, DownloadHostRules.CHECK_SERVICE, candidates = listOf(torrent, usenet, usenet2), tried = listOf(usenet)),
+            row("mixed-limit", 14, DownloadState.Waiting, DownloadHostRules.SERVICE_LIMIT, candidates = listOf(torrent, usenet2)).copy(
+                limitWait = DownloadColumns.text(LimitWait("tb", LimitWait.Kind.Service, 1, 7_200_001)),
+            ),
+            row("mixed-reach", 15, DownloadState.Resolving, DownloadHostRules.CANT_REACH_SERVICE, candidates = listOf(torrent, usenet)),
+            // A season row whose turn's search found torrents its accounts couldn't check: its search is still to come.
+            row("season", 16, DownloadState.Waiting, DownloadHostRules.CHECK_SERVICE, candidates = emptyList()).copy(
+                search = DownloadColumns.text(SeasonSearch("Quiet Orbit", 2020, tmdb = 900002, seasonEpisodes = 8)),
+            ),
         )
         val stays = listOf(
             row("usenet", 8, DownloadState.Queued, candidates = listOf(usenet)),
@@ -388,16 +411,21 @@ class DebridHiddenTest {
             row("done", 10, DownloadState.Done, resolved = true),
             row("failed", 11, DownloadState.Failed, "This release is no longer cached", resolved = true),
         )
-        (left + stays).forEach { dao.insert(it) }
+        (left + stays + again).forEach { dao.insert(it) }
 
         assertEquals(emptyList(), runner.failHiddenTorrents(shown = true))
-        assertEquals(left + stays, (left + stays).map { dao.get(it.id) })
+        assertEquals(left + stays + again, (left + stays + again).map { dao.get(it.id) })
 
         assertEquals(left.map { it.id }.toSet(), runner.failHiddenTorrents(shown = false).toSet())
         left.forEach { row ->
             val now = assertNotNull(dao.get(row.id))
             assertEquals(DownloadState.Failed to DownloadHostRules.NOT_IN_THIS_VERSION, now.state to now.reason, row.id)
             assertTrue("drop source ${row.id}" in storage.events, storage.events.toString())
+        }
+        again.forEach { row ->
+            val now = assertNotNull(dao.get(row.id))
+            assertEquals(Triple(DownloadState.Queued, null, null), Triple(now.state, now.reason, now.limitWait), row.id)
+            assertEquals(row.tried, now.tried, row.id)
         }
         // The pause held the queue: the next that would run holds it now, as Resume asks.
         assertEquals(DownloadState.Paused, dao.get("usenet")?.state)

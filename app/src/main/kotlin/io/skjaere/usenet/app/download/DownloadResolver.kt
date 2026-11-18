@@ -1426,13 +1426,17 @@ class DownloadResolver(
 
         /**
          * Whether [row] downloads a torrent (L422): its release is one; before it has one, every release it has left to try
-         * is one, or it waits on a debrid service in that wait's words.
+         * is one, or, with none left to try and no search to come, it waits on a debrid service in that wait's words. One
+         * that waits so with a Usenet release still to try, or its season's search to come, doesn't: [waitsOnService].
          */
         internal fun torrent(row: Download): Boolean {
             row.release?.let { return it.source == ReleaseFacts.TORRENT }
             val left = row.candidates.filter { ranked(it).key !in row.tried }
-            return (left.isNotEmpty() && left.all { it.source == ReleaseFacts.TORRENT }) || row.reason in SERVICE_WAITS
+            return if (left.isNotEmpty()) left.all { it.source == ReleaseFacts.TORRENT } else waitsOnService(row) && !DownloadSearch.searches(row)
         }
+
+        /** Whether [row] waits on a debrid service, in one of its waits' words (L474). */
+        internal fun waitsOnService(row: Download): Boolean = row.reason in SERVICE_WAITS
 
         /** The waits a row has only for a debrid service (L474). */
         private val SERVICE_WAITS = setOf(

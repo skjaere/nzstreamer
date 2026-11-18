@@ -139,9 +139,8 @@ class DownloadSearch(
         data class Unchecked(val stop: ServiceStop) : Searched
     }
 
-    /** Whether [row]'s turn searches: a season row (L392) whose facts are still to be searched, and no file chosen by hand. */
-    fun due(row: Download): Boolean =
-        row.season != null && row.episode != null && DownloadColumns.pick(row) == null && DownloadColumns.search(row)?.searched == false
+    /** Whether [row]'s turn searches ([searches]). */
+    fun due(row: Download): Boolean = searches(row)
 
     /** [row]'s episode searched, as the class says, what was tried before ([leaveOut], by key) left out of what it finds. */
     suspend fun search(row: Download, leaveOut: Set<String> = row.tried.toSet()): Searched {
@@ -216,6 +215,10 @@ class DownloadSearch(
     }
 
     companion object {
+        /** Whether [row]'s turn searches: a season row (L392) whose facts are still to be searched, and no file chosen by hand. */
+        fun searches(row: Download): Boolean =
+            row.season != null && row.episode != null && DownloadColumns.pick(row) == null && DownloadColumns.search(row)?.searched == false
+
         /**
          * The app's: the episode finder over the indexers a search asks, ranked for downloading, in the room the downloads'
          * storage gives, the indexers' limits kept in the walk's memory ([limits]: the runner's).
