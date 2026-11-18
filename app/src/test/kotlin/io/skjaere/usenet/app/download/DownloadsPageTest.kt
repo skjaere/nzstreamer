@@ -409,14 +409,6 @@ class DownloadsPageTest {
     }
 
     /**
-     * L461, L471, L474: a debrid download's waits and failures in the page's words, each as the Usenet one it mirrors. The
-     * stream's wait in the secondary tone, how far it is, its bytes, the bar muted and Pause; the service out of reach
-     * while the writer backs off in the warning colour with Pause, and after an hour, as its key refused, its words alone
-     * with Resume; its limit with the line saying what makes it go on, alone, whatever its end and whichever account; its
-     * failures with how many releases were tried. While debrid is hidden (L422), a failed row's debrid reason reads "Not
-     * available in this version", a Usenet reason as it is. No word names a service.
-     */
-    /**
      * L422: what a debrid service failed before, as Resolve's memory of releases tried passes a torrent over for it, is a
      * debrid word too. Hidden, a row failed so reads "Not available in this version" on the page as in its notification,
      * whether the torrents were skipped alone or beside Usenet releases; a row whose Usenet releases alone were skipped
@@ -439,6 +431,14 @@ class DownloadsPageTest {
         assertEquals(PageLine("✕ Skipped 2 releases found incomplete before", Tone.Warn), DownloadsPage.failure(usenet, shown = false).first())
     }
 
+    /**
+     * L461, L471, L474: a debrid download's waits and failures in the page's words, each as the Usenet one it mirrors. The
+     * stream's wait in the secondary tone, how far it is, its bytes, the bar muted and Pause; the service out of reach
+     * while the writer backs off in the warning colour with Pause, and after an hour, as its key refused, its words alone
+     * with Resume; its limit with the line saying what makes it go on, alone, whatever its end and whichever account; its
+     * failures with how many releases were tried. While debrid is hidden (L422), a failed row's debrid reason reads "Not
+     * available in this version", a Usenet reason as it is. No word names a service.
+     */
     @Test
     fun `a debrid download's waits and failures say themselves in the page's words, the stream's wait in the secondary tone`() {
         val running = episode("run", 5, DownloadState.Running, size = 3_100_000_000, file = true, written = 1_302_000_000)
