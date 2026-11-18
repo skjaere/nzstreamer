@@ -11,6 +11,7 @@ import io.skjaere.usenet.app.download.DownloadResolver.Resolution
 import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.MissingReleases
 import io.skjaere.usenet.app.play.Replay
+import io.skjaere.usenet.app.search.IndexerConfigs
 import io.skjaere.usenet.core.AttemptFailure
 import io.skjaere.usenet.core.BackoffWakes
 import io.skjaere.usenet.core.DownloadWriter
@@ -230,6 +231,12 @@ class DownloadRunnerDeps(
      * at its end. The app's is DebridAdds' lease of each download, which the debrid writer moves with the torrent (L424).
      */
     val leases: DownloadLeases = DownloadLeases.None,
+    /**
+     * Whether a torrent can go to a service now, as the settings say (debrid shown, an account on, its indexer not kept from
+     * the service, L422, L194), told again as they change: a season's torrent pack leads its season's rows on the
+     * Downloads page only then, as their turns take it first only then (L462).
+     */
+    val toService: Flow<(DownloadCandidate) -> Boolean> = flowOf { true },
 ) {
     /** The writer (item 6), over [opener], following [network] as the runner does. */
     val writer = DownloadWriter(
@@ -282,6 +289,11 @@ class DownloadRunnerDeps(
                 prefs = container.settings.downloads,
                 limitLeft = { id -> container.services.limitLeft(id) },
                 leases = leases,
+                toService = combine(container.settings.settings, container.serviceOn) { saved, on ->
+                    val off = IndexerConfigs.offService(saved)
+                    val rule: (DownloadCandidate) -> Boolean = { candidate -> on && candidate.indexerId !in off }
+                    rule
+                },
                 serviceWriter = ServiceDownloadWriter(
                     accounts = { id -> container.services.gated(id) },
                     keyRefused = { id -> container.settings.services.first().any { it.id == id && it.enabled && !it.deleted && it.keyRefused } },
@@ -494,14 +506,17 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /**
      * The season packs' copies kept now, as the Downloads page says them (L406): the keys of those that lead ([leading], by
      * show and season), which a queued season row of theirs takes first (L431), and every copy's release key ([keys]), by
-     * which a row written from one is told. An NZB opened on Import is no season's pack (L423): no row is from it.
+     * which a row written from one is told. An NZB opened on Import is no season's pack (L423): no row is from it. A season's
+     * torrent pack leads only where it can go to a service now ([toService]), as its season's turns take it first only then
+     * (L462).
      */
     data class Packs(val leading: Map<Pair<Int, Int>, Set<String>> = emptyMap(), val keys: Set<String> = emptySet()) {
         companion object {
-            fun of(copies: List<DownloadNzbs.Meta>): Packs {
+            fun of(copies: List<DownloadNzbs.Meta>, toService: (DownloadCandidate) -> Boolean = { true }): Packs {
                 val seasons = copies.filter { it.nzb == null && it.show != null && it.season != null }
                 return Packs(
-                    seasons.filter { it.leads }.groupBy({ it.show!! to it.season!! }, { it.key }).mapValues { (_, keys) -> keys.toSet() },
+                    seasons.filter { it.leads && (!it.torrent || toService(it.candidate)) }
+                        .groupBy({ it.show!! to it.season!! }, { it.key }).mapValues { (_, keys) -> keys.toSet() },
                     seasons.mapTo(HashSet()) { it.key },
                 )
             }
@@ -610,11 +625,14 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         return Item(row, live.written, rate)
     }
 
-    /** The season packs' copies kept now (L406), as the copies' last write or sweep left them: none on a TV. */
+    /**
+     * The season packs' copies kept now (L406), as the copies' last write or sweep left them, a torrent's leading as the
+     * settings let it ([DownloadRunnerDeps.toService]): none on a TV.
+     */
     val packs: StateFlow<Packs> = if (!runs) {
         MutableStateFlow(Packs())
     } else {
-        deps.storage.copies.map(Packs::of).stateIn(scope, SharingStarted.Eagerly, Packs())
+        combine(deps.storage.copies, deps.toService, Packs::of).stateIn(scope, SharingStarted.Eagerly, Packs())
     }
 
     /**

@@ -57,6 +57,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -237,6 +238,7 @@ class DownloadRunnerTest {
         exit: DownloadExit? = null,
         missing: suspend (RememberedRelease, List<ProviderConfig>, String) -> Unit = { release, asked, _ -> recorded += release.guid to asked.map { it.id } },
         limitLeft: suspend (String) -> kotlin.time.Duration? = { null },
+        toService: Flow<(DownloadCandidate) -> Boolean> = flowOf { true },
     ): DownloadRunner {
         clock = Clock { NOW + testScheduler.currentTime }
         return DownloadRunner(
@@ -246,7 +248,7 @@ class DownloadRunnerTest {
                 inUse = { providers }, lastExit = { exit }, television = television, host = { host }, network = network,
                 receiverSwitch = { switches += it }, debug = DownloadDebug.On(File(dir, "debug"), clock), longGapBytes = LONG_GAP, clock = clock,
                 timeSource = testScheduler.timeSource, io = StandardTestDispatcher(testScheduler), undoMillis = DownloadRunner.UNDO_MILLIS, limits = limits,
-                watched = watched, prefs = prefs, serviceWriter = serviceWriter(), limitLeft = limitLeft, leases = leases,
+                watched = watched, prefs = prefs, serviceWriter = serviceWriter(), limitLeft = limitLeft, leases = leases, toService = toService,
             ),
             work,
         )
@@ -2639,6 +2641,33 @@ class DownloadRunnerTest {
         val tv = runner(television = true)
         runCurrent()
         assertEquals(DownloadRunner.Packs(), tv.packs.value)
+    }
+
+    /**
+     * L462, L422, L194: a season's torrent pack leads its season's queued rows on the Downloads page only where their turns
+     * would take it first: where it can go to a service now, as the settings say (debrid shown, an account on, its indexer
+     * not kept from the service). Else no queued row reads "Queued · from the season pack", though a row written from it
+     * still says where it came from.
+     */
+    @Test
+    fun `the runner's packs lead with a season's torrent pack only where it can go to a service now`() = test {
+        val torrent = DownloadNzbs.Meta(
+            "btih:$TORRENT_HASH", "Harbor.Lights.S02.1080p.WEB-DL.AAC2.0.H.264-TIDE", torrentCandidate.copy(title = "Harbor.Lights.S02.1080p.WEB-DL.AAC2.0.H.264-TIDE"),
+            SHOW, 2, leads = true,
+        )
+        assertEquals(DownloadRunner.Packs(mapOf((SHOW to 2) to setOf(torrent.key)), setOf(torrent.key)), DownloadRunner.Packs.of(listOf(torrent)) { true })
+        assertEquals(DownloadRunner.Packs(emptyMap(), setOf(torrent.key)), DownloadRunner.Packs.of(listOf(torrent)) { false })
+        // A Usenet copy leads as it did, whatever the services say.
+        assertEquals(DownloadRunner.Packs(mapOf((SHOW to 2) to setOf(PACK.key)), setOf(PACK.key)), DownloadRunner.Packs.of(listOf(PACK)) { false })
+
+        val toService = MutableStateFlow<(DownloadCandidate) -> Boolean> { true }
+        val runner = runner(toService = toService)
+        storage.packs.write(torrent, null, null)
+        runCurrent()
+        assertEquals(setOf(torrent.key), runner.packs.value.leading[SHOW to 2])
+        toService.value = { it.indexerId != torrentCandidate.indexerId }
+        runCurrent()
+        assertEquals(DownloadRunner.Packs(emptyMap(), setOf(torrent.key)), runner.packs.value)
     }
 
     /** Resolve's fake, answering as DownloadResolver does, as the class says. */
