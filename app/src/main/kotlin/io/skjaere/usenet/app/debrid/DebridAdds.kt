@@ -1,6 +1,7 @@
 package io.skjaere.usenet.app.debrid
 
 import androidx.annotation.VisibleForTesting
+import io.skjaere.usenet.app.download.DownloadTrace
 import io.skjaere.usenet.data.ServiceAccount
 import io.skjaere.usenet.debrid.AddWatch
 import io.skjaere.usenet.debrid.DebridService
@@ -46,7 +47,8 @@ import kotlin.coroutines.CoroutineContext
  * every add made for it. Once no lease holds a record and its last use is over [grace] old (W82: [GRACE], 2 minutes),
  * [sweep] removes it: a sweep runs a grace after a record's last lease goes, and a grace after the process starts
  * ([start]), so a player made again after the process went takes its lease first; and a process's sweeps wait first, at
- * most [START_HOLDS_WAIT_MS], for the downloads' leases its start takes ([startHolds], L421).
+ * most [START_HOLDS_WAIT_MS], for the downloads' leases its start takes ([startHolds], L421). Each sweep says how many
+ * records a lease held, were due and it removed ([trace]: a debug build's trace, L464), counts alone.
  *
  * A removal is asked only of an account that is on with its gate open ([usable]), and never while debrid is hidden
  * ([shown], L192): a record waits for those, and a delete the service doesn't confirm keeps its record; one left waiting
@@ -77,6 +79,8 @@ class DebridAdds(
      * complete (at once on a TV); a test's records have none to wait for.
      */
     val startHolds: CompletableDeferred<Unit> = CompletableDeferred(Unit),
+    /** Hears each sweep's counts ([DownloadTrace.DebridSweep]): the app's writes them to a debug build's trace (L464). */
+    private val trace: (DownloadTrace) -> Unit = {},
 ) {
     /**
      * One add a play made to [account]'s list that this device can remove: the service's [handle] for it (TorBox's torrent
@@ -255,11 +259,20 @@ class DebridAdds(
         var stale = 0
         var next: Long? = null
         var waiting = false
+        // For the trace: those a lease held, and those still within their grace; the rest were due.
+        var leased = 0
+        var within = 0
         for (record in kept) {
-            if (heldNow(record.listingId)) continue
+            if (heldNow(record.listingId)) {
+                leased++
+                continue
+            }
             val idle = now - lastUsed(record)
             when {
-                idle < grace -> next = minOf(next ?: Long.MAX_VALUE, grace - idle)
+                idle < grace -> {
+                    within++
+                    next = minOf(next ?: Long.MAX_VALUE, grace - idle)
+                }
                 idle > grace + DAY -> {
                     removed += record
                     stale++
@@ -280,7 +293,10 @@ class DebridAdds(
                         continue
                     }
                     // Taken again while the account was asked for (a Resume as the grace ended): kept.
-                    if (heldNow(record.listingId)) continue
+                    if (heldNow(record.listingId)) {
+                        leased++
+                        continue
+                    }
                     // An account erring now likely errs for each: the next try begins with these.
                     if (record.account in erring) {
                         waiting = true
@@ -305,6 +321,8 @@ class DebridAdds(
             }
         }
         if (stale > 0) log("debrid: ${adds(stale)} not removed within a day, dropped with no call")
+        // Counts alone (L464): a device test's pair tells "the start's sweep ran and left the held add" from "it hadn't run".
+        trace(DownloadTrace.DebridSweep(held = leased, removed = removed.size - stale, due = kept.size - leased - within))
         // ELC-2: nothing else may sweep before a waiting record's day is over (no play ends, no new start), so it is tried
         // again on its own; each try in a row waits longer, as a delete that errs reads the whole list.
         if (waiting) next = minOf(next ?: Long.MAX_VALUE, retryAfter(waited++)) else waited = 0

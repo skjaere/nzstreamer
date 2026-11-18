@@ -61,14 +61,28 @@ object DebridFakes {
      */
     fun holdTheFake(): () -> Unit {
         val by = "test-${java.util.UUID.randomUUID()}"
+        holdTheFake(by, ms = null)
+        return { giveBack(by) }
+    }
+
+    /**
+     * Holds the debrid fake by the id [by], as [holdTheFake] does, waiting while another test holds it: for [ms]
+     * milliseconds where given (half an hour at most), else the fake's own lease. A pair's Start holds it so for its
+     * Check, minutes on in another process, which gives it back by the same id ([giveBack], L476).
+     */
+    fun holdTheFake(by: String, ms: Long?) {
         val until = System.nanoTime() + HOLD_WAIT_MS * 1_000_000
         while (true) {
-            val (status, _) = ask("take?by=$by")
-            if (status == 200) break
+            val (status, _) = ask("take?by=$by${ms?.let { "&ms=$it" }.orEmpty()}")
+            if (status == 200) return
             check(status == 409 && System.nanoTime() < until) { "the debrid fake was held by another test for ${HOLD_WAIT_MS / 1000} s (or answered $status)" }
             Thread.sleep(250)
         }
-        return { control("give-back?by=$by") }
+    }
+
+    /** Gives the debrid fake back, held by [by]: nothing where another holds it now. */
+    fun giveBack(by: String) {
+        control("give-back?by=$by")
     }
 
     /** How long a test waits for another's turn at the fake: a long debrid class's run, and more. */

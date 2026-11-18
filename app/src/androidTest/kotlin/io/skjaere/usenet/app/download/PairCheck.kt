@@ -27,8 +27,8 @@ import java.io.File
  *
  * Its end ([putBack]) leaves nothing of the pair running or kept: the downloads' jobs cancelled and the service
  * stopped, the rows and their files deleted, the season packs' copies with them, the debug seams' files (`.host`,
- * `.throttle`) removed. The trace stays, for the runner's logs; the settings stay as Start left them, as the runner
- * installs the app afresh for each pair.
+ * `.throttle`, `.debrid`) removed. The trace stays, for the runner's logs; the settings stay as Start left them, as the
+ * runner installs the app afresh for each pair.
  */
 class PairCheck(private val fixture: PairFixture = PairFixture.HARBOR_LIGHTS) {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -47,9 +47,10 @@ class PairCheck(private val fixture: PairFixture = PairFixture.HARBOR_LIGHTS) {
      * Room's [count] rows, in the queue's order, as the step left them (this process's start changes no row Done,
      * Stopped or Queued); and the trace as a whole before them: every line of a shape this reads, and the app's open by
      * the runner seen scheduling its host (L391) before any byte came, so what follows is the host the app's open asked
-     * for. And no debrid account or torrent indexer saved by the app's processes between the phases (L182).
+     * for. And no debrid account or torrent indexer saved by the app's processes between the phases (L182): none on but
+     * the [services] Start saved itself (the debrid pair's fake account).
      */
-    suspend fun rows(count: Int): List<Download> {
+    suspend fun rows(count: Int, services: Int = 0): List<Download> {
         val unread = PairRecord.traceLines(context).filter { PairRecord.parse(it) == null }.map { "${it.substringBefore(' ')} (${it.length} chars)" }
         assertEquals("every trace line of a shape the pairs read (DownloadTrace's)", emptyList<String>(), unread)
         val firstByte = evidence.firstOrNull { it.event == "progress" } ?: throw AssertionError("no transfer under way in the trace")
@@ -62,7 +63,7 @@ class PairCheck(private val fixture: PairFixture = PairFixture.HARBOR_LIGHTS) {
         // build's debrid accounts or torrent indexers (L182): counted, never named.
         val saved = container.settings.settings.first()
         assertEquals(
-            "debrid accounts and torrent indexers saved between the phases", 0 to 0, saved.activeServices.size to saved.activeTorrentIndexers.size,
+            "debrid accounts and torrent indexers on after the phases", services to 0, saved.activeServices.size to saved.activeTorrentIndexers.size,
         )
         val rows = dao.all().first()
         assertEquals("the downloads Start seeded", count, rows.size)
@@ -109,6 +110,12 @@ class PairCheck(private val fixture: PairFixture = PairFixture.HARBOR_LIGHTS) {
 
     /** Every line naming download [id] before this process. */
     fun linesOf(id: String): List<PairRecord.Traced> = evidence.filter { it.fields["id"] == id }
+
+    /** The sweeps of what plays and downloads added (L464) at [from] or later, before this process. */
+    fun sweeps(from: Long): List<PairRecord.Traced> = evidence.filter { it.event == "debrid-sweep" && it.at >= from }
+
+    /** The sweeps this process wrote. */
+    fun ownSweeps(): List<PairRecord.Traced> = traced().filter { it.at >= since && it.event == "debrid-sweep" }
 
     /** Download [id]'s done line at [from] or later, before this process; fails without one. */
     fun done(id: String, from: Long): PairRecord.Traced =
@@ -208,7 +215,7 @@ class PairCheck(private val fixture: PairFixture = PairFixture.HARBOR_LIGHTS) {
             manager.cancel(DownloadNotifications.ONGOING_ID)
             manager.cancel(DownloadNotifications.STATUS_ID)
         }
-        back { listOf(DownloadDebug.THROTTLE, DownloadDebug.HOST).forEach { File(folder, it).delete() } }
+        back { listOf(DownloadDebug.THROTTLE, DownloadDebug.HOST, DownloadDebug.DEBRID).forEach { File(folder, it).delete() } }
         failures.firstOrNull()?.let { first -> failures.drop(1).forEach(first::addSuppressed); throw first }
     }
 

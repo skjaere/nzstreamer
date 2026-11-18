@@ -1,13 +1,14 @@
 package io.skjaere.usenet.app.download
 
+import io.skjaere.usenet.app.debrid.ServiceEndpoints
 import io.skjaere.usenet.data.Clock
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.io.IOException
 
 /**
- * What the downloads' trace says ([DownloadDebug.trace]), in the debug build alone: ids, offsets, sizes and causes, never a
- * title, a release or a host. The two-phase device tests read it for what each boundary did (L367).
+ * What the downloads' trace says ([DownloadDebug.trace]), in the debug build alone: ids, offsets, sizes, causes and counts,
+ * never a title, a release or a host. The two-phase device tests read it for what each boundary did (L367, L464).
  */
 sealed interface DownloadTrace {
     /** What started a host. */
@@ -87,14 +88,23 @@ sealed interface DownloadTrace {
     data class Completed(val id: String, val size: Long) : DownloadTrace {
         override val line get() = "done id=$id size=$size"
     }
+
+    /**
+     * A sweep of what plays and downloads added to the service accounts (L421, L464): of the records it read, [held] a
+     * lease held, [due] none held and their grace was over, and [removed] of those it removed from their account. Counts
+     * alone: never an account, a torrent or a listing.
+     */
+    data class DebridSweep(val held: Int, val removed: Int, val due: Int) : DownloadTrace {
+        override val line get() = "debrid-sweep held=$held removed=$removed due=$due"
+    }
 }
 
 /**
- * The debug build's seams for the downloads' device tests (L336, L367), files in filesDir's `downloads/` beside the
- * downloads' folders, which reconcile leaves alone: [serviceHost] (`.host`), [throttle] (`.throttle`) and the [trace]
- * (`.trace`). Read and written only in a debug build ([of]'s flag, BuildConfig.DEBUG): a release, bench or beta build gets
- * [Off], which holds no path and touches no file. A device test writes the first two, so they last through a kill and a
- * reboot, as the trace does.
+ * The debug build's seams for the downloads' device tests (L336, L367, L464), files in filesDir's `downloads/` beside the
+ * downloads' folders, which reconcile leaves alone: [serviceHost] (`.host`), [throttle] (`.throttle`), [debrid]
+ * (`.debrid`) and the [trace] (`.trace`). Read and written only in a debug build ([of]'s flag, BuildConfig.DEBUG): a
+ * release, bench or beta build gets [Off], which holds no path and touches no file. A device test writes the first three,
+ * so they last through a kill and a reboot, as the trace does.
  */
 sealed interface DownloadDebug {
     /** The host override (L336): the service on any API level while `.host` is there, whatever it holds. */
@@ -103,13 +113,21 @@ sealed interface DownloadDebug {
     /** The writer's bytes a second (item 6), as `.throttle` says them; null with none, or anything but a number above 0. */
     val throttle: Long?
 
+    /**
+     * Whether `.debrid` is there (L464): the services' clients then point at the debrid fake ([pointServices]), so a
+     * debrid pair's app processes, which no test runner reaches, never call a real service. Its presence alone: nothing in
+     * it is read.
+     */
+    val debrid: Boolean
+
     /** Appends [event]'s line to `.trace`, after the wall-clock time in milliseconds. */
     fun trace(event: DownloadTrace)
 
-    /** A release, bench or beta build's: no override, no throttle, no trace. */
+    /** A release, bench or beta build's: no override, no throttle, no debrid fake, no trace. */
     data object Off : DownloadDebug {
         override val serviceHost get() = false
         override val throttle: Long? get() = null
+        override val debrid get() = false
 
         override fun trace(event: DownloadTrace) = Unit
     }
@@ -123,6 +141,8 @@ sealed interface DownloadDebug {
         private val percents = HashMap<String, Long>()
 
         override val serviceHost get() = File(folder, HOST).isFile
+
+        override val debrid get() = File(folder, DEBRID).isFile
 
         override val throttle: Long?
             get() = try {
@@ -153,10 +173,21 @@ sealed interface DownloadDebug {
     companion object {
         const val HOST = ".host"
         const val THROTTLE = ".throttle"
+        const val DEBRID = ".debrid"
         const val TRACE = ".trace"
 
         /** The trace's size at most: past it, it starts again. */
         const val TRACE_CAP = 1L shl 20
+
+        /**
+         * The container's seam (L464), called before any service client is made: while [debug] has `.debrid`, every
+         * client points at the debrid fake's fixed address for the process's life. Without it nothing is written: a device
+         * run's closed address, set by its runner before the app starts, stays as it was, and nothing sets it back to none,
+         * which would let a run reach the real services.
+         */
+        fun pointServices(debug: DownloadDebug) {
+            if (debug.debrid) ServiceEndpoints.pointAtTheFake()
+        }
 
         /** The seams of a build whose BuildConfig.DEBUG is [debug], in [filesDir]'s `downloads/`. */
         fun of(filesDir: File, debug: Boolean, clock: Clock = Clock.System): DownloadDebug =

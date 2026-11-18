@@ -11,6 +11,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.skjaere.usenet.app.download.DownloadLease
+import io.skjaere.usenet.app.download.DownloadTrace
 import io.skjaere.usenet.data.ServiceAccount
 import io.skjaere.usenet.debrid.Account
 import io.skjaere.usenet.debrid.DebridService
@@ -99,11 +100,12 @@ class DebridAddsTest {
 
     /**
      * The app's records over [file], as a process makes them, on the test's clock; its sweeps waiting first for
-     * [startHolds], the downloads' holds a start takes (none to wait for unless a case gives them).
+     * [startHolds], the downloads' holds a start takes (none to wait for unless a case gives them), and saying what each
+     * found to [trace], as a debug build's trace hears it.
      */
-    private fun TestScope.adds(startHolds: CompletableDeferred<Unit> = CompletableDeferred(Unit)) = DebridAdds(
+    private fun TestScope.adds(startHolds: CompletableDeferred<Unit> = CompletableDeferred(Unit), trace: (DownloadTrace) -> Unit = {}) = DebridAdds(
         file, accounts = { accounts.value }, usable = ::usable, scope = backgroundScope,
-        clock = { testScheduler.currentTime }, shown = { shown }, io = Dispatchers.Unconfined, log = lines::add, startHolds = startHolds,
+        clock = { testScheduler.currentTime }, shown = { shown }, io = Dispatchers.Unconfined, log = lines::add, startHolds = startHolds, trace = trace,
     )
 
     /** The account's client as the registry's usable clients give it: with the account as read with the client's key. */
@@ -393,6 +395,39 @@ class DebridAddsTest {
         adds.release(lease)
         wait(GRACE.multipliedBy(3))
         assertEquals(listOf("42", "41", "43"), service.asked.toList())
+    }
+
+    /**
+     * L464: each sweep says, in a debug build's trace, how many records a lease held, how many it removed from their
+     * account and how many were due (no lease held them, their grace over): one still in its grace is none of these, and
+     * one due that waits (its account's gate shut) is due and not removed. Counts alone.
+     */
+    @Test
+    fun `each sweep traces how many records a lease held, it removed and were due`() = runTest {
+        val traced = CopyOnWriteArrayList<DownloadTrace>()
+        val adds = adds(trace = traced::add)
+        val download = DownloadLease("c0ffee00-0000-4000-8000-000000000001")
+        adds.hold(download, listing(PACK))
+        adds.torBox().added(PACK, "41")
+        adds.torBox().added(GOOD, "42")
+        // The sweep a grace after GOOD's add, which nothing holds; the pack's held by the download.
+        wait(GRACE.plusSeconds(1))
+        assertEquals(listOf(DownloadTrace.DebridSweep(held = 1, removed = 1, due = 1)), traced.toList())
+        assertEquals(listOf("42"), service.removed.toList())
+
+        // The account's gate shut: its grace over, the add waits, due and not removed.
+        open = false
+        adds.torBox().added(ORBIT, "43")
+        wait(GRACE.plusSeconds(1))
+        assertEquals(DownloadTrace.DebridSweep(held = 1, removed = 0, due = 1), traced.last())
+
+        // Open again, with an add still in its grace: the waiting one goes, the new one is none of the three.
+        open = true
+        adds.torBox().added(InfoHash.of("0a1b2c3d4e5f60718293a4b5c6d7e8f9abcdef01"), "44")
+        adds.sweep()
+        assertEquals(DownloadTrace.DebridSweep(held = 1, removed = 1, due = 1), traced.last())
+        assertEquals(listOf("42", "43"), service.removed.toList())
+        assertTrue(traced.all { it.line.matches(Regex("""debrid-sweep held=\d+ removed=\d+ due=\d+""")) }, "$traced")
     }
 
     @Test

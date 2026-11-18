@@ -77,7 +77,9 @@ import java.net.URL
  * A download's add (L421): held by the download's own lease while it runs, is paused and waits while something streams,
  * however many graces pass; gone a grace after it is Done; and one already in the account is never removed. Its walk run
  * by the case as a host runs it, its pace the debug build's throttle; before and after each case every download row
- * deleted, the downloads' jobs cancelled and the throttle's file removed.
+ * deleted, the downloads' jobs cancelled and the throttle's file removed; and while each case runs the debug build's
+ * `.debrid` there (L464), a stale one deleted first, so an app process a job starts after a crash mid-case points the
+ * services at the debrid fake, never at a real service.
  */
 @RunWith(AndroidJUnit4::class)
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -94,6 +96,9 @@ class RemoveAfterPlayDeviceTest {
     /** The debug build's throttle of the downloads' writers, as the case sets it. */
     private val throttle = File(File(context.filesDir, DownloadStorage.DIR), DownloadDebug.THROTTLE)
 
+    /** The debug build's file that points a new process's services at the debrid fake (L464). */
+    private val debrid = File(File(context.filesDir, DownloadStorage.DIR), DownloadDebug.DEBRID)
+
     /** The walks a case ran, and its own stream's meter: stopped and closed at its end. */
     private val walks = mutableListOf<CoroutineScope>()
     private var meter: StreamTraffic.Meter? = null
@@ -101,6 +106,9 @@ class RemoveAfterPlayDeviceTest {
     @Before
     fun setUp() {
         downloadsApart()
+        debrid.delete()
+        debrid.parentFile?.mkdirs()
+        debrid.writeText("fake")
         fixture.open()
         fixture.usenetIndexerOn(false)
         container.debridAdds.grace = GRACE_MS
@@ -117,6 +125,7 @@ class RemoveAfterPlayDeviceTest {
             { onMainThread { container.playback.cancel() } },
             { container.debridAdds.grace = DebridAdds.GRACE.toMillis() },
             { fixture.close() },
+            { debrid.delete() },
         )
     }
 

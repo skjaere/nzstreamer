@@ -324,8 +324,14 @@ class AppContainer(private val context: Context) {
         )
     }
 
-    /** The debug build's seams for the downloads' device tests (L336, L367): Off in every other build. */
+    /** The debug build's seams for the downloads' device tests (L336, L367, L464): Off in every other build. */
     val downloadDebug: DownloadDebug by lazy { DownloadDebug.of(context.filesDir, BuildConfig.DEBUG) }
+
+    init {
+        // L464: a debug build's `.debrid` points the services' clients at the debrid fake, before any client is made (the
+        // registry below makes them on first use). Its absence writes nothing: a device run's closed address stays.
+        if (BuildConfig.DEBUG) DownloadDebug.pointServices(downloadDebug)
+    }
 
     /**
      * The device's default network as the app follows it (L381), one default network callback a process: what it offers,
@@ -646,6 +652,7 @@ class AppContainer(private val context: Context) {
         usable = { id -> services.usable().firstOrNull { it.account.id == id } },
         scope = appScope,
         startHolds = CompletableDeferred(),
+        trace = { downloadDebug.trace(it) },
     )
 
     /** The links debrid plays read their files by (L172): Opening's first, then fresh ones from the account, in memory only. */

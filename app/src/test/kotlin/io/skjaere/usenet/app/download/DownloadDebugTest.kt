@@ -1,23 +1,28 @@
 package io.skjaere.usenet.app.download
 
+import io.skjaere.usenet.app.debrid.ServiceEndpoints
 import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
 import io.skjaere.usenet.app.download.DownloadTrace.Decision
 import io.skjaere.usenet.app.download.DownloadTrace.ScheduleResult
 import io.skjaere.usenet.app.download.DownloadTrace.StartCause
 import io.skjaere.usenet.data.Clock
+import io.skjaere.usenet.debrid.ServiceKind
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
- * The debug build's seams for the downloads' device tests (L336, L367): the host override (`.host`), the writer's throttle
- * (`.throttle`) and the trace the runner and the hosts append to (`.trace`), in filesDir's `downloads/`. A release, bench
- * or beta build reads and writes none of them; the debug flag is passed in, so a test stands for either. The trace's lines
- * name ids, offsets and causes, never a title, a release or a host.
+ * The debug build's seams for the downloads' device tests (L336, L367, L464): the host override (`.host`), the writer's
+ * throttle (`.throttle`), the debrid fake's file (`.debrid`, which points the services' clients at the debrid fake) and
+ * the trace the runner, the hosts and the sweep of what plays and downloads added append to (`.trace`), in filesDir's
+ * `downloads/`. A release, bench or beta build reads and writes none of them; the debug flag is passed in, so a test stands
+ * for either. The trace's lines name ids, offsets, causes and counts, never a title, a release or a host.
  */
 class DownloadDebugTest {
     @TempDir
@@ -26,18 +31,79 @@ class DownloadDebugTest {
     private val folder get() = File(filesDir, "downloads")
     private val clock = Clock { NOW }
 
+    /** Where the services' clients pointed before a case: a process's, the test JVM's none. */
+    private val pointed = ServiceEndpoints.override
+
+    @AfterEach
+    fun pointBack() {
+        ServiceEndpoints.override = pointed
+    }
+
     @Test
-    fun `a release build reads and writes none of the three`() {
+    fun `a release build reads and writes none of the four`() {
         folder.mkdirs()
         File(folder, ".host").writeText("service")
         File(folder, ".throttle").writeText("1000000")
+        File(folder, ".debrid").writeText("")
         File(folder, ".trace").writeText("1763164700000 start host=job cause=job\n")
         val release = DownloadDebug.of(filesDir, debug = false, clock = clock)
         assertFalse(release.serviceHost)
         assertNull(release.throttle)
+        assertFalse(release.debrid)
         release.trace(DownloadTrace.HostStart(DownloadHost.Service, StartCause.BootReceiver))
         release.trace(DownloadTrace.Completed(ID, 48_000_000))
+        release.trace(DownloadTrace.DebridSweep(held = 1, removed = 0, due = 0))
         assertEquals("1763164700000 start host=job cause=job\n", File(folder, ".trace").readText())
+    }
+
+    /**
+     * L464: a debug build's `.debrid` says only that it is there. Nothing in it is read: an address written in it, or a file
+     * that can't be read, points nowhere else.
+     */
+    @Test
+    fun `a debug build has the debrid fake's file while it is there, and reads nothing in it`() {
+        val debug = DownloadDebug.of(filesDir, debug = true, clock = clock)
+        assertFalse(debug.debrid)
+        folder.mkdirs()
+        val file = File(folder, ".debrid")
+        file.writeText("https://elsewhere.invalid/api")
+        assertTrue(debug.debrid)
+        assertTrue(file.setReadable(false), "the file made unreadable")
+        try {
+            assertTrue(debug.debrid, "its presence alone")
+        } finally {
+            file.setReadable(true)
+        }
+        file.delete()
+        assertFalse(debug.debrid)
+    }
+
+    /**
+     * L464: the container's seam, before any service client is made. With `.debrid` in a debug build, every service's
+     * client points at the debrid fake's fixed address, whatever the file holds; without it, or in any other build,
+     * nothing is written: an address set before (a device run's runner's closed one) stays as it was, and nothing ever
+     * writes it back to none.
+     */
+    @Test
+    fun `the debrid fake's file points the services at the fake, and without it nothing is written`() {
+        val closed: (ServiceKind) -> String = { "http://127.0.0.1:9" }
+        val debug = DownloadDebug.of(filesDir, debug = true, clock = clock)
+        ServiceEndpoints.override = closed
+        DownloadDebug.pointServices(debug)
+        assertSame(closed, ServiceEndpoints.override, "no .debrid: the runner's closed address as it was")
+        ServiceEndpoints.override = null
+        DownloadDebug.pointServices(debug)
+        assertNull(ServiceEndpoints.override, "no .debrid: nothing written")
+
+        folder.mkdirs()
+        File(folder, ".debrid").writeText("https://elsewhere.invalid/api")
+        ServiceEndpoints.override = closed
+        DownloadDebug.pointServices(DownloadDebug.of(filesDir, debug = false, clock = clock))
+        assertSame(closed, ServiceEndpoints.override, "a release build's seams: nothing written")
+
+        DownloadDebug.pointServices(debug)
+        assertEquals("http://10.0.2.2:8097/torbox/v1/api", ServiceEndpoints.of(ServiceKind.TorBox))
+        assertEquals("http://10.0.2.2:8097/premiumize/api", ServiceEndpoints.of(ServiceKind.Premiumize))
     }
 
     @Test
@@ -128,6 +194,20 @@ class DownloadDebugTest {
         lines.forEach { assertTrue(LINE.matches(it), it) }
     }
 
+    /**
+     * L464: each sweep of what plays and downloads added to a service account says how many records a lease held, how many
+     * it removed and how many were due (no lease, their grace over): counts alone, never an account, a torrent or a listing.
+     */
+    @Test
+    fun `a sweep's line says how many records a lease held, it removed and were due, and nothing else`() {
+        val debug = DownloadDebug.of(filesDir, debug = true, clock = clock)
+        debug.trace(DownloadTrace.DebridSweep(held = 1, removed = 0, due = 0))
+        debug.trace(DownloadTrace.DebridSweep(held = 0, removed = 2, due = 3))
+        val lines = File(folder, ".trace").readLines()
+        assertEquals(listOf("1763164800000 debrid-sweep held=1 removed=0 due=0", "1763164800000 debrid-sweep held=0 removed=2 due=3"), lines)
+        lines.forEach { assertTrue(LINE.matches(it), it) }
+    }
+
     @Test
     fun `progress is traced at each whole percent, not at every record`() {
         val debug = DownloadDebug.of(filesDir, debug = true, clock = clock)
@@ -153,6 +233,6 @@ class DownloadDebugTest {
         const val NOW = 1_763_164_800_000
         const val ID = "c0ffee00-0000-4000-8000-000000000001"
         const val OTHER = "c0ffee00-0000-4000-8000-000000000002"
-        val LINE = Regex("""\d+ [a-z]+( [a-z-]+=[A-Za-z0-9._~-]+)*""")
+        val LINE = Regex("""\d+ [a-z]+(-[a-z]+)?( [a-z-]+=[A-Za-z0-9._~-]+)*""")
     }
 }

@@ -13,6 +13,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assume.assumeTrue
+import java.io.File
 
 /**
  * A download case's sources over the fakes (L422, L464): the fake TorBox account the only service account on, and nothing
@@ -23,9 +24,14 @@ import org.junit.Assume.assumeTrue
  * strict: anything asked of it is refused, never sent, and fails the case at [close] (a class with a strict seam of its
  * own passes false). [close] puts each back as it was, the case's own account and torrent indexer removed with their
  * keys, whatever the step before it did.
+ *
+ * And while it is open, the debug build's `.debrid` (L464): a stale one deleted, then written before the account is
+ * saved, and deleted at [close], so an app process a job starts after a crash mid-case points the services at the debrid
+ * fake, or at nothing while the fake is stopped, never at a real service with the fake's key.
  */
 internal class FakeAccountOnly(private val torznab: Boolean, private val providers: Boolean = true, private val tmdb: Boolean = true) : AutoCloseable {
     private val container = InstrumentationRegistry.getInstrumentation().targetContext.container
+    private val debrid = File(File(InstrumentationRegistry.getInstrumentation().targetContext.filesDir, DownloadStorage.DIR), DownloadDebug.DEBRID)
     private val settings = container.settings
     private lateinit var saved: AppSettings
     private var strict: FakeTmdb? = null
@@ -54,6 +60,9 @@ internal class FakeAccountOnly(private val torznab: Boolean, private val provide
         giveBack = DebridFakes.holdTheFake()
         DebridFakes.control("reset")
         pointBack = DebridFakes.pointServicesAtTheFake()
+        debrid.delete()
+        debrid.parentFile?.mkdirs()
+        debrid.writeText("fake")
         account = settings.saveService(ServiceKind.TorBox.name, DebridFakes.TORBOX_KEY) { ServiceSignIn(DebridFakes.TORBOX_ACCOUNT) }
     }
 
@@ -79,6 +88,7 @@ internal class FakeAccountOnly(private val torznab: Boolean, private val provide
                 }
             },
             { strict?.close() },
+            { debrid.delete() },
         )
     }
 }

@@ -23,6 +23,7 @@ import io.skjaere.usenet.app.debrid.seedDevDebrid
 import io.skjaere.usenet.app.engineSetup
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.core.TrackProbe
+import io.skjaere.usenet.data.AppSettings
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadState
@@ -49,26 +50,32 @@ import java.net.Socket
  * tools/mock-seed (the README's device tests): its NZB and its file's SHA-256, androidTest assets ([nzb],
  * [sha256Asset]); the release's invented name ([release]); the file's exact [size]; and what each row is a download of
  * ([target]). Of a release of several files, one of them: the asset lists each file's SHA-256 by its name, as sha256sum
- * does, and [file] names this one's. The device doesn't have the files: each is told by its SHA-256 alone.
+ * does, and [file] names this one's. The device doesn't have the files: each is told by its SHA-256 alone. A torrent the
+ * debrid fake has cached ([torrent]) has no NZB: its file is the fake's sample, told by the SHA-256 the fake says.
  */
 class PairFixture(
-    val nzb: String,
-    val sha256Asset: String,
+    val nzb: String?,
+    val sha256Asset: String?,
     val release: String,
     val size: Long,
     val target: DownloadTarget,
     val file: String? = null,
+    /** The file's SHA-256 where no asset lists it: a torrent's, as the debrid fake says its sample's. */
+    private val known: String? = null,
 ) {
     /** The NZB's bytes, as an indexer would hand them over. */
-    fun nzbBytes(): ByteArray = asset(nzb)
+    fun nzbBytes(): ByteArray = asset(requireNotNull(nzb) { "$release has no NZB: a torrent's" })
 
-    /** The file's SHA-256, in lowercase hex: the asset's one, or its line for [file]. */
+    /** The file's SHA-256, in lowercase hex: the asset's one, or its line for [file]; a torrent's as the fake says it. */
     val sha256: String by lazy {
-        val listed = asset(sha256Asset).decodeToString()
-        if (file == null) {
-            listed.trim()
-        } else {
-            listed.lines().firstOrNull { it.substringAfter("  ") == file }?.substringBefore(' ') ?: throw AssertionError("$sha256Asset lists no $file")
+        known ?: run {
+            val asset = requireNotNull(sha256Asset) { "$release's SHA-256 is listed nowhere" }
+            val listed = asset(asset).decodeToString()
+            if (file == null) {
+                listed.trim()
+            } else {
+                listed.lines().firstOrNull { it.substringAfter("  ") == file }?.substringBefore(' ') ?: throw AssertionError("$asset lists no $file")
+            }
         }
     }
 
@@ -117,6 +124,13 @@ class PairFixture(
         )
 
         private const val HARBOR_LIGHTS_SHOW = 900_973
+
+        /**
+         * The debrid fake's torrent [release] as a pair downloads it (L476): its one video the fake's sample, of [size] bytes
+         * and the [sha256] its `/control/media` says, a download of [target]. No NZB: its listing is the account's.
+         */
+        fun torrent(release: String, size: Long, sha256: String, target: DownloadTarget) =
+            PairFixture(nzb = null, sha256Asset = null, release = release, size = size, target = target, known = sha256)
     }
 }
 
@@ -232,7 +246,7 @@ object PairSeed {
     }
 
     /** Every row and file of the downloads gone, the debug seams' files and the trace with them: nothing else of the app's. */
-    private suspend fun empty(context: Context, container: AppContainer) {
+    internal suspend fun empty(context: Context, container: AppContainer) {
         val dao = container.data.downloads
         dao.all().first().forEach { row ->
             try {
@@ -274,7 +288,7 @@ object PairSeed {
      * The seeding saves only while none was ever saved, so an account signed out of and a torrent indexer removed, both
      * invented and never asked, leave the records that keep it from ever doing so.
      */
-    private suspend fun debridHeldOff(container: AppContainer) {
+    internal suspend fun debridHeldOff(container: AppContainer) {
         val settings = container.settings
         val saved = settings.settings.first()
         if (saved.services.isEmpty()) settings.signOut(settings.saveService(ServiceKind.TorBox.name, PLACEHOLDER_KEY) { ServiceSignIn(accountName = "") })
@@ -358,14 +372,20 @@ object PairSeed {
         expect(container.engine.configuredProviders.value == listOf(mock)) { "the engine isn't on the mock alone" }
         val prefs = container.settings.downloads.first()
         expect(!prefs.unmeteredOnly && !prefs.whileCharging) { "Only on Wi-Fi ${prefs.unmeteredOnly}, Only while charging ${prefs.whileCharging}" }
-        // The debug build's debrid seeding as the app's next process runs it (L182): invented entries here, never asked, so a
-        // seeding that would run saves these, not the developer's.
-        seedDevDebrid(container.settings, INVENTED_SERVICES, INVENTED_TORRENT_INDEXERS, enabled = true, shown = true)
-        val after = container.settings.settings.first()
+        val after = afterSeeding(container)
         expect(after.activeServices.isEmpty() && after.activeTorrentIndexers.isEmpty()) {
             "the debug build's debrid seeding would save ${after.activeServices.size} account(s) and ${after.activeTorrentIndexers.size} torrent indexer(s) in the app's next process"
         }
         return problems
+    }
+
+    /**
+     * The settings once the debug build's debrid seeding has run as the app's next process runs it (L182): with invented
+     * entries here, never asked, so a seeding that would run saves these, not the developer's.
+     */
+    internal suspend fun afterSeeding(container: AppContainer): AppSettings {
+        seedDevDebrid(container.settings, INVENTED_SERVICES, INVENTED_TORRENT_INDEXERS, enabled = true, shown = true)
+        return container.settings.settings.first()
     }
 
     private fun reachable(): Boolean = try {
@@ -403,7 +423,7 @@ class PairRun : TestRule {
  * and causes only: no title, release, host or a cause's words.
  * - the process (its pid and start, the boot's time) and the package's install and update times;
  * - the settings that rule a download (the providers' count, whether the mock alone, the switches, notifications), the
- *   host, the override, the throttle, the boot receiver's state, and the network;
+ *   host, the override, the throttle, whether the debrid fake's file is there, the boot receiver's state, and the network;
  * - the trace (`files/downloads/.trace`), line by line as the app wrote it, those from this process's start on marked
  *   (this process's own start reconciles first, and may judge a row the boundary before left under way);
  * - each row's state, stop words, safe offset and size; each file's size, and whether its SHA-256 is its episode's
@@ -467,7 +487,10 @@ object PairRecord {
         if (strict && unread.isNotEmpty()) throw AssertionError("not read: ${unread.joinToString()}")
     }
 
-    /** A trace line read back: its time, its event (start, schedule, reconcile, reopen, progress, done) and its fields. */
+    /**
+     * A trace line read back: its time, its event (start, schedule, reconcile, reopen, progress, done, debrid-sweep) and its
+     * fields.
+     */
     data class Traced(val at: Long, val event: String, val fields: Map<String, String>) {
         /** The field [name]'s value; fails for a line without it. */
         operator fun get(name: String): String = fields[name] ?: throw AssertionError("the trace's $event line at $at has no $name")
@@ -513,7 +536,7 @@ object PairRecord {
             PackageManager.COMPONENT_ENABLED_STATE_DISABLED -> "disabled"
             else -> "other"
         }
-        say("host $host override=${debug.serviceHost} throttle=${debug.throttle ?: "none"} boot-receiver=$receiver")
+        say("host $host override=${debug.serviceHost} throttle=${debug.throttle ?: "none"} debrid-fake=${debug.debrid} boot-receiver=$receiver")
         val connectivity = context.getSystemService(ConnectivityManager::class.java)
         val network = connectivity.activeNetwork?.let { connectivity.getNetworkCapabilities(it) }
         val transport = when {
@@ -687,7 +710,8 @@ object PairRecord {
             "|reconcile id=$ID_SHAPE decision=${words(DownloadTrace.Decision.entries.map { it.word })} exit=(none|\\d+( exit-at=\\d+)?)" +
             "|reopen id=$ID_SHAPE offset=\\d+" +
             "|progress id=$ID_SHAPE offset=\\d+ size=\\d+" +
-            "|done id=$ID_SHAPE size=\\d+)",
+            "|done id=$ID_SHAPE size=\\d+" +
+            "|debrid-sweep held=\\d+ removed=\\d+ due=\\d+)",
     )
 
     /** The system's plain words, the package's name put as <pkg> first. */
