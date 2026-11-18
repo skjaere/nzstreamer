@@ -54,14 +54,9 @@ class DebridSearchFixture(private val quarry: Boolean = false) : AutoCloseable {
 
     val today: LocalDate = LocalDate.now()
 
-    val show = ShowDetails(
-        HARBOR_LIGHTS, "Harbor Lights", null, 2021, null, null, null, "Returning Series", true, 45,
-        listOf(SeasonSummary(1, null, 3, today.minusDays(60), null)),
-        lastEpisode = EpisodeSummary(1, 3, EPISODES[2], today.minusDays(46)), nextEpisode = null,
-        ids = ExternalIds(tvdb = 900001, imdb = "tt9000003"),
-    )
+    val show = showOf(today)
 
-    private val season = Season(HARBOR_LIGHTS, 1, null, null, EPISODES.mapIndexed { i, name -> Episode(1, i + 1, name, null, today.minusDays(60L - 7 * i), 45, null) })
+    private val season = seasonOf(today)
 
     fun open() = runBlocking<Unit> {
         fun reachable(port: Int) = runCatching { Socket().use { it.connect(InetSocketAddress(DebridFakes.HOST, port), 2_000) } }.isSuccess
@@ -142,6 +137,27 @@ class DebridSearchFixture(private val quarry: Boolean = false) : AutoCloseable {
         const val INDEXER_A = "debrid-search-indexer-a"
         /** Invented episode names. */
         val EPISODES = listOf("Pilot Light", "Salt Road", "Night Ferry")
+
+        /** FakeCatalog's Harbor Lights as TMDB would give it on [today]: its first season of three episodes, all aired. */
+        fun showOf(today: LocalDate) = ShowDetails(
+            HARBOR_LIGHTS, "Harbor Lights", null, 2021, null, null, null, "Returning Series", true, 45,
+            listOf(SeasonSummary(1, null, 3, today.minusDays(60), null)),
+            lastEpisode = EpisodeSummary(1, 3, EPISODES[2], today.minusDays(46)), nextEpisode = null,
+            ids = ExternalIds(tvdb = 900001, imdb = "tt9000003"),
+        )
+
+        /** Harbor Lights' first season as TMDB would give it on [today]: [EPISODES], a week apart. */
+        fun seasonOf(today: LocalDate) =
+            Season(HARBOR_LIGHTS, 1, null, null, EPISODES.mapIndexed { i, name -> Episode(1, i + 1, name, null, today.minusDays(60L - 7 * i), 45, null) })
+
+        /**
+         * TMDB answering for Harbor Lights alone, its show and first season, and no titles for anything typed: [strict], it
+         * passes nothing on, the player's next and previous episode answered from it too (C9).
+         */
+        fun harborLightsTmdb(strict: Boolean, today: LocalDate = LocalDate.now()): FakeTmdb = FakeTmdb(
+            shows = mapOf(HARBOR_LIGHTS to showOf(today)), seasons = { id, number -> seasonOf(today).takeIf { id == HARBOR_LIGHTS && number == 1 } },
+            suggestions = { emptyList() }, strict = strict,
+        )
 
         /** The Torznab fake's Jackett-shaped feed. */
         const val JACKETT_URL = "http://${DebridFakes.HOST}:${DebridFakes.TORZNAB_PORT}/jackett/api/v2.0/indexers/fake/results/torznab"

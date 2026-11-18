@@ -23,6 +23,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.app.AppNav
+import io.skjaere.usenet.app.FakeTmdb
 import io.skjaere.usenet.app.ImmersiveHintSeen
 import io.skjaere.usenet.app.NetworkNow
 import io.skjaere.usenet.app.PlayerActivity
@@ -134,6 +135,8 @@ class DebridHiddenDeviceTest {
     private var prowlarr: String? = null
     private var fakeBack: (() -> Unit)? = null
     private var endpointsBack: (() -> Unit)? = null
+    /** TMDB's seam where a case plays: strict, so nothing it asks reaches TMDB (C9). */
+    private var tmdb: FakeTmdb? = null
 
     @Before
     fun setUp() = runBlocking<Unit> {
@@ -164,6 +167,9 @@ class DebridHiddenDeviceTest {
     fun restore() = runBlocking<Unit> {
         everyStep(
             { container.playback.cancel() },
+            // Nor does a class after this one find a played episode remembered, however the case went.
+            { DebridSearchFixture.forgetPlays(container.library) },
+            { tmdb?.close() },
             { downloadsApart() },
             { if (fakeBack != null) DebridFakes.control("reset") },
             { fakeBack?.invoke() },
@@ -285,10 +291,14 @@ class DebridHiddenDeviceTest {
         }
     }
 
-    /** L422: a finished torrent row plays its file while hidden, through the hook, nothing asked of the debrid fake. */
+    /**
+     * L422: a finished torrent row plays its file while hidden, through the hook, nothing asked of the debrid fake; and the
+     * player's next and previous episode answered by TMDB's strict seam, nothing reaching TMDB.
+     */
     @Test
     fun hiddenAFinishedTorrentRowPlaysItsFile() = runBlocking<Unit> {
         atTheFake()
+        tmdb = DebridSearchFixture.harborLightsTmdb(strict = true)
         val row = torrentRow(2, DownloadState.Done, resolved = true)
         val bytes = DownloadFixtures.media(MEDIA)
         val name = checkNotNull(row.fileName)
@@ -318,8 +328,8 @@ class DebridHiddenDeviceTest {
         ActivityScenario.launch<PlayerActivity>(PlayerActivity.intent(context, launch)).use { scenario ->
             waitForValue("the player playing the file", 60_000) { scenario.read { it.player?.takeIf { p -> p.playbackState == Player.STATE_READY } } }
             assertEquals(launch.uri, scenario.read { it.player?.currentMediaItem?.localConfiguration?.uri?.toString() })
+            waitForValue("the player's next and previous episode looked up through TMDB's strict seam", 15_000) { tmdb?.lookups?.get()?.takeIf { it > 0 } }
         }
-        DebridSearchFixture.forgetPlays(container.library)
         assertEquals("nothing asked of the debrid fake", emptyMap<String, Int>() to 0, asked())
     }
 
