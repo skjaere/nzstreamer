@@ -116,7 +116,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * - Offline (the container's own override, L438): the LOAD goes within a second with no TMDB lookup, the session's
  *   picture the stored still, and the LOAD's picture TMDB's address for it.
  * - A row Delete once watched has taken: its hold refused, "The downloaded file is gone", nothing sent.
- * - The player's Cast row (W121 c): a download playing here moves there, served byte for byte, and the player closes.
+ * - The player's Cast row (W121 c): a download playing here moves there, served byte for byte, and the player closes;
+ *   with no TMDB key, so Home, opened under the remote, asks TMDB nothing of what other classes left in its Up next.
  * - A download with recorded gaps: the cast counts them as the device is sent past them, none before, and its prompt
  *   offers Stream instead only while online (L449).
  * - A title's Play with Kitchen display connected (the router's, as the Show page's button plays it): the file is cast,
@@ -131,8 +132,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * The session's picture is never fetched from TMDB's image host: an address is answered with none.
  *
  * Put back after each, whatever happened: the rows and their files, the downloads' jobs, the offline override, the cast
- * seams and Play on (This phone), the app's screens, the settings and the marks. The show, its releases and the device
- * are invented.
+ * seams and Play on (This phone), the app's screens, the settings, the TMDB key and the marks. The show, its releases and
+ * the device are invented.
  */
 @RunWith(AndroidJUnit4::class)
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -157,6 +158,10 @@ class DownloadCastDeviceTest {
     private var remote: FakeRemotePlayer? = null
     private var tmdb: FakeTmdb? = null
     private var saved: AppSettings? = null
+
+    /** The TMDB key as it was before the player's case took it away ([keyTaken]), put back after the case. */
+    private var keyBefore: String? = null
+    private var keyTaken = false
 
     /** The rows the test made, whose watches its casts may save. */
     private val made = CopyOnWriteArrayList<Download>()
@@ -214,6 +219,8 @@ class DownloadCastDeviceTest {
             { onMainThread { container.playback.cancel() } },
             { alive().forEach { activity -> onMainThread { activity.finish() } } },
             { waitFor("the app's screens closed", 30_000) { Unit.takeIf { alive().isEmpty() } } },
+            // Once Home, which would ask TMDB with it, is gone.
+            { if (keyTaken) container.settings.setTmdbKey(keyBefore) },
             { container.playOn.choose(PlayChoice.Phone) },
             { CastFakes.reset() },
             { seeds.after() },
@@ -469,6 +476,11 @@ class DownloadCastDeviceTest {
         // The player's next and previous episodes, which TMDB would be asked for: none (the strict fake puts them back).
         PlayerActivity.nextEpisode = { _, _ -> null }
         PlayerActivity.previousEpisode = { _, _ -> null }
+        // Home, which the move opens under the remote as the player closes, asks TMDB about every title in its Up next,
+        // those other classes' plays left there too, which the strict fake can't know: with no key it asks nothing.
+        keyBefore = container.settings.tmdbKey()
+        keyTaken = true
+        container.settings.setTmdbKey(null)
         // Kitchen display in the list as Google's discovery finds it, its session connected already.
         routes.found(kitchen)
         val row = finished(2)
