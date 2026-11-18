@@ -55,7 +55,8 @@ import kotlin.coroutines.CoroutineContext
  * so is tried again on its own, a grace on and then less often, [RETRY_AT_MOST] apart at most. Dropped with no
  * call (unsure means not ours): the records of an account signed out of or removed, one switched to keep what its plays
  * add (Remove after playing off, L246), one given a new key since the add (L232: it may open another account), and any
- * record not removed within a day of its grace's end ([STALE]). The accounts are read again before each delete, as one
+ * record not removed within a day of its grace's end ([STALE]); one a lease held as its process went ([Record.held]) has
+ * its grace and its day from the next process's start, a download's lease outliving any write of it. The accounts are read again before each delete, as one
  * before it can take seconds, and only the client of the key the add was made under is asked (EDL-2).
  */
 class DebridAdds(
@@ -85,12 +86,17 @@ class DebridAdds(
     /**
      * One add a play made to [account]'s list that this device can remove: the service's [handle] for it (TorBox's torrent
      * id), the [listingId] its listing is kept as (the store's id for the account and the torrent, which every lease
-     * names), the account's [keySavedAt] at the add, and when it was added and last used (milliseconds).
+     * names), the account's [keySavedAt] at the add, when it was added and last used (milliseconds), and whether a lease
+     * [held] it as it was last written: a process that goes leaves no let-go, so the next counts its last use from its own
+     * start.
      */
     @Serializable
-    data class Record(val account: String, val handle: String, val listingId: String, val keySavedAt: Long, val addedAt: Long, val lastUsedAt: Long) {
+    data class Record(
+        val account: String, val handle: String, val listingId: String, val keySavedAt: Long, val addedAt: Long, val lastUsedAt: Long,
+        val held: Boolean = false,
+    ) {
         // No account, handle or listing in a log line (L208).
-        override fun toString() = "Record(addedAt=$addedAt, lastUsedAt=$lastUsedAt)"
+        override fun toString() = "Record(addedAt=$addedAt, lastUsedAt=$lastUsedAt, held=$held)"
     }
 
     /**
@@ -127,6 +133,10 @@ class DebridAdds(
     @Volatile
     private var era = 0
 
+    /** When this process began keeping the records ([restart]'s for a test): the last use of one an earlier process's lease held. */
+    @Volatile
+    private var startedAt = clock()
+
     // The records, read from [file] on first use; under [lock].
     private val lock = Mutex()
     private val records = ArrayList<Record>()
@@ -161,6 +171,7 @@ class DebridAdds(
             leases.getOrPut(owner) { HashSet() } += listingId
             usedAt[listingId] = clock()
         }
+        keepHeld(listingId)
     }
 
     /**
@@ -177,6 +188,7 @@ class DebridAdds(
             before.forEach { usedAt[it] = now }
             before
         }
+        keepHeld(listingId)
         if (left.isNotEmpty()) letGo(left)
     }
 
@@ -201,6 +213,7 @@ class DebridAdds(
             askedAt.clear()
             due = null
             era++
+            startedAt = clock()
         }
         waited = 0
         lock.withLock {
@@ -222,6 +235,21 @@ class DebridAdds(
             listings
         }
         letGo(listings)
+    }
+
+    /**
+     * [listingId] held now: a record of it not yet written as held is written so, for a process that goes with no let-go
+     * (L421: a download's lease can last days with no other write).
+     */
+    private fun keepHeld(listingId: String) {
+        scope.launch {
+            quietly("keep that an add is held") {
+                lock.withLock {
+                    readEarlier()
+                    if (records.any { it.listingId == listingId && !it.held }) write()
+                }
+            }
+        }
     }
 
     /** [listings] let go now: when, kept for a process that goes before the sweep, and a sweep a grace on. */
@@ -437,9 +465,16 @@ class DebridAdds(
     /** Whether a lease holds [listingId] now. */
     private fun heldNow(listingId: String): Boolean = synchronized(held) { leases.values.any { listingId in it } }
 
-    /** When [record] was last used: now while a lease holds it, else its own time or its listing's last lease, the later. */
+    /**
+     * When [record] was last used: now while a lease holds it, else its own time or its listing's last lease, the later, and
+     * no earlier than this process's start for one a lease held as an earlier process went ([Record.held]).
+     */
     private fun lastUsed(record: Record): Long = synchronized(held) {
-        if (leases.values.any { record.listingId in it }) clock() else maxOf(record.lastUsedAt, usedAt[record.listingId] ?: 0)
+        if (leases.values.any { record.listingId in it }) {
+            clock()
+        } else {
+            maxOf(record.lastUsedAt, usedAt[record.listingId] ?: 0, if (record.held) startedAt else 0)
+        }
     }
 
     /** A sweep [afterMs] from now, in [scope]; none more where one is due by then already. */
@@ -472,9 +507,9 @@ class DebridAdds(
         }
     }
 
-    /** The records to [file], each with when it was last used, newest last. Under [lock]. */
+    /** The records to [file], each with when it was last used and whether a lease holds it, newest last. Under [lock]. */
     private suspend fun write() {
-        val now = records.map { it.copy(lastUsedAt = lastUsed(it)) }
+        val now = records.map { it.copy(lastUsedAt = lastUsed(it), held = heldNow(it.listingId)) }
         records.clear()
         records += now
         withContext(io) {

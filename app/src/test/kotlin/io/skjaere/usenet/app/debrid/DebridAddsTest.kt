@@ -398,6 +398,32 @@ class DebridAddsTest {
     }
 
     /**
+     * L421, L232: a record a lease held as its process went is judged from the next process's start, never from when it
+     * was last written. A download that held its add for days (paused, no other debrid write on the device) and whose row
+     * then went with no let-go (removed, the process gone within its Undo) has its add removed a grace after the next
+     * start, as any add let go: never dropped as stale with no call, which would leave this device's torrent in the account.
+     */
+    @Test
+    fun `an add a download held for days as its process went is removed a grace into the next, never dropped as stale`() = runTest {
+        val earlier = adds()
+        val play = DebridAdds.Play()
+        withContext(play) { earlier.torBox().added(PACK, "41") }
+        earlier.holdOnly(DownloadLease("dl-1"), listing(PACK))
+        earlier.release(play)
+        runCurrent()
+        // Three days of a paused download; then the process goes, its lease never let go.
+        wait(Duration.ofDays(3))
+        assertEquals(emptyList(), service.asked.toList())
+        val next = adds()
+        next.start(accounts)
+        wait(GRACE.minusSeconds(1))
+        assertEquals(emptyList(), service.asked.toList())
+        wait(Duration.ofSeconds(2))
+        assertEquals(listOf("41"), service.removed.toList())
+        assertFalse(lines.any { "within a day" in it }, lines.toString())
+    }
+
+    /**
      * L464: each sweep says, in a debug build's trace, how many records a lease held, how many it removed from their
      * account and how many were due (no lease held them, their grace over): one still in its grace is none of these, and
      * one due that waits (its account's gate shut) is due and not removed. Counts alone.
