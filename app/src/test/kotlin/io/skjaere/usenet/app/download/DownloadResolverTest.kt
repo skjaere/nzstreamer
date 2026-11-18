@@ -2739,6 +2739,46 @@ class DownloadResolverTest {
         assertEquals(0, onAsked.get())
     }
 
+    /**
+     * L422, L460: while debrid is hidden, a torrent row a shown build left goes to no service, and a Usenet release beside it
+     * is tried. Its Try again (its tries and reason cleared, its listing's copy dropped, its torrent release kept) tries the
+     * row's Usenet release, the file started again from 0, and a season row's searches its episode afresh; with nothing but
+     * torrents left it fails "Not available in this version". None of it asks an account anything.
+     */
+    @Test
+    fun `hidden, Try again of a row whose release was a torrent tries its Usenet release, or searches a season row afresh`() = runBlocking<Unit> {
+        resolvedOn(goodTorrent, offset = 400_000_000)
+        dao.update(stored().copy(candidates = listOf(goodTorrent.candidate, usenet(single)), tried = emptyList(), state = DownloadState.Queued))
+        storage.listings.clear()
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(shown = false).resolve(ID))
+        assertEquals(single.guid, ready.row.release?.guid)
+        assertEquals(0L, ready.row.safeOffset)
+        assertEquals(listOf(ID), storage.deletedVideos)
+        assertEquals(listOf(key(single)), stored().tried)
+        assertEquals(emptyList(), lookups)
+        assertEquals(0, onAsked.get())
+
+        // A season row's: its releases cleared, its search to come.
+        reset()
+        resolvedOn(goodTorrent, offset = 400_000_000)
+        dao.update(stored().copy(candidates = emptyList(), tried = emptyList(), state = DownloadState.Queued).withFacts())
+        storage.listings.clear()
+        finds = listOf(single)
+        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(shown = false).resolve(ID)).row.release?.guid)
+        assertEquals(1, searched.size)
+        assertEquals(emptyList(), lookups)
+        assertEquals(0, onAsked.get())
+
+        // Nothing but the torrent left.
+        reset()
+        resolvedOn(goodTorrent, offset = 400_000_000)
+        dao.update(stored().copy(tried = emptyList(), state = DownloadState.Queued))
+        storage.listings.clear()
+        assertEquals(DownloadResolver.Resolution.Failed(DownloadHostRules.NOT_IN_THIS_VERSION), resolver(shown = false).resolve(ID))
+        assertEquals(emptyList(), lookups)
+        assertEquals(0, onAsked.get())
+    }
+
     /** With every account switched off or signed out of since it was queued, a torrent row waits for one, nothing counted or asked. */
     @Test
     fun `with no account on, a torrent row waits for one`() = runBlocking<Unit> {

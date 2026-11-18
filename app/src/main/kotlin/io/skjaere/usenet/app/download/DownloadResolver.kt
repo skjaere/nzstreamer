@@ -508,11 +508,18 @@ class DownloadResolver(
      * the writer keeps once it has moved the torrent there (L424), may list it at another place. No prepare, no call and
      * no provider wait, the writer asking a fresh link as it opens. Null where it has no copy (its process went before it
      * was written) or its file is no longer listed so, the copy dropped first: then its candidates are resolved. While
-     * debrid is hidden it fails, with no call (L422). A season's torrent pack is kept for its season, as at a resolve's
-     * success ([keepPack], L462).
+     * debrid is hidden (L422) its torrent goes to no service, with no call: a Usenet release left beside it, or a season
+     * row's search still to come (its Try again), is its turn's to try, the copy dropped first; with nothing else, it
+     * fails. A season's torrent pack is kept for its season, as at a resolve's success ([keepPack], L462).
      */
     private suspend fun reopenedService(row: Download, release: RememberedRelease, size: Long): Resolution? {
-        if (!shown()) return hidden(row.id)
+        if (!shown()) {
+            val usenetLeft = row.candidates.any { it.source != ReleaseFacts.TORRENT && ranked(it).key !in row.tried } || search.due(row)
+            if (!usenetLeft) return hidden(row.id)
+            log.info("download {}: debrid is hidden in this build: its torrent left, with no call, for what else its turn has", row.id)
+            storage.dropSource(row.id)
+            return null
+        }
         val entry = storage.listing(row.id) ?: return null
         val name = row.fileName ?: release.fileName
         val files = entry.prepared.listing.files
