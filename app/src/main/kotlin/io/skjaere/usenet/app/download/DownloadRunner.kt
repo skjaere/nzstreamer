@@ -1081,13 +1081,15 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     }
 
     /**
-     * Ends the waits between reopens and Resolve's tries, their backoff starting again from 2 s (L381), and queues again
-     * the downloads waiting for the providers: Resume, a provider saved (L388).
+     * A provider saved (L388): the Usenet writer's waits between reopens and Resolve's tries for the providers or the
+     * indexers end, their backoff starting again from 2 s (L381), and the downloads waiting for the providers are queued
+     * again. What waits on a debrid service is left to its own save ([servicesSaved]).
      */
     suspend fun retryNow() {
         if (!runs) return
-        wake()
+        writer.retryNow()
         changes.withLock {
+            wakeResolve(service = false)
             dao.queue().first().filter { it.state == DownloadState.Waiting && it.reason in DownloadHostRules.PROVIDER_WAITS }.forEach {
                 dao.setState(it.id, DownloadState.Queued, null, now())
             }
@@ -1096,13 +1098,15 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
     /**
      * A debrid account saved by the user (L474, [DownloadHostRules.servicesSaved]: a key saved, an account added or
-     * switched on, a refused key taken again): the waits between reopens end, and the downloads waiting on a debrid
-     * service (its key, its outage, its limit) are queued again, as [retryNow] queues the providers' for a provider saved.
+     * switched on, a refused key taken again): the debrid writer's waits between reopens and Resolve's tries for a debrid
+     * service end, and the downloads waiting on a debrid service (its key, its outage, its limit) are queued again, as
+     * [retryNow] queues the providers' for a provider saved. What waits on the providers is left to theirs.
      */
     suspend fun servicesSaved() {
         if (!runs) return
-        wake()
+        serviceWriter.retryNow()
         changes.withLock {
+            wakeResolve(service = true)
             val waits = dao.queue().first().filter { it.state == DownloadState.Waiting && it.reason in DownloadHostRules.SERVICE_WAITS }
             waits.forEach { dao.setState(it.id, DownloadState.Queued, null, now()) }
             if (waits.isNotEmpty()) log.info("Downloads: a debrid account saved, {} waiting on a debrid service queued again", waits.size)
@@ -1941,7 +1945,17 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         }
     }
 
-    /** Ends the writer's wait between reopens and Resolve's between tries, or the one after a try under way (L381). */
+    /**
+     * Ends Resolve's wait between tries of the row under way, or the one after a try under way, where it waits on what was
+     * saved: a debrid service ([service], its words one of [DownloadHostRules.SERVICE_WAITS]), else the providers or the
+     * indexers. Under [changes].
+     */
+    private suspend fun wakeResolve(service: Boolean) {
+        val id = current?.id ?: return
+        if ((dao.get(id)?.reason in DownloadHostRules.SERVICE_WAITS) == service) wakes.retryNow()
+    }
+
+    /** Ends both writers' waits between reopens and Resolve's between tries, or the one after a try under way (L381): Resume. */
     private fun wake() {
         writer.retryNow()
         serviceWriter.retryNow()

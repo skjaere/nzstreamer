@@ -2695,7 +2695,7 @@ class DownloadRunnerTest {
             val row = dao.get(id) ?: return Resolution.Gone
             (answers[id] ?: scripted.removeFirstOrNull())?.let { said ->
                 when (said) {
-                    is Resolution.Unreachable -> dao.setState(id, DownloadState.Resolving, DownloadHostRules.CANT_REACH_PROVIDER, clock.now())
+                    is Resolution.Unreachable -> dao.setState(id, DownloadState.Resolving, said.words, clock.now())
                     is Resolution.Waiting -> dao.setState(id, DownloadState.Waiting, said.reason, clock.now())
                     is Resolution.Failed -> dao.setState(id, DownloadState.Failed, said.reason, clock.now())
                     else -> Unit
@@ -3131,6 +3131,62 @@ class DownloadRunnerTest {
         linkFails = null
         runner.servicesSaved()
         assertEquals(DownloadState.Queued, stored(C).state)
+    }
+
+    /**
+     * L388, L474: each save ends the waits of its own source alone. A services save ends the debrid writer's wait between
+     * reopens and Resolve's tries for a debrid service, never the Usenet writer's or Resolve's for the providers, which
+     * would start their backoff again from 2 s against a provider still out of reach; a provider saved, the reverse.
+     */
+    @Test
+    fun `a debrid save wakes what waits on a debrid service alone, and a provider save what waits on the providers`() = test {
+        val runner = runner()
+        // The Usenet writer, its provider out of reach at each open.
+        val away = fake("hl-away").apply { refused = (0 until 100).toSet() }
+        row(A, 1, 0, away)
+        host(runner)
+        runCurrent()
+        assertEquals(1, away.opens.size)
+        runner.servicesSaved()
+        runCurrent()
+        assertEquals(1, away.opens.size, "a services save leaves the Usenet writer's wait")
+        runner.retryNow()
+        runCurrent()
+        assertEquals(2, away.opens.size, "a provider saved ends it")
+        runner.cancel(A)
+
+        // The debrid writer, its service out of reach at each open.
+        torrentRow(B, 2, 1)
+        torrentReads.unreached = Int.MAX_VALUE
+        host(runner)
+        runCurrent()
+        val opened = torrentReads.opens.size
+        runner.retryNow()
+        runCurrent()
+        assertEquals(opened, torrentReads.opens.size, "a provider saved leaves the debrid writer's wait")
+        runner.servicesSaved()
+        runCurrent()
+        assertEquals(opened + 1, torrentReads.opens.size, "a services save ends it")
+        runner.cancel(B)
+
+        // Resolve, backing off from the providers out of reach, then from a debrid service out of reach.
+        listOf(
+            Triple(C, DownloadHostRules.CANT_REACH_PROVIDER, UsenetError.ConnectionFailed("refused")),
+            Triple(D, DownloadHostRules.CANT_REACH_SERVICE, UsenetError.Network(null)),
+        ).forEachIndexed { i, (id, words, error) ->
+            row(id, 3 + i, 2L + i, fake("hl-$id"))
+            resolver.answers[id] = Resolution.Unreachable(error, words)
+            host(runner)
+            runCurrent()
+            val service = words == DownloadHostRules.CANT_REACH_SERVICE
+            if (service) runner.retryNow() else runner.servicesSaved()
+            runCurrent()
+            assertEquals(1, resolver.calls.count { it == id }, "$words: the other source's save leaves it")
+            if (service) runner.servicesSaved() else runner.retryNow()
+            runCurrent()
+            assertEquals(2, resolver.calls.count { it == id }, "$words: its own source's save ends it")
+            runner.cancel(id)
+        }
     }
 
     /**
