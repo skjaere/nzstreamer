@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.debrid
 
+import io.skjaere.usenet.app.download.DebridKillSeed
 import io.skjaere.usenet.debrid.ServiceKind
 import org.junit.Assume.assumeTrue
 import java.net.HttpURLConnection
@@ -85,8 +86,12 @@ object DebridFakes {
         control("give-back?by=$by")
     }
 
-    /** How long a test waits for another's turn at the fake: a long debrid class's run, and more. */
-    private const val HOLD_WAIT_MS = 10 * 60_000L
+    /**
+     * How long a test waits for another's turn at the fake: a long debrid class's run, and more; and longer than the debrid
+     * pair's hold ([DebridKillSeed.HOLD_MS]), which only its Check gives back, so a class run after a pair whose lane
+     * stopped before its Check waits that hold out rather than failing for the pair's leftover.
+     */
+    private const val HOLD_WAIT_MS = DebridKillSeed.HOLD_MS + 60_000L
 
     private fun ask(path: String): Pair<Int, String> {
         val connection = URL("http://$HOST:$DEBRID_PORT/control/$path").openConnection() as HttpURLConnection
