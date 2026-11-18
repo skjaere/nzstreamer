@@ -999,6 +999,10 @@ class DownloadResolver(
         val same = row.size == size && row.release?.let { Replay.key(it) == target.candidate.id && it.fileName == release.fileName } == true
         val base = (if (same) row else startOver(row)) ?: return Pass.Ended(waiting(id, DownloadHostRules.STORAGE_UNAVAILABLE))
         storage.keepListing(id, entry)
+        // Held by the download's own lease before the row takes the release, and before the resolve's Play lets its attempts'
+        // adds go (L421): the chosen one stays in the account while the download runs, or is paused as the row takes it, and
+        // the others go a grace on.
+        adds?.holdOnly(DownloadLease(id), entry.id)
         val kept = base.copy(
             release = release,
             fileName = target.file.name,
@@ -1009,9 +1013,6 @@ class DownloadResolver(
             updatedAt = clock.now(),
         )
         downloads.update(kept)
-        // Held by the download's own lease before the resolve's Play lets its attempts' adds go (L421): the chosen one stays
-        // in the account while the download runs, the others go a grace on.
-        adds?.holdOnly(DownloadLease(id), entry.id)
         keepPack(kept, byKey.getValue(target.candidate.id))
         log.info("download {}: resolved on a debrid service, {} bytes, {}", id, size, if (kept.oneVideo) "its torrent's one video" else "one of its torrent's videos")
         return Pass.Ended(Resolution.Ready.Service(kept, entry, target.file.file))

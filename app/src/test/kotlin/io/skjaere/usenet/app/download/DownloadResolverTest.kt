@@ -2956,6 +2956,34 @@ class DownloadResolverTest {
     }
 
     /**
+     * L421: a pause (or the host's end) that lands as the row takes the torrent it found leaves the row paused with its
+     * release and its listing's copy. Its add is held by the download's lease all the same, taken before the row takes the
+     * release, so no sweep removes it from the account while the download is paused.
+     */
+    @Test
+    fun `a pause landing as the row takes its torrent leaves its add held by the download's lease`() = runBlocking<Unit> {
+        val adds = adds()
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        rowOf(goodTorrent.candidate)
+        // The row's update is made, and the pause's cancel lands as it returns.
+        dao.onUpdate = { row ->
+            if (row.release != null) {
+                dao.rows.update { it + (row.id to row) }
+                throw kotlinx.coroutines.CancellationException("paused")
+            }
+        }
+        assertFailsWith<kotlinx.coroutines.CancellationException> { resolver(adds = adds).resolve(ID) }
+        dao.onUpdate = {}
+        assertEquals(goodTorrent.key, stored().release?.guid)
+        assertNotNull(storage.listings[ID])
+        repeat(2) { sweptAfterGrace(adds) }
+        assertEquals(emptyList(), serviceA.removed, "held while it is paused")
+        adds.release(DownloadLease(ID))
+        sweptAfterGrace(adds)
+        assertEquals(1, serviceA.removed.size, "let go at the download's end, removed a grace on")
+    }
+
+    /**
      * A torrent's lines in the app's log name the download by its id and the release by its place among the row's, never
      * by its hash, its release's or file's name, or its account (L419, L208), whether it fails or is kept.
      */
