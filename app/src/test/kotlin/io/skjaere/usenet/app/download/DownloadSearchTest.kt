@@ -42,16 +42,19 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
- * The turn's search (L392, L398, L443): a season row's episode searched at its turn by the facts its row keeps, over a fake
- * finder and a fake room on the device. What it finds that fits is written into the row before anything is grabbed, as
- * its releases, with what the first needs and the facts as searched; nothing found, nothing that fits, the indexers out of
- * reach and an indexer's limit each say so. Harbor Lights S02E04; releases and indexers are invented.
+ * The turn's search (L392, L398, L443, L459): a season row's episode searched at its turn by the facts its row keeps, over a
+ * fake finder and a fake room on the device. What it finds that fits is written into the row before anything is grabbed,
+ * as its releases, a torrent a debrid service has cached among them with its source, with what the first needs and the
+ * facts as searched; nothing found, nothing that fits, the indexers out of reach and an indexer's limit each say so. The
+ * torrent indexers are asked only while debrid shows and an account is on (L422). Harbor Lights S02E04; releases and
+ * indexers are invented.
  */
 class DownloadSearchTest {
     private val dao = FakeDao()
 
-    /** The finder's answer: its releases, ranked as given, and each indexer's report. */
+    /** The finder's answer: its releases, ranked as given, those it hid, and each indexer's report. */
     private var playable: List<FoundRelease> = emptyList()
+    private var hidden: List<FoundRelease> = emptyList()
     private var reports: List<IndexerReport> = emptyList()
 
     /** What the finder was asked, in order: the episode, the indexers, the ranking. */
@@ -64,7 +67,7 @@ class DownloadSearchTest {
         flow {
             asked += Triple(request, indexers.map { it.id }, context)
             dao.rows.value[ID]?.let { meanwhile += it.state to it.reason }
-            emit(FinderEvent.Finished(FindResult(request, playable, emptyList(), listOf(StageReport(SearchStage.Episode, reports)))))
+            emit(FinderEvent.Finished(FindResult(request, playable, hidden, listOf(StageReport(SearchStage.Episode, reports)))))
         }
     }
 
@@ -86,10 +89,10 @@ class DownloadSearchTest {
     /** The search's clock: epoch milliseconds, moved on by a case. */
     private var now = NOW
 
-    private fun search(indexers: List<IndexerConfig> = listOf(A, B), limits: DownloadSearch.Limits = this.limits) = DownloadSearch(
+    private fun search(indexers: List<IndexerConfig> = listOf(A, B), limits: DownloadSearch.Limits = this.limits, asks: (suspend () -> List<IndexerConfig>)? = null) = DownloadSearch(
         downloads = dao,
         find = find,
-        indexers = { indexers },
+        indexers = asks ?: { indexers },
         context = { DOWNLOADING },
         space = { id ->
             spaceFor += id
@@ -133,9 +136,11 @@ class DownloadSearchTest {
         assertEquals(listOf(A.id, B.id), indexers)
         assertSame(DOWNLOADING, context)
         assertEquals(listOf<Pair<DownloadState, String?>>(DownloadState.Resolving to DownloadHostRules.FINDING_RELEASES), meanwhile)
-        // The pack first, then the singles that fit, the one too big and the torrent left out: 10 in all.
+        // The pack first, then the torrent a debrid service has cached and the singles that fit, the one too big left out:
+        // 10 in all.
         val kept = stored()
-        assertEquals(listOf(pack.item.title) + singles.take(9).map { it.item.title }, kept.candidates.map { it.title })
+        assertEquals(listOf(pack.item.title, torrent.item.title) + singles.take(8).map { it.item.title }, kept.candidates.map { it.title })
+        assertEquals(listOf(null, "torrent") + List(8) { null }, kept.candidates.map { it.source }, "the torrent's source written, Usenet's left out (L459)")
         assertEquals(DownloadSheetModel.candidate(io.skjaere.usenet.search.RankedItem(pack.item, pack.ranked)), kept.candidates.first())
         // What the first needs here: the pack's share of the episode, a season of 8.
         assertEquals(GB, kept.indexerSize)
@@ -143,6 +148,48 @@ class DownloadSearchTest {
         assertEquals(kept, found.row)
         assertEquals(listOf(ID), spaceFor)
         assertFalse(search.due(kept), "searched once: its next resolve takes what it found")
+    }
+
+    /**
+     * L459: a torrent a debrid service has cached is kept as any release, by its content id and with its source, the turn
+     * asking the services' cache from the background host as a play's search does; one not cached the finder hid is never
+     * kept.
+     */
+    @Test
+    fun `a cached torrent is kept with its source, and one not cached that the finder hid is not`() = runBlocking<Unit> {
+        val cached = found("Harbor.Lights.S02E04.1080p.WEB.h264-TIDE", GB, torrent = true)
+        val single = found("Harbor.Lights.S02E04.720p.WEB.h264-GRP", 2 * GB)
+        playable = listOf(cached, single)
+        hidden = listOf(found("Harbor.Lights.S02E04.720p.HDTV.x264-DRIFT", GB / 2, torrent = true, hash = "fedcba9876543210fedcba9876543210fedcba98"))
+        reports = listOf(IndexerReport(A, "TVDB id", found = 3, accepted = 3))
+        val before = row(candidate("Harbor.Lights.S02E04.1080p.WEB.h264-KESTREL", 2 * GB))
+
+        assertIs<DownloadSearch.Searched.Found>(search().search(before))
+        val kept = stored().candidates
+        assertEquals(listOf(cached.item.title, single.item.title), kept.map { it.title }, "the one not cached never kept")
+        assertEquals(DownloadCandidate(A.id, "btih:0123456789abcdef0123456789abcdef01234567", cached.item.title, null, GB, source = "torrent"), kept.first())
+        assertNull(kept[1].source)
+    }
+
+    /**
+     * L422, L459: the turn's search asks the indexers the container gives a search
+     * ([io.skjaere.usenet.app.search.IndexerConfigs.of]): the torrent indexers only while debrid shows and a service account
+     * is on; hidden, or with no account on, Usenet's alone.
+     */
+    @Test
+    fun `the turn's search asks the torrent indexers only while debrid shows and an account is on`() = runBlocking<Unit> {
+        suspend fun searchedBy(account: Boolean, shown: Boolean): List<String> {
+            val sources = SearchSources.of(kotlinx.coroutines.Dispatchers.Unconfined, account)
+            asked.clear()
+            dao.delete(ID)
+            search(asks = { sources.indexers(shown) }).search(row(candidate("Harbor.Lights.S02E04.1080p.WEB.h264-KESTREL", 2 * GB)))
+            val ids = asked.single().second
+            val names = sources.indexers(shown = true).associate { it.id to it.name }
+            return ids.map { names.getValue(it) }
+        }
+        assertEquals(listOf(SearchSources.USENET, SearchSources.TORZNAB), searchedBy(account = true, shown = true))
+        assertEquals(listOf(SearchSources.USENET), searchedBy(account = false, shown = true), "no account on")
+        assertEquals(listOf(SearchSources.USENET), searchedBy(account = true, shown = false), "debrid hidden, whatever a shown build saved")
     }
 
     @Test
@@ -401,13 +448,17 @@ class DownloadSearchTest {
 
         fun candidate(title: String, size: Long) = DownloadCandidate("idx-a", title, title, null, size)
 
-        /** [title] as the finder ranks it, of [size] bytes, from Indexer A; a [torrent] has its hash. */
-        fun found(title: String, size: Long, torrent: Boolean = false): FoundRelease {
+        /**
+         * [title] as the finder ranks it, of [size] bytes, from Indexer A; a [torrent] has its [hash], is known by its content
+         * id and keeps no link, as a torrent indexer's answer gives it.
+         */
+        fun found(title: String, size: Long, torrent: Boolean = false, hash: String = "0123456789abcdef0123456789abcdef01234567"): FoundRelease {
             val item = NewznabItem(
-                indexerId = A.id, guid = title, title = title, sizeBytes = size, publishedAt = null, postedAt = null, categories = emptyList(), grabs = null,
-                passworded = false, files = null, tvdbId = null, tmdbId = null, imdbId = null, tvmazeId = null, season = null, episode = null, coverUrl = null,
-                mediaInfo = null, downloadTemplate = "https://a.indexer.invalid/api?t=get&id=$title&apikey={apikey}", attributes = emptyMap(),
-                infoHash = if (torrent) "0123456789abcdef0123456789abcdef01234567" else null,
+                indexerId = A.id, guid = if (torrent) "btih:$hash" else title, title = title, sizeBytes = size, publishedAt = null, postedAt = null,
+                categories = emptyList(), grabs = null, passworded = false, files = null, tvdbId = null, tmdbId = null, imdbId = null, tvmazeId = null,
+                season = null, episode = null, coverUrl = null, mediaInfo = null,
+                downloadTemplate = "https://a.indexer.invalid/api?t=get&id=$title&apikey={apikey}".takeIf { !torrent }, attributes = emptyMap(),
+                infoHash = hash.takeIf { torrent },
             )
             val ranked = RankedRelease(
                 ReleaseFacts(item.key, title, size, source = if (torrent) ReleaseFacts.TORRENT else ReleaseFacts.USENET), ReleaseParser.parse(title),

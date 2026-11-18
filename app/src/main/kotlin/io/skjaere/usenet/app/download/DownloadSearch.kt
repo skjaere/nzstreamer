@@ -23,8 +23,10 @@ import java.time.Duration
 /**
  * The turn's search for a season row (L392, L398, L443): its episode searched once its turn comes, by the facts its row
  * keeps ([SeasonSearch], so no TMDB call), before anything is grabbed. The full finder ([find]: the episode, its air date,
- * the season's packs and its name) over the Usenet indexers ([indexers], L370), ranked for downloading as the Download sheet
- * ranks an episode's ([context], W112), torrents left out. The row says "Finding releases…" meanwhile.
+ * the season's packs and its name) over the indexers a search asks ([indexers]: the torrent indexers only while debrid
+ * shows and a service account is on, L422), ranked for downloading as the Download sheet ranks an episode's ([context],
+ * W112): from the background host too, a torrent is checked against the services' caches by its hash alone, as a play's
+ * search checks it, and one not cached stays hidden (L459). The row says "Finding releases…" meanwhile.
  * - Found: up to 10 that fit the room now ([space], the row's own need counted out), in their order, written into the row
  *   as its releases, with what the first needs (a season pack's share of the episode) and its facts as searched: a
  *   process that dies after it resolves from that list, with no second search.
@@ -43,7 +45,7 @@ class DownloadSearch(
     private val downloads: DownloadDao,
     /** The episode finder's search ([io.skjaere.usenet.search.EpisodeReleaseFinder.find]), of the indexers given. */
     private val find: (request: EpisodeRequest, indexers: List<IndexerConfig>, context: RankingContext) -> Flow<FinderEvent>,
-    /** The indexers a download searches: the Usenet ones ([DownloadSheetDeps.usenetOnly]). */
+    /** The indexers a download searches, as a search asks them ([AppContainer.indexerConfigs]). */
     private val indexers: suspend () -> List<IndexerConfig>,
     /** What a download's releases are ranked by ([AppContainer.downloadRankingContext]). */
     private val context: suspend () -> RankingContext,
@@ -130,7 +132,7 @@ class DownloadSearch(
         val reports = result?.stages.orEmpty().flatMap { it.indexers }
         val limited = reports.mapNotNull { report -> (report.error as? NewznabError.ApiLimitReached)?.let { report.indexer to it.retryAfter } }.distinctBy { it.first.id }
         limited.forEach { (indexer, retryAfter) -> limits.answered(indexer, retryAfter, at) }
-        val found = result?.playable.orEmpty().map { RankedItem(it.item, it.ranked) }.filter { it.item.infoHash == null && it.key !in leaveOut }
+        val found = result?.playable.orEmpty().map { RankedItem(it.item, it.ranked) }.filter { it.key !in leaveOut }
         if (found.isEmpty()) {
             // The limit that ends first, of those met now, each its start now (L434), and those the walk keeps an indexer
             // out for: the app's start queues the row again once any of them may answer.
@@ -171,13 +173,13 @@ class DownloadSearch(
 
     companion object {
         /**
-         * The app's: the episode finder over the Usenet indexers, ranked for downloading, in the room the downloads' storage
-         * gives, the indexers' limits kept in the walk's memory ([limits]: the runner's).
+         * The app's: the episode finder over the indexers a search asks, ranked for downloading, in the room the downloads'
+         * storage gives, the indexers' limits kept in the walk's memory ([limits]: the runner's).
          */
         fun of(container: AppContainer, storage: DownloadStorage, limits: Limits = Limits.None): DownloadSearch = DownloadSearch(
             downloads = container.data.downloads,
             find = { request, indexers, context -> container.finder.find(request, indexers, context) },
-            indexers = { DownloadSheetDeps.usenetOnly(container.indexerConfigs()) },
+            indexers = { container.indexerConfigs() },
             context = container::downloadRankingContext,
             space = { id -> storage.space(id) },
             limits = limits,

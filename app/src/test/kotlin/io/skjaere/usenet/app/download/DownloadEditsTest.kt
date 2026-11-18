@@ -335,9 +335,10 @@ internal class PageFakes {
             )
         },
         search = DownloadSheetDeps(
-            findEpisode = { request, _ -> flowOf(FinderEvent.Finished(FindResult(request, emptyList(), emptyList(), emptyList()))) },
-            findMovie = { _, context -> flowOf(MovieFind(null, emptyList(), context)) },
-            findSeason = { _, _ -> error("No season's search on the Downloads page") },
+            indexers = { emptyList() },
+            findEpisode = { request, _, _ -> flowOf(FinderEvent.Finished(FindResult(request, emptyList(), emptyList(), emptyList()))) },
+            findMovie = { _, _, context -> flowOf(MovieFind(null, emptyList(), context)) },
+            findSeason = { _, _, _ -> error("No season's search on the Downloads page") },
             context = { DownloadRanking.context(StaticDeviceCapabilities(displayHeight = 1080), PlaybackPrefs(), DownloadPrefs(), "en") },
             space = { DownloadSpace(available = 20_000_000_000, used = 0, queued = 0) },
             rows = { rows.values.toList() },

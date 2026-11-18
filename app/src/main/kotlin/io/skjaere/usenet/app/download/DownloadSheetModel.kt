@@ -36,9 +36,9 @@ import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadPrefs
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.newznab.IndexerConfig
-import io.skjaere.usenet.newznab.IndexerKind
 import io.skjaere.usenet.releases.ParsedRelease
 import io.skjaere.usenet.releases.RankingContext
+import io.skjaere.usenet.releases.ReleaseFacts
 import io.skjaere.usenet.releases.ReleaseParser
 import io.skjaere.usenet.search.EpisodeRequest
 import io.skjaere.usenet.search.FinderEvent
@@ -55,7 +55,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.update
@@ -250,18 +249,21 @@ sealed interface DownloadSheetState {
 
 /**
  * What a Download sheet reads and asks, one title's or a season's: the app's ([of]), or a test's fakes. [findEpisode],
- * [findMovie] and [findSeason] are the searches, by the ranking [context] given; [space], [rows], [prefs], [network] and
- * [charging] what the sheet says of the device; [askDue] and [beforeDownload] Android's notification ask (L358);
+ * [findMovie] and [findSeason] are the searches, of the [indexers] read as each starts, by the ranking [context] given;
+ * [space], [rows], [prefs], [network] and [charging] what the sheet says of the device; [askDue] and [beforeDownload]
+ * Android's notification ask (L358);
  * [enqueue] (one title, with a file chosen in a pack where one was), [enqueueAll] (a season's episodes) or [enqueueImport]
  * (a file opened on Import) and [schedule] the download, counted at what the sheet reckoned its pick needs until it is
  * resolved, and its host. What Download starts runs in [outlive], on the main thread, so the sheet's close never cuts it
  * short. [grab] and [prepare] are Choose file's.
  */
 data class DownloadSheetDeps(
-    val findEpisode: (request: EpisodeRequest, context: RankingContext) -> Flow<FinderEvent>,
-    val findMovie: (movie: MovieTarget, context: RankingContext) -> Flow<MovieFind>,
+    /** The indexers a download's search asks ([AppContainer.indexerConfigs]), read as each search starts. */
+    val indexers: suspend () -> List<IndexerConfig>,
+    val findEpisode: (request: EpisodeRequest, indexers: List<IndexerConfig>, context: RankingContext) -> Flow<FinderEvent>,
+    val findMovie: (movie: MovieTarget, indexers: List<IndexerConfig>, context: RankingContext) -> Flow<MovieFind>,
     /** A season's one search for its episodes ([io.skjaere.usenet.search.EpisodeReleaseFinder.findSeason], L393). */
-    val findSeason: suspend (request: SeasonRequest, context: RankingContext) -> SeasonFind,
+    val findSeason: suspend (request: SeasonRequest, indexers: List<IndexerConfig>, context: RankingContext) -> SeasonFind,
     /** What a download's releases are ranked by ([AppContainer.downloadRankingContext]). */
     val context: suspend () -> RankingContext,
     /** What downloads take of the primary volume and what a new one may take; null while it isn't there. */
@@ -300,18 +302,21 @@ data class DownloadSheetDeps(
 ) {
     companion object {
         /**
-         * The app's: the episode finder, the film's search and the season's over the Usenet indexers alone (L370), ranked
-         * for downloading; the downloads' storage, rows and settings; the default network and the charger, as [context]
-         * reads it; the activity's notification [ask] (none outside MainActivity); the runner's queue, each download queued
-         * with its pictures fetched (L411), and its host scheduled from the visible app (L335). Choose file's grab is the
+         * The app's: the episode finder, the film's search and the season's over the indexers a search asks
+         * ([AppContainer.indexerConfigs]: the torrent indexers only while debrid shows and a service account is on, L422),
+         * their torrents checked against the services' caches as a play's search checks them, ranked for downloading; the
+         * downloads' storage, rows and settings; the default network and the charger, as [context] reads it; the
+         * activity's notification [ask] (none outside MainActivity); the runner's queue, each download queued with its
+         * pictures fetched (L411), and its host scheduled from the visible app (L335). Choose file's grab is the
          * coordinator's, as a download's Resolve grabs (its test seam), and its prepare the container's preparer, which
          * keeps nothing in the NZB store.
          */
         @SuppressLint("VisibleForTests") // The coordinator's grab, read as each grab is made, so a test serves both.
         fun of(container: AppContainer, ask: NotificationAsk?, context: Context) = DownloadSheetDeps(
-            findEpisode = { request, context -> flow { emitAll(container.finder.find(request, usenetIndexers(container), context)) } },
-            findMovie = { movie, context -> findMovieReleases(container, movie, indexers = { usenetIndexers(container) }, context = { context }) },
-            findSeason = { request, context -> container.finder.findSeason(request, usenetIndexers(container), context) },
+            indexers = { container.indexerConfigs() },
+            findEpisode = { request, indexers, context -> container.finder.find(request, indexers, context) },
+            findMovie = { movie, indexers, context -> findMovieReleases(container, movie, indexers = { indexers }, context = { context }) },
+            findSeason = { request, indexers, context -> container.finder.findSeason(request, indexers, context) },
             context = { container.downloadRankingContext() },
             space = { container.downloadStorage.space() },
             rows = { container.data.downloads.all().first() },
@@ -338,28 +343,20 @@ data class DownloadSheetDeps(
             prepare = { nzb, title, password -> container.preparer.prepare(nzb, title, password) },
             providersLeftOut = { container.engine.leftOut.value.isNotEmpty() },
         )
-
-        /** The indexers a download searches: the app's Usenet ones ([usenetOnly]). */
-        private suspend fun usenetIndexers(container: AppContainer) = usenetOnly(container.indexerConfigs())
-
-        /**
-         * Of [configs], the Usenet indexers alone, as only their releases download (L370): a torrent indexer's calls, and
-         * the debrid cache checks after them, would be spent on releases left out.
-         */
-        internal fun usenetOnly(configs: List<IndexerConfig>): List<IndexerConfig> = configs.filter { it.kind == IndexerKind.Newznab }
     }
 }
 
 /**
- * The Download sheet's model (L338, L358, L370): it searches for [request] as Choose release does, with a [ReleaseChooser]
+ * The Download sheet's model (L338, L358, L422): it searches for [request] as Choose release does, with a [ReleaseChooser]
  * of its own ranked for downloading (L355), its list never ranked again for a Cast device, and says what it found. Finding
  * only searches: nothing is grabbed until the download's turn comes in its host.
- * - [DownloadSheetState.Pick]: the download ranking's first Usenet release, with the space free and when it starts.
+ * - [DownloadSheetState.Pick]: the download ranking's first release, with the space free and when it starts.
  * - [DownloadSheetState.WontFit]: the first doesn't fit; Choose release shows the ones that do.
  * - [DownloadSheetState.NoRelease]: nothing to download, with the indexers' lines.
  * - [DownloadSheetState.Chosen]: a file chosen in a pack from the list (Choose file, L403, L435), with its exact size.
  *
- * Torrents are left out (L370). [download] (the sheet's Download, or a tap in the list) queues the download with up to 10
+ * A torrent a debrid service has cached is a release as any other, and one not cached, or not checked, stays hidden as the
+ * ranker hides it (L422). [download] (the sheet's Download, or a tap in the list) queues the download with up to 10
  * releases that fit, in download order, the one chosen first, and the sheet is [closed]; then Android's notification ask
  * where it is due, then the host's schedule. A file chosen in a pack goes with it: the pack first, the file's size its
  * need, the pack's NZB kept with the download. The search runs in [scope], the sheet's, and goes with it.
@@ -571,26 +568,26 @@ class DownloadSheetModel(
         }
     }
 
-    /** The search, as Choose release's: [request]'s releases ranked for downloading, Usenet's alone. */
+    /** The search, as Choose release's: [request]'s releases ranked for downloading, a torrent by its cache check. */
     private fun ListSearch.search(): Flow<ResultGroup> = flow {
         val context = deps.context()
         var shown = false
         try {
             when (val r = request) {
-                is DownloadRequest.Episode -> deps.findEpisode(r.play.request, context).collect { event ->
+                is DownloadRequest.Episode -> deps.findEpisode(r.play.request, deps.indexers(), context).collect { event ->
                     val result = (event as? FinderEvent.Finished)?.result ?: (event as? FinderEvent.Joined)?.result ?: return@collect
                     val found = ResultGroup(
                         key = r.play.label, kind = GroupKind.Episode, season = r.play.season, episodes = listOf(r.play.episode), airDate = null,
                         year = null, playable = result.playable.map { RankedItem(it.item, it.ranked) }, hidden = result.hidden.map { RankedItem(it.item, it.ranked) },
-                    ).usenetOnly()
+                    )
                     val lines = noRelease(r.play, result, deps.today())
                     said = DownloadSheetState.NoRelease(lines.stages, lines.note)
                     rankedBy(context) { found.rankedAgain(it.forEpisode(r.play.request)) }
                     emit(found)
                     shown = true
                 }
-                is DownloadRequest.Movie -> deps.findMovie(r.movie, context).collect { find ->
-                    val found = (find.group ?: ResultGroup(r.movie.title, GroupKind.Movie, null, emptyList(), null, r.movie.year, emptyList(), emptyList())).usenetOnly()
+                is DownloadRequest.Movie -> deps.findMovie(r.movie, deps.indexers(), context).collect { find ->
+                    val found = find.group ?: ResultGroup(r.movie.title, GroupKind.Movie, null, emptyList(), null, r.movie.year, emptyList(), emptyList())
                     said = DownloadSheetState.NoRelease(find.stages, movieNoReleaseNote(r.movie.releaseDate, r.movie.released, deps.today()))
                     rankedBy(context) { found.rankedAgain(it) }
                     emit(found)
@@ -686,19 +683,24 @@ class DownloadSheetModel(
         private const val SETTINGS = "Settings › Downloads"
 
         /**
-         * What a download of [chosen] keeps to try (L338, L340): [chosen], then [group]'s other Usenet releases that fit
-         * ([ReleaseListMode.Download.fits]), in the list's order, 10 at most. One that doesn't fit would only be found too big
-         * after its grab.
+         * What a download of [chosen] keeps to try (L338, L340): [chosen], then [group]'s other releases that fit
+         * ([ReleaseListMode.Download.fits]), in the list's order, 10 at most, a torrent a debrid service has cached among
+         * them (L459). One that doesn't fit would only be found too big after its grab.
          */
         fun candidates(chosen: RankedItem, group: ResultGroup, mode: ReleaseListMode.Download): List<DownloadCandidate> =
             (listOf(chosen) + group.playable.filter { it.key != chosen.key && mode.fits(it) })
-                .filter { it.item.infoHash == null }
                 .take(KEPT)
                 .map(::candidate)
 
-        /** [item] as a download keeps it to try: its indexer and guid, its name, its link as the app keeps it, its size, passworded. */
-        internal fun candidate(item: RankedItem): DownloadCandidate =
-            DownloadCandidate(item.item.indexerId, item.item.guid, item.item.title, item.item.downloadTemplate, item.item.sizeBytes, item.item.passworded)
+        /**
+         * [item] as a download keeps it to try: its indexer and guid, its name, its link as the app keeps it, its size,
+         * passworded; and a torrent's source (L459), its guid its content id and with no link, as its indexer's answer gave
+         * it. A Usenet release's source is left unwritten.
+         */
+        internal fun candidate(item: RankedItem): DownloadCandidate = DownloadCandidate(
+            item.item.indexerId, item.item.guid, item.item.title, item.item.downloadTemplate, item.item.sizeBytes, item.item.passworded,
+            source = ReleaseFacts.TORRENT.takeIf { item.item.infoHash != null },
+        )
 
         /**
          * When a download queued now starts, as the host would start it: what holds it first, a hold only Resume ends (L380),
@@ -784,7 +786,3 @@ class DownloadSheetModel(
         private val log = LoggerFactory.getLogger(DownloadSheetModel::class.java)
     }
 }
-
-/** [this] with its torrents left out: a download is Usenet's alone (L370). */
-private fun ResultGroup.usenetOnly(): ResultGroup =
-    copy(playable = playable.filter { it.item.infoHash == null }, hidden = hidden.filter { it.item.infoHash == null })

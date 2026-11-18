@@ -141,7 +141,7 @@ internal class DownloadsPageSeeds(private val context: Context, private val cont
                 )
             },
             search = app.search.copy(
-                findEpisode = { request, _ -> flowOf(FinderEvent.Finished(FindResult(request, releases, emptyList(), emptyList()))) },
+                findEpisode = { request, _, _ -> flowOf(FinderEvent.Finished(FindResult(request, releases, emptyList(), emptyList()))) },
                 prefs = { DownloadPrefs() },
                 network = { wifi },
             ),

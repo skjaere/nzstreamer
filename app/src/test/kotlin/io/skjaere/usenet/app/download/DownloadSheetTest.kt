@@ -12,6 +12,8 @@ import io.skjaere.usenet.app.download.SheetFixtures.finished
 import io.skjaere.usenet.app.download.SheetFixtures.inOrder
 import io.skjaere.usenet.app.download.SheetFixtures.nzb
 import io.skjaere.usenet.app.download.SheetFixtures.ranked
+import io.skjaere.usenet.app.download.SheetFixtures.ranking
+import io.skjaere.usenet.app.download.SheetFixtures.torrent
 import io.skjaere.usenet.app.play.EpisodePlay
 import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.MovieTarget
@@ -29,6 +31,7 @@ import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.newznab.IndexerConfig
 import io.skjaere.usenet.newznab.IndexerKind
 import io.skjaere.usenet.newznab.TvIds
+import io.skjaere.usenet.releases.Availability
 import io.skjaere.usenet.releases.RankingTarget
 import io.skjaere.usenet.search.FindResult
 import io.skjaere.usenet.search.FinderEvent
@@ -43,6 +46,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -61,11 +65,13 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The Download sheet's model for one episode or film (L338, L358, L370), each state from fakes of its search, the device's
- * space, network and queue, Android's notification ask and the runner: the pick is the download ranking's first; the free
- * space and what a pick needs; when it starts by the network and the queue; one that won't fit; no release; the
+ * The Download sheet's model for one episode or film (L338, L358, L422, L459), each state from fakes of its search, the
+ * device's space, network and queue, Android's notification ask and the runner: the pick is the download ranking's first;
+ * the free space and what a pick needs; when it starts by the network and the queue; one that won't fit; no release; the
  * notification line once, on Android 13 and later; and what Download stores: the releases that fit, in download order, the
- * one chosen first, torrents left out, then the ask and the host's schedule. Finding only searches. Invented releases.
+ * one chosen first, a torrent a debrid service has cached among them with its source, then the ask and the host's
+ * schedule. A torrent not cached stays hidden, and the torrent indexers are asked only while debrid shows and an account
+ * is on. Finding only searches. Invented releases.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class DownloadSheetTest {
@@ -291,8 +297,8 @@ class DownloadSheetTest {
             open(EPISODE, fakes).state.value,
         )
 
-        // A torrent alone found: nothing to download from Usenet (L370).
-        val torrent = SheetFakes().apply { finder = inOrder(nzb(TORRENT, 1_000_000_000, hash = HASH)) }
+        // A torrent alone found, which no debrid service has cached: hidden, so nothing to download (L422).
+        val torrent = SheetFakes().apply { finder = ranking(torrent(TORRENT, 1_000_000_000, Availability.NotCached, HASH)) }
         assertIs<DownloadSheetState.NoRelease>(open(EPISODE, torrent).state.value)
 
         // A film: each indexer and what it answered.
@@ -380,18 +386,18 @@ class DownloadSheetTest {
     }
 
     @Test
-    fun `Download queues the pick and the releases that fit after it, torrents left out, then asks, schedules and closes`() = runTest {
+    fun `Download queues the pick and the releases that fit after it, a cached torrent among them, then asks, schedules and closes`() = runTest {
         val fakes = SheetFakes().apply {
             // 4.0 GB free: the 9.8 GB remux doesn't fit; the pack's share of the episode does.
             space = DownloadSpace(available = 5 * GB, used = 0, queued = 0)
             finder = inOrder(
-                nzb(KESTREL, 1_200_000_000), nzb(TORRENT, 1_800_000_000, hash = HASH), nzb(PACK, 11_200_000_000, indexer = "idx-b", passworded = true),
-                nzb(FERRY, 9_800_000_000), nzb(ATMOS, 3_400_000_000),
+                nzb(KESTREL, 1_200_000_000), torrent(TORRENT, 1_800_000_000, Availability.Cached(listOf("tb")), HASH),
+                nzb(PACK, 11_200_000_000, indexer = "idx-b", passworded = true), nzb(FERRY, 9_800_000_000), nzb(ATMOS, 3_400_000_000),
             )
         }
         val sheet = open(EPISODE, fakes)
         val pick = assertIs<DownloadSheetState.Pick>(sheet.state.value)
-        assertEquals(listOf(KESTREL, PACK, FERRY, ATMOS), pick.group.playable.map { it.item.title }, "the list lists Usenet's alone")
+        assertEquals(listOf(KESTREL, TORRENT, PACK, FERRY, ATMOS), pick.group.playable.map { it.item.title }, "a torrent the service has cached listed as any release")
         assertFalse(sheet.closed.value)
 
         sheet.download()
@@ -399,12 +405,18 @@ class DownloadSheetTest {
         advanceUntilIdle()
         val (target, candidates) = fakes.enqueued.single()
         assertEquals(EPISODE.target, target)
-        assertEquals(listOf(KESTREL, PACK, ATMOS), candidates.map { it.title })
+        assertEquals(listOf(KESTREL, TORRENT, PACK, ATMOS), candidates.map { it.title })
         assertEquals(
             DownloadCandidate("idx-b", PACK, PACK, "https://indexer.invalid/api?t=get&id=$PACK&apikey={apikey}", 11_200_000_000, passworded = true),
-            candidates[1],
+            candidates[2],
             "the link as the app keeps it, the indexer's size and its passworded flag",
         )
+        assertEquals(
+            DownloadCandidate(SheetFixtures.INDEXER_T.id, "btih:$HASH", TORRENT, null, 1_800_000_000, source = "torrent"),
+            candidates[1],
+            "a torrent by its content id, with no link, its source written (L459)",
+        )
+        assertEquals(listOf(null, "torrent", null, null), candidates.map { it.source }, "a Usenet release's source left unwritten")
         assertEquals(listOf("enqueue", "ask", "schedule"), fakes.calls)
         assertTrue(sheet.closed.value)
     }
@@ -441,14 +453,73 @@ class DownloadSheetTest {
         assertEquals((1..10).map { "Harbor.Lights.S02E04.720p.WEB-DL.H.264-GRP$it" }, fakes.enqueued.single().second.map { it.title })
     }
 
+    /**
+     * L422, L459: the search ranks a torrent by its cache check, as a play's does. One a debrid service has cached is offered
+     * as any release, the pick where it ranks first, and kept with its source; one no service has cached stays hidden with
+     * the ranker's reason, never kept.
+     */
     @Test
-    fun `a download searches the Usenet indexers alone, as only their releases download`() {
-        val usenet = IndexerConfig("idx-a", "Indexer A", "https://indexer-a.invalid/api", "")
-        val torrents = IndexerConfig("idx-t", "Indexer T", "https://indexer-t.invalid/api", "", kind = IndexerKind.Torznab)
-        val other = IndexerConfig("idx-b", "Indexer B", "https://indexer-b.invalid/api", "")
-        // A torrent indexer's calls, and the debrid cache checks after them, would be spent on releases left out (L370).
-        assertEquals(listOf(usenet, other), DownloadSheetDeps.usenetOnly(listOf(usenet, torrents, other)))
-        assertEquals(emptyList<IndexerConfig>(), DownloadSheetDeps.usenetOnly(listOf(torrents)))
+    fun `a torrent a debrid service has cached is offered and kept with its source, and one not cached stays hidden`() = runTest {
+        val fakes = SheetFakes().apply {
+            finder = ranking(
+                torrent(TORRENT, 1_800_000_000, Availability.Cached(listOf("tb")), HASH), torrent(DRIFT, 900_000_000, Availability.NotCached, HASH_2),
+                nzb(KESTREL, 1_200_000_000),
+            )
+        }
+        val sheet = open(EPISODE, fakes)
+        val pick = assertIs<DownloadSheetState.Pick>(sheet.state.value)
+        assertEquals(setOf(TORRENT, KESTREL), pick.group.playable.map { it.item.title }.toSet())
+        val hidden = pick.group.hidden.single()
+        assertEquals(DRIFT, hidden.item.title)
+        assertEquals("Not cached", hidden.ranked.reasons.first().text)
+
+        sheet.download()
+        advanceUntilIdle()
+        val candidates = fakes.enqueued.single().second
+        assertEquals(pick.group.playable.map { it.item.title }, candidates.map { it.title }, "in the list's order, the one not cached left out")
+        assertEquals("torrent", candidates.single { it.title == TORRENT }.source)
+        assertEquals("btih:$HASH", candidates.single { it.title == TORRENT }.guid)
+        assertNull(candidates.single { it.title == KESTREL }.source)
+    }
+
+    /**
+     * L422: the searches ask the indexers the container gives a search ([io.skjaere.usenet.app.search.IndexerConfigs.of]):
+     * the torrent indexers only while debrid shows and a service account is on, so a hidden build, or one with no account
+     * on, searches Usenet's alone.
+     */
+    @Test
+    fun `the torrent indexers are asked only while debrid shows and an account is on, and hidden Usenet's alone`() = runTest {
+        suspend fun asked(request: DownloadRequest, account: Boolean, shown: Boolean): List<Pair<String, IndexerKind>> {
+            val sources = SearchSources.of(StandardTestDispatcher(testScheduler), account)
+            val fakes = SheetFakes().apply { indexers = { sources.indexers(shown) } }
+            open(request, fakes)
+            return fakes.searched.single().map { it.name to it.kind }
+        }
+        val both = listOf(SearchSources.USENET to IndexerKind.Newznab, SearchSources.TORZNAB to IndexerKind.Torznab)
+        val usenet = listOf(SearchSources.USENET to IndexerKind.Newznab)
+        mapOf("an episode" to EPISODE, "a film" to FILM).forEach { (what, request) ->
+            assertEquals(both, asked(request, account = true, shown = true), "$what: an account on, debrid shown")
+            assertEquals(usenet, asked(request, account = false, shown = true), "$what: no account on")
+            assertEquals(usenet, asked(request, account = true, shown = false), "$what: debrid hidden, whatever a shown build saved")
+        }
+    }
+
+    /**
+     * L422: the sheets' and the turn's searches read the container's indexers, with nothing they find left out by its
+     * source: the app's deps and the turn's search ask [io.skjaere.usenet.app.AppContainer.indexerConfigs], and no torrent
+     * filter stands in the three files.
+     */
+    @Test
+    fun `the download searches ask the container's indexers and leave no torrent out themselves`() {
+        val dir = java.io.File("src/main/kotlin/io/skjaere/usenet/app/download")
+        val files = listOf("DownloadSheetModel.kt", "DownloadSeasonSheetModel.kt", "DownloadSearch.kt").associateWith { java.io.File(dir, it).readText() }
+        files.forEach { (name, text) ->
+            listOf("usenetOnly", "infoHash == null").forEach { assertFalse(it in text, "$name still has $it") }
+        }
+        listOf("DownloadSheetModel.kt", "DownloadSearch.kt").forEach { name ->
+            assertTrue("indexers = { container.indexerConfigs() }" in files.getValue(name), "$name's app deps ask the container's indexers")
+        }
+        assertTrue("deps.findSeason(request.search, deps.indexers(), deps.context())" in files.getValue("DownloadSeasonSheetModel.kt"))
     }
 
     /** An imported file's sheet asks no search (L455): each of these fails the test if a sheet asks it. */
@@ -640,6 +711,8 @@ class DownloadSheetTest {
         const val FERRY = "Harbor.Lights.S02E04.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-FERRY"
         const val TORRENT = "Harbor.Lights.S02E04.1080p.WEB.H264-SALTMARSH"
         const val HASH = "0123456789abcdef0123456789abcdef01234567"
+        const val DRIFT = "Harbor.Lights.S02E04.720p.HDTV.x264-DRIFT"
+        const val HASH_2 = "fedcba9876543210fedcba9876543210fedcba98"
         const val COPPER = "Copper.Crown.2022.1080p.WEB-DL.DDP5.1.H.264-KESTREL"
         const val COPPER_BLURAY = "Copper.Crown.2022.1080p.BluRay.x264-DRIFTWOOD"
         const val COPPER_720 = "Copper.Crown.2022.720p.WEB-DL.DDP5.1.H.264-KESTREL"

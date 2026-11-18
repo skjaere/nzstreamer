@@ -1,9 +1,11 @@
 package io.skjaere.usenet.app.search
 
 import io.skjaere.usenet.app.debrid.DebridGate
+import io.skjaere.usenet.app.debrid.ServiceRegistry
 import io.skjaere.usenet.data.AppSettings
 import io.skjaere.usenet.data.IndexerRecord
 import io.skjaere.usenet.data.IndexerWithKey
+import io.skjaere.usenet.data.SettingsRepository
 import io.skjaere.usenet.data.TorrentIndexerRecord
 import io.skjaere.usenet.data.TorrentIndexerWithKey
 import io.skjaere.usenet.newznab.IndexerConfig
@@ -33,6 +35,17 @@ object IndexerConfigs {
                     kind = IndexerKind.Torznab, useWithService = it.record.useWithService,
                 )
             }
+
+    /**
+     * The indexers a search asks now, as the container gives them ([io.skjaere.usenet.app.AppContainer.indexerConfigs]):
+     * [settings]' Usenet indexers, then its torrent indexers while one of [services]' accounts is on and debrid shows
+     * ([shown]), as [searchable] says. The torrent indexers' keys are read only when they will be searched.
+     */
+    suspend fun of(settings: SettingsRepository, services: ServiceRegistry, shown: Boolean = DebridGate.shown): List<IndexerConfig> {
+        val serviceOn = services.on(shown).isNotEmpty()
+        val torznab = if (serviceOn && shown) settings.searchableTorrentIndexers() else emptyList()
+        return searchable(settings.searchableIndexers(), torznab, serviceOn, shown)
+    }
 
     /**
      * The torrent indexers whose "Use with your debrid service" is off, by id, from every one [saved]: enabled or not, its

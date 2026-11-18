@@ -153,12 +153,12 @@ class EpisodeRowTextTest {
 
     @Test
     fun `the menu keeps Choose release and Mark watched, then the download's items by state`() {
-        fun menu(d: TitleDownload?, watched: Boolean = false, usenet: Boolean = true) =
-            episodeMenu(watched, TitleDownloads.entries(d, usenet)).map { it.label }
+        fun menu(d: TitleDownload?, watched: Boolean = false, source: Boolean = true) =
+            episodeMenu(watched, TitleDownloads.entries(d, source)).map { it.label }
         val base = listOf("Choose release", "Mark watched")
         assertEquals(base + "Download", menu(null))
-        // No Usenet provider saved and on: no Download (L370).
-        assertEquals(base, menu(null, usenet = false))
+        // Neither a Usenet provider usable nor a debrid account on: no Download (L422).
+        assertEquals(base, menu(null, source = false))
         // The running item: the queue's pause (L380).
         listOf(dl(DownloadState.Running), dl(DownloadState.Resolving), dl(DownloadState.Waiting, DownloadHostRules.WAITING_FOR_WIFI)).forEach {
             assertEquals(base + listOf("Pause download", "Remove download"), menu(it), it.toString())
@@ -168,7 +168,7 @@ class EpisodeRowTextTest {
             assertEquals(base + listOf("Resume download", "Remove download"), menu(it), it.toString())
         }
         assertEquals(listOf("Choose release", "Mark unwatched", "Remove download"), menu(dl(DownloadState.Done, missing = 2), watched = true))
-        assertEquals(base + listOf("Download again", "Remove download"), menu(dl(DownloadState.Failed), usenet = false))
+        assertEquals(base + listOf("Download again", "Remove download"), menu(dl(DownloadState.Failed), source = false))
         // Nothing of downloads where they don't show: the TV's row, which is given none.
         assertEquals(base, episodeMenu(false, emptyList()).map { it.label })
         assertEquals(DownloadEntry.Pause, (episodeMenu(false, listOf(DownloadEntry.Pause)).last() as EpisodeMenuItem.Download).entry)

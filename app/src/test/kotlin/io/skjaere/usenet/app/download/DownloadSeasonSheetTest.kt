@@ -2,8 +2,10 @@ package io.skjaere.usenet.app.download
 
 import io.skjaere.usenet.app.download.SheetFixtures.GB
 import io.skjaere.usenet.app.download.SheetFixtures.MOBILE
+import io.skjaere.usenet.app.download.SheetFixtures.byRanker
 import io.skjaere.usenet.app.download.SheetFixtures.nzb
 import io.skjaere.usenet.app.download.SheetFixtures.ranked
+import io.skjaere.usenet.app.download.SheetFixtures.torrent
 import io.skjaere.usenet.app.play.EpisodePlay
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
@@ -11,9 +13,11 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.newznab.IndexerConfig
+import io.skjaere.usenet.newznab.IndexerKind
 import io.skjaere.usenet.newznab.NewznabError
 import io.skjaere.usenet.newznab.NewznabItem
 import io.skjaere.usenet.newznab.TvIds
+import io.skjaere.usenet.releases.Availability
 import io.skjaere.usenet.releases.RankingTarget
 import io.skjaere.usenet.releases.ReleaseReason
 import io.skjaere.usenet.search.FindResult
@@ -27,6 +31,7 @@ import io.skjaere.usenet.search.ShowRef
 import io.skjaere.usenet.search.StageReport
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -48,7 +53,9 @@ import kotlin.test.assertTrue
  * the season's line, each episode's size or that nothing is found yet, the episodes counted apart, a failed one listed
  * again, one found only above the Download size, when it starts; Won't fit's prefix in episode order; nothing for the
  * whole season; and what Download queues: each episode once, in order, its releases that fit with the first's need and
- * its search facts, torrents left out, then the ask and the host's schedule. Invented show and releases.
+ * its search facts, a torrent a debrid service has cached among them with its source (L459), then the ask and the host's
+ * schedule. A torrent not cached stays hidden, and the torrent indexers are asked only while debrid shows and an account
+ * is on (L422). Invented show and releases.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class DownloadSeasonSheetTest {
@@ -68,13 +75,17 @@ class DownloadSeasonSheetTest {
             runCurrent()
         }
 
-    /** A season's search that found [found] for each episode by its number, in that order, ranked for downloading. */
-    private fun SheetFakes.finds(found: Map<Int, List<NewznabItem>>, stages: List<StageReport> = emptyList()) {
-        seasons = { request, _ ->
+    /**
+     * A season's search that found [found] for each episode by its number, in that order, ranked for downloading, and
+     * [hidden] for each as the ranker hid them (a torrent not cached among them).
+     */
+    private fun SheetFakes.finds(found: Map<Int, List<NewznabItem>>, stages: List<StageReport> = emptyList(), hidden: Map<Int, List<NewznabItem>> = emptyMap()) {
+        seasons = { request, context ->
             SeasonFind(
                 request.episodes.associate { e ->
                     val releases = found[e.number].orEmpty().mapIndexed { i, item -> ranked(item, 100.0 - i).let { FoundRelease(it.item, it.ranked, SearchStage.SeasonPack) } }
-                    e.number to FindResult(request.request(e), releases, emptyList(), stages)
+                    val hid = byRanker(hidden[e.number].orEmpty(), context).map { FoundRelease(it.item, it.ranked, SearchStage.SeasonPack) }
+                    e.number to FindResult(request.request(e), releases, hid, stages)
                 },
                 stages,
             )
@@ -367,8 +378,9 @@ class DownloadSeasonSheetTest {
             SeasonSheetState.NoRelease(listOf("Searched 1 indexer for season 2 by TVDB id" to "Nothing yet")),
             open(SEASON, SheetFakes().apply { finds(emptyMap(), one) }).state.value,
         )
-        // A torrent alone found: nothing to download from Usenet (L370).
-        assertIs<SeasonSheetState.NoRelease>(open(SEASON, SheetFakes().apply { finds(mapOf(3 to listOf(nzb(TORRENT, 1_000_000_000, hash = HASH)))) }).state.value)
+        // A torrent alone found, which no debrid service has cached: hidden, so nothing to download (L422).
+        val uncached = mapOf(3 to listOf(torrent(TORRENT, 1_000_000_000, Availability.NotCached, HASH)))
+        assertIs<SeasonSheetState.NoRelease>(open(SEASON, SheetFakes().apply { finds(emptyMap(), hidden = uncached) }).state.value)
         // A search that fails says nothing of the indexers.
         assertEquals(SeasonSheetState.NoRelease(emptyList()), open(SEASON, SheetFakes().apply { seasons = { _, _ -> throw IllegalStateException("the finder broke") } }).state.value)
     }
@@ -407,23 +419,47 @@ class DownloadSeasonSheetTest {
     }
 
     @Test
-    fun `at most 10 releases are kept for each episode, and torrents are left out`() = runTest {
+    fun `at most 10 releases are kept for each episode, a cached torrent among them with its source`() = runTest {
         val fakes = SheetFakes().apply {
             finds(
                 mapOf(
-                    3 to listOf(nzb(TORRENT, 1_000_000_000, hash = HASH)) + (1..12).map { nzb(single(3, "GRP$it"), 900_000_000) },
+                    3 to listOf(torrent(TORRENT, 1_000_000_000, Availability.Cached(listOf("tb")), HASH)) + (1..12).map { nzb(single(3, "GRP$it"), 900_000_000) },
                     4 to listOf(nzb(single(4), 1_200_000_000)),
                 ),
+                hidden = mapOf(4 to listOf(torrent(DRIFT, 700_000_000, Availability.NotCached, HASH_2))),
             )
         }
         val sheet = open(request(listOf(3, 4)), fakes)
         val pick = pick(sheet)
-        assertEquals(single(3, "GRP1"), pick.episodes.first().best?.item?.title, "the torrent never the pick")
+        assertEquals(TORRENT, pick.episodes.first().best?.item?.title, "a torrent the service has cached is the pick where it ranks first")
+        assertEquals(single(4), pick.episodes[1].best?.item?.title, "one not cached never the pick")
         sheet.download()
         advanceUntilIdle()
         val items = fakes.enqueuedAll.single()
-        assertEquals((1..10).map { single(3, "GRP$it") }, items[0].candidates.map { it.title })
-        assertEquals(listOf(single(4)), items[1].candidates.map { it.title })
+        assertEquals(listOf(TORRENT) + (1..9).map { single(3, "GRP$it") }, items[0].candidates.map { it.title })
+        assertEquals(DownloadCandidate(SheetFixtures.INDEXER_T.id, "btih:$HASH", TORRENT, null, 1_000_000_000, source = "torrent"), items[0].candidates.first())
+        assertEquals(listOf("torrent") + List(9) { null }, items[0].candidates.map { it.source })
+        assertEquals(listOf(single(4)), items[1].candidates.map { it.title }, "the one not cached never kept")
+    }
+
+    /**
+     * L422: the season's one search asks the indexers the container gives a search: the torrent indexers only while debrid
+     * shows and a service account is on, so a hidden build, or one with no account on, searches Usenet's alone.
+     */
+    @Test
+    fun `the season's search asks the torrent indexers only while debrid shows and an account is on`() = runTest {
+        suspend fun asked(account: Boolean, shown: Boolean): List<Pair<String, IndexerKind>> {
+            val sources = SearchSources.of(StandardTestDispatcher(testScheduler), account)
+            val fakes = SheetFakes().apply {
+                indexers = { sources.indexers(shown) }
+                finds(singles())
+            }
+            open(SEASON, fakes)
+            return fakes.searched.single().map { it.name to it.kind }
+        }
+        assertEquals(listOf(SearchSources.USENET to IndexerKind.Newznab, SearchSources.TORZNAB to IndexerKind.Torznab), asked(account = true, shown = true))
+        assertEquals(listOf(SearchSources.USENET to IndexerKind.Newznab), asked(account = false, shown = true), "no account on")
+        assertEquals(listOf(SearchSources.USENET to IndexerKind.Newznab), asked(account = true, shown = false), "debrid hidden")
     }
 
     @Test
@@ -480,6 +516,8 @@ class DownloadSeasonSheetTest {
         const val PACK = "Harbor.Lights.S02.1080p.WEB-DL.DDP5.1.H.264-DRIFTWOOD"
         const val TORRENT = "Harbor.Lights.S02E03.1080p.WEB.H264-SALTMARSH"
         const val HASH = "0123456789abcdef0123456789abcdef01234567"
+        const val DRIFT = "Harbor.Lights.S02E04.720p.HDTV.x264-DRIFT"
+        const val HASH_2 = "fedcba9876543210fedcba9876543210fedcba98"
 
         /** S02E[n]'s single release by [group]. */
         fun single(n: Int, group: String = "KESTREL") = "Harbor.Lights.S02E%02d.1080p.WEB-DL.DDP5.1.H.265-%s".format(n, group)

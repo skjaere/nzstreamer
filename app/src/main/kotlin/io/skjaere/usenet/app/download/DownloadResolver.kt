@@ -1076,8 +1076,8 @@ class DownloadResolver(
          * track probe, the indexers the search asks, the coordinator's grab (its test seam), the memory of releases found
          * missing as a play that wasn't chosen reads it, and Settings' "Releases to try"; a season pack's prepare held for its
          * season handed back over the engine's prepare ([PlayingPack.preparer]), the download ranking's context, the turn's
-         * search over the Usenet indexers ([DownloadSearch.of]), the indexers' limits kept in the walk's memory ([limits]: the
-         * runner's, L443), and the library's release that played a title last. A test
+         * search over the indexers a search asks ([DownloadSearch.of]), the indexers' limits kept in the walk's memory
+         * ([limits]: the runner's, L443), and the library's release that played a title last. A test
          * gives its own [indexers] and [attempts], a [probe] that reads nothing where its releases are no film, a
          * [prepareBackend] that counts the prepares, and a [search] of its own finder.
          */

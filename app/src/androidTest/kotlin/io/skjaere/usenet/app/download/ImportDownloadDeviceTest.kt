@@ -481,9 +481,9 @@ class ImportDownloadDeviceTest {
      */
     private fun deps(metered: Boolean = false, space: DownloadSpace = DownloadSpace(available = 15 * GB, used = 0, queued = 0)) =
         DownloadSheetDeps.of(container, ask = null, context).copy(
-            findEpisode = { _, _ -> throw AssertionError("an episode's search asked") },
-            findMovie = { _, _ -> throw AssertionError("a film's search asked") },
-            findSeason = { _, _ -> throw AssertionError("a season's search asked") },
+            findEpisode = { _, _, _ -> throw AssertionError("an episode's search asked") },
+            findMovie = { _, _, _ -> throw AssertionError("a film's search asked") },
+            findSeason = { _, _, _ -> throw AssertionError("a season's search asked") },
             space = { space },
             rows = { emptyList() },
             prefs = { DownloadPrefs() },

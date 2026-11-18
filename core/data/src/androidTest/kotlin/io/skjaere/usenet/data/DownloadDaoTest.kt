@@ -15,8 +15,8 @@ import org.junit.runner.RunWith
 /**
  * This device's downloads as the library stores them (L351): the queue in its order and a move in it, the finished ones
  * by watch key, a show's and a film's, the progress record written whole, a row read back as it was written (version 15's
- * search facts, file chosen by hand and limit's wait among it), an imported file's row of its own kind, a season's rows
- * written in one transaction, and a delete.
+ * search facts, file chosen by hand and limit's wait among it), an imported file's row of its own kind, a candidate's
+ * source written for a torrent alone, a season's rows written in one transaction, and a delete.
  */
 @RunWith(AndroidJUnit4::class)
 class DownloadDaoTest {
@@ -212,6 +212,40 @@ class DownloadDaoTest {
     }
 
     /**
+     * L459: a candidate knows its source, a JSON field with a default. A torrent's is written, "torrent"; a Usenet
+     * candidate's is left out, so its row's JSON is as an older build wrote it; and a row an older build wrote, its
+     * candidates with no source, reads back with none: Usenet's.
+     */
+    @Test
+    fun aCandidatesSourceIsWrittenForATorrentAloneAndAnOlderRowReadsNone() = runBlocking<Unit> {
+        val usenet = DownloadCandidate("fake", "hl-s02e04-a", "Harbor.Lights.S02E04.1080p.WEB.h264-GRP", "http://x/api?t=get&id=a&apikey={apikey}", 1_400_000_000)
+        val torrent = DownloadCandidate(
+            "prowlarr", "btih:$HASH", "Harbor.Lights.S02E04.1080p.WEB.H264-SALTMARSH", size = 1_800_000_000, source = "torrent",
+        )
+        downloads.insert(episode("usenet", 4, position = 0).copy(candidates = listOf(usenet)))
+        downloads.insert(episode("both", 5, position = 1).copy(candidates = listOf(torrent, usenet)))
+        assertEquals(listOf(usenet), downloads.get("usenet")?.candidates)
+        assertEquals(listOf(torrent, usenet), downloads.get("both")?.candidates)
+        // As stored: the torrent's source written, the Usenet one's left out, as before sources were.
+        assertEquals("[$OLDER_USENET]", candidatesStored("usenet"))
+        val torrentStored = """{"indexerId":"prowlarr","guid":"btih:$HASH","title":"Harbor.Lights.S02E04.1080p.WEB.H264-SALTMARSH","size":1800000000,"source":"torrent"}"""
+        assertEquals("[$torrentStored,$OLDER_USENET]", candidatesStored("both"))
+
+        // A row an older build wrote: its candidates read as Usenet's, with no source.
+        db.openHelper.writableDatabase.execSQL("UPDATE download SET candidates = ? WHERE id = ?", arrayOf<Any>("[$OLDER_USENET]", "both"))
+        val older = downloads.get("both")?.candidates
+        assertEquals(listOf(usenet), older)
+        assertEquals(listOf(null), older?.map { it.source })
+    }
+
+    /** Download [id]'s candidates as stored: the JSON the app wrote. */
+    private fun candidatesStored(id: String): String =
+        db.query("SELECT candidates FROM download WHERE id = ?", arrayOf(id)).use { cursor ->
+            cursor.moveToFirst()
+            cursor.getString(0)
+        }
+
+    /**
      * A season queued at once (L392, L396): its new rows inserted and its failed ones put back in one transaction, so one
      * insert that fails leaves none of it, the rows put back as they were; whole, it writes them all.
      */
@@ -271,5 +305,10 @@ class DownloadDaoTest {
         const val SHOW = 900002
         const val FILM = 900011
         const val MIB = 1024L * 1024
+        const val HASH = "0123456789abcdef0123456789abcdef01234567"
+
+        /** A Usenet candidate as a build from before sources wrote it. */
+        const val OLDER_USENET = """{"indexerId":"fake","guid":"hl-s02e04-a","title":"Harbor.Lights.S02E04.1080p.WEB.h264-GRP",""" +
+            """"downloadTemplate":"http://x/api?t=get&id=a&apikey={apikey}","size":1400000000}"""
     }
 }

@@ -37,6 +37,7 @@ import io.skjaere.usenet.app.FakeTmdb
 import io.skjaere.usenet.app.HomeContentShown
 import io.skjaere.usenet.app.collection.MovieScreen
 import io.skjaere.usenet.app.collection.SHOW_FOOTNOTE_PHONE
+import io.skjaere.usenet.app.collection.SHOW_FOOTNOTE_PHONE_STREAM
 import io.skjaere.usenet.app.collection.ShowScreen
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.CC
@@ -102,6 +103,7 @@ import kotlin.math.abs
  * - Search's movie card: Download beside N releases, one under the other at twice the font size.
  * - Home's Downloads section, shown only while something is queued or downloaded; See all opens the Downloads page, a
  *   show's row its downloads.
+ * - With the debrid fake's TorBox account the only source (L422), an episode's ⋮ still offers Download.
  *
  * The app's Usenet indexers are switched off meanwhile, and a grab throws, so nothing reaches an indexer: the sheet's
  * search finds nothing to ask. The settings are put back as they were, the rows and their folders deleted, and the
@@ -304,6 +306,28 @@ class DownloadEntriesDeviceTest {
         pick("Undo")
         compose.waitTill("episode 2's download back") { drawn("Downloaded · 1.3 GB") && state(2) == "Downloaded" }
         assertEquals(DownloadState.Done, seeds.row(rows.getValue(2).id)?.state)
+    }
+
+    /**
+     * L422 over the debrid fake: with the fake TorBox account the only source (no Usenet provider usable, every indexer
+     * off), an episode with no download still offers Download, and the footnote says the ⋮ downloads; with the account
+     * switched off there is no source, and neither does.
+     */
+    @Test
+    fun withOnlyTheFakeDebridAccountOnAnEpisodesMenuOffersDownload() {
+        FakeAccountOnly(torznab = false, providers = false, tmdb = false).use { fakes ->
+            fakes.open()
+            assertTrue("no Usenet provider usable", runBlocking { container.settings.usableProviders().isEmpty() })
+            showPage()
+            assertEquals(listOf("Choose release", "Mark watched", "Download"), menuOf(1))
+            closeMenu()
+            assertTrue(scrolledTo(hasText(SHOW_FOOTNOTE_PHONE)))
+
+            fakes.accountOn(false)
+            compose.waitTill("the footnote with no source") { scrolledTo(hasText(SHOW_FOOTNOTE_PHONE_STREAM)) }
+            assertEquals(listOf("Choose release", "Mark watched"), menuOf(1))
+            closeMenu()
+        }
     }
 
     @Test

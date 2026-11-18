@@ -191,8 +191,8 @@ internal fun IndexerStatus.State.outcome(): String = when (this) {
  * Searches every indexer for [target] as the Search tab searches a movie picked from TMDB's
  * suggestions (by its ids where an indexer can, else by name), so a movie's page and Search find the
  * same releases. What it found comes once every indexer has answered, and again as torrents join once checked
- * ([MovieFind.found]): Play's own pick takes the last (L199). A download's search asks the Usenet [indexers] alone and
- * ranks for downloading ([context], L355, L370); a play's, every indexer, for whom Play goes to.
+ * ([MovieFind.found]): Play's own pick takes the last (L199). A download's search asks the same [indexers] and ranks
+ * for downloading ([context], L355, L422); a play's, for whom Play goes to.
  */
 fun findMovieReleases(
     container: AppContainer,

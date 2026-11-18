@@ -277,7 +277,7 @@ class DownloadSeasonSheetDeviceTest {
         space: DownloadSpace = DownloadSpace(available = 42 * GB, used = 0, queued = 0),
         found: Map<Int, List<RankedItem>> = RELEASES,
     ) = DownloadSheetDeps.of(container, ask = null, context).copy(
-        findSeason = { request, ranking ->
+        findSeason = { request, _, ranking ->
             rankedBy += ranking
             answer.await()
             SeasonFind(

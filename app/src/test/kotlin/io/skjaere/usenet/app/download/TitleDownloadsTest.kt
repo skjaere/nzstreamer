@@ -1,6 +1,8 @@
 package io.skjaere.usenet.app.download
 
 import io.skjaere.nzbstreamer.stream.StreamableFile
+import io.skjaere.usenet.app.debrid.DebridGate
+import io.skjaere.usenet.app.debrid.ServiceRegistry
 import io.skjaere.usenet.app.download.DownloadHostRules.ScheduleCause
 import io.skjaere.usenet.app.settings.TestCipher
 import io.skjaere.usenet.app.settings.memorySettings
@@ -11,7 +13,10 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.ProviderRecord
 import io.skjaere.usenet.data.RememberedRelease
+import io.skjaere.usenet.data.ServiceSignIn
+import io.skjaere.usenet.data.SettingsRepository
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.debrid.ServiceKind
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
@@ -92,7 +97,7 @@ class TitleDownloadsTest {
         val waiting = TitleDownload.of(DownloadRunner.Item(row("l", 6, DownloadState.Waiting).copy(reason = DownloadHostRules.LIMIT_REACHED), 0, null))
         assertEquals(listOf(PageLine("Your indexer's limit is reached", Tone.Warn)), TitleDownloads.line(waiting))
         assertEquals(DownloadMark.Queued, TitleDownloads.mark(waiting))
-        assertEquals(listOf(DownloadEntry.Resume, DownloadEntry.Remove), TitleDownloads.entries(waiting, usenet = true))
+        assertEquals(listOf(DownloadEntry.Resume, DownloadEntry.Remove), TitleDownloads.entries(waiting, source = true))
         assertEquals(DownloadHostRules.LIMIT_REACHED, TitleDownloads.spoken(waiting))
         val button = TitleDownloads.button(waiting)
         assertEquals(TitleDownloads.QUEUED, button.text)
@@ -259,24 +264,54 @@ class TitleDownloadsTest {
         assertNull(actions.offer.value)
     }
 
+    /** The service accounts' registry over [settings], as the container keeps it: nothing here makes a client or calls one. */
+    private fun services(settings: SettingsRepository) =
+        ServiceRegistry(settings::servicesWithKeys, settings::markKeyRefused, make = { _, _, _, _, _ -> error("no client is made") })
+
     @Test
-    fun `Download is offered only while a Usenet provider is saved and on, with its password readable`() = runBlocking<Unit> {
-        // The settings as the app keeps them, in memory, its secrets sealed by a stand-in that can lose one.
+    fun `Download is offered while a Usenet provider is saved and on, with its password readable`() = runBlocking<Unit> {
+        // The settings as the app keeps them, in memory, its secrets sealed by a stand-in that can lose one; no account.
         val cipher = TestCipher()
         val settings = memorySettings(cipher = cipher)
-        val usenet = usenetUsable(settings)
-        assertFalse(usenet.first(), "none saved (L370): a debrid service alone downloads nothing in DN1")
+        val source = downloadSource(settings, services(settings).anyOn(settings.services))
+        assertFalse(source.first(), "nothing saved")
         val id = settings.saveProvider(ProviderRecord("", "Provider A", "news.provider-a.invalid", 563, "user-a"), "secret-a")
-        assertTrue(usenet.first())
+        assertTrue(source.first())
         settings.setProviderEnabled(id, false)
-        assertFalse(usenet.first(), "switched off")
+        assertFalse(source.first(), "switched off")
         settings.setProviderEnabled(id, true)
-        assertTrue(usenet.first())
+        assertTrue(source.first())
         cipher.unreadable += "secret-a"
-        assertFalse(usenet.first(), "its password can't be read, as after a device move")
+        assertFalse(source.first(), "its password can't be read, as after a device move")
         cipher.unreadable.clear()
         settings.deleteProvider(id)
-        assertFalse(usenet.first(), "deleted")
+        assertFalse(source.first(), "deleted")
+    }
+
+    /**
+     * L422: a debrid service account on is a source too, wherever debrid shows, so a user with only TorBox has the Download
+     * entries; none while debrid is hidden, whatever a shown build saved, and none with nothing on: the account switched
+     * off, or its key refused by the service.
+     */
+    @Test
+    fun `Download is offered with only a debrid account on, and not while debrid is hidden or nothing is on`() = runBlocking<Unit> {
+        val settings = memorySettings()
+        val source = downloadSource(settings, services(settings).anyOn(settings.services))
+        DebridGate.showing(true) {
+            assertFalse(source.first(), "nothing saved")
+            val id = settings.saveService(ServiceKind.TorBox.name, "tb-key") { ServiceSignIn("viewer@example.invalid") }
+            assertTrue(source.first(), "TorBox's account alone, no Usenet provider")
+            settings.setServiceEnabled(id, false)
+            assertFalse(source.first(), "switched off")
+            settings.setServiceEnabled(id, true)
+            settings.markKeyRefused(id)
+            assertFalse(source.first(), "its key refused")
+            settings.updateSignIn(id, ServiceSignIn("viewer@example.invalid"))
+            assertTrue(source.first(), "the key taken again")
+        }
+        DebridGate.showing(false) {
+            assertFalse(source.first(), "debrid hidden: the account a shown build saved counts for nothing")
+        }
     }
 
     private companion object {

@@ -31,6 +31,9 @@ enum class DownloadState { Queued, Resolving, Running, Paused, Waiting, Stopped,
  * A release a download may be made from, as the Download sheet ranked it (L338): what the host grabs when the item's turn
  * comes. Its link is kept as the app keeps links, with the API key replaced by its placeholder ([downloadTemplate]; null:
  * `t=get` by [guid]), its [size] as the indexer says it, in bytes, and whether the indexer flags it [passworded].
+ * [source]: where it comes from (L459), "torrent" for a torrent a debrid service has cached, whose [guid] is its content
+ * id (`btih:` and its hash) and which keeps no link; null for a Usenet release. Left out of the JSON while null, so a
+ * Usenet candidate is stored as before, and a row from before sources were reads as Usenet's.
  */
 @Serializable
 data class DownloadCandidate(
@@ -40,6 +43,7 @@ data class DownloadCandidate(
     val downloadTemplate: String? = null,
     val size: Long = 0,
     val passworded: Boolean = false,
+    val source: String? = null,
 )
 
 /**

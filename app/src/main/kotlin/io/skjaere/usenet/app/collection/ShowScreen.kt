@@ -68,9 +68,9 @@ import io.skjaere.usenet.app.download.TitleDownload
 import io.skjaere.usenet.app.download.TitleDownloadActions
 import io.skjaere.usenet.app.download.TitleDownloads
 import io.skjaere.usenet.app.download.downloadEntryHandler
+import io.skjaere.usenet.app.download.downloadSource
 import io.skjaere.usenet.app.download.downloadsShown
 import io.skjaere.usenet.app.download.showDownloads
-import io.skjaere.usenet.app.download.usenetUsable
 import io.skjaere.usenet.app.link.CastButton
 import io.skjaere.usenet.app.link.PlayOnPrimary
 import io.skjaere.usenet.app.link.PlayTarget
@@ -174,8 +174,8 @@ class ShowViewModel(private val container: AppContainer, private val tmdbId: Int
     /** The show's downloads by season and episode (L384), for the rows' marks and their ⋮; none on a TV. */
     val downloads: StateFlow<Map<Pair<Int, Int>, TitleDownload>> = showDownloads(container, tmdbId).stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
-    /** Whether a Usenet provider is saved and on, which a new download needs (L370). */
-    val usenet: StateFlow<Boolean> = usenetUsable(container.settings).stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    /** Whether a new download has a source: a Usenet provider usable, or a debrid service account on (L422). */
+    val source: StateFlow<Boolean> = downloadSource(container).stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     /** Whether the app reads as offline (L438, L439): the container's one signal, or a test's say over it. */
     val offline: StateFlow<Boolean> = container.offline
@@ -344,7 +344,7 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDow
     val chosenFailed by vm.chosenFailed.collectAsStateWithLifecycle()
     val today by vm.today.collectAsStateWithLifecycle()
     val downloads by vm.downloads.collectAsStateWithLifecycle()
-    val usenet by vm.usenet.collectAsStateWithLifecycle()
+    val source by vm.source.collectAsStateWithLifecycle()
     val offline by vm.offline.collectAsStateWithLifecycle()
     val downloaded by vm.downloaded.collectAsStateWithLifecycle()
     // Downloads on phones and tablets alone, in their layout (L369): a TV's rows, and a phone's layout on a TV, have none.
@@ -461,8 +461,9 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDow
                     item { CircularProgressIndicator(Modifier.padding(24.dp), color = colors.accent) }
                 } else {
                     val mark = seasonMark(s.episodes, { d.hasAired(it, today) }, { states[it.season to it.episode]?.watched == true })
-                    // As the episodes' ⋮ offers Download: where downloads show and a Usenet provider is on (L369, L370).
-                    val download = if (downloadsHere && usenet) seasonDownload(s.episodes, { d.hasAired(it, today) }, downloads) else null
+                    // As the episodes' ⋮ offers Download: where downloads show and there is a source to download from
+                    // (L369, L422).
+                    val download = if (downloadsHere && source) seasonDownload(s.episodes, { d.hasAired(it, today) }, downloads) else null
                     item {
                         SeasonButtons(
                             mark, download, onMark = { vm.mark(mark.episodes, mark.watched) }, onDownload = { downloadingSeason = s.number },
@@ -489,7 +490,7 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDow
                                     still = e.stillPath, showArtwork = artwork, current = progress.nextUp.episodeRef() == EpisodeRef(e.season, e.episode),
                                     onTv = playing?.let { rememberRemoteEpisodeLine(container.remotePlaying, it) },
                                     download = download,
-                                    downloadEntries = if (downloadsHere) TitleDownloads.entries(download, usenet) else emptyList(),
+                                    downloadEntries = if (downloadsHere) TitleDownloads.entries(download, source) else emptyList(),
                                     onDownloadEntry = { entry ->
                                         if (entry == DownloadEntry.Download) downloading = e.season to e.episode else onDownloadEntry(entry, download)
                                     },
@@ -500,7 +501,7 @@ fun ShowScreen(tmdbId: Int, onBack: () -> Unit, onRemote: () -> Unit = {}, onDow
                         }
                     }
                     // The footnote says what the ⋮ offers: a download only where it does.
-                    item { Footnote(if (downloadsHere && usenet) SHOW_FOOTNOTE_PHONE else SHOW_FOOTNOTE_PHONE_STREAM) }
+                    item { Footnote(if (downloadsHere && source) SHOW_FOOTNOTE_PHONE else SHOW_FOOTNOTE_PHONE_STREAM) }
                 }
             }
         }
@@ -728,7 +729,8 @@ private const val DISABLED_TEXT = 0.38f
 
 /**
  * The Show page's footnote on a phone, and on a TV, whose remote has no tap. A phone's says the ⋮ downloads (L356) where
- * it does: on phones and tablets with a Usenet provider (L369, L370); else it says what it did before.
+ * it does: on phones and tablets with a source to download from, a Usenet provider or a debrid account on (L369, L422);
+ * else it says what it did before.
  */
 const val SHOW_FOOTNOTE_PHONE = "Tap an episode to play the best release, or ⋮ to choose one yourself or download it."
 const val SHOW_FOOTNOTE_PHONE_STREAM = "Tap an episode to play the best release, or ⋮ to choose one yourself."

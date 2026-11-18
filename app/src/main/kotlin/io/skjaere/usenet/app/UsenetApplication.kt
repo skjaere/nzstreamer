@@ -612,13 +612,7 @@ class AppContainer(private val context: Context) {
     )
 
     /** The indexers a search asks: the Usenet ones, and the torrent ones while a service account is on and debrid shows (L194). */
-    suspend fun indexerConfigs(): List<IndexerConfig> {
-        val serviceOn = accountsOn().isNotEmpty()
-        val shown = DebridGate.shown
-        // The torrent indexers' keys are read only when they will be searched.
-        val torznab = if (serviceOn && shown) settings.searchableTorrentIndexers() else emptyList()
-        return IndexerConfigs.searchable(settings.searchableIndexers(), torznab, serviceOn, shown)
-    }
+    suspend fun indexerConfigs(): List<IndexerConfig> = IndexerConfigs.of(settings, services)
 
     /**
      * Why no provider is usable right now, said at once rather than after waiting on the engine; null while one is. What
@@ -660,9 +654,10 @@ class AppContainer(private val context: Context) {
 
     /**
      * Whether a service account is on, as it changes, for the lines that tell whether torrent indexers are searched
-     * (Settings' Torrent indexers row, L166): [accountsOn], never while debrid is hidden.
+     * (Settings' Torrent indexers row, L166) and whether a new download has a source (L422): [accountsOn], never while
+     * debrid is hidden.
      */
-    val serviceOn: Flow<Boolean> = settings.services.map { accountsOn().isNotEmpty() }.distinctUntilChanged()
+    val serviceOn: Flow<Boolean> = services.anyOn(settings.services)
 
     /**
      * The service accounts on, in the user's order, by id with their services' names, as they change (a move included):

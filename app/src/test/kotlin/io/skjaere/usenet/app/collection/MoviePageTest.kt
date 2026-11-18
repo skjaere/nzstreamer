@@ -233,12 +233,12 @@ class MoviePageTest {
     }
 
     @Test
-    fun `the button shows where downloads do, while a Usenet provider is usable or the film has a download`() {
-        assertTrue(TitleDownloads.offered(shown = true, usenet = true, download = null))
-        // Only debrid, or no provider at all: no new download (L370), but one made before still shows.
-        assertFalse(TitleDownloads.offered(shown = true, usenet = false, download = null))
-        assertTrue(TitleDownloads.offered(shown = true, usenet = false, download = dl(DownloadState.Done)))
+    fun `the button shows where downloads do, while there is a source to download from or the film has a download`() {
+        assertTrue(TitleDownloads.offered(shown = true, source = true, download = null))
+        // Neither a Usenet provider usable nor a debrid account on: no new download (L422), but one made before still shows.
+        assertFalse(TitleDownloads.offered(shown = true, source = false, download = null))
+        assertTrue(TitleDownloads.offered(shown = true, source = false, download = dl(DownloadState.Done)))
         // A TV, or a phone's layout on one: never (L369).
-        assertFalse(TitleDownloads.offered(shown = false, usenet = true, download = dl(DownloadState.Done)))
+        assertFalse(TitleDownloads.offered(shown = false, source = true, download = dl(DownloadState.Done)))
     }
 }

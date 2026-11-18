@@ -1032,7 +1032,8 @@ private fun LazyListScope.resultsState(
     if (title?.type == MediaType.Movie) {
         val movieGroup = r.grouped.movieGroup
         item {
-            // The film's Download where downloads show (L369), with a Usenet provider or a download of it (L370); else none.
+            // The film's Download where downloads show (L369), with a source to download from or a download of it (L422);
+            // else none.
             val download = movieDownload(title)
             MovieHeroCard(
                 title, showArtwork, movieGroup, title.key in collected, title.key in adding,

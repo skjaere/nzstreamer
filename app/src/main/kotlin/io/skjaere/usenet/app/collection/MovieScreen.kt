@@ -54,9 +54,9 @@ import io.skjaere.usenet.app.download.TitleDownloadActions
 import io.skjaere.usenet.app.download.TitleDownloadButton
 import io.skjaere.usenet.app.download.TitleDownloads
 import io.skjaere.usenet.app.download.downloadEntryHandler
+import io.skjaere.usenet.app.download.downloadSource
 import io.skjaere.usenet.app.download.downloadsShown
 import io.skjaere.usenet.app.download.movieDownload
-import io.skjaere.usenet.app.download.usenetUsable
 import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.play.PlayRequest
 import io.skjaere.usenet.app.play.movieNoReleaseNote
@@ -146,8 +146,8 @@ class MovieViewModel(private val container: AppContainer, private val tmdbId: In
     /** The film's download (L356), for its Download button; none on a TV. */
     val download: StateFlow<TitleDownload?> = movieDownload(container, tmdbId).stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    /** Whether a Usenet provider is saved and on, which a new download needs (L370). */
-    val usenet: StateFlow<Boolean> = usenetUsable(container.settings).stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    /** Whether a new download has a source: a Usenet provider usable, or a debrid service account on (L422). */
+    val source: StateFlow<Boolean> = downloadSource(container).stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     /** What the button's menu does (L379, L380): the runner's calls and the Undo bar. */
     val downloadActions = TitleDownloadActions(TitleDownloadActions.Deps.of(container), viewModelScope, container.appScope)
@@ -257,7 +257,7 @@ fun MovieScreen(tmdbId: Int, onBack: () -> Unit, onDownloads: (() -> Unit)? = nu
     val today by vm.today.collectAsStateWithLifecycle()
     val playOn by container.playOn.target.collectAsStateWithLifecycle()
     val download by vm.download.collectAsStateWithLifecycle()
-    val usenet by vm.usenet.collectAsStateWithLifecycle()
+    val source by vm.source.collectAsStateWithLifecycle()
     // Downloads on phones and tablets alone, in their layout (L369).
     val downloadsHere = downloadsShown()
     var downloadSheet by rememberSaveable { mutableStateOf(false) }
@@ -290,7 +290,7 @@ fun MovieScreen(tmdbId: Int, onBack: () -> Unit, onDownloads: (() -> Unit)? = nu
     // A TV has no Play on button: it plays itself (L36).
     val ui = MoviePageUi(
         header, details?.overview, error, collected, artwork, state, today, playOn.takeUnless { container.television },
-        download = download.takeIf { downloadsHere }, downloadOffered = TitleDownloads.offered(downloadsHere, usenet, download),
+        download = download.takeIf { downloadsHere }, downloadOffered = TitleDownloads.offered(downloadsHere, source, download),
     )
     val actions = MoviePageActions(
         play = vm::play,

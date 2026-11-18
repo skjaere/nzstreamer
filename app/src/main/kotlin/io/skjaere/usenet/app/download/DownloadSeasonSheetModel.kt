@@ -54,9 +54,9 @@ data class SeasonDownloadRequest(
 }
 
 /**
- * A listed episode as the season's search found it: its Usenet [releases], ranked for downloading as its own sheet ranks
- * them (none: nothing found yet, and its turn searches again), and what the first [need]s here, its size or a season
- * pack's share of the episode; null with none.
+ * A listed episode as the season's search found it: its [releases], ranked for downloading as its own sheet ranks them (a
+ * torrent a debrid service has cached among them; none: nothing found yet, and its turn searches again), and what the
+ * first [need]s here, its size or a season pack's share of the episode; null with none.
  */
 data class SeasonEpisodeFound(val listed: SeasonDownloadRequest.Listed, val releases: List<RankedItem>, val need: Long?) {
     val best: RankedItem? get() = releases.firstOrNull()
@@ -96,18 +96,20 @@ sealed interface SeasonSheetState {
         val asks: Boolean,
     ) : SeasonSheetState
 
-    /** No Usenet release for any listed episode: what the season's search of the indexers did ([stages]). */
+    /** No release for any listed episode: what the season's search of the indexers did ([stages]). */
     data class NoRelease(val stages: List<Pair<String, String>>) : SeasonSheetState
 }
 
 /**
- * A season's Download sheet's model (W114, L392, L393, L396, L400): one search for the season over the Usenet indexers,
- * ranked for downloading, each listed episode's releases split from it, and what that comes to on this device.
+ * A season's Download sheet's model (W114, L392, L393, L396, L400, L422): one search for the season over the indexers a
+ * search asks, ranked for downloading, each listed episode's releases split from it, and what that comes to on this
+ * device.
  * - [SeasonSheetState.Pick]: all fit, with the space free and when the first starts.
  * - [SeasonSheetState.WontFit]: the longest run of them in episode order that fits; none, no Download.
  * - [SeasonSheetState.NoRelease]: nothing to download for any of them, with the search's line.
  *
- * Torrents are left out (L370). An episode with nothing found yet is listed and queued all the same: its turn searches
+ * A torrent a debrid service has cached is a release as any other, and one not cached stays hidden as the ranker hides it
+ * (L422, L459). An episode with nothing found yet is listed and queued all the same: its turn searches
  * for it. [download] queues each episode once, in episode order ([DownloadRunner.enqueueAll], which puts a failed one's
  * row back), with its releases that fit, the first's need and its search facts, and the sheet is [closed]; then
  * Android's notification ask where it is due, then the host's schedule. The search runs in [scope], the sheet's.
@@ -188,12 +190,12 @@ class DownloadSeasonSheetModel(private val request: SeasonDownloadRequest, priva
     }
 
     /**
-     * The season's one search (L393), ranked for downloading: each listed episode's Usenet releases, as the finder ranked
+     * The season's one search (L393), ranked for downloading: each listed episode's releases, as the finder ranked
      * them with its length and its season's count, and what the first needs. A search that fails finds nothing.
      */
     private suspend fun search(): List<SeasonEpisodeFound> {
         val find = try {
-            deps.findSeason(request.search, deps.context())
+            deps.findSeason(request.search, deps.indexers(), deps.context())
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -204,7 +206,7 @@ class DownloadSeasonSheetModel(private val request: SeasonDownloadRequest, priva
         val seasonEpisodes = request.episodes.first().play.seasonEpisodes
         return request.episodes.map { e ->
             val found = find?.byEpisode?.get(e.play.episode)?.playable.orEmpty()
-            val releases = found.filter { it.item.infoHash == null }.map { RankedItem(it.item, it.ranked) }
+            val releases = found.map { RankedItem(it.item, it.ranked) }
             SeasonEpisodeFound(e, releases, releases.firstOrNull()?.let { ReleaseListMode.Download.need(it, seasonEpisodes) })
         }
     }

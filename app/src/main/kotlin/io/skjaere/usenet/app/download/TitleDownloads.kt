@@ -165,12 +165,12 @@ object TitleDownloads {
 
     /**
      * What the episode's ⋮ offers of its download, after Choose release and Mark watched (L380): Download while there is
-     * none, and a Usenet provider is saved and on ([usenet], L370); the running one, the queue's Pause and Remove; one
-     * queued behind it, Remove; one held, or waiting for what only Resume ends, Resume and Remove; a finished one, Remove;
-     * a failed one, Download again and Remove.
+     * none, and there is a source to download from ([source], [downloadSource], L422); the running one, the queue's Pause
+     * and Remove; one queued behind it, Remove; one held, or waiting for what only Resume ends, Resume and Remove; a
+     * finished one, Remove; a failed one, Download again and Remove.
      */
-    fun entries(download: TitleDownload?, usenet: Boolean): List<DownloadEntry> = when (download?.state) {
-        null, DownloadState.Deleting -> if (usenet) listOf(DownloadEntry.Download) else emptyList()
+    fun entries(download: TitleDownload?, source: Boolean): List<DownloadEntry> = when (download?.state) {
+        null, DownloadState.Deleting -> if (source) listOf(DownloadEntry.Download) else emptyList()
         DownloadState.Running, DownloadState.Resolving -> listOf(DownloadEntry.Pause, DownloadEntry.Remove)
         DownloadState.Waiting -> if (holdsOnNeed(download)) listOf(DownloadEntry.Pause, DownloadEntry.Remove) else listOf(DownloadEntry.Resume, DownloadEntry.Remove)
         DownloadState.Queued, DownloadState.Done -> listOf(DownloadEntry.Remove)
@@ -227,13 +227,13 @@ object TitleDownloads {
     }
 
     /** The button's menu once it is started (DlPhoneMovie): the ⋮'s items by state, then Open Downloads. */
-    fun menu(download: TitleDownload): List<DownloadEntry> = entries(download, usenet = false) + DownloadEntry.OpenDownloads
+    fun menu(download: TitleDownload): List<DownloadEntry> = entries(download, source = false) + DownloadEntry.OpenDownloads
 
     /**
-     * Whether a film's Download button shows: where downloads do ([shown], L369), while a Usenet provider is saved and on
-     * ([usenet], L370) or the film has a download, which says how it is whatever is saved since.
+     * Whether a film's Download button shows: where downloads do ([shown], L369), while there is a source to download from
+     * ([source], [downloadSource], L422) or the film has a download, which says how it is whatever is saved since.
      */
-    fun offered(shown: Boolean, usenet: Boolean, download: TitleDownload?): Boolean = shown && (usenet || download != null)
+    fun offered(shown: Boolean, source: Boolean, download: TitleDownload?): Boolean = shown && (source || download != null)
 
     /**
      * A show's downloads ([items], the runner's, by season and episode) by episode: the latest added where one has two, each
@@ -271,11 +271,16 @@ object TitleDownloads {
 }
 
 /**
- * Whether a Usenet provider is saved and on, with its password readable (L370): the Download entries show only then, as a
- * user with only debrid services has none to download from until DN2.
+ * Whether a new download has a source (L422): a Usenet provider saved and on, with its password readable, or a debrid
+ * service account on ([AppContainer.serviceOn], none while debrid is hidden). The Download entries show only then.
  */
-fun usenetUsable(settings: SettingsRepository): Flow<Boolean> =
-    settings.providersWithPasswords.map { providers -> providers.any { it.record.enabled && it.password != null } }.distinctUntilChanged()
+fun downloadSource(container: AppContainer): Flow<Boolean> = downloadSource(container.settings, container.serviceOn)
+
+/** [downloadSource] from [settings]' providers and whether a service account is on ([serviceOn]). */
+internal fun downloadSource(settings: SettingsRepository, serviceOn: Flow<Boolean>): Flow<Boolean> {
+    val usenet = settings.providersWithPasswords.map { providers -> providers.any { it.record.enabled && it.password != null } }
+    return combine(usenet, serviceOn) { provider, service -> provider || service }.distinctUntilChanged()
+}
 
 /**
  * Show [showTmdbId]'s downloads by episode, as its page's rows say them, at most four times a second, each finished one

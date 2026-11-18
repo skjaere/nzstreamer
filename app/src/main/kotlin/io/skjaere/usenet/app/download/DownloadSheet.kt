@@ -70,7 +70,7 @@ import io.skjaere.usenet.search.RankedItem
 import io.skjaere.usenet.search.ResultGroup
 
 /**
- * The Download sheet for one episode or film (L338, L358, L370), in the play sheet's look: what its search ranked first
+ * The Download sheet for one episode or film (L338, L358, L422), in the play sheet's look: what its search ranked first
  * for downloading, the space free and when it would start, or why it won't fit, or that nothing was found. [request] is
  * what an episode's ⋮, a film's page and Search's movie card hand it; [onClose] ends it: Cancel, Close, a swipe, or once
  * Download has queued the download and asked for its host. Choose release opens the release list ranked for downloading

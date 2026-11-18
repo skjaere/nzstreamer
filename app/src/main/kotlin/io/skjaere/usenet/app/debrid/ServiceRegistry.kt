@@ -19,6 +19,9 @@ import io.skjaere.usenet.debrid.ServiceListing
 import io.skjaere.usenet.debrid.ServiceRateLimit
 import io.skjaere.usenet.debrid.premiumize.PremiumizeService
 import io.skjaere.usenet.debrid.torbox.TorBoxService
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -56,6 +59,12 @@ class ServiceRegistry(
     /** The accounts that are on, in the user's order; none while debrid is hidden ([shown] false). */
     suspend fun on(shown: Boolean = DebridGate.shown): List<ServiceAccount> =
         if (!shown) emptyList() else onWithKeys().map { it.record }
+
+    /**
+     * Whether an account is on ([on]), read again each time [saved] (the saved accounts, as the settings give them) moves:
+     * never while debrid is hidden, whatever was saved.
+     */
+    fun anyOn(saved: Flow<*>): Flow<Boolean> = saved.map { on().isNotEmpty() }.distinctUntilChanged()
 
     /** The accounts that are on and whose gate is open (no limit or refused key holding them), with their clients, in the user's order. */
     suspend fun usable(shown: Boolean = DebridGate.shown): List<Client> =

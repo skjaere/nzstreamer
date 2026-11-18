@@ -210,8 +210,8 @@ fun movieDownloadSlot(
     if (!downloadsShown()) return null
     val container = LocalContext.current.container
     val download by remember(container, movie.tmdbId) { movieDownload(container, movie.tmdbId) }.collectAsStateWithLifecycle(null)
-    val usenet by remember(container) { usenetUsable(container.settings) }.collectAsStateWithLifecycle(false)
-    if (!TitleDownloads.offered(shown = true, usenet, download)) return null
+    val source by remember(container) { downloadSource(container) }.collectAsStateWithLifecycle(false)
+    if (!TitleDownloads.offered(shown = true, source, download)) return null
     val handle = downloadEntryHandler(actions, onDownload = { onSheet(DownloadRequest.Movie(movie, posterPath)) }, onDownloads)
     return { modifier -> TitleDownloadButton(download, { entry -> handle(entry, download) }, modifier) }
 }

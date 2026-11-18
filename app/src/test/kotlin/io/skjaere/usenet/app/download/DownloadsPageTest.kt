@@ -676,17 +676,18 @@ class DownloadsPageTest {
         }) { row -> sheet(row, scope) }
 
         private fun sheet(row: Download, scope: CoroutineScope) = DownloadSheetDeps(
-            findEpisode = { request, _ ->
+            indexers = { emptyList() },
+            findEpisode = { request, _, _ ->
                 calls += "find"
                 requests += request
                 flowOf(FinderEvent.Finished(FindResult(request, listOf(ranked(KESTREL, 1_200_000_000, 2.0), ranked(ATMOS, 3_400_000_000, 1.0)), emptyList(), emptyList())))
             },
-            findMovie = { movie, context ->
+            findMovie = { movie, _, context ->
                 calls += "film"
                 films += movie
                 flowOf(MovieFind(null, emptyList(), context))
             },
-            findSeason = { _, _ -> error("No season's search from Choose release") },
+            findSeason = { _, _, _ -> error("No season's search from Choose release") },
             context = { DOWNLOADING },
             space = {
                 spaceFor += row.id

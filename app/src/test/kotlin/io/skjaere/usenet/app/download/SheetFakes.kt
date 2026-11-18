@@ -3,6 +3,7 @@ package io.skjaere.usenet.app.download
 import io.skjaere.usenet.app.NetworkNow
 import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.search.MovieFind
+import io.skjaere.usenet.app.search.forEpisode
 import io.skjaere.usenet.core.FetchException
 import io.skjaere.usenet.core.FetchedNzb
 import io.skjaere.usenet.core.PrepareOutcome
@@ -11,10 +12,14 @@ import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadPrefs
 import io.skjaere.usenet.data.PlaybackPrefs
+import io.skjaere.usenet.newznab.IndexerConfig
+import io.skjaere.usenet.newznab.IndexerKind
 import io.skjaere.usenet.newznab.NewznabItem
+import io.skjaere.usenet.releases.Availability
 import io.skjaere.usenet.releases.RankedRelease
 import io.skjaere.usenet.releases.RankingContext
 import io.skjaere.usenet.releases.ReleaseFacts
+import io.skjaere.usenet.releases.ReleaseKey
 import io.skjaere.usenet.releases.ReleaseParser
 import io.skjaere.usenet.releases.ReleaseRanker
 import io.skjaere.usenet.releases.ReleaseReason
@@ -38,9 +43,16 @@ import kotlin.coroutines.CoroutineContext
 
 /**
  * What a Download sheet reads and asks, faked, for the one episode's or film's sheet and the season's alike; what it
- * asked recorded. The searches are seams: [finder] and [films] for one title, [seasons] for a season's one search.
+ * asked recorded. The searches are seams: [finder] and [films] for one title, [seasons] for a season's one search, each
+ * handed the [indexers] read as it starts ([searched]).
  */
 internal class SheetFakes {
+    /** The indexers a search asks, as the app's [DownloadSheetDeps.indexers] gives them: by default Indexer A (Usenet's). */
+    var indexers: suspend () -> List<IndexerConfig> = { listOf(SheetFixtures.INDEXER_A) }
+
+    /** The indexers each search was handed, in order. */
+    val searched = mutableListOf<List<IndexerConfig>>()
+
     var finder: (EpisodeRequest, RankingContext) -> Flow<FinderEvent> = { request, _ -> flowOf(SheetFixtures.finished(request, emptyList())) }
     var films: (MovieTarget, RankingContext) -> Flow<MovieFind> = { _, _ -> flowOf(MovieFind(null, emptyList())) }
 
@@ -94,16 +106,20 @@ internal class SheetFakes {
     var readsAway = 0
 
     fun deps(outlive: CoroutineScope) = DownloadSheetDeps(
-        findEpisode = { request, context ->
+        indexers = { indexers() },
+        findEpisode = { request, indexers, context ->
             contexts += context
+            searched += indexers
             finder(request, context)
         },
-        findMovie = { movie, context ->
+        findMovie = { movie, indexers, context ->
             contexts += context
+            searched += indexers
             films(movie, context)
         },
-        findSeason = { request, context ->
+        findSeason = { request, indexers, context ->
             contexts += context
+            searched += indexers
             seasonRequests += request
             seasons(request, context)
         },
@@ -174,6 +190,9 @@ internal object SheetFixtures {
     val ETHERNET = NetworkNow(usable = true, unmetered = true, wifi = false)
     val MOBILE = NetworkNow(usable = true, unmetered = false, wifi = false)
 
+    /** A Usenet indexer, the one the fakes' searches ask unless a case gives others. */
+    val INDEXER_A = IndexerConfig("idx-a", "Indexer A", "https://indexer.invalid/api", "")
+
     val PHONE = StaticDeviceCapabilities(displayHeight = 1080)
     val DOWNLOADING: RankingContext = DownloadRanking.context(PHONE, PlaybackPrefs(), DownloadPrefs(), "en")
     val PLAYING = RankingContext(PHONE, PlaybackPrefs().rankingPrefs("en"))
@@ -194,10 +213,32 @@ internal object SheetFixtures {
         ),
     )
 
-    /** [items] as the ranker ranks them by [context], playable first. */
+    /** [items] as the ranker ranks them by [context], playable first: a torrent by its cache check, as a search's are. */
     fun byRanker(items: List<NewznabItem>, context: RankingContext): List<RankedItem> {
         val held = items.associateBy { it.key }
-        return ReleaseRanker().rank(items.map { ReleaseFacts(it.key, it.title, it.sizeBytes, grabs = it.grabs) }, context).map { RankedItem(held.getValue(it.facts.id), it) }
+        val facts = items.map {
+            ReleaseFacts(it.key, it.title, it.sizeBytes, grabs = it.grabs, source = if (it.infoHash != null) ReleaseFacts.TORRENT else ReleaseFacts.USENET, availability = it.availability)
+        }
+        return ReleaseRanker().rank(facts, context).map { RankedItem(held.getValue(it.facts.id), it) }
+    }
+
+    /** A torrent indexer, whose releases the debrid services' cache check has answered for. */
+    val INDEXER_T = IndexerConfig("idx-t", "Home Prowlarr", "https://prowlarr.invalid/1", "", kind = IndexerKind.Torznab)
+
+    /**
+     * A torrent [title] of [size] bytes from [INDEXER_T], known by its content id (`btih:` and [hash]) and with no link, as
+     * a torrent indexer's answer gives it, and the cache check's [availability] for it.
+     */
+    fun torrent(title: String, size: Long, availability: Availability, hash: String) =
+        nzb(title, size, indexer = INDEXER_T.id, hash = hash).copy(guid = ReleaseKey.TORRENT + hash, availability = availability)
+
+    /**
+     * A finder that found [items], ranked by the context asked as a search ranks them, the hidden apart (a torrent not
+     * cached among them).
+     */
+    fun ranking(vararg items: NewznabItem): (EpisodeRequest, RankingContext) -> Flow<FinderEvent> = { request, context ->
+        val (playable, hidden) = byRanker(items.toList(), context.forEpisode(request)).map { FoundRelease(it.item, it.ranked, SearchStage.Episode) }.partition { it.ranked.playable }
+        flowOf(FinderEvent.Finished(FindResult(request, playable, hidden, emptyList())))
     }
 
     fun finished(request: EpisodeRequest, found: List<FoundRelease>) = FinderEvent.Finished(FindResult(request, found, emptyList(), emptyList()))

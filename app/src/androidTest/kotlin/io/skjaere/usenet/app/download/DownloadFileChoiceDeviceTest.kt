@@ -325,7 +325,7 @@ class DownloadFileChoiceDeviceTest {
      * case holds them.
      */
     private fun deps() = DownloadSheetDeps.of(container, ask = null, context).copy(
-        findEpisode = { request, _ ->
+        findEpisode = { request, _, _ ->
             flowOf(FinderEvent.Finished(FindResult(request, RELEASES.map { FoundRelease(it.item, it.ranked, SearchStage.Episode) }, emptyList(), emptyList())))
         },
         space = { DownloadSpace(available = 1_500_000_000L + DownloadSpace.KEPT_FREE, used = 0, queued = 0) },
