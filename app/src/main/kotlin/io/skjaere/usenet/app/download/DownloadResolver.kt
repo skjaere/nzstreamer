@@ -787,7 +787,8 @@ class DownloadResolver(
         var current: String? = null
         var answered = false
         // A torrent's attempt under way with no answer yet: it costs no grab, so it is kept out of the row's count until it
-        // has one, and a process death that cuts it short leaves it to try again (L340's count is for the grabs).
+        // has one, and a process death that cuts it short leaves it to try again (L340's count is for the grabs). Its
+        // accounts' own refusals are no answer: it stays so through them, as the attempt may go on to its next account.
         var unanswered: String? = null
 
         // The releases tried as the row keeps them: those counted, the torrent under way still without its answer left out.
@@ -854,10 +855,11 @@ class DownloadResolver(
                         )
                         is StepStatus.Failed -> {
                             val failure = status.failure.also { failedWith = it }
-                            // A torrent's answer, but its account's own refusal, which is none ([settle]): counted from now.
-                            if (event.candidate.id == unanswered) {
+                            // A torrent's answer, but its account's own refusal, which is none: counted from now. After a
+                            // refusal its next account's answer counts it, or the attempt ends with none ([settle]).
+                            if (event.candidate.id == unanswered && !failure.isServiceStop()) {
                                 unanswered = null
-                                if (!failure.isServiceStop()) keepCount()
+                                keepCount()
                             }
                             when (failure) {
                                 // The providers failing is no answer about the release, nor a connection lost.

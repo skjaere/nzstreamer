@@ -411,12 +411,15 @@ class DownloadResolverTest {
      * A debrid account's service as Resolve asks it (L460): the torrents it has [cached], by hash, prepared as a service
      * prepares one (its files handed to the pick before anything is added, nothing added for a pick of none), each add
      * told to [watching]'s watch as TorBox's client tells its own; and a link to the picked file. [failsFor] fails a
-     * torrent's prepare with its error. A removal is [removed].
+     * torrent's prepare with its error, [linkFailsFor] its link at Opening; [onPrepare] runs at each prepare, once it is
+     * counted. A removal is [removed].
      */
     private inner class FakeService(private val id: String) : DebridService {
         override val kind = ServiceKind.TorBox
         val cached = mutableMapOf<String, List<ServiceFile>>()
         val failsFor = mutableMapOf<String, ServiceError>()
+        val linkFailsFor = mutableMapOf<String, ServiceError>()
+        var onPrepare: () -> Unit = {}
         val prepares: MutableList<String> = Collections.synchronizedList(mutableListOf())
         val added: MutableList<String> = Collections.synchronizedList(mutableListOf())
         val links = java.util.concurrent.atomic.AtomicInteger()
@@ -429,6 +432,7 @@ class DownloadResolverTest {
 
         override suspend fun prepare(hash: InfoHash, pick: suspend (ServiceListing) -> ServiceFile?): Prepared {
             prepares += hash.hex
+            onPrepare()
             failsFor[hash.hex]?.let { throw ServiceException(it) }
             val listing = ServiceListing(cached[hash.hex] ?: throw ServiceException(ServiceError.NotCached))
             val picked = pick(listing) ?: return Prepared(hash, listing, null)
@@ -441,6 +445,7 @@ class DownloadResolverTest {
 
         override suspend fun link(prepared: Prepared, file: ServiceFile): ServiceLink {
             links.incrementAndGet()
+            linkFailsFor[prepared.hash.hex]?.let { throw ServiceException(it) }
             return ServiceLink("https://cdn.example.org/dl/${file.index}", java.time.Instant.ofEpochMilli(NOW))
         }
 
@@ -2846,6 +2851,65 @@ class DownloadResolverTest {
         assertEquals(listOf(goodTorrent.key, key(single)), stored().tried)
     }
 
+    /**
+     * L340, L460: a torrent its first account refused at Opening (its outage there) goes on, within its attempt, to the next
+     * account that has it cached, whose answer counts it: played there, the row takes it, counted; failed there for its
+     * own sake, counted too, the row failing in its words. Refused by every account, it ends uncounted, as any attempt its
+     * accounts' own refusals ended.
+     */
+    @Test
+    fun `a torrent its first account refused at Opening is counted by the next account's answer`() = runBlocking<Unit> {
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        serviceA.linkFailsFor[goodTorrent.hash] = ServiceError.Down
+        serviceB.cached[goodTorrent.hash] = goodTorrent.files
+        rowOf(goodTorrent.candidate)
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Service>(resolver(on = listOf(ACCOUNT_A, ACCOUNT_B)).resolve(ID))
+        assertEquals(ACCOUNT_B, ready.entry.account)
+        assertEquals(listOf(goodTorrent.key), ready.row.tried)
+        assertEquals(listOf(goodTorrent.key), stored().tried)
+
+        // Not cached on the next: counted, and the row fails in the play sheet's words.
+        reset()
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        serviceA.linkFailsFor[goodTorrent.hash] = ServiceError.Down
+        rowOf(goodTorrent.candidate)
+        assertEquals(DownloadResolver.Resolution.Failed(DownloadResolver.NO_LONGER_CACHED), resolver(on = listOf(ACCOUNT_A, ACCOUNT_B)).resolve(ID))
+        assertEquals(listOf(goodTorrent.key), stored().tried)
+
+        // Out of reach at Opening on both: no answer, uncounted, and the row backs off.
+        reset()
+        listOf(serviceA, serviceB).forEach {
+            it.cached[goodTorrent.hash] = goodTorrent.files
+            it.linkFailsFor[goodTorrent.hash] = ServiceError.Down
+        }
+        rowOf(goodTorrent.candidate)
+        assertEquals(DownloadHostRules.CANT_REACH_SERVICE, assertIs<DownloadResolver.Resolution.Unreachable>(resolver(on = listOf(ACCOUNT_A, ACCOUNT_B)).resolve(ID)).words)
+        assertEquals(emptyList(), stored().tried)
+    }
+
+    /**
+     * L401, L460: a torrent the next account plays after the first refused it at Opening, whose file won't fit the room, is
+     * passed over once, counted, and the row's next release is tried: the account that played it prepares it once, never
+     * again in a round of passes over it.
+     */
+    @Test
+    fun `a torrent its next account plays that won't fit is passed over once, and the next release tried`() = runBlocking<Unit> {
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        serviceA.linkFailsFor[goodTorrent.hash] = ServiceError.Down
+        serviceB.cached[goodTorrent.hash] = goodTorrent.files
+        // An error, not an exception, so no step takes it for the release's failure: the resolve ends with it.
+        serviceB.onPrepare = { if (serviceB.prepares.size > 1) throw AssertionError("prepared again: the torrent passed over is tried round again") }
+        rowOf(goodTorrent.candidate, usenet(single))
+        // Room for the Usenet release's 1.2 GB, not the torrent's 1.25 GB video.
+        storage.space = DownloadSpace(available = 1_220_000_000L + DownloadSpace.KEPT_FREE, used = 0, queued = 0)
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(on = listOf(ACCOUNT_A, ACCOUNT_B)).resolve(ID))
+        assertEquals(single.guid, ready.row.release?.guid)
+        assertEquals(listOf(goodTorrent.hash), serviceA.prepares)
+        assertEquals(listOf(goodTorrent.hash), serviceB.prepares)
+        assertEquals(listOf(single.guid), grabbed)
+        assertEquals(listOf(goodTorrent.key, key(single)), stored().tried)
+    }
+
     /** With every account switched off or signed out of since it was queued, a torrent row waits for one, nothing counted or asked. */
     @Test
     fun `with no account on, a torrent row waits for one`() = runBlocking<Unit> {
@@ -3261,6 +3325,8 @@ class DownloadResolverTest {
         services.values.forEach {
             it.cached.clear()
             it.failsFor.clear()
+            it.linkFailsFor.clear()
+            it.onPrepare = {}
             it.prepares.clear()
             it.added.clear()
             it.removed.clear()
