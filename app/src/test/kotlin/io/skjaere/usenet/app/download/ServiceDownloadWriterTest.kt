@@ -141,6 +141,7 @@ class ServiceDownloadWriterTest {
         throttle: Long? = null,
         letGo: kotlin.time.Duration = ServiceDownloadWriter.LET_GO,
         leases: DownloadLeases = DownloadLeases.None,
+        toService: suspend (String) -> Boolean = { true },
     ) = ServiceDownloadWriter(
         reads,
         accounts = { id ->
@@ -161,6 +162,7 @@ class ServiceDownloadWriterTest {
         timeSource = time,
         letGo = letGo,
         leases = leases,
+        toService = toService,
     )
 
     /** The writer on the test's virtual time, its reads on the test's dispatcher unless [io] says another. */
@@ -172,7 +174,8 @@ class ServiceDownloadWriterTest {
         throttle: Long? = null,
         io: CoroutineDispatcher = StandardTestDispatcher(testScheduler),
         leases: DownloadLeases = DownloadLeases.None,
-    ) = writer(io, testScheduler.timeSource, { testScheduler.currentTime }, on, services, shown, httpsOnly, throttle, leases = leases)
+        toService: suspend (String) -> Boolean = { true },
+    ) = writer(io, testScheduler.timeSource, { testScheduler.currentTime }, on, services, shown, httpsOnly, throttle, leases = leases, toService = toService)
 
     /**
      * Writes [entry]'s file to [path] from [from], each open's offset in [opens] and each record in [records] and [events].
@@ -579,6 +582,23 @@ class ServiceDownloadWriterTest {
         reads.script(Script(cutAt = 300_000), Script(cutAt = 300_000))
         assertEquals(Outcome.Done, writer(leases = leases).wrote(onOpen = { offset -> if (offset == 300_000L) a.again = again }))
         assertEquals(listOf(ID to entry.id), held.toList())
+    }
+
+    /**
+     * L194, L424: a torrent whose indexer has been kept from the service since ("Use with your debrid service" off) goes to
+     * no other account once it is lost on its own: its hash is sent nowhere new, and its release is given up.
+     */
+    @Test
+    fun `a torrent lost on its account goes to no other once its indexer is kept from the service`() = runTest(timeout = 60.seconds) {
+        val asked = CopyOnWriteArrayList<String>()
+        reads.script(Script(cutAt = 400_000, opened = { a.failing = ServiceError.NotCached }))
+        val outcome = writer(on = listOf(ACCOUNT_A, ACCOUNT_B), toService = { id -> asked += id; false }).wrote()
+        assertEquals(Outcome.NextRelease(Lost.NotCached), outcome)
+        assertEquals(listOf(ID), asked.toList())
+        assertTrue(b.picks.isEmpty())
+        assertFalse(ACCOUNT_B in lookups)
+        assertTrue(folder.copies.isEmpty())
+        assertEquals(listOf(400_000L), records)
     }
 
     @Test

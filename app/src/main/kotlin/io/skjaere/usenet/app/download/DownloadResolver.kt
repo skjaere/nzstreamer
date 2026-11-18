@@ -513,7 +513,10 @@ class DownloadResolver(
      * was written) or its file is no longer listed so, the copy dropped first: then its candidates are resolved. While
      * debrid is hidden (L422) its torrent goes to no service, with no call: a Usenet release left beside it, or a season
      * row's search still to come (its Try again), is its turn's to try, the copy dropped first; with nothing else, it
-     * fails. A season's torrent pack is kept for its season, as at a resolve's success ([keepPack], L462).
+     * fails. One whose indexer has been kept from the service since (L194) goes to no service either, its account asked
+     * nothing: the row's other releases, or its season's search, are its turn's to try, its copy dropped first; with none,
+     * it fails in the ranking's words. A season's torrent pack is kept for its season, as at a resolve's success
+     * ([keepPack], L462).
      */
     private suspend fun reopenedService(row: Download, release: RememberedRelease, size: Long): Resolution? {
         if (!shown()) {
@@ -522,6 +525,13 @@ class DownloadResolver(
             log.info("download {}: debrid is hidden in this build: its torrent left, with no call, for what else its turn has", row.id)
             storage.dropSource(row.id)
             return null
+        }
+        if (release.indexerId in offService()) {
+            log.info("download {}: its torrent's indexer kept from the service since: left, with no call", row.id)
+            storage.dropSource(row.id)
+            val key = Replay.key(release)
+            val others = row.candidates.any { ranked(it).key.let { other -> other != key && other !in row.tried } } || search.due(row)
+            return if (others) null else failed(row.id, ReleaseReason.NotForService.text)
         }
         val entry = storage.listing(row.id) ?: return null
         val name = row.fileName ?: release.fileName

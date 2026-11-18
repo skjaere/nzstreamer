@@ -2699,6 +2699,29 @@ class DownloadResolverTest {
         assertFalse("drop source $ID" in storage.events, storage.events.toString())
     }
 
+    /**
+     * L194, L460: a torrent row whose indexer has been kept from the service since ("Use with your debrid service" off)
+     * opens again on no service, its account asked nothing, not even for a link: another release of the row is tried, the
+     * file started again from 0; with none, it fails in the ranking's words.
+     */
+    @Test
+    fun `a torrent row whose indexer was kept from the service since opens again on no service`() = runBlocking<Unit> {
+        resolvedOn(goodTorrent, offset = 400_000_000)
+        dao.update(stored().copy(candidates = listOf(goodTorrent.candidate, usenet(single))))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(offService = setOf(TORZNAB)).resolve(ID))
+        assertEquals(single.guid, ready.row.release?.guid)
+        assertEquals(0L, ready.row.safeOffset)
+        assertEquals(listOf(ID), storage.deletedVideos)
+        assertTrue("drop source $ID" in storage.events, storage.events.toString())
+        assertEquals(emptyList(), lookups)
+
+        reset()
+        resolvedOn(goodTorrent, offset = 400_000_000)
+        assertEquals(DownloadResolver.Resolution.Failed("Not used with your debrid service"), resolver(offService = setOf(TORZNAB)).resolve(ID))
+        assertEquals(emptyList(), lookups)
+        assertEquals(emptyList(), storage.deletedVideos)
+    }
+
     /** L460, L194: a torrent of an indexer whose "Use with your debrid service" is off now goes to no service: left out, uncounted. */
     @Test
     fun `a torrent of an indexer since kept from the service is left out with no call`() = runBlocking<Unit> {

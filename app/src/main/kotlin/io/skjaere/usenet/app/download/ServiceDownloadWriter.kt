@@ -143,6 +143,11 @@ class ServiceDownloadWriter(
     private val letGo: Duration = LET_GO,
     /** What holds the torrent's add in the account the write reads it from (L421): moved with it to the next account's. */
     private val leases: DownloadLeases = DownloadLeases.None,
+    /**
+     * Whether download [id]'s torrent may still go to a service: its indexer not kept from the service since ("Use with
+     * your debrid service" off, L194). One lost on its account goes to no other otherwise, its hash sent nowhere new.
+     */
+    private val toService: suspend (id: String) -> Boolean = { true },
 ) {
     /** How a write ended. */
     sealed interface Outcome {
@@ -557,6 +562,10 @@ class ServiceDownloadWriter(
      * prepared there (the file picked before anything is added), its listing kept as the row's; false with none.
      */
     private suspend fun nextAccount(run: Run, why: Lost): Boolean {
+        if (!toService(run.id)) {
+            log.info("download {}: its torrent lost on its account ({}), its indexer kept from the service since: given up at {} of {} bytes", run.id, why, run.written, run.size)
+            return false
+        }
         val hash = run.entry.prepared.hash
         for (account in accountsOn()) {
             if (!run.tried.add(account)) continue

@@ -304,6 +304,10 @@ class DownloadRunnerDeps(
                     network = container.validatedNetwork,
                     throttle = { debug.throttle },
                     leases = leases,
+                    toService = { id ->
+                        val indexer = container.data.downloads.get(id)?.release?.indexerId
+                        indexer == null || indexer !in IndexerConfigs.offService(container.settings.settings.first())
+                    },
                 ),
             )
         }
