@@ -2781,6 +2781,34 @@ class DownloadResolverTest {
     }
 
     /**
+     * L382, L388: the providers failing a Usenet release is no answer about it, wherever it falls in the pass. Its failure
+     * stops Usenet's route alone, so a torrent after it is still tried; one failing for its own sake then leaves the row
+     * waiting for the providers (backing off from them out of reach), the Usenet release uncounted, never Failed in the
+     * torrent's words.
+     */
+    @Test
+    fun `the providers failing a Usenet release before a torrent that fails leave the row waiting for them, not failed`() = runBlocking<Unit> {
+        val unreachable = Fake(
+            "hl-s02e04-down", "Harbor.Lights.S02E04.1080p.WEB.h264-WREN", listOf("e2.mkv" to 1_000_000_000L),
+            opening = NntpConnectionException("Connection refused", ConnectException("Connection refused")),
+        )
+        rowOf(usenet(unreachable), goodTorrent.candidate)
+        val out = assertIs<DownloadResolver.Resolution.Unreachable>(resolver().resolve(ID))
+        assertIs<UsenetError.ConnectionFailed>(out.error)
+        assertEquals(DownloadHostRules.CANT_REACH_PROVIDER, out.words)
+        assertEquals(DownloadState.Resolving, stored().state)
+        assertEquals(listOf(goodTorrent.hash), serviceA.prepares)
+        assertEquals(listOf(goodTorrent.key), stored().tried)
+
+        reset()
+        val refused = Fake("hl-s02e04-auth", "Harbor.Lights.S02E04.1080p.WEB.h264-WREN", listOf("e1.mkv" to 1_000_000_000L), opening = NntpAuthenticationException("481 Authentication failed"))
+        rowOf(usenet(refused), goodTorrent.candidate)
+        assertEquals(DownloadResolver.Resolution.Waiting(DownloadHostRules.CHECK_PROVIDER), resolver().resolve(ID))
+        assertEquals(DownloadHostRules.CHECK_PROVIDER, stored().reason)
+        assertEquals(listOf(goodTorrent.key), stored().tried)
+    }
+
+    /**
      * L421: what Resolve's attempts add to an account is held by the resolve while it runs and let go as it ends, however it
      * ends, so each add starts its grace then and a sweep a grace later removes it: an exhausted resolve, one that waits
      * (the next torrent's key refused), and one cut short by a pause, held meanwhile.

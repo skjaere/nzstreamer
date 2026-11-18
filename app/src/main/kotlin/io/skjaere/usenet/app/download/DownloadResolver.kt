@@ -1118,8 +1118,9 @@ class DownloadResolver(
     }
 
     /**
-     * The releases ran out (L340). The providers failing, not the release (the last failure stops their route): it isn't
-     * counted, and the download waits for them. Releases left untried behind an indexer's download limit ([limited], L399):
+     * The releases ran out (L340). The providers failing, not the release (the failure stops their route): it isn't
+     * counted, and the download waits for them, though a torrent tried after it by a route of its own failed for its own
+     * sake. Releases left untried behind an indexer's download limit ([limited], L399):
      * the others' are tried next, never the outage's backoff, which would ask the limited indexer again every few seconds.
      * Else it fails, in the last failure's words, or, every release left passed over as found missing before, in the play
      * sheet's words for those; an [imported] NZB's release that had no NZB, in Import's words for its copy gone (L457).
@@ -1134,9 +1135,9 @@ class DownloadResolver(
         val last = ended.failedAttempts.lastOrNull()
             ?: return Pass.Failed(skipped.takeIf { it.isNotEmpty() }?.let(::skippedNotice) ?: NO_OTHER_RELEASE)
         val (candidate, failure) = last
-        if (failure is AttemptFailure.Provider) {
-            count(id, counted - candidate.id)
-            providers(id, failure.error)?.let { return Pass.Ended(it) }
+        ended.failedAttempts.lastOrNull { it.second is AttemptFailure.Provider }?.let { (usenet, provider) ->
+            count(id, counted - usenet.id)
+            providers(id, (provider as AttemptFailure.Provider).error)?.let { return Pass.Ended(it) }
         }
         stop?.let { return Pass.Ended(serviceWait(id, it)) }
         if (limited) return Pass.Limited
