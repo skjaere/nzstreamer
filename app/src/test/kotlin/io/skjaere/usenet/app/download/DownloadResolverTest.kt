@@ -2723,6 +2723,64 @@ class DownloadResolverTest {
     }
 
     /**
+     * L460, L165: a row's torrent goes to its service whatever the providers do, as a play's cut leaves the NZBs out while no
+     * provider is usable. With none in use (none saved and on, or none the engine has taken up yet), the row's Usenet
+     * releases wait for one, uncounted and never grabbed, while its torrents are tried, and the row waits for the providers
+     * only once those have failed. A connection lost on a Usenet release ends Usenet's share of the pass alone: no other
+     * Usenet release is grabbed while it lasts, but a torrent after it is still tried.
+     */
+    @Test
+    fun `a torrent beside Usenet releases is tried while no provider is usable, the Usenet ones waiting for one uncounted`() = runBlocking<Unit> {
+        // No provider saved and on: the torrent, though the Usenet release ranks first.
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        rowOf(usenet(single), goodTorrent.candidate)
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Service>(resolver(providers = false).resolve(ID))
+        assertEquals(goodTorrent.key, ready.row.release?.guid)
+        assertEquals(listOf(goodTorrent.key), stored().tried)
+        assertEquals(emptyList(), grabbed)
+
+        // The torrent no longer cached: the row waits for a provider then, its Usenet release untried and uncounted.
+        reset()
+        rowOf(usenet(single), goodTorrent.candidate)
+        assertEquals(DownloadResolver.Resolution.Waiting(DownloadHostRules.CHECK_PROVIDER), resolver(providers = false).resolve(ID))
+        assertEquals(DownloadHostRules.CHECK_PROVIDER, stored().reason)
+        assertEquals(listOf(goodTorrent.key), stored().tried)
+        assertEquals(emptyList(), grabbed)
+        // A provider saved: its Usenet release, the torrent counted once.
+        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(listOf(goodTorrent.key, key(single)), stored().tried)
+
+        // Saved, and not taken up by the engine yet: the torrent too, and once it fails the row backs off for the providers.
+        reset()
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        rowOf(usenet(single), goodTorrent.candidate)
+        assertEquals(goodTorrent.key, assertIs<DownloadResolver.Resolution.Ready.Service>(resolver(providers = null).resolve(ID)).row.release?.guid)
+        reset()
+        rowOf(usenet(single), goodTorrent.candidate)
+        val notYet = assertIs<DownloadResolver.Resolution.Unreachable>(resolver(providers = null).resolve(ID))
+        assertEquals(DownloadHostRules.CANT_REACH_PROVIDER, notYet.words)
+        assertEquals(listOf(goodTorrent.key), stored().tried)
+        assertEquals(emptyList(), grabbed)
+
+        // The connection lost checking the Usenet release: the torrent after it is tried all the same.
+        reset()
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        rowOf(usenet(single), goodTorrent.candidate, usenet(pack))
+        checkFails = java.io.IOException("Connection reset by peer")
+        assertEquals(goodTorrent.key, assertIs<DownloadResolver.Resolution.Ready.Service>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(listOf(single.guid), grabbed)
+        // With the torrent failing too: backed off for the providers, the Usenet release uncounted, the next never grabbed.
+        reset()
+        rowOf(usenet(single), goodTorrent.candidate, usenet(pack))
+        checkFails = java.io.IOException("Connection reset by peer")
+        val lost = assertIs<DownloadResolver.Resolution.Unreachable>(resolver().resolve(ID))
+        assertIs<UsenetError.Network>(lost.error)
+        assertEquals(DownloadHostRules.CANT_REACH_PROVIDER, lost.words)
+        assertEquals(listOf(goodTorrent.key), stored().tried)
+        assertEquals(listOf(single.guid), grabbed)
+    }
+
+    /**
      * L421: what Resolve's attempts add to an account is held by the resolve while it runs and let go as it ends, however it
      * ends, so each add starts its grace then and a sweep a grace later removes it: an exhausted resolve, one that waits
      * (the next torrent's key refused), and one cut short by a pause, held meanwhile.

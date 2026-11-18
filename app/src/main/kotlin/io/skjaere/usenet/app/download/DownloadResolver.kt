@@ -632,7 +632,9 @@ class DownloadResolver(
      * spent already. A grab refused for its indexer's download or API limit is counted out, and that limit kept in [limited].
      *
      * A torrent (L460) is tried by its own source, on the service accounts on in the user's order, its file picked from the
-     * service's listing with no question; the providers are waited for only where a Usenet release is among them. While
+     * service's listing with no question. The providers are waited for only where nothing but Usenet's releases is left: with
+     * none in use, a torrent beside them is tried first, as a play's cut leaves the NZBs out (L165), and they wait for one,
+     * uncounted, once it has failed; a connection lost on one of them ends Usenet's share of the pass alone. While
      * debrid is hidden a torrent goes to no service (L422), nor one of an indexer since kept from the service (L194): left
      * out before any lookup, uncounted; with only such torrents left, the row fails "Not available in this version" while
      * hidden. With no account on, the torrents wait for one. An attempt its account's own refusal ended (its outage, its
@@ -669,8 +671,14 @@ class DownloadResolver(
         // Nothing is searched for an imported file (L454): its NZB is opened, which its row says until its file is checked.
         val opening = row.kind == DownloadKind.Release
         say(if (opening) DownloadHostRules.OPENING else DownloadHostRules.FINDING_RELEASES)
-        if (items.any { it.item.infoHash == null }) providersReady(id)?.let { return Pass.Ended(it) }
-        val byKey = items.associateBy { it.key }
+        // The engine's check of the providers, where a Usenet release is left: with none in use, a torrent among them goes on
+        // alone, the Usenet ones waiting for a provider, uncounted, until it has failed; with none, the row waits now.
+        val providers = if (items.any { it.item.infoHash == null }) providersChecked() else true
+        val torrentsFirst = providers != true && items.any { it.item.infoHash != null }
+        if (providers != true && !torrentsFirst) return Pass.Ended(providersWait(id, providers))
+        if (torrentsFirst) log.info("download {}: no Usenet provider in use: its torrents tried first, its Usenet releases waiting for one", id)
+        val trying = if (torrentsFirst) items.filter { it.item.infoHash != null } else items
+        val byKey = trying.associateBy { it.key }
         val newznab = byKey.mapValues { it.value.item }
         // Import's own releases of NZBs the user opened (L457): their copy is their one source, and no indexer has them.
         val imported = items.filter { it.item.indexerId == IMPORTED }.mapTo(HashSet()) { it.key }
@@ -760,8 +768,10 @@ class DownloadResolver(
             answered = true
             storage.dropGrab(id)
         }
-        // The connection lost or timed out in the attempt before: no other release is grabbed while it lasts (L382).
+        // The connection lost or timed out in a Usenet release's attempt: no other is grabbed while it lasts (L382).
         var lost: UsenetError? = null
+        // The Usenet release whose attempt lost it: tried again first, uncounted, from the NZB kept for it.
+        var lostOf: String? = null
         // Grabs that failed for an outage on the indexer's side, uncounted.
         var indexerOutages = 0
         // Grabs refused for their indexer's download limit, uncounted.
@@ -782,11 +792,16 @@ class DownloadResolver(
             stops += failure
             log.info("{}: its service's {}, not counted", named(cut), failure::class.simpleName)
         }
-        log.info("download {}: resolving: up to {} of the {} release{} not tried yet", id, minOf(left, items.size), items.size, if (items.size == 1) "" else "s")
+        log.info("download {}: resolving: up to {} of the {} release{} not tried yet", id, minOf(left, trying.size), trying.size, if (trying.size == 1) "" else "s")
         try {
-            pipeline.play(items.map { it.playCandidate }, picker(row)).collect { event ->
-                // Ended at the next event, once the attempt before has let go of what it held.
-                lost?.let { throw OutOfReach(it) }
+            pipeline.play(trying.map { it.playCandidate }, picker(row)).collect { event ->
+                // Ended at the next Usenet release, or the pass's end, once the attempt before has let go of what it held: a
+                // torrent goes to its service by a route of its own, and is tried meanwhile.
+                lost?.let { error ->
+                    if (event is PipelineEvent.Exhausted || event is PipelineEvent.AttemptStarted && event.candidate.source == PlayCandidate.USENET) {
+                        throw OutOfReach(error)
+                    }
+                }
                 when (event) {
                     is PipelineEvent.AttemptStarted -> {
                         settle()
@@ -811,7 +826,12 @@ class DownloadResolver(
                             // Nor a service's outage, its refusal of the key or its limit (L460): its next account may still
                             // have the release, and the attempt's end says whether it had an answer ([settle]).
                             is AttemptFailure.ServiceDown, is AttemptFailure.KeyRefused, is AttemptFailure.ServiceLimit -> Unit
-                            is AttemptFailure.Failed -> if (event.step in READS_PROVIDERS && failure.error.isLostConnection()) lost = failure.error else answer()
+                            is AttemptFailure.Failed -> if (event.step in READS_PROVIDERS && failure.error.isLostConnection()) {
+                                lost = failure.error
+                                lostOf = current
+                            } else {
+                                answer()
+                            }
                             is AttemptFailure.FetchFailed -> {
                                 val limit = limitedBy
                                 when {
@@ -852,11 +872,13 @@ class DownloadResolver(
             }
             throw e
         } catch (e: OutOfReach) {
-            // Nothing known of the release: not counted, and tried again from its NZB once the wait is over.
-            current?.let { count(id, counting - it) }
+            // Nothing known of the release: not counted, and tried again from its NZB once the wait is over. A torrent tried
+            // since that its account's own refusal ended isn't counted either.
+            settle()
+            lostOf?.let { count(id, counting - it) }
             return Pass.Ended(unreachable(id, e.error, DownloadHostRules.CANT_REACH_PROVIDER))
         }
-        return when (val end = ended) {
+        val pass = when (val end = ended) {
             is PipelineEvent.Succeeded -> when (val target = end.target) {
                 is ServiceTarget -> resolvedService(id, end, target, byKey, named)
                 else -> resolved(id, end, byKey, target.candidate.id in copied, named)
@@ -867,6 +889,8 @@ class DownloadResolver(
             }
             else -> Pass.Failed(NO_OTHER_RELEASE)
         }
+        // The torrents tried first failed for their own sake: the Usenet releases left wait for a provider (L382).
+        return if (torrentsFirst && pass is Pass.Failed) Pass.Ended(providersWait(id, providers)) else pass
     }
 
     /**
@@ -875,11 +899,17 @@ class DownloadResolver(
      * the download waits for one (L382). With some saved that the engine hasn't taken up yet (a new process, before the
      * app's start has read them), it backs off as from a provider out of reach. Null once one is in use.
      */
-    private suspend fun providersReady(id: String): Resolution? = when (providersChecked()) {
-        true -> null
-        false -> waiting(id, DownloadHostRules.CHECK_PROVIDER)
-        null -> unreachable(id, UsenetError.NotConfigured, DownloadHostRules.CANT_REACH_PROVIDER)
+    private suspend fun providersReady(id: String): Resolution? {
+        val checked = providersChecked()
+        return if (checked == true) null else providersWait(id, checked)
     }
+
+    /**
+     * What the download does with no provider in use, as the engine's check says ([checked]: false, none saved and on; null,
+     * some the engine hasn't taken up yet), as [providersReady] says.
+     */
+    private suspend fun providersWait(id: String, checked: Boolean?): Resolution =
+        if (checked == false) waiting(id, DownloadHostRules.CHECK_PROVIDER) else unreachable(id, UsenetError.NotConfigured, DownloadHostRules.CANT_REACH_PROVIDER)
 
     /** A connection lost in an attempt ([lost]): it ends the resolve before another release is grabbed. */
     private class OutOfReach(val error: UsenetError) : Exception(error::class.simpleName)
