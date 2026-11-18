@@ -32,12 +32,14 @@ import java.time.LocalDate
  * service" off; TorBox signed in on the debrid fake (and Premiumize, first in the order, by [premiumizeFirst]). Every
  * other indexer is switched off, and the saved torrent indexers and service accounts are hidden for the test (tombstoned,
  * their keys untouched). TMDB is answered by [FakeTmdb]: no
- * titles for anything typed, and Harbor Lights (FakeCatalog's ids) with its first season's three episodes. The debrid
+ * titles for anything typed, and Harbor Lights (FakeCatalog's ids) with its first season's three episodes; with
+ * [strictTmdb], nothing else reaches TMDB, the player's next and previous episode answered from it too, and anything else
+ * asked fails the class at [close] (C9, a debrid download class's). The debrid
  * fake is held for the test, as its switches are one set for every emulator. What the library remembers of the plays of
  * the debrid classes' titles is forgotten before the test and after it ([forgetPlays]). [close] puts everything back, the
  * test's own keys removed.
  */
-class DebridSearchFixture(private val quarry: Boolean = false) : AutoCloseable {
+class DebridSearchFixture(private val quarry: Boolean = false, private val strictTmdb: Boolean = false) : AutoCloseable {
     private val container = InstrumentationRegistry.getInstrumentation().targetContext.container
     private val settings = container.settings
     private val home = HomeContentShown()
@@ -55,8 +57,6 @@ class DebridSearchFixture(private val quarry: Boolean = false) : AutoCloseable {
     val today: LocalDate = LocalDate.now()
 
     val show = showOf(today)
-
-    private val season = seasonOf(today)
 
     fun open() = runBlocking<Unit> {
         fun reachable(port: Int) = runCatching { Socket().use { it.connect(InetSocketAddress(DebridFakes.HOST, port), 2_000) } }.isSuccess
@@ -78,7 +78,7 @@ class DebridSearchFixture(private val quarry: Boolean = false) : AutoCloseable {
         DebridFakes.control("reset")
         pointBack = DebridFakes.pointServicesAtTheFake()
         service = settings.saveService(ServiceKind.TorBox.name, DebridFakes.TORBOX_KEY) { ServiceSignIn(DebridFakes.TORBOX_ACCOUNT) }
-        tmdb = FakeTmdb(shows = mapOf(HARBOR_LIGHTS to show), seasons = { id, number -> season.takeIf { id == HARBOR_LIGHTS && number == 1 } }, suggestions = { emptyList() })
+        tmdb = harborLightsTmdb(strictTmdb, today)
     }
 
     /** Holds the debrid fake's cache checks, or lets them go ([on] false): a search's torrents stay being checked meanwhile. */

@@ -73,6 +73,7 @@ import java.net.URL
  * and plays on; the next episode of a pack within the grace adds nothing again; what a process that died left goes at the
  * next start's sweep; and an entry another device deletes mid-play is added again by the next refresh, the play going on.
  * The account is read as the app's key sees it, through the fake's own TorBox API; the titles and hashes are FakeTorrents'.
+ * TMDB answers from the fixture's strict seam alone (C9): what else a case asks of it fails the class.
  *
  * A download's add (L421): held by the download's own lease while it runs, is paused and waits while something streams,
  * however many graces pass; gone a grace after it is Done; and one already in the account is never removed. Its walk run
@@ -91,7 +92,7 @@ class RemoveAfterPlayDeviceTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context = instrumentation.targetContext
     private val container = context.container
-    private val fixture = DebridSearchFixture()
+    private val fixture = DebridSearchFixture(strictTmdb = true)
 
     /** The debug build's throttle of the downloads' writers, as the case sets it. */
     private val throttle = File(File(context.filesDir, DownloadStorage.DIR), DownloadDebug.THROTTLE)
