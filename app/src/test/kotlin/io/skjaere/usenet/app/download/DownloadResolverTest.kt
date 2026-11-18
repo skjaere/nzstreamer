@@ -268,6 +268,9 @@ class DownloadResolverTest {
     /** The torrents the turn's search finds after [finds], each as the Torznab indexer lists it (L459). */
     private var torrentFinds: List<Torrent> = emptyList()
 
+    /** What the app would say kept the service accounts from checking a turn's torrents, where its search found nothing. */
+    private var serviceStop: DownloadSearch.ServiceStop? = null
+
     /** The sizes the indexer lists for some of [finds], by guid, where they aren't their files' (a pack's share is an average). */
     private val listed = mutableMapOf<String, Long>()
 
@@ -342,6 +345,7 @@ class DownloadResolverTest {
             space = { id -> storage.space(id) },
             limits = limits,
             clock = { NOW },
+            stopped = { _, _ -> serviceStop },
         ),
         lastRelease = { key ->
             lastAsked += key
@@ -3092,6 +3096,35 @@ class DownloadResolverTest {
     }
 
     /**
+     * L460, L461, L474: a season row's turn whose search found nothing but torrents its accounts couldn't check had no answer
+     * about any release: never Failed "No playable release found", nothing counted, its search still to come. Its account's
+     * limit goes to the runner with when the gate opens (waited out in place, or the row's wait); its refused key waits for
+     * a new one; its outage, or a check out of time, is backed off from in the debrid words.
+     */
+    @Test
+    fun `a season row whose turn's search couldn't check its torrents waits for the account, never failing`() = runBlocking<Unit> {
+        listOf(
+            DownloadSearch.ServiceStop.Limit(ACCOUNT_A, NOW + 3_600_000) to DownloadHostRules.FINDING_RELEASES,
+            DownloadSearch.ServiceStop.KeyRefused to DownloadHostRules.CHECK_SERVICE,
+            DownloadSearch.ServiceStop.Out to DownloadHostRules.CANT_REACH_SERVICE,
+        ).forEach { (stop, words) ->
+            reset()
+            serviceStop = stop
+            rowOf { it.withFacts() }
+            val resolution = resolver().resolve(ID)
+            when (stop) {
+                is DownloadSearch.ServiceStop.Limit -> assertEquals(DownloadResolver.Resolution.Limited(ACCOUNT_A, NOW + 3_600_000), resolution)
+                DownloadSearch.ServiceStop.KeyRefused -> assertEquals(DownloadResolver.Resolution.Waiting(DownloadHostRules.CHECK_SERVICE), resolution)
+                DownloadSearch.ServiceStop.Out -> assertEquals(DownloadHostRules.CANT_REACH_SERVICE, assertIs<DownloadResolver.Resolution.Unreachable>(resolution).words)
+            }
+            assertEquals(words, stored().reason, "$stop")
+            assertEquals(emptyList(), stored().tried, "$stop")
+            assertEquals(false, DownloadColumns.search(stored())?.searched, "$stop")
+            assertEquals(emptyList(), lookups, "$stop")
+        }
+    }
+
+    /**
      * L462, L422, L194: a season's torrent pack goes first only where it can go to a service now. While debrid is hidden,
      * with no account on, or with its indexer kept from the service since, the turn goes on as with no copy: nothing is
      * asked of an account, nothing counted, and the search finds what the sources on now give.
@@ -3166,6 +3199,7 @@ class DownloadResolverTest {
         probeAnswer = { null }
         finds = emptyList()
         torrentFinds = emptyList()
+        serviceStop = null
         listed.clear()
         findReports = listOf(IndexerReport(indexer, "TVDB id"))
         searched.clear()

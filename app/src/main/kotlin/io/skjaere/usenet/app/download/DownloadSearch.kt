@@ -1,20 +1,25 @@
 package io.skjaere.usenet.app.download
 
 import io.skjaere.usenet.app.AppContainer
+import io.skjaere.usenet.app.debrid.DebridGate
 import io.skjaere.usenet.app.download.DownloadResolver.Companion.isOutage
 import io.skjaere.usenet.app.search.ReleaseListMode
+import io.skjaere.usenet.data.AppSettings
 import io.skjaere.usenet.data.Clock
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadDao
 import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.data.ServiceAccount
 import io.skjaere.usenet.newznab.IndexerConfig
 import io.skjaere.usenet.newznab.MultiIndexerSearch
 import io.skjaere.usenet.newznab.NewznabError
 import io.skjaere.usenet.releases.RankingContext
+import io.skjaere.usenet.releases.ReleaseReason
 import io.skjaere.usenet.search.EpisodeRequest
 import io.skjaere.usenet.search.FinderEvent
 import io.skjaere.usenet.search.RankedItem
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.lastOrNull
 import kotlinx.coroutines.flow.mapNotNull
 import org.slf4j.LoggerFactory
@@ -38,6 +43,10 @@ import java.time.Duration
  * - Nothing found while an indexer is limited, answering so now or kept out ([Limits]): a wait ([Searched.Limited]) for
  *   the limit that ends first, never the outage's backoff, which would ask it again every few seconds (L443).
  * - Nothing found, an indexer out of reach or failing (a 5xx): [Searched.Out], backed off from as a grab's outage is.
+ * - Nothing found while the service accounts couldn't say whether its torrents are cached (no account could be asked: its
+ *   limit, its key refused, its outage, or a check out of time), or a torrent indexer went unasked for a refused key:
+ *   [Searched.Unchecked], which is no answer about the releases, the row waiting for the accounts as what stopped them
+ *   says ([stopped], L460, L461, L474).
  * - Nothing found, every indexer answered: [Searched.NoneFound] (L398).
  *
  * Its log lines name the row by its id only: no title, query, indexer or host.
@@ -54,7 +63,28 @@ class DownloadSearch(
     private val space: suspend (id: String) -> DownloadSpace?,
     private val limits: Limits = Limits.None,
     private val clock: Clock = Clock.System,
+    /**
+     * What kept the service accounts from saying whether torrents are cached, at [at] (epoch milliseconds), where nothing
+     * was found: [unchecked], the finder hid torrents as not checked; else whether a refused key kept the torrent indexers
+     * unasked. Null where nothing stopped them. The app's reads the settings and the gates alone ([DownloadSearch.stopped]).
+     */
+    private val stopped: suspend (unchecked: Boolean, at: Long) -> ServiceStop? = { _, _ -> null },
 ) {
+    /** What keeps the service accounts from being asked about a torrent's cache now (L474): no answer about the release. */
+    sealed interface ServiceStop {
+        /** Account [account]'s limit shut its gate until [until] (epoch milliseconds): of those on, the first to open. */
+        data class Limit(val account: String, val until: Long) : ServiceStop {
+            // No account in a log line.
+            override fun toString() = "Limit(until=$until)"
+        }
+
+        /** An account's key refused: a new one is waited for. */
+        data object KeyRefused : ServiceStop
+
+        /** Out of reach or failing, or slower than the check's time: asked again after a wait. */
+        data object Out : ServiceStop
+    }
+
     /**
      * What the walk keeps of the indexers' limits (L443): those kept out of a turn's search until their limit's end, and each
      * limit a turn's search was answered with, kept by the runner's memory, as a play's search keeps none of it; and those
@@ -104,6 +134,9 @@ class DownloadSearch(
 
         /** The row is gone: removed meanwhile. */
         data object Gone : Searched
+
+        /** Nothing found while the service accounts couldn't check its torrents, as [stop] says: the row waits for them. */
+        data class Unchecked(val stop: ServiceStop) : Searched
     }
 
     /** Whether [row]'s turn searches: a season row (L392) whose facts are still to be searched, and no file chosen by hand. */
@@ -153,6 +186,12 @@ class DownloadSearch(
                     Searched.Out
                 }
                 else -> {
+                    // A torrent the services couldn't check may well be cached: nothing is known of it yet.
+                    val unchecked = result?.hidden.orEmpty().any { hid -> hid.ranked.reasons.any { it is ReleaseReason.NotChecked } }
+                    stopped(unchecked, at)?.let { stop ->
+                        log.info("download {}: nothing found, its debrid service unasked ({})", row.id, stop)
+                        return Searched.Unchecked(stop)
+                    }
                     log.info("download {}: nothing found", row.id)
                     Searched.NoneFound
                 }
@@ -188,7 +227,31 @@ class DownloadSearch(
             context = container::downloadRankingContext,
             space = { id -> storage.space(id) },
             limits = limits,
+            stopped = { unchecked, at -> stopped(unchecked, container.settings.settings.first(), container.services.on(), container.services::limitLeft, at) },
         )
+
+        /**
+         * What kept the service accounts [on] from saying whether torrents are cached (L474), read from the settings saved
+         * ([saved]) and the accounts' gates ([limitLeft]) with no call, from [now]: only while debrid shows ([shown]) and a
+         * torrent indexer is on that sends its torrents to a service. Torrents hidden as not checked ([unchecked]): every
+         * account on shut for its limit, the first to open; else a key refused; else out of reach (an outage, or a check out
+         * of time). None checked, for want of an account on: its key refused, where one is; else nothing stopped them, an
+         * account switched off or signed out of being the user's own doing.
+         */
+        suspend fun stopped(
+            unchecked: Boolean, saved: AppSettings, on: List<ServiceAccount>, limitLeft: suspend (String) -> kotlin.time.Duration?, now: Long,
+            shown: Boolean = DebridGate.shown,
+        ): ServiceStop? {
+            if (!shown || saved.activeTorrentIndexers.none { it.enabled && it.useWithService }) return null
+            val refused = saved.services.any { it.enabled && !it.deleted && it.keyRefused }
+            if (!unchecked) return ServiceStop.KeyRefused.takeIf { on.isEmpty() && refused }
+            val limited = on.mapNotNull { account -> limitLeft(account.id)?.let { account.id to it } }
+            if (on.isNotEmpty() && limited.size == on.size) {
+                val (account, left) = limited.minBy { it.second }
+                return ServiceStop.Limit(account, now + left.inWholeMilliseconds)
+            }
+            return if (refused) ServiceStop.KeyRefused else ServiceStop.Out
+        }
     }
 }
 

@@ -117,7 +117,8 @@ import kotlin.time.Duration.Companion.seconds
  * tried first, alone, with no grab and no search (L431); else, or once that has failed for the release, the turn's search
  * ([DownloadSearch]) finds its releases where it hasn't searched yet, written into the row before any grab; then its
  * releases. One whose release or file was chosen by hand is tried as chosen. A search that finds nothing fails it
- * (L398); an indexer's limit makes it wait, its limit's facts kept (L443); the indexers out of reach are backed off from.
+ * (L398); an indexer's limit makes it wait, its limit's facts kept (L443); the indexers out of reach are backed off from;
+ * torrents the service accounts couldn't check have the row wait for the accounts, as their own refusals do (L474).
  *
  * A grab refused for the indexer's download limit (L399), or for its API limit, which its searches meet too (L443), is no
  * answer about the release and counts no try, as an outage isn't: the indexer refuses its other releases alike, so the
@@ -414,6 +415,8 @@ class DownloadResolver(
                 DownloadSearch.Searched.Out -> return indexersOut(row.id)
                 DownloadSearch.Searched.Unavailable -> return waiting(row.id, DownloadHostRules.STORAGE_UNAVAILABLE)
                 DownloadSearch.Searched.Gone -> return Resolution.Gone
+                // Its torrents unchecked: no answer about them, so nothing fails; the row waits for the account (L474).
+                is DownloadSearch.Searched.Unchecked -> return unchecked(row.id, found.stop)
             }
         }
         return fromCandidates(now, limited, keptOut)
@@ -1181,6 +1184,20 @@ class DownloadResolver(
             Resolution.Limited(stop.route?.let(UsableRoutes::accountOf), clock.now() + left.inWholeMilliseconds)
         }
         else -> unreachable(id, UsenetError.Network(null), DownloadHostRules.CANT_REACH_SERVICE)
+    }
+
+    /**
+     * A turn's search that found nothing while the service accounts couldn't check its torrents (L460, L461, L474), as
+     * [stop] says: an account's limit goes to the runner with when its gate opens; a key refused waits for a new one; out
+     * of reach, the host backs off and searches again. Nothing counted.
+     */
+    private suspend fun unchecked(id: String, stop: DownloadSearch.ServiceStop): Resolution = when (stop) {
+        is DownloadSearch.ServiceStop.Limit -> {
+            log.info("download {}: its torrents unchecked, its debrid account's limit reached", id)
+            Resolution.Limited(stop.account, stop.until)
+        }
+        DownloadSearch.ServiceStop.KeyRefused -> waiting(id, DownloadHostRules.CHECK_SERVICE)
+        DownloadSearch.ServiceStop.Out -> unreachable(id, UsenetError.Network(null), DownloadHostRules.CANT_REACH_SERVICE)
     }
 
     /** The indexers out of reach or failing: no NZB came, and the host backs off and resolves the download again (L382). */

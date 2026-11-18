@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.download
 
+import io.skjaere.usenet.data.AppSettings
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadDao
@@ -8,6 +9,8 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadPrefs
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.PlaybackPrefs
+import io.skjaere.usenet.data.ServiceAccount
+import io.skjaere.usenet.data.TorrentIndexerRecord
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.logging.LogBuffer
 import io.skjaere.usenet.newznab.IndexerConfig
@@ -17,6 +20,7 @@ import io.skjaere.usenet.releases.RankedRelease
 import io.skjaere.usenet.releases.RankingContext
 import io.skjaere.usenet.releases.ReleaseFacts
 import io.skjaere.usenet.releases.ReleaseParser
+import io.skjaere.usenet.releases.ReleaseReason
 import io.skjaere.usenet.releases.StaticDeviceCapabilities
 import io.skjaere.usenet.search.EpisodeRequest
 import io.skjaere.usenet.search.FindResult
@@ -40,6 +44,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
 
 /**
  * The turn's search (L392, L398, L443, L459): a season row's episode searched at its turn by the facts its row keeps, over a
@@ -96,6 +102,10 @@ class DownloadSearchTest {
     /** The search's clock: epoch milliseconds, moved on by a case. */
     private var now = NOW
 
+    /** What the app says stopped the service accounts, where it is asked, and whether the result hid torrents unchecked, as asked. */
+    private var stop: DownloadSearch.ServiceStop? = null
+    private val stops = mutableListOf<Boolean>()
+
     private fun search(indexers: List<IndexerConfig> = listOf(A, B), limits: DownloadSearch.Limits = this.limits, asks: (suspend () -> List<IndexerConfig>)? = null) = DownloadSearch(
         downloads = dao,
         find = find,
@@ -107,6 +117,11 @@ class DownloadSearchTest {
         },
         limits = limits,
         clock = { now },
+        stopped = { unchecked, at ->
+            assertEquals(now, at)
+            stops += unchecked
+            stop
+        },
     )
 
     /** Harbor Lights S02E04's season row, its facts not yet searched, with the sheet's [candidates]. */
@@ -227,6 +242,63 @@ class DownloadSearchTest {
         assertEquals(before.candidates, stored().candidates)
         assertEquals(FACTS, DownloadColumns.search(stored()))
         assertEquals(emptyList<String>(), spaceFor)
+    }
+
+    /**
+     * L460, L461, L474: torrents the services couldn't check (no account could be asked: its limit, its key refused, its
+     * outage, or a check that ran out of time) say nothing of the releases. With nothing else found, the turn's search ends
+     * waiting for the accounts as what stopped them says, never none found, the row as it was and still to search. Torrents
+     * hidden for anything else are an answer: none found.
+     */
+    @Test
+    fun `nothing found while the services couldn't check its torrents waits for them, never none found`() = runBlocking<Unit> {
+        hidden = listOf(hiddenFor(found("Harbor.Lights.S02E04.1080p.WEB.h264-TIDE", GB, torrent = true), ReleaseReason.NotChecked))
+        reports = listOf(IndexerReport(A, "TVDB id", found = 1))
+        val limit = DownloadSearch.ServiceStop.Limit("acc-tb", NOW + 2 * HOUR)
+        stop = limit
+        val before = row(candidate("Harbor.Lights.S02E04.1080p.WEB.h264-KESTREL", 2 * GB))
+        assertEquals(DownloadSearch.Searched.Unchecked(limit), search().search(before))
+        assertEquals(listOf(true), stops)
+        assertEquals(before.candidates, stored().candidates)
+        assertTrue(search().due(stored()), "still to search")
+
+        reset()
+        hidden = listOf(hiddenFor(found("Harbor.Lights.S02E04.1080p.WEB.h264-TIDE", GB, torrent = true), ReleaseReason.NotCached))
+        reports = listOf(IndexerReport(A, "TVDB id", found = 1))
+        assertEquals(DownloadSearch.Searched.NoneFound, search().search(row()))
+        assertEquals(listOf(false), stops)
+    }
+
+    /**
+     * L474: what kept the service accounts from checking a turn's torrents, as the app reads it, with no call: only while
+     * debrid shows and a torrent indexer on sends its torrents to a service. Torrents hidden unchecked: every account on
+     * shut for its limit waits for the first to open; else a key refused waits for a new one; else they were out of reach
+     * (an outage, a check out of time). None checked as no account is on: a refused key waits; an account switched off or
+     * signed out of is the user's own doing, and stops nothing.
+     */
+    @Test
+    fun `what kept the accounts from checking is read from their gates and keys alone`() = runBlocking<Unit> {
+        val torrents = listOf(TorrentIndexerRecord("prowlarr", "Home Prowlarr", "https://prowlarr.invalid/1"))
+        val a = ServiceAccount("acc-a", "TorBox")
+        val b = ServiceAccount("acc-b", "Premiumize")
+        val saved = AppSettings(torrentIndexers = torrents, services = listOf(a, b))
+        val left = mutableMapOf("acc-a" to 3.hours, "acc-b" to 40.minutes)
+        suspend fun stopped(unchecked: Boolean, on: List<ServiceAccount> = listOf(a, b), settings: AppSettings = saved, shown: Boolean = true) =
+            DownloadSearch.stopped(unchecked, settings, on, { left[it] }, NOW, shown)
+
+        assertEquals(DownloadSearch.ServiceStop.Limit("acc-b", NOW + 40 * MINUTE), stopped(true))
+        left.remove("acc-a")
+        assertEquals(DownloadSearch.ServiceStop.Out, stopped(true), "one account open, its check unanswered")
+        assertEquals(DownloadSearch.ServiceStop.KeyRefused, stopped(true, settings = saved.copy(services = listOf(a.copy(keyRefused = true), b))))
+        assertNull(stopped(false), "checked: none found")
+
+        assertEquals(DownloadSearch.ServiceStop.KeyRefused, stopped(false, on = emptyList(), settings = saved.copy(services = listOf(a.copy(keyRefused = true)))))
+        assertNull(stopped(false, on = emptyList(), settings = saved.copy(services = listOf(a.copy(enabled = false)))), "switched off")
+        assertNull(stopped(false, on = emptyList(), settings = saved.copy(services = listOf(a.copy(keyRefused = true, deleted = true)))), "signed out of")
+
+        assertNull(stopped(true, shown = false), "debrid hidden")
+        assertNull(stopped(true, settings = saved.copy(torrentIndexers = torrents.map { it.copy(useWithService = false) })), "kept from the service")
+        assertNull(stopped(true, settings = saved.copy(torrentIndexers = torrents.map { it.copy(enabled = false) })), "switched off")
     }
 
     @Test
@@ -419,7 +491,10 @@ class DownloadSearchTest {
         now = NOW
         dao.rows.value = emptyMap()
         playable = emptyList()
+        hidden = emptyList()
         reports = emptyList()
+        stop = null
+        stops.clear()
         asked.clear()
         meanwhile.clear()
         spaceFor.clear()
@@ -474,6 +549,9 @@ class DownloadSearchTest {
         )
 
         fun candidate(title: String, size: Long) = DownloadCandidate("idx-a", title, title, null, size)
+
+        /** [release] as the finder hides it, for [reason]. */
+        fun hiddenFor(release: FoundRelease, reason: ReleaseReason) = release.copy(ranked = release.ranked.copy(playable = false, reasons = listOf(reason)))
 
         /**
          * [title] as the finder ranks it, of [size] bytes, from Indexer A; a [torrent] has its [hash], is known by its content
