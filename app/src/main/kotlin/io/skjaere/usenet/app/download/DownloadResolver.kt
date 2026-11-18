@@ -98,7 +98,8 @@ import kotlin.time.Duration.Companion.seconds
  *
  * At most three releases are tried for a download, or "Releases to try" where that is lower ([attempts]), counted across
  * its resolves ([Download.tried], L340): one counts once its attempt starts, before its grab, so a process that dies
- * mid-attempt never grabs more. Each NZB grabbed is kept in the download's folder until its attempt has its answer about
+ * mid-attempt never grabs more; a torrent, which costs no grab, once its attempt has its answer, so one a process death
+ * cuts short is tried again. Each NZB grabbed is kept in the download's folder until its attempt has its answer about
  * the release ([Storage.keepGrab]). One whose attempt had none (the providers failed it: a login refused, none in reach;
  * the attempt cut short by a pause or the host's end; the volume away as it was picked) is tried again first from that
  * NZB, with no grab, and isn't counted twice; the download waits for the providers meanwhile ([Resolution.Waiting],
@@ -785,6 +786,12 @@ class DownloadResolver(
         // The attempt under way, and whether it has had its answer about its release (a step of it failed for the release).
         var current: String? = null
         var answered = false
+        // A torrent's attempt under way with no answer yet: it costs no grab, so it is kept out of the row's count until it
+        // has one, and a process death that cuts it short leaves it to try again (L340's count is for the grabs).
+        var unanswered: String? = null
+
+        // The releases tried as the row keeps them: those counted, the torrent under way still without its answer left out.
+        suspend fun keepCount() = count(id, counting - listOfNotNull(unanswered).toSet())
 
         // The release had its answer: the NZB kept for it is no use now.
         suspend fun answer() {
@@ -811,7 +818,7 @@ class DownloadResolver(
             val cut = current ?: return
             val failure = failedWith?.takeIf { it.isServiceStop() } ?: return
             counting = counting - cut
-            count(id, counting)
+            keepCount()
             stops += failure
             log.info("{}: its service's {}, not counted", named(cut), failure::class.simpleName)
         }
@@ -835,52 +842,70 @@ class DownloadResolver(
                         answered = false
                         indexerOut = false
                         limitedBy = null
-                        // Before its grab: a process that dies mid-attempt never grabs it a fourth time (L340).
+                        // Before its grab: a process that dies mid-attempt never grabs it a fourth time (L340). A torrent's
+                        // once it has its answer.
                         counting = counting + event.candidate.id
-                        count(id, counting)
+                        unanswered = event.candidate.id.takeIf { event.candidate.source != PlayCandidate.USENET }
+                        keepCount()
                     }
                     is PipelineEvent.Step -> when (val status = event.status) {
                         is StepStatus.Running -> say(
                             if (opening && event.step in OPENS) DownloadHostRules.OPENING else DownloadHostRules.resolving(STEP_LABELS.getValue(event.step), attempt, of),
                         )
-                        is StepStatus.Failed -> when (val failure = status.failure.also { failedWith = it }) {
-                            // The providers failing is no answer about the release, nor a connection lost.
-                            is AttemptFailure.Provider -> Unit
-                            // Nor a service's outage, its refusal of the key or its limit (L460): its next account may still
-                            // have the release, and the attempt's end says whether it had an answer ([settle]).
-                            is AttemptFailure.ServiceDown, is AttemptFailure.KeyRefused, is AttemptFailure.ServiceLimit -> Unit
-                            is AttemptFailure.Failed -> if (event.step in READS_PROVIDERS && failure.error.isLostConnection()) {
-                                lost = failure.error
-                                lostOf = current
-                            } else {
-                                answer()
+                        is StepStatus.Failed -> {
+                            val failure = status.failure.also { failedWith = it }
+                            // A torrent's answer, but its account's own refusal, which is none ([settle]): counted from now.
+                            if (event.candidate.id == unanswered) {
+                                unanswered = null
+                                if (!failure.isServiceStop()) keepCount()
                             }
-                            is AttemptFailure.FetchFailed -> {
-                                val limit = limitedBy
-                                when {
-                                    indexerOut -> {
-                                        // No NZB came: the release isn't counted, and the next may be another indexer's.
-                                        current?.let { counting = counting - it }
-                                        count(id, counting)
-                                        indexerOutages++
-                                    }
-                                    limit != null -> {
-                                        // Its indexer's limit (L399): no answer about the release, and no try spent.
-                                        current?.let { counting = counting - it }
-                                        count(id, counting)
-                                        refusals++
-                                        limited[limit.indexerId] = limit
-                                        log.info("{}: its indexer's {} limit reached, not counted", named(event.candidate.id), limit.kind.name.lowercase())
-                                    }
-                                    else -> answer()
+                            when (failure) {
+                                // The providers failing is no answer about the release, nor a connection lost.
+                                is AttemptFailure.Provider -> Unit
+                                // Nor a service's outage, its refusal of the key or its limit (L460): its next account may still
+                                // have the release, and the attempt's end says whether it had an answer ([settle]).
+                                is AttemptFailure.ServiceDown, is AttemptFailure.KeyRefused, is AttemptFailure.ServiceLimit -> Unit
+                                is AttemptFailure.Failed -> if (event.step in READS_PROVIDERS && failure.error.isLostConnection()) {
+                                    lost = failure.error
+                                    lostOf = current
+                                } else {
+                                    answer()
                                 }
+                                is AttemptFailure.FetchFailed -> {
+                                    val limit = limitedBy
+                                    when {
+                                        indexerOut -> {
+                                            // No NZB came: the release isn't counted, and the next may be another indexer's.
+                                            current?.let { counting = counting - it }
+                                            count(id, counting)
+                                            indexerOutages++
+                                        }
+                                        limit != null -> {
+                                            // Its indexer's limit (L399): no answer about the release, and no try spent.
+                                            current?.let { counting = counting - it }
+                                            count(id, counting)
+                                            refusals++
+                                            limited[limit.indexerId] = limit
+                                            log.info("{}: its indexer's {} limit reached, not counted", named(event.candidate.id), limit.kind.name.lowercase())
+                                        }
+                                        else -> answer()
+                                    }
+                                }
+                                else -> answer()
                             }
-                            else -> answer()
                         }
                         is StepStatus.Done -> Unit
                     }
                     is PipelineEvent.Skipped -> skipped += event.reason
-                    is PipelineEvent.Succeeded, is PipelineEvent.Exhausted -> ended = event
+                    is PipelineEvent.Succeeded -> {
+                        ended = event
+                        // Its answer: a torrent counted from now, as the row takes it or passes it over.
+                        if (event.target.candidate.id == unanswered) {
+                            unanswered = null
+                            keepCount()
+                        }
+                    }
+                    is PipelineEvent.Exhausted -> ended = event
                     is PipelineEvent.Retrying -> Unit
                 }
             }
@@ -898,7 +923,8 @@ class DownloadResolver(
             // Nothing known of the release: not counted, and tried again from its NZB once the wait is over. A torrent tried
             // since that its account's own refusal ended isn't counted either.
             settle()
-            lostOf?.let { count(id, counting - it) }
+            lostOf?.let { counting = counting - it }
+            keepCount()
             return Pass.Ended(unreachable(id, e.error, DownloadHostRules.CANT_REACH_PROVIDER))
         }
         val pass = when (val end = ended) {

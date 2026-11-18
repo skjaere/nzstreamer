@@ -2806,6 +2806,34 @@ class DownloadResolverTest {
         assertEquals(0, onAsked.get())
     }
 
+    /**
+     * L340, L460: a release is counted as its attempt starts so a process that dies mid-attempt never grabs it again; a
+     * torrent costs no grab, so it is counted once its attempt has its answer. One a process death cuts short (as it is
+     * prepared, opened or probed) is left to try again at the next resolve, never passed over as tried.
+     */
+    @Test
+    fun `a torrent is counted once its attempt has its answer, so one a process death cut short is tried again`() = runBlocking<Unit> {
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        rowOf(goodTorrent.candidate, usenet(single))
+        val counted = mutableListOf<List<String>>()
+        onProbe = { counted += stored().tried }
+        assertEquals(goodTorrent.key, assertIs<DownloadResolver.Resolution.Ready.Service>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(listOf(emptyList<String>()), counted, "uncounted while its attempt has no answer")
+        assertEquals(listOf(goodTorrent.key), stored().tried)
+
+        // Failing for its own sake: counted then, and the next tried, counted as its attempt starts.
+        reset()
+        onProbe = {}
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        probeAnswer = { key -> ProbeResult.NoPlayableAudio(listOf("DTS-HD MA")).takeIf { key == goodTorrent.key } }
+        rowOf(goodTorrent.candidate, usenet(single))
+        val grabbedWith = mutableListOf<List<String>>()
+        onGrab = { grabbedWith += stored().tried }
+        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(listOf(listOf(goodTorrent.key, key(single))), grabbedWith)
+        assertEquals(listOf(goodTorrent.key, key(single)), stored().tried)
+    }
+
     /** With every account switched off or signed out of since it was queued, a torrent row waits for one, nothing counted or asked. */
     @Test
     fun `with no account on, a torrent row waits for one`() = runBlocking<Unit> {
