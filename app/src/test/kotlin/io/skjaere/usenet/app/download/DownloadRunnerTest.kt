@@ -31,8 +31,19 @@ import io.skjaere.usenet.data.ReleaseChecks
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchedDownload
+import io.skjaere.usenet.debrid.DebridService
+import io.skjaere.usenet.debrid.InfoHash
+import io.skjaere.usenet.debrid.Prepared
+import io.skjaere.usenet.debrid.ServiceError
+import io.skjaere.usenet.debrid.ServiceException
+import io.skjaere.usenet.debrid.ServiceFile
+import io.skjaere.usenet.debrid.ServiceKind
+import io.skjaere.usenet.debrid.ServiceLink
+import io.skjaere.usenet.debrid.ServiceListing
 import io.skjaere.usenet.logging.LogBuffer
 import io.skjaere.usenet.newznab.IndexerConfig
+import io.skjaere.usenet.player.LinkResolver
+import io.skjaere.usenet.player.PlayUris
 import io.skjaere.usenet.releases.ReleaseKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -234,7 +245,7 @@ class DownloadRunnerTest {
                 inUse = { providers }, lastExit = { exit }, television = television, host = { host }, network = network,
                 receiverSwitch = { switches += it }, debug = DownloadDebug.On(File(dir, "debug"), clock), longGapBytes = LONG_GAP, clock = clock,
                 timeSource = testScheduler.timeSource, io = StandardTestDispatcher(testScheduler), undoMillis = DownloadRunner.UNDO_MILLIS, limits = limits,
-                watched = watched, prefs = prefs,
+                watched = watched, prefs = prefs, serviceWriter = serviceWriter(),
             ),
             work,
         )
@@ -2665,7 +2676,7 @@ class DownloadRunnerTest {
             if (row.release != null && row.size != null && source != null) {
                 reopened += id
                 val fake = fakes.values.first { it.nzb.contentEquals(source.nzb) }
-                return Resolution.Ready(row, fake.prepared, fake.file)
+                return Resolution.Ready.Usenet(row, fake.prepared, fake.file)
             }
             val left = DownloadResolver.MAX_TRIES - row.tried.size
             val candidate = row.candidates.firstOrNull { ReleaseKey.of(it.indexerId, it.guid) !in row.tried }
@@ -2691,8 +2702,223 @@ class DownloadRunnerTest {
             )
             dao.update(resolved)
             storage.keepSource(id, fake.nzb, fake.password)
-            return Resolution.Ready(resolved, fake.prepared, fake.file)
+            return Resolution.Ready.Usenet(resolved, fake.prepared, fake.file)
         }
+    }
+
+    /**
+     * A torrent's file as the debrid fake's CDN serves it (L419): its bytes, each open answered with the rest of the file
+     * from the byte asked, in 16 KiB reads, unless [unreached] opens are left to reach nothing first. [onRead] hears each
+     * read's first byte, on the writer's read thread.
+     */
+    private inner class TorrentReads : ServiceDownloadWriter.Reads {
+        val data: ByteArray = Random(TORRENT_HASH.hashCode()).nextBytes(SIZE)
+        val opens: MutableList<Long> = java.util.Collections.synchronizedList(mutableListOf())
+
+        @Volatile var unreached = 0
+
+        @Volatile var onRead: (at: Long) -> Unit = {}
+
+        override fun make(resolver: LinkResolver, uri: String): ServiceDownloadWriter.Read = object : ServiceDownloadWriter.Read {
+            private var at = 0L
+
+            override fun open(position: Long): ServiceDownloadWriter.Answer {
+                resolver.link(PlayUris.parse(uri) as PlayUris.Target.Service, null)
+                opens += position
+                if (unreached > 0) {
+                    unreached--
+                    throw java.net.ConnectException("Connection refused")
+                }
+                at = position
+                return ServiceDownloadWriter.Answer(data.size - position, data.size.toLong())
+            }
+
+            override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+                if (at >= data.size) return -1
+                onRead(at)
+                val n = minOf(length.toLong(), CHUNK, data.size - at).toInt()
+                data.copyInto(buffer, offset, at.toInt(), at.toInt() + n)
+                at += n
+                return n
+            }
+
+            override fun abort() = Unit
+
+            override fun close() = Unit
+        }
+    }
+
+    /** The account a torrent row's listing is of: its links, and its refusal of them while [linkFails] says one. */
+    private val torrentService = object : DebridService {
+        override val kind = ServiceKind.TorBox
+        val links = java.util.concurrent.atomic.AtomicInteger()
+
+        override suspend fun test() = throw AssertionError("a download never tests a key")
+        override suspend fun check(hashes: List<InfoHash>) = throw AssertionError("a download never checks the cache")
+        override suspend fun prepare(hash: InfoHash, pick: suspend (ServiceListing) -> ServiceFile?) = throw ServiceException(ServiceError.NotCached)
+
+        override suspend fun link(prepared: Prepared, file: ServiceFile): ServiceLink {
+            links.incrementAndGet()
+            linkFails?.let { throw ServiceException(it) }
+            return ServiceLink("https://cdn.example.org/dl/${file.index}", java.time.Instant.ofEpochMilli(NOW))
+        }
+    }
+
+    @Volatile private var linkFails: ServiceError? = null
+    private val torrentReads = TorrentReads()
+
+    /** Whether something streams here (L471): a play's or a cast's meter open. */
+    private val streaming = MutableStateFlow(false)
+
+    /** Whether this build shows debrid, as the debrid writer reads it at each open. */
+    @Volatile private var shown = true
+
+    /** The debrid writer of these fakes, on the test's virtual time, following the same network as the runner. */
+    private fun TestScope.serviceWriter() = ServiceDownloadWriter(
+        torrentReads, accounts = { id -> torrentService.takeIf { id == ACCOUNT } }, keyRefused = { false },
+        listings = DebridListingStore(File(dir, "listings.json"), io = Dispatchers.Unconfined), accountsOn = { listOf(ACCOUNT) }, streaming = streaming,
+        folder = storage, network = network, clock = clock, dispatcher = StandardTestDispatcher(testScheduler), shown = { shown },
+        timeSource = testScheduler.timeSource,
+    )
+
+    /** The torrent's file, its listing on [ACCOUNT] as the row's copy keeps it. */
+    private val torrentFile = ServiceFile(0, "Harbor.Lights.S02E04.1080p.WEB-DL.AAC2.0.H.264-WREN.mkv", SIZE.toLong(), id = "701")
+    private val torrentEntry = DebridListingStore.Entry(
+        DebridListingStore.idFor(ACCOUNT, InfoHash.of(TORRENT_HASH)), ACCOUNT, "Harbor.Lights.S02E04.1080p.WEB-DL.AAC2.0.H.264-WREN",
+        Prepared(InfoHash.of(TORRENT_HASH), ServiceListing(listOf(torrentFile)), torrentFile, "4101"),
+    )
+    private val torrentCandidate = DownloadCandidate("fake-torznab", "btih:$TORRENT_HASH", "Harbor.Lights.S02E04.1080p.WEB-DL.AAC2.0.H.264-WREN", size = SIZE.toLong(), source = "torrent")
+
+    /**
+     * Download [id] of episode [episode], resolved to the torrent as Resolve leaves one: its release and file, its listing's
+     * copy in its folder; the releases [others] after it. Resolve's first answer for it is the torrent, ready to write.
+     */
+    private suspend fun torrentRow(id: String, episode: Int, position: Long, vararg others: Fake): Download {
+        val row = row(id, episode, position, *others) {
+            it.copy(
+                candidates = listOf(torrentCandidate) + it.candidates, tried = listOf("btih:$TORRENT_HASH"),
+                release = RememberedRelease("fake-torznab", "btih:$TORRENT_HASH", torrentCandidate.title, null, 0, "btih:$TORRENT_HASH", torrentFile.name, torrentFile.size, source = "torrent"),
+                fileName = torrentFile.name, size = torrentFile.size, indexerSize = torrentFile.size,
+            )
+        }
+        storage.keepListing(id, torrentEntry)
+        resolver.scripted += Resolution.Ready.Service(row, torrentEntry, torrentFile)
+        return row
+    }
+
+    /**
+     * L475: a torrent's file is written by the debrid writer from its listing's copy, the walk reading its bytes as they come
+     * from whichever writer writes; the row says while it waits for a stream (L471), and goes on to Done once nothing has
+     * streamed for 10 s. Nothing of Usenet's is asked, and nothing is remembered missing.
+     */
+    @Test
+    fun `a torrent's file is written by the debrid writer, its bytes and its stream's wait on the page`() = test {
+        torrentRow(A, 1, 0)
+        var streamed = false
+        torrentReads.onRead = { at ->
+            if (at >= HOLD && !streamed) {
+                streamed = true
+                streaming.value = true
+            }
+        }
+        val runner = runner()
+        host(runner)
+        runCurrent()
+        val waiting = stored(A)
+        assertEquals(DownloadState.Running, waiting.state)
+        assertEquals(DownloadHostRules.WAITS_FOR_STREAM, waiting.reason)
+        val shown = runner.state.value.single { it.row.id == A }
+        assertTrue(shown.written in HOLD until SIZE, "${shown.written} written, as the writer says")
+        assertEquals(shown.written, runner.state.value.single { it.row.id == A }.written)
+
+        streaming.value = false
+        advanceTimeBy(ServiceDownloadWriter.QUIET.inWholeMilliseconds + 1_000)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Done, stored(A).state)
+        assertNull(stored(A).reason)
+        assertContentEquals(torrentReads.data, storage.video(A).readBytes())
+        assertEquals(listOf(0L, shown.written), torrentReads.opens)
+        assertEquals(2, torrentService.links.get())
+        assertTrue(fakes.values.all { it.opens.isEmpty() }, "nothing of Usenet's opened")
+        assertEquals(emptyList(), recorded)
+        // Its listing's copy goes with its source at Done (L420).
+        assertNull(storage.listing(A))
+    }
+
+    /** L475: a torrent's writer backing off for its service out of reach says so in the debrid words, then goes on. */
+    @Test
+    fun `a torrent's service out of reach is said in the debrid words while its writer backs off`() = test {
+        torrentRow(A, 1, 0)
+        torrentReads.unreached = 1
+        val runner = runner()
+        host(runner)
+        runCurrent()
+        assertEquals(DownloadState.Running, stored(A).state)
+        assertEquals(DownloadHostRules.CANT_REACH_SERVICE, stored(A).reason)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Done, stored(A).state)
+        assertNull(stored(A).reason)
+        assertContentEquals(torrentReads.data, storage.video(A).readBytes())
+    }
+
+    /**
+     * L424, L460: a torrent lost on its account with no other account to give it is given up as it is written: its file
+     * and listing gone, and the next release resolved and written from 0, nothing remembered missing on the providers; with
+     * no other release, it fails in the release's words.
+     */
+    @Test
+    fun `a torrent lost as it is written goes to the next release, and with none fails in the release's words`() = test {
+        val next = fake("hl-next")
+        torrentRow(A, 1, 0, next)
+        linkFails = ServiceError.NotCached
+        val runner = runner()
+        host(runner)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Done, stored(A).state)
+        assertEquals(next.guid, stored(A).release?.guid)
+        assertContentEquals(next.data, storage.video(A).readBytes())
+        assertTrue("drop source $A" in storage.events, storage.events.toString())
+        assertEquals(emptyList(), recorded)
+
+        torrentRow(B, 2, 1)
+        host(runner)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Failed, stored(B).state)
+        assertEquals("This release is no longer cached", stored(B).reason)
+        assertNull(storage.listing(B))
+    }
+
+    /**
+     * L474: the debrid writer's waits end the walk with the row waiting in their words (its key refused), and its failures
+     * fail the row in theirs (debrid hidden at its open: no call).
+     */
+    @Test
+    fun `a torrent's writer's waits and failures are the row's`() = test {
+        torrentRow(A, 1, 0)
+        linkFails = ServiceError.KeyRefused
+        val runner = runner()
+        host(runner).join()
+        assertEquals(DownloadState.Waiting, stored(A).state)
+        assertEquals(DownloadHostRules.CHECK_SERVICE, stored(A).reason)
+
+        linkFails = null
+        shown = false
+        torrentRow(B, 2, 1)
+        host(runner)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Failed, stored(B).state)
+        assertEquals(DownloadHostRules.NOT_IN_THIS_VERSION, stored(B).reason)
+    }
+
+    /** L475: what a running row says while its writer holds it, by the row's source and the writer's flags. */
+    @Test
+    fun `a held write is said by its source and its writer's flags`() {
+        val live = DownloadWriter.Live(A, 42, unreachable = false)
+        assertEquals(null, DownloadRunner.held(live, torrent = false))
+        assertEquals(null, DownloadRunner.held(live, torrent = true))
+        assertEquals(DownloadHostRules.CANT_REACH_PROVIDER, DownloadRunner.held(live.copy(unreachable = true), torrent = false))
+        assertEquals(DownloadHostRules.CANT_REACH_SERVICE, DownloadRunner.held(live.copy(unreachable = true), torrent = true))
+        assertEquals(DownloadHostRules.WAITS_FOR_STREAM, DownloadRunner.held(live.copy(streamWait = true), torrent = true))
     }
 
     /** The downloads' table in memory, ordered as Room's queries order it. */
@@ -2926,6 +3152,10 @@ class DownloadRunnerTest {
     private companion object {
         const val INDEXER = "fake-indexer"
         const val SHOW = 900_002
+
+        /** A service account's id, as the settings give one, and a torrent cached there. */
+        const val ACCOUNT = "4c1d9e70-account-a"
+        const val TORRENT_HASH = "c0ffee01c0ffee02c0ffee03c0ffee04c0ffee05"
 
         /** A season pack of season 2 kept for its season's rows, and its NZB. */
         val PACK = DownloadNzbs.Meta(

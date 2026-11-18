@@ -70,6 +70,14 @@ class ServiceRegistry(
     suspend fun usable(shown: Boolean = DebridGate.shown): List<Client> =
         if (!shown) emptyList() else onWithKeys().map { client(it) }.filter { it.gate.closed() == null }
 
+    /**
+     * Account [id]'s service while it is on ([on]: switched on, its key readable and not refused) and debrid shows; null
+     * otherwise. The downloads' one lookup (L422), for Resolve, their writer and their holds: an account switched off,
+     * signed out of or refused since is never asked, and nothing is asked while debrid is hidden.
+     */
+    suspend fun gated(id: String, shown: Boolean = DebridGate.shown): DebridService? =
+        on(shown).firstOrNull { it.id == id }?.let { service(it.id)?.service }
+
     /** Account [id]'s client, on or off, for its own page; null for none, or one whose key can't be read. */
     suspend fun service(id: String): Client? = accounts().firstOrNull { it.record.id == id }?.takeIf { kindOf(it.record) != null && it.apiKey != null }?.let { client(it) }
 

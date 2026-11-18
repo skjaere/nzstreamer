@@ -1,6 +1,13 @@
 package io.skjaere.usenet.app.debrid
 
 import io.skjaere.usenet.app.BuildConfig
+import io.skjaere.usenet.app.download.DownloadHost
+import io.skjaere.usenet.app.download.DownloadHostRules
+import io.skjaere.usenet.app.download.DownloadNzbs
+import io.skjaere.usenet.app.download.DownloadRunner
+import io.skjaere.usenet.app.download.DownloadRunnerDeps
+import io.skjaere.usenet.app.download.DownloadStorage
+import io.skjaere.usenet.app.download.ServiceDownloadWriter
 import io.skjaere.usenet.app.home.SetupState
 import io.skjaere.usenet.app.home.SetupStep
 import io.skjaere.usenet.app.play.Replay
@@ -13,16 +20,33 @@ import io.skjaere.usenet.app.settings.settingsHub
 import io.skjaere.usenet.app.settings.resultsOfOtherKind
 import io.skjaere.usenet.app.setup.SavedSources
 import io.skjaere.usenet.app.setup.setupSeed
+import io.skjaere.usenet.core.StreamOpener
 import io.skjaere.usenet.data.AppSettings
+import io.skjaere.usenet.data.Clock
+import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadCandidate
+import io.skjaere.usenet.data.DownloadDao
+import io.skjaere.usenet.data.DownloadGap
+import io.skjaere.usenet.data.DownloadKind
+import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.ServiceAccount
 import io.skjaere.usenet.data.ServiceWithKey
 import io.skjaere.usenet.data.TorrentIndexerRecord
 import io.skjaere.usenet.data.TorrentIndexerWithKey
+import io.skjaere.usenet.debrid.DebridService
+import io.skjaere.usenet.debrid.InfoHash
+import io.skjaere.usenet.debrid.Prepared
+import io.skjaere.usenet.debrid.ServiceFile
+import io.skjaere.usenet.debrid.ServiceKind
+import io.skjaere.usenet.debrid.ServiceListing
 import io.skjaere.usenet.newznab.IndexerKind
 import io.skjaere.usenet.releases.ReleaseReason
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.flow.update
 import org.junit.jupiter.api.Test
 import java.io.File
 import kotlin.test.assertEquals
@@ -287,6 +311,148 @@ class DebridHiddenTest {
         }
         assertEquals(emptyList<String>() to emptyList(), play(shown = false))
         assertEquals(emptyList<String>() to listOf<ReleaseReason>(ReleaseReason.NotForService), play(shown = true))
+    }
+
+    /**
+     * L422: the downloads' one lookup of an account's service (Resolve's, their writer's and their holds') gives none while
+     * debrid is hidden, whatever a shown build saved, and makes no client; shown, it gives the account's while it is on.
+     */
+    @Test
+    fun `hidden, the downloads' lookup gives no account's service`() = kotlinx.coroutines.runBlocking<Unit> {
+        var made = 0
+        val service = object : DebridService {
+            override val kind = ServiceKind.TorBox
+            override suspend fun test() = error("not asked")
+            override suspend fun check(hashes: List<InfoHash>) = error("not asked")
+            override suspend fun prepare(hash: InfoHash, pick: suspend (ServiceListing) -> ServiceFile?) = error("not asked")
+            override suspend fun link(prepared: Prepared, file: ServiceFile) = error("not asked")
+        }
+        var saved = listOf(ServiceWithKey(ServiceAccount("tb", "TorBox"), "TB-KEY"))
+        val registry = ServiceRegistry(accounts = { saved }, markRefused = {}, make = { _, _, _, _, _ -> service.also { made++ } })
+        assertEquals(null, registry.gated("tb", shown = false))
+        assertEquals(0, made, "no client made while hidden")
+        assertNotNull(registry.gated("tb", shown = true))
+        saved = listOf(ServiceWithKey(ServiceAccount("tb", "TorBox", enabled = false), "TB-KEY"))
+        assertEquals(null, registry.gated("tb", shown = true), "switched off")
+        saved = listOf(ServiceWithKey(ServiceAccount("tb", "TorBox", keyRefused = true), "TB-KEY"))
+        assertEquals(null, registry.gated("tb", shown = true), "its key refused")
+    }
+
+    /**
+     * L422: at the app's start in a build that hides debrid, each torrent download a build that showed it left still to
+     * finish fails "Not available in this version", with no call of any kind (Resolve, the writer and the services all
+     * fail the case if asked): queued, under way, paused (its hold on the queue passed on, as a cancel passes it) and
+     * waiting with each debrid reason, its listing's copy gone. A Usenet row, a finished torrent row and a failed one stay as
+     * they were, and nothing changes while debrid shows.
+     */
+    @Test
+    fun `hidden, the start fails the torrent downloads a shown build left, with no call`() = kotlinx.coroutines.test.runTest {
+        val dao = Rows()
+        val storage = Places()
+        val runner = DownloadRunner(
+            DownloadRunnerDeps(
+                downloads = dao, storage = storage, resolve = { error("no resolve at the start") },
+                opener = StreamOpener { _, _, _ -> error("no stream at the start") },
+                missing = { _, _, _ -> }, inUse = { emptyList() }, lastExit = { null }, television = false,
+                host = { DownloadHost.Job }, network = MutableStateFlow(true),
+                clock = Clock { 1_800_000_000_000L },
+                serviceWriter = ServiceDownloadWriter(
+                    accounts = { error("no service asked") }, keyRefused = { error("no service asked") },
+                    listings = DebridListingStore(File(dir, "listings.json")), accountsOn = { error("no service asked") },
+                    streaming = MutableStateFlow(false), folder = storage,
+                ),
+            ),
+            backgroundScope,
+        )
+        val torrent = DownloadCandidate("t1", "btih:1111111111111111111111111111111111111111", "Quiet.Orbit.S02E05.1080p.WEB.H264-GRP", source = "torrent")
+        val usenet = DownloadCandidate("i1", "qo-s02e05", "Quiet.Orbit.S02E05.1080p.WEB.H264-WREN")
+        val release = RememberedRelease("t1", torrent.guid, torrent.title, null, 0, torrent.guid, "Quiet.Orbit.S02E05.1080p.WEB.H264-GRP.mkv", 900, source = "torrent")
+        fun row(id: String, position: Long, state: DownloadState, reason: String? = null, candidates: List<DownloadCandidate> = listOf(torrent), resolved: Boolean = false) =
+            Download(
+                id = id, watchKey = "episode:900002:2:$position", kind = DownloadKind.Episode, title = "Quiet Orbit", showTmdbId = 900002,
+                season = 2, episode = position.toInt(), state = state, reason = reason, position = position, candidates = candidates,
+                release = release.takeIf { resolved }, size = 900L.takeIf { resolved }, createdAt = 1, updatedAt = 1,
+            )
+        val left = listOf(
+            row("queued", 1, DownloadState.Queued),
+            row("running", 2, DownloadState.Running, resolved = true),
+            row("paused", 3, DownloadState.Paused, resolved = true),
+            row("check", 4, DownloadState.Waiting, DownloadHostRules.CHECK_SERVICE),
+            row("reach", 5, DownloadState.Waiting, DownloadHostRules.CANT_REACH_SERVICE, resolved = true),
+            row("limit", 6, DownloadState.Waiting, DownloadHostRules.SERVICE_LIMIT),
+            row("stream", 7, DownloadState.Running, DownloadHostRules.WAITS_FOR_STREAM, resolved = true),
+        )
+        val stays = listOf(
+            row("usenet", 8, DownloadState.Queued, candidates = listOf(usenet)),
+            row("both", 9, DownloadState.Queued, candidates = listOf(torrent, usenet)),
+            row("done", 10, DownloadState.Done, resolved = true),
+            row("failed", 11, DownloadState.Failed, "This release is no longer cached", resolved = true),
+        )
+        (left + stays).forEach { dao.insert(it) }
+
+        assertEquals(emptyList(), runner.failHiddenTorrents(shown = true))
+        assertEquals(left + stays, (left + stays).map { dao.get(it.id) })
+
+        assertEquals(left.map { it.id }.toSet(), runner.failHiddenTorrents(shown = false).toSet())
+        left.forEach { row ->
+            val now = assertNotNull(dao.get(row.id))
+            assertEquals(DownloadState.Failed to DownloadHostRules.NOT_IN_THIS_VERSION, now.state to now.reason, row.id)
+            assertTrue("drop source ${row.id}" in storage.events, storage.events.toString())
+        }
+        // The pause held the queue: the next that would run holds it now, as Resume asks.
+        assertEquals(DownloadState.Paused, dao.get("usenet")?.state)
+        assertEquals(stays.drop(1), stays.drop(1).map { dao.get(it.id) })
+    }
+
+    /** The downloads' table in memory, ordered as Room's queries order them. */
+    private class Rows : DownloadDao {
+        private val rows = MutableStateFlow<Map<String, Download>>(emptyMap())
+        private fun sorted(filter: (Download) -> Boolean) =
+            rows.map { all -> all.values.filter(filter).sortedWith(compareBy({ it.position }, { it.createdAt })) }
+
+        override fun queue() = sorted { it.state != DownloadState.Done && it.state != DownloadState.Deleting }
+        override fun all() = sorted { true }
+        override suspend fun get(id: String) = rows.value[id]
+        override fun done() = sorted { it.state == DownloadState.Done }
+        override suspend fun doneFor(watchKey: String) = rows.value.values.firstOrNull { it.state == DownloadState.Done && it.watchKey == watchKey }
+        override fun forShow(showTmdbId: Int) = sorted { it.showTmdbId == showTmdbId }
+        override fun forMovie(movieTmdbId: Int) = rows.map { all -> all.values.firstOrNull { it.movieTmdbId == movieTmdbId } }
+        override suspend fun insert(download: Download) = rows.update { it + (download.id to download) }
+        override suspend fun update(download: Download) = rows.update { if (download.id in it) it + (download.id to download) else it }
+        override suspend fun progress(id: String, safeOffset: Long, gaps: List<DownloadGap>, updatedAt: Long) =
+            change(id) { it.copy(safeOffset = safeOffset, gaps = gaps, updatedAt = updatedAt) }
+        override suspend fun setState(id: String, state: DownloadState, reason: String?, updatedAt: Long) =
+            change(id) { it.copy(state = state, reason = reason, updatedAt = updatedAt) }
+        override suspend fun move(id: String, position: Long) = change(id) { it.copy(position = position) }
+        override suspend fun delete(id: String) = rows.update { it - id }
+        private fun change(id: String, block: (Download) -> Download) =
+            rows.update { all -> all[id]?.let { all + (id to block(it)) } ?: all }
+    }
+
+    /** The downloads' places on the device: what the start drops of them, and nothing else asked. */
+    private class Places : DownloadRunner.Storage {
+        val events = mutableListOf<String>()
+        override suspend fun add(row: Download, grab: DownloadStorage.Grab?, copy: DownloadNzbs.Copy?) = error("not asked")
+        override suspend fun addAll(rows: List<Download>, putBack: List<Download>, copy: DownloadNzbs.Copy?) = error("not asked")
+        override suspend fun keepGrab(id: String, grab: DownloadStorage.Grab) = error("not asked")
+        override suspend fun open(id: String, fileName: String, size: Long) = error("not asked")
+        override suspend fun finish(id: String, fileName: String) = error("not asked")
+        override fun relativePath(id: String, fileName: String) = error("not asked")
+        override suspend fun deleteVideo(id: String) = error("not asked")
+        override suspend fun dropSource(id: String) {
+            events += "drop source $id"
+        }
+        override suspend fun delete(id: String) = error("not asked")
+        override suspend fun reconcile(held: (String) -> Boolean) = Unit
+        override fun volumeThere() = true
+        override suspend fun sweepPacks(removed: Set<String>) {
+            events += "sweep packs"
+        }
+        override val copies = MutableStateFlow(emptyList<DownloadNzbs.Meta>())
+        override suspend fun keepListing(id: String, entry: DebridListingStore.Entry) = error("not asked")
+        override suspend fun listing(id: String) = error("not asked")
+        override suspend fun markRestarted(id: String) = error("not asked")
+        override suspend fun restarted(id: String) = error("not asked")
     }
 
     /** L192: hidden, Settings has no Torrent indexers row, on a phone or a TV, though the app's graph would open one. */

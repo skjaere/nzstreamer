@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.debrid
 
+import android.os.Build
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -14,14 +15,33 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
+import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.app.AppNav
+import io.skjaere.usenet.app.ImmersiveHintSeen
+import io.skjaere.usenet.app.NetworkNow
+import io.skjaere.usenet.app.PlayerActivity
 import io.skjaere.usenet.app.SettingsRoute
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.download.DownloadFixtures
+import io.skjaere.usenet.app.download.DownloadHost
+import io.skjaere.usenet.app.download.DownloadHostRules
+import io.skjaere.usenet.app.download.DownloadJobService
+import io.skjaere.usenet.app.download.DownloadRequest
+import io.skjaere.usenet.app.download.DownloadSheet
+import io.skjaere.usenet.app.download.DownloadSheetDeps
+import io.skjaere.usenet.app.download.DownloadSheetModel
+import io.skjaere.usenet.app.download.DownloadSpace
+import io.skjaere.usenet.app.download.DownloadsPageSeeds
+import io.skjaere.usenet.app.download.DownloadsScreen
 import io.skjaere.usenet.app.everyStep
+import io.skjaere.usenet.app.play.EpisodePlay
+import io.skjaere.usenet.app.read
 import io.skjaere.usenet.app.settings.PHONE_SETUP_HUB_ROW
 import io.skjaere.usenet.app.settings.phoneSetupHubLine
 import io.skjaere.usenet.app.setup.ADDRESS
@@ -30,12 +50,33 @@ import io.skjaere.usenet.app.setup.PhoneSetupPart
 import io.skjaere.usenet.app.switchTab
 import io.skjaere.usenet.app.tv.setTvContent
 import io.skjaere.usenet.app.ui.AppTheme
+import io.skjaere.usenet.app.waitFor as waitForValue
 import io.skjaere.usenet.data.AppSettings
+import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadCandidate
+import io.skjaere.usenet.data.DownloadKind
+import io.skjaere.usenet.data.DownloadPrefs
+import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.ServiceSignIn
+import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.debrid.InfoHash
+import io.skjaere.usenet.debrid.Prepared
+import io.skjaere.usenet.debrid.ServiceFile
 import io.skjaere.usenet.debrid.ServiceKind
+import io.skjaere.usenet.debrid.ServiceListing
 import io.skjaere.usenet.handoff.SetupPage
+import io.skjaere.usenet.newznab.TvIds
+import io.skjaere.usenet.player.PlayUris
+import io.skjaere.usenet.releases.ReleaseFacts
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -53,6 +94,8 @@ import java.net.NetworkInterface
 import java.net.Socket
 import java.net.URL
 import java.net.URLEncoder
+import java.nio.ByteBuffer
+import java.time.LocalDate
 
 /**
  * A build with debrid hidden offers no way in (L192), over what a build that showed it saved earlier: a TorBox account
@@ -63,13 +106,25 @@ import java.net.URLEncoder
  * card and refuses a form naming one; and a search asks Usenet's indexer alone: no torrent indexer's pill, no release's
  * tag, no cache check at the debrid fake. What was saved stays saved. The device's own sources are taken away for each
  * test and put back after, keys included.
+ *
+ * Downloads, while hidden (L422): the Download sheet offers no torrent and asks no service about its cache; a torrent row a
+ * shown build left, queued or opened again from its listing's copy, fails "Not available in this version" at its turn,
+ * nothing asked of the debrid fake; the app's start fails those left waiting on a debrid service, and the Downloads page
+ * says so; a finished torrent row plays its file. Every download row is deleted and the downloads' jobs cancelled before
+ * and after each test (L464).
  */
 @RunWith(AndroidJUnit4::class)
+@androidx.annotation.OptIn(UnstableApi::class)
 class DebridHiddenDeviceTest {
+    /** The player hides the system bars: Android's hint about that would take its window's focus. */
+    @get:Rule
+    val immersiveHint = ImmersiveHintSeen()
+
     @get:Rule
     val compose = createAndroidComposeRule<ComponentActivity>()
 
-    private val container = InstrumentationRegistry.getInstrumentation().targetContext.container
+    private val context = InstrumentationRegistry.getInstrumentation().targetContext
+    private val container = context.container
     private val settings = container.settings
     private lateinit var saved: AppSettings
     private lateinit var nav: NavHostController
@@ -86,6 +141,7 @@ class DebridHiddenDeviceTest {
         DebridGate.shownForTests = false
         // The debug build's own settings saved first: else they could land after this test took the settings away.
         container.devSettingsSaved.await()
+        downloadsApart()
         saved = settings.settings.first()
         secrets = saved.activeProviders.mapNotNull { p -> settings.provider(p.id)?.password?.let { p.passwordSecret to it } }.toMap() +
             saved.activeIndexers.mapNotNull { i -> settings.indexer(i.id)?.apiKey?.let { i.apiKeySecret to it } }.toMap()
@@ -107,6 +163,8 @@ class DebridHiddenDeviceTest {
     @After
     fun restore() = runBlocking<Unit> {
         everyStep(
+            { container.playback.cancel() },
+            { downloadsApart() },
             { if (fakeBack != null) DebridFakes.control("reset") },
             { fakeBack?.invoke() },
             { endpointsBack?.invoke() },
@@ -114,6 +172,162 @@ class DebridHiddenDeviceTest {
             { putBack() },
         )
     }
+
+    /** No download row left of any test, and none of the downloads' jobs pending (L464). */
+    private suspend fun downloadsApart() {
+        container.data.downloads.all().first().forEach { container.downloadStorage.delete(it.id) }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) DownloadJobService.scheduler(context).cancelAll()
+    }
+
+    /** The debrid fake held, reset and every service's client pointed at it for the test: what a call would reach, counted. */
+    private fun atTheFake() {
+        DebridFakes.assumeDebrid()
+        fakeBack = DebridFakes.holdTheFake()
+        DebridFakes.control("reset")
+        endpointsBack = DebridFakes.pointServicesAtTheFake()
+    }
+
+    /** What the debrid fake was asked since its reset: every call by name, and every CDN body. */
+    private fun asked(): Pair<Map<String, Int>, Int> {
+        val counts = JSONObject(DebridFakes.control("counts"))
+        val calls = counts.getJSONObject("calls").let { json -> json.keys().asSequence().associateWith { json.getInt(it) } }
+        return calls.filterValues { it > 0 } to counts.getJSONObject("cdnFrom").length()
+    }
+
+    /** A torrent row a shown build left for Harbor Lights' S01E0[episode]: queued, or resolved ([resolved]) with its file and size. */
+    private fun torrentRow(episode: Int, state: DownloadState = DownloadState.Queued, reason: String? = null, resolved: Boolean = false): Download {
+        val key = "btih:$GOOD_HASH"
+        val now = System.currentTimeMillis()
+        return Download(
+            id = Download.newId(), watchKey = WatchKey.episode(DebridSearchFixture.HARBOR_LIGHTS, 1, episode), kind = DownloadKind.Episode,
+            title = "Harbor Lights", showTmdbId = DebridSearchFixture.HARBOR_LIGHTS, season = 1, episode = episode, state = state, reason = reason,
+            position = episode.toLong(), candidates = listOf(DownloadCandidate(prowlarr ?: "t1", key, GOOD, size = SIZE, source = ReleaseFacts.TORRENT)),
+            tried = if (resolved) listOf(key) else emptyList(),
+            release = if (resolved) RememberedRelease(prowlarr ?: "t1", key, GOOD, null, 0, key, "$GOOD.mkv", SIZE, source = ReleaseFacts.TORRENT) else null,
+            fileName = if (resolved) "$GOOD.mkv" else null, size = if (resolved) SIZE else null, indexerSize = SIZE, createdAt = now, updatedAt = now,
+        )
+    }
+
+    /**
+     * L422: the Download sheet over the fakes while hidden asks Usenet's indexer alone, though a torrent indexer and an
+     * account are saved: Usenet's release is offered, no release is tagged as a torrent or cached, and no cache check
+     * reaches the debrid fake.
+     */
+    @Test
+    fun hiddenTheDownloadSheetOffersNoTorrent() {
+        assumeTrue("the fake indexer isn't reachable at 10.0.2.2:8089 (mock-seed indexer)", reachable(8089))
+        atTheFake()
+        runBlocking { settings.saveIndexer(DebridSearchFixture.INDEXER_A, "Indexer A", "http://10.0.2.2:8089", "fake-indexer-key") }
+        val deps = DownloadSheetDeps.of(container, ask = null, context).copy(
+            space = { DownloadSpace(available = 60_000_000_000L, used = 0, queued = 0) },
+            rows = { emptyList() },
+            prefs = { DownloadPrefs() },
+            network = { NetworkNow(usable = true, unmetered = true, wifi = true) },
+            schedule = { throw AssertionError("nothing is scheduled") },
+        )
+        compose.setContent { AppTheme { DownloadSheet(EPISODE, onClose = {}, deps) } }
+        waitFor(hasText(DownloadSheetModel.BEST), 60_000)
+        assertTrue("Usenet's release offered", exists(hasText(GOOD)))
+        listOf("From TorBox", "Torrent, not playable").forEach { assertFalse("a release tagged \"$it\"", exists(hasContentDescription(it))) }
+        assertFalse("a release marked cached", exists(hasText("✓ Cached")))
+        assertEquals("nothing asked of the debrid fake", emptyMap<String, Int>() to 0, asked())
+    }
+
+    /**
+     * L422: a torrent row a shown build left, queued, and one opened again from its listing's copy, fail "Not available in
+     * this version" at their turns, with no call: the debrid fake, where every client points, counts nothing.
+     */
+    @Test
+    fun hiddenATorrentRowsTurnFailsWithNoCall() = runBlocking<Unit> {
+        atTheFake()
+        val queued = torrentRow(2)
+        val begun = torrentRow(3, resolved = true)
+        container.downloadStorage.add(queued)
+        container.downloadStorage.add(begun)
+        container.downloadStorage.keepListing(begun.id, listingOf(begun))
+        withTimeout(WALK_MILLIS) { container.downloads.run(DownloadHost.Service) }
+        listOf(queued, begun).forEach { row ->
+            val now = container.data.downloads.get(row.id) ?: throw AssertionError("download ${row.id} gone")
+            assertEquals(DownloadState.Failed to DownloadHostRules.NOT_IN_THIS_VERSION, now.state to now.reason)
+        }
+        assertEquals(null, container.downloadStorage.listing(begun.id))
+        assertEquals("nothing asked of the debrid fake", emptyMap<String, Int>() to 0, asked())
+    }
+
+    /**
+     * L422: at the app's start while hidden, the torrent rows a shown build left waiting on a debrid service (or under way,
+     * waiting while something streamed) fail "Not available in this version", with no call, and the Downloads page says so;
+     * no debrid wait is said.
+     */
+    @Test
+    fun hiddenTheStartFailsTheTorrentRowsLeftWaitingAndThePageSaysSo() = runBlocking<Unit> {
+        atTheFake()
+        val seeds = DownloadsPageSeeds(context, container)
+        val left = listOf(
+            torrentRow(1, DownloadState.Waiting, DownloadHostRules.CHECK_SERVICE),
+            torrentRow(2, DownloadState.Waiting, DownloadHostRules.CANT_REACH_SERVICE, resolved = true),
+            torrentRow(3, DownloadState.Waiting, DownloadHostRules.SERVICE_LIMIT),
+            torrentRow(4, DownloadState.Running, DownloadHostRules.WAITS_FOR_STREAM, resolved = true),
+        ).map(seeds::seed)
+        try {
+            assertEquals(left.map { it.id }.toSet(), container.downloads.failHiddenTorrents().toSet())
+            left.forEach { row ->
+                val now = container.data.downloads.get(row.id) ?: throw AssertionError("download ${row.id} gone")
+                assertEquals(DownloadState.Failed to DownloadHostRules.NOT_IN_THIS_VERSION, now.state to now.reason)
+            }
+            compose.setContent { AppTheme { DownloadsScreen(seeds.deps(), onBack = {}, onSettings = {}, onShow = {}, onOpenMovie = {}) } }
+            waitFor("the page's failed rows") { scrolledTo(hasText(DownloadHostRules.NOT_IN_THIS_VERSION, substring = true)) }
+            listOf(DownloadHostRules.CHECK_SERVICE, DownloadHostRules.CANT_REACH_SERVICE, DownloadHostRules.SERVICE_LIMIT, DownloadHostRules.WAITS_FOR_STREAM)
+                .forEach { assertFalse("\"$it\" said", exists(hasText(it, substring = true))) }
+            assertEquals("nothing asked of the debrid fake", emptyMap<String, Int>() to 0, asked())
+        } finally {
+            seeds.after()
+        }
+    }
+
+    /** L422: a finished torrent row plays its file while hidden, through the hook, nothing asked of the debrid fake. */
+    @Test
+    fun hiddenAFinishedTorrentRowPlaysItsFile() = runBlocking<Unit> {
+        atTheFake()
+        val row = torrentRow(2, DownloadState.Done, resolved = true)
+        val bytes = DownloadFixtures.media(MEDIA)
+        val name = checkNotNull(row.fileName)
+        val storage = container.downloadStorage
+        storage.open(row.id, name, bytes.size.toLong()).use { channel ->
+            val buffer = ByteBuffer.wrap(bytes)
+            while (buffer.hasRemaining()) channel.write(buffer)
+            channel.force(true)
+        }
+        storage.finish(row.id, name)
+        val size = bytes.size.toLong()
+        val done = row.copy(
+            release = row.release?.copy(fileSize = size), size = size, indexerSize = size, safeOffset = size, relativePath = storage.relativePath(row.id, name),
+            completedAt = System.currentTimeMillis(),
+        )
+        storage.add(done)
+        waitForValue("the finished torrent row among the finished ones") { container.downloads.done.value[done.watchKey]?.takeIf { it.id == done.id } }
+        val launches = CoroutineScope(Dispatchers.Default)
+        val launch = try {
+            val next = launches.async { container.playback.launches.filter { it.watchKey == done.watchKey }.first() }
+            assertTrue("the hook takes it", container.playback.playDownloaded(done.watchKey))
+            withTimeout(15_000) { next.await() }
+        } finally {
+            launches.cancel()
+        }
+        assertEquals(PlayUris.download(done.id), launch.uri)
+        ActivityScenario.launch<PlayerActivity>(PlayerActivity.intent(context, launch)).use { scenario ->
+            waitForValue("the player playing the file", 60_000) { scenario.read { it.player?.takeIf { p -> p.playbackState == Player.STATE_READY } } }
+            assertEquals(launch.uri, scenario.read { it.player?.currentMediaItem?.localConfiguration?.uri?.toString() })
+        }
+        DebridSearchFixture.forgetPlays(container.library)
+        assertEquals("nothing asked of the debrid fake", emptyMap<String, Int>() to 0, asked())
+    }
+
+    /** [row]'s listing as a shown build's Resolve kept its copy: the fake account's TorBox listing of the episode. */
+    private fun listingOf(row: Download) = DebridListingStore.Entry(
+        DebridListingStore.idFor(account ?: "tb", InfoHash.of(GOOD_HASH)), account ?: "tb", GOOD,
+        Prepared(InfoHash.of(GOOD_HASH), ServiceListing(listOf(ServiceFile(0, checkNotNull(row.fileName), SIZE, "0"))), ServiceFile(0, checkNotNull(row.fileName), SIZE, "0"), "1"),
+    )
 
     /** The device's sources as they were, keys included; then the check of the torrent pair, read before any of it. */
     private suspend fun putBack() {
@@ -314,5 +528,22 @@ class DebridHiddenDeviceTest {
     private companion object {
         /** S01E02 on the shared fake indexer, as Usenet lists it (FakeCatalog), and as a cached torrent on the Torznab fake. */
         const val GOOD = "Harbor.Lights.S01E02.1080p.WEB-DL.AAC2.0.H.264-GOOD"
+        const val GOOD_HASH = "1bb5795cb9f72aa684193ddf405249b071b2ba5f"
+        const val SIZE = 8_791_696L
+
+        /** A film the player plays: a finished row's file. */
+        const val MEDIA = "rate-23976.mkv"
+
+        /** How long a walk of the queue may take here: its rows fail with no call, at once. */
+        const val WALK_MILLIS = 30_000L
+
+        /** The Download sheet's episode: the fakes' Harbor Lights S01E02, by their catalog's ids. */
+        val EPISODE = DownloadRequest.Episode(
+            EpisodePlay(
+                showTmdbId = DebridSearchFixture.HARBOR_LIGHTS, showName = "Harbor Lights", showYear = 2021, aliases = emptyList(),
+                ids = TvIds(tvdb = 900001, tmdb = DebridSearchFixture.HARBOR_LIGHTS, imdb = "tt9000003"), season = 1, episode = 2,
+                episodeName = DebridSearchFixture.EPISODES[1], airDate = LocalDate.now().minusDays(53), runtimeMinutes = 45, seasonEpisodes = 3,
+            ),
+        )
     }
 }

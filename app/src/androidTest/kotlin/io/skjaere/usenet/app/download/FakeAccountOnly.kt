@@ -57,6 +57,9 @@ internal class FakeAccountOnly(private val torznab: Boolean, private val provide
         account = settings.saveService(ServiceKind.TorBox.name, DebridFakes.TORBOX_KEY) { ServiceSignIn(DebridFakes.TORBOX_ACCOUNT) }
     }
 
+    /** The fake TorBox account's id, as the settings saved it at [open]. */
+    val accountId: String get() = checkNotNull(account) { "not open" }
+
     /** Switches the fake's account off, as its page's "Use this service" does, or back on. */
     fun accountOn(on: Boolean) = runBlocking<Unit> { account?.let { settings.setServiceEnabled(it, on) } }
 

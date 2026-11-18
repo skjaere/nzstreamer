@@ -5,11 +5,13 @@ import android.content.Context
 import android.database.sqlite.SQLiteFullException
 import android.os.Build
 import io.skjaere.usenet.app.AppContainer
+import io.skjaere.usenet.app.debrid.DebridGate
 import io.skjaere.usenet.app.debrid.DebridListingStore
 import io.skjaere.usenet.app.download.DownloadResolver.Resolution
 import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.MissingReleases
 import io.skjaere.usenet.app.play.Replay
+import io.skjaere.usenet.core.AttemptFailure
 import io.skjaere.usenet.core.BackoffWakes
 import io.skjaere.usenet.core.DownloadWriter
 import io.skjaere.usenet.core.MissingOn
@@ -211,6 +213,11 @@ class DownloadRunnerDeps(
     val watched: Flow<List<WatchedDownload>> = flowOf(emptyList()),
     /** Settings › Downloads, whose Delete once watched the runner follows. */
     val prefs: Flow<DownloadPrefs> = flowOf(DownloadPrefs()),
+    /**
+     * The debrid writer (L419), which writes a torrent's file from the row's copy of its listing ([storage], its folder) as
+     * the writer above writes a Usenet release's: the app's follows the same [network] and the debug build's throttle.
+     */
+    val serviceWriter: ServiceDownloadWriter,
 ) {
     /** The writer (item 6), over [opener], following [network] as the runner does. */
     val writer = DownloadWriter(
@@ -225,8 +232,10 @@ class DownloadRunnerDeps(
          * the memory of releases found missing, the process's last exit, and the host by the API level and the debug
          * override, and the boot and update receiver switched as it says (L375); the walk's memory of the indexers' limits,
          * which Resolve's turns keep ([limits], L443); the library's finished downloads marked watched and Settings ›
-         * Downloads, which Delete once watched reads (L412). A test gives its own [resolve] and [debug], and the writer's
-         * [longGapBytes] given small.
+         * Downloads, which Delete once watched reads (L412); and the debrid writer (L419) over the accounts on through the
+         * one gated lookup (L422), an account's refused key as the settings mark it, the listings the services prepared,
+         * the streams' signal (L471), the downloads' folders, the same network and the debug build's throttle. A test
+         * gives its own [resolve] and [debug], and the writer's [longGapBytes] given small.
          */
         fun of(
             container: AppContainer,
@@ -236,25 +245,38 @@ class DownloadRunnerDeps(
             limits: DownloadLimits = DownloadLimits(),
             resolve: suspend (String) -> Resolution = DownloadResolver.of(container, storage, limits = limits)::resolve,
             longGapBytes: Long = DownloadWriter.LONG_GAP_BYTES,
-        ) = DownloadRunnerDeps(
-            downloads = container.data.downloads,
-            storage = DownloadRunner.Storage.of(storage),
-            resolve = resolve,
-            opener = NzbStreamOpener.download(container.engine),
-            missing = remembered(container.missingReleases),
-            inUse = { container.engine.inUse },
-            lastExit = { lastExit(context) },
-            television = container.television,
-            host = { DownloadHostRules.hostFor(Build.VERSION.SDK_INT, debug.serviceHost) },
-            network = container.validatedNetwork,
-            receiverSwitch = { on -> DownloadBootReceiver.switch(context, on) },
-            debug = debug,
-            longGapBytes = longGapBytes,
-            providersLeftOut = { container.engine.leftOut.value.isNotEmpty() },
-            limits = limits,
-            watched = container.data.downloadWatches.watched(),
-            prefs = container.settings.downloads,
-        )
+        ): DownloadRunnerDeps {
+            val places = DownloadRunner.Storage.of(storage)
+            return DownloadRunnerDeps(
+                downloads = container.data.downloads,
+                storage = places,
+                resolve = resolve,
+                opener = NzbStreamOpener.download(container.engine),
+                missing = remembered(container.missingReleases),
+                inUse = { container.engine.inUse },
+                lastExit = { lastExit(context) },
+                television = container.television,
+                host = { DownloadHostRules.hostFor(Build.VERSION.SDK_INT, debug.serviceHost) },
+                network = container.validatedNetwork,
+                receiverSwitch = { on -> DownloadBootReceiver.switch(context, on) },
+                debug = debug,
+                longGapBytes = longGapBytes,
+                providersLeftOut = { container.engine.leftOut.value.isNotEmpty() },
+                limits = limits,
+                watched = container.data.downloadWatches.watched(),
+                prefs = container.settings.downloads,
+                serviceWriter = ServiceDownloadWriter(
+                    accounts = { id -> container.services.gated(id) },
+                    keyRefused = { id -> container.settings.services.first().any { it.id == id && it.enabled && !it.deleted && it.keyRefused } },
+                    listings = container.debridListings,
+                    accountsOn = { container.services.on().map { it.id } },
+                    streaming = container.streamTraffic.streaming,
+                    folder = places,
+                    network = container.validatedNetwork,
+                    throttle = { debug.throttle },
+                ),
+            )
+        }
 
         /**
          * The app's memory of releases tried ([missingReleases]) remembering a release found missing on the providers fetched
@@ -322,13 +344,17 @@ interface DownloadHolds {
  *   [packs] says which copies are kept, for the Downloads page's words (L406).
  * - A file of an NZB opened on Import is queued with its NZB's copy, a failed one put back with it ([enqueueImport],
  *   L423, L469); the copies no row holds go at each end, Delete once watched's and a held removal's too (L456).
+ * - A torrent a debrid service has cached is written by the debrid writer from the row's copy of its listing (L419,
+ *   L460), its bytes, its rate and what holds it read as the Usenet writer's are (L475). One lost on every account is
+ *   given up as a Usenet release is, never remembered missing on the providers. In a build that hides debrid, the app's
+ *   start fails the torrent rows a build that showed it left ([failHiddenTorrents], L422).
  *
  * Nothing runs on a TV (L369): every call but [reconcile] returns at once there, and nothing is held. Its log lines name a
  * download by its id, with sizes and a cause's kind: never its title, release or a host.
  */
 class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: CoroutineScope) : DownloadHolds {
     /** What the runner keeps in and asks of the downloads' places on the device: [DownloadStorage]'s ([of]). */
-    interface Storage {
+    interface Storage : ServiceDownloadWriter.Folder {
         /**
          * Makes [row]'s bookkeeping folder and its marker, with [grab] beside them where it has one (the NZB of a file chosen
          * by hand, L403), or the [copy] of the NZB opened on Import (L423), then the row (L346), under the lock the copies'
@@ -380,16 +406,16 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         val copies: StateFlow<List<DownloadNzbs.Meta>>
 
         /** Keeps [entry], the listing of the torrent [id] downloads, in its bookkeeping folder (L420), written whole. */
-        suspend fun keepListing(id: String, entry: DebridListingStore.Entry)
+        override suspend fun keepListing(id: String, entry: DebridListingStore.Entry)
 
         /** The listing [keepListing] kept for [id]; null when it has none. */
         suspend fun listing(id: String): DebridListingStore.Entry?
 
         /** Marks [id]'s file as started again from 0 once (L419), until its source is dropped. */
-        suspend fun markRestarted(id: String)
+        override suspend fun markRestarted(id: String)
 
         /** Whether [id]'s file was started again from 0 ([markRestarted]). */
-        suspend fun restarted(id: String): Boolean
+        override suspend fun restarted(id: String): Boolean
 
         companion object {
             fun of(storage: DownloadStorage): Storage = object : Storage {
@@ -460,6 +486,10 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
     private val dao = deps.downloads
     private val writer = deps.writer
+    private val serviceWriter = deps.serviceWriter
+
+    /** The write under way, whichever writer writes it (L475): one download at a time, so one of them at most. */
+    private val live: Flow<DownloadWriter.Live?> = combine(writer.live, serviceWriter.live) { usenet, service -> usenet ?: service }
     private val runs = DownloadHostRules.runs(deps.television)
 
     /** The queue's changes, one at a time: each call's, and the walk's pick of the next item. */
@@ -531,7 +561,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     val state: StateFlow<List<Item>> = if (!runs) {
         MutableStateFlow(emptyList())
     } else {
-        combine(dao.all(), writer.live) { rows, live -> rows.filter { it.state != DownloadState.Deleting }.map { item(it, live) } }
+        combine(dao.all(), live) { rows, live -> rows.filter { it.state != DownloadState.Deleting }.map { item(it, live) } }
             .stateIn(scope, SharingStarted.Eagerly, emptyList())
     }
 
@@ -540,18 +570,21 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      * marks (L384). None on a TV.
      */
     fun forShow(showTmdbId: Int): Flow<List<Item>> =
-        if (!runs) flowOf(emptyList()) else combine(dao.forShow(showTmdbId), writer.live) { rows, live -> rows.map { item(it, live) } }
+        if (!runs) flowOf(emptyList()) else combine(dao.forShow(showTmdbId), live) { rows, live -> rows.map { item(it, live) } }
 
     /**
      * Film [movieTmdbId]'s download but one removed, the latest added, with the live write's bytes: its page's and Search's
      * card's Download button (L356). None on a TV.
      */
     fun forMovie(movieTmdbId: Int): Flow<Item?> =
-        if (!runs) flowOf(null) else combine(dao.forMovie(movieTmdbId), writer.live) { row, live -> row?.let { item(it, live) } }
+        if (!runs) flowOf(null) else combine(dao.forMovie(movieTmdbId), live) { row, live -> row?.let { item(it, live) } }
 
-    /** [row] with what the writer says of it while it is the one written ([live]), else its safe offset. */
-    private fun item(row: Download, live: DownloadWriter.Live?): Item =
-        if (live != null && live.id == row.id) Item(row, live.written, writer.bytesPerSecond()) else Item(row, row.safeOffset, null)
+    /** [row] with what its writer says of it while it is the one written ([live]), else its safe offset. */
+    private fun item(row: Download, live: DownloadWriter.Live?): Item {
+        if (live == null || live.id != row.id) return Item(row, row.safeOffset, null)
+        val rate = if (serviceWriter.live.value?.id == row.id) serviceWriter.bytesPerSecond() else writer.bytesPerSecond()
+        return Item(row, live.written, rate)
+    }
 
     /** The season packs' copies kept now (L406), as the copies' last write or sweep left them: none on a TV. */
     val packs: StateFlow<Packs> = if (!runs) {
@@ -1321,6 +1354,34 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     }
 
     /**
+     * At the app's start, after [reconcile], in a build that hides debrid ([shown] false, L422): each torrent download a
+     * build that showed it left still to finish ([DownloadResolver.torrent]: queued, under way, held or waiting) fails "Not
+     * available in this version", with no call, its listing's copy gone with its source, so no stored debrid wait shows.
+     * One that held the queue (Paused, Stopped) hands the hold on as a cancel does. A finished one plays its file, and a
+     * failed one keeps its reason. Under the queue's lock, the one a walk runs now left to its walk, which fails it so too.
+     * Their ids; none while debrid shows, and none on a TV.
+     */
+    suspend fun failHiddenTorrents(shown: Boolean = DebridGate.shown): List<String> {
+        if (!runs || shown) return emptyList()
+        return changes.withLock {
+            val live = current?.takeIf { it.job.isActive }?.id
+            val left = dao.queue().first().filter { it.state in GOING_ON && it.id != live && DownloadResolver.torrent(it) }
+            withContext(NonCancellable) {
+                left.forEach { row ->
+                    dao.setState(row.id, DownloadState.Failed, DownloadHostRules.NOT_IN_THIS_VERSION, now())
+                    deps.storage.dropSource(row.id)
+                }
+                left.firstOrNull { it.state in HOLDS }?.let { passHold(it) }
+                if (left.isNotEmpty()) {
+                    log.info("Downloads: {} torrent download{} failed, debrid hidden in this build: {}", left.size, if (left.size == 1) "" else "s", left.joinToString { it.id })
+                    sweepPacks()
+                }
+            }
+            left.map { it.id }
+        }
+    }
+
+    /**
      * At the app's start, before any host (L359): storage's reconcile first (item 4); then each download a process left
      * Running or Resolving with no host on it now is Stopped, "Stopped by Android", held until Resume, when the process's
      * last end was the user's (Task Manager's Stop or a force stop, [DownloadExit.byUser]) after the row's last update; any
@@ -1428,8 +1489,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     private suspend fun releases(id: String): Walk = wakes.watching { tryReleases(id) }
 
     private suspend fun tryReleases(id: String): Walk {
-        // Why the last release was given up as it was written: the words of a failure once no other is left to try.
-        var gaveUp: DownloadWriter.GiveUp? = null
+        // Why the last release was given up as it was written, in a failure's words once no other is left to try.
+        var gaveUp: String? = null
         var wait = DownloadWriter.FIRST_BACKOFF
         // Since when Resolve has found the providers out of reach, try after try.
         var outOfReach: TimeMark? = null
@@ -1443,7 +1504,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                     // Failed by Resolve: its NZB goes too, whatever stops the walk meanwhile (L346).
                     withContext(NonCancellable) {
                         if (why != null && resolution.reason == DownloadResolver.NO_OTHER_RELEASE) {
-                            dao.setState(id, DownloadState.Failed, gaveUpWords(why), now())
+                            dao.setState(id, DownloadState.Failed, why, now())
                         }
                         deps.storage.dropSource(id)
                         sweepPacks()
@@ -1477,7 +1538,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                     when (val written = write(id, resolution)) {
                         is Written.Ended -> return written.walk
                         is Written.GaveUp -> {
-                            gaveUp = written.why
+                            gaveUp = written.words
                             if (!discard(id)) return Walk.End
                             // A stop asked for as it was discarded stops the walk here, before the next release is resolved.
                             currentCoroutineContext().ensureActive()
@@ -1492,14 +1553,28 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     private sealed interface Written {
         data class Ended(val walk: Walk) : Written
 
-        data class GaveUp(val why: DownloadWriter.GiveUp) : Written
+        /** Its release given up as it was written, [words] the failure's where none is left to try (null: Resolve's own). */
+        data class GaveUp(val words: String?) : Written
     }
 
-    /** [ready]'s file written into download [id]'s, from its safe offset; the row says how it ended. */
+    /** What a write came to, by its source's writer, once its file is closed. */
+    private sealed interface Wrote {
+        /** The engine's writer's [outcome], its release fetched from the providers [asked] as it started. */
+        class Usenet(val outcome: DownloadWriter.Outcome, val asked: List<ProviderConfig>) : Wrote
+
+        /** The debrid writer's [outcome]. */
+        class Service(val outcome: ServiceDownloadWriter.Outcome) : Wrote
+    }
+
+    /**
+     * [ready]'s file written into download [id]'s, from its safe offset, by its source's writer (L460): a Usenet release's
+     * by the engine's, a torrent's by the debrid writer from the row's copy of its listing (a whole file: no gaps). While
+     * it runs its row says what holds the writer ([sayHeld]); once it is closed the row says how it ended.
+     */
     private suspend fun write(id: String, ready: Resolution.Ready): Written {
         val row = ready.row
-        val size = ready.file.size
-        val fileName = row.fileName ?: ready.file.name
+        val size = ready.size
+        val fileName = row.fileName ?: ready.fileName
         val channel = try {
             deps.storage.open(id, fileName, size)
         } catch (e: DownloadStorage.Unavailable) {
@@ -1510,61 +1585,111 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             failed(id, DownloadWriter.WRITE_FAILED)
             return Written.Ended(Walk.Next)
         }
-        val asked = deps.inUse()
-        val outcome = channel.use { out ->
+        val torrent = ready is Resolution.Ready.Service
+        val wrote = channel.use { out ->
             val made = dao.get(id) ?: return Written.Ended(Walk.Next)
             // Its file made at its whole size: the room it holds is its own from here (DownloadSpace).
             val path = deps.storage.relativePath(id, fileName)
             dao.update(made.copy(state = DownloadState.Running, reason = null, relativePath = path, updatedAt = now()))
             val from = row.safeOffset.coerceIn(0, size)
+            val onOpen = { offset: Long -> deps.debug.trace(DownloadTrace.Reopen(id, offset)) }
             coroutineScope {
-                val words = launch { sayOutOfReach(id) }
+                val words = launch { sayHeld(id, if (torrent) serviceWriter.live else writer.live, torrent) }
                 try {
-                    writer.write(
-                        id, ready.nzb, ready.file, out, from, row.gaps.map { it.first..it.last },
-                        onOpen = { offset -> deps.debug.trace(DownloadTrace.Reopen(id, offset)) },
-                    ) { offset, gaps ->
-                        dao.progress(id, offset, gaps.map { DownloadGap(it.first, it.last) }, now())
-                        deps.debug.trace(DownloadTrace.Progress(id, offset, size))
+                    when (ready) {
+                        is Resolution.Ready.Usenet -> {
+                            // The providers it is fetched from as it starts: those it is remembered missing on (L342).
+                            val asked = deps.inUse()
+                            Wrote.Usenet(
+                                writer.write(id, ready.nzb, ready.file, out, from, row.gaps.map { it.first..it.last }, onOpen) { offset, gaps ->
+                                    dao.progress(id, offset, gaps.map { DownloadGap(it.first, it.last) }, now())
+                                    deps.debug.trace(DownloadTrace.Progress(id, offset, size))
+                                },
+                                asked,
+                            )
+                        }
+                        is Resolution.Ready.Service -> Wrote.Service(
+                            serviceWriter.write(id, ready.entry, ready.file, out, from, onOpen) { offset ->
+                                dao.progress(id, offset, emptyList(), now())
+                                deps.debug.trace(DownloadTrace.Progress(id, offset, size))
+                            },
+                        )
                     }
                 } finally {
                     words.cancel()
                 }
             }
         }
-        return when (outcome) {
-            is DownloadWriter.Outcome.Done -> try {
-                finished(id, fileName, size, outcome.gaps)
-                Written.Ended(Walk.Next)
-            } catch (e: DownloadStorage.Unavailable) {
-                // Written whole, and its volume gone before it was renamed: the next walk renames it, its record at its end.
-                waiting(id, DownloadHostRules.STORAGE_UNAVAILABLE)
-                Written.Ended(Walk.End)
-            }
-            is DownloadWriter.Outcome.NextRelease -> {
-                remember(id, outcome.why, asked)
-                Written.GaveUp(outcome.why)
-            }
-            is DownloadWriter.Outcome.Waiting -> {
-                val provider = outcome.wait == DownloadWriter.Wait.Provider
-                waiting(id, if (provider) DownloadHostRules.CHECK_PROVIDER else DownloadHostRules.CANT_REACH_PROVIDER)
-                Written.Ended(Walk.End)
-            }
-            is DownloadWriter.Outcome.Failed -> {
-                failed(id, outcome.reason)
-                Written.Ended(Walk.Next)
-            }
+        return when (wrote) {
+            is Wrote.Usenet -> usenetEnded(id, wrote, fileName, size)
+            is Wrote.Service -> serviceEnded(id, wrote.outcome, fileName, size)
         }
     }
 
-    /** While download [id] is written, its row says "Can't reach your Usenet provider" as long as its writer backs off for that (L382). */
-    private suspend fun sayOutOfReach(id: String) {
-        var said = false
-        writer.live.collect { live ->
-            val out = live != null && live.id == id && live.unreachable
-            if (out != said) {
-                said = out
-                dao.setState(id, DownloadState.Running, if (out) DownloadHostRules.CANT_REACH_PROVIDER else null, now())
+    /** What the walk does after the engine's writer wrote download [id]'s file [fileName] of [size] as [wrote] says. */
+    private suspend fun usenetEnded(id: String, wrote: Wrote.Usenet, fileName: String, size: Long): Written = when (val outcome = wrote.outcome) {
+        is DownloadWriter.Outcome.Done -> try {
+            finished(id, fileName, size, outcome.gaps)
+            Written.Ended(Walk.Next)
+        } catch (e: DownloadStorage.Unavailable) {
+            // Written whole, and its volume gone before it was renamed: the next walk renames it, its record at its end.
+            waiting(id, DownloadHostRules.STORAGE_UNAVAILABLE)
+            Written.Ended(Walk.End)
+        }
+        is DownloadWriter.Outcome.NextRelease -> {
+            remember(id, outcome.why, wrote.asked)
+            Written.GaveUp(gaveUpWords(outcome.why))
+        }
+        is DownloadWriter.Outcome.Waiting -> {
+            val provider = outcome.wait == DownloadWriter.Wait.Provider
+            waiting(id, if (provider) DownloadHostRules.CHECK_PROVIDER else DownloadHostRules.CANT_REACH_PROVIDER)
+            Written.Ended(Walk.End)
+        }
+        is DownloadWriter.Outcome.Failed -> {
+            failed(id, outcome.reason)
+            Written.Ended(Walk.Next)
+        }
+    }
+
+    /**
+     * What the walk does after the debrid writer wrote download [id]'s file [fileName] of [size] as [outcome] says (L419).
+     * A torrent lost on its account and on every other is given up, never remembered missing on the providers, which were
+     * never asked: the next release is resolved, and with none the row fails in the words Resolve gives that failure
+     * (L460). Its waits end the walk, as the providers' do.
+     */
+    private suspend fun serviceEnded(id: String, outcome: ServiceDownloadWriter.Outcome, fileName: String, size: Long): Written = when (outcome) {
+        ServiceDownloadWriter.Outcome.Done -> try {
+            finished(id, fileName, size, emptyList())
+            Written.Ended(Walk.Next)
+        } catch (e: DownloadStorage.Unavailable) {
+            waiting(id, DownloadHostRules.STORAGE_UNAVAILABLE)
+            Written.Ended(Walk.End)
+        }
+        is ServiceDownloadWriter.Outcome.NextRelease -> {
+            log.info("download {}: its torrent given up ({})", id, outcome.why)
+            Written.GaveUp(lostWords(outcome.why))
+        }
+        is ServiceDownloadWriter.Outcome.Waiting -> {
+            waiting(id, outcome.wait.reason)
+            Written.Ended(Walk.End)
+        }
+        is ServiceDownloadWriter.Outcome.Failed -> {
+            failed(id, outcome.reason)
+            Written.Ended(Walk.Next)
+        }
+    }
+
+    /**
+     * While download [id] is written, its row says what holds its writer ([held], L475), as long as it does: by [live], the
+     * writer's that writes it, a torrent's ([torrent]) in the debrid words.
+     */
+    private suspend fun sayHeld(id: String, live: StateFlow<DownloadWriter.Live?>, torrent: Boolean) {
+        var said: String? = null
+        live.collect { now ->
+            val words = now?.takeIf { it.id == id }?.let { held(it, torrent) }
+            if (words != said) {
+                said = words
+                dao.setState(id, DownloadState.Running, words, now())
             }
         }
     }
@@ -1683,6 +1808,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /** Ends the writer's wait between reopens and Resolve's between tries, or the one after a try under way (L381). */
     private fun wake() {
         writer.retryNow()
+        serviceWriter.retryNow()
         wakes.retryNow()
     }
 
@@ -1733,6 +1859,27 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
         /** [search] as a row keeps it: not yet searched, as a queued or put-back row's turn is still to come. */
         private fun searchText(search: SeasonSearch): String = DownloadColumns.text(search.copy(searched = false))
+
+        /**
+         * What a running row says while its writer holds it ([live], L475): its source out of reach, a torrent's ([torrent])
+         * in the debrid words; a torrent's wait while something streams (L471); null while it writes.
+         */
+        fun held(live: DownloadWriter.Live, torrent: Boolean): String? = when {
+            live.streamWait -> DownloadHostRules.WAITS_FOR_STREAM
+            live.unreachable -> if (torrent) DownloadHostRules.CANT_REACH_SERVICE else DownloadHostRules.CANT_REACH_PROVIDER
+            else -> null
+        }
+
+        /**
+         * A failed torrent's words, given up as it was written on its account and every other [why] (L424), as Resolve
+         * says the same failure (L460); null for its account gone, which is no word on the release: Resolve's own then.
+         */
+        fun lostWords(why: ServiceDownloadWriter.Lost): String? = when (why) {
+            ServiceDownloadWriter.Lost.NotCached -> DownloadResolver.reason(AttemptFailure.NoLongerCached)
+            ServiceDownloadWriter.Lost.Removed -> DownloadResolver.reason(AttemptFailure.RemovedByService)
+            ServiceDownloadWriter.Lost.Refused -> DownloadResolver.reason(AttemptFailure.ServiceRefused(tooLarge = false))
+            ServiceDownloadWriter.Lost.AccountGone -> null
+        }
 
         /** A failed download's words, its last release given up [why] as it was written and none left to try. */
         fun gaveUpWords(why: DownloadWriter.GiveUp): String = when (why) {

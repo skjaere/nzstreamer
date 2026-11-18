@@ -2,7 +2,14 @@ package io.skjaere.usenet.app.download
 
 import android.annotation.SuppressLint
 import io.skjaere.usenet.app.AppContainer
+import io.skjaere.usenet.app.debrid.DebridAdds
+import io.skjaere.usenet.app.debrid.DebridGate
 import io.skjaere.usenet.app.debrid.DebridListingStore
+import io.skjaere.usenet.app.debrid.ServiceLinks
+import io.skjaere.usenet.app.debrid.ServiceMisses
+import io.skjaere.usenet.app.debrid.ServiceSource
+import io.skjaere.usenet.app.debrid.ServiceTarget
+import io.skjaere.usenet.app.debrid.triedBySource
 import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.IMPORT_GONE
 import io.skjaere.usenet.app.play.MissingReleases
@@ -19,6 +26,7 @@ import io.skjaere.usenet.app.play.playCandidate
 import io.skjaere.usenet.app.play.savedRelease
 import io.skjaere.usenet.app.play.shortFailure
 import io.skjaere.usenet.app.play.skippedNotice
+import io.skjaere.usenet.app.search.IndexerConfigs
 import io.skjaere.usenet.app.search.ReleaseListMode
 import io.skjaere.usenet.app.search.offersFileChoice
 import io.skjaere.usenet.core.AttemptFailure
@@ -57,6 +65,8 @@ import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.data.WatchTitle
+import io.skjaere.usenet.debrid.DebridService
+import io.skjaere.usenet.debrid.ServiceFile
 import io.skjaere.usenet.newznab.IndexerConfig
 import io.skjaere.usenet.newznab.NewznabError
 import io.skjaere.usenet.newznab.NewznabException
@@ -131,6 +141,16 @@ import kotlin.time.Duration.Companion.seconds
  * gone fails in Import's words, with nothing asked of an indexer; the memory of releases found missing neither skips nor
  * records it; and the NZB's next file in this process takes the prepare held for it ([keepPack]).
  *
+ * A torrent a debrid service has cached (L459, L460) is tried by its own source, as a play tries one: prepared on the
+ * service accounts on in the user's order ([accounts], the one gated lookup, L422), its file picked from the service's
+ * listing before anything is added, with no question, opened and probed. Only a release from Usenet waits for the
+ * providers. Its listing is kept in the row's folder before the row takes it (L420), and the debrid writer writes its file
+ * from that copy ([Resolution.Ready.Service]); a row opened again reads the copy, with no call. Its account's outage,
+ * refused key or limit is no answer about the release: uncounted, the row backs off or waits in the debrid service's words;
+ * what fails the release there is counted, in the play sheet's words where they name no service. While debrid is hidden,
+ * or for an indexer whose "Use with your debrid service" is off, a torrent goes to no service. What the attempts add to an
+ * account is held while the resolve runs and let go as it ends (L421).
+ *
  * Its log lines, the pipeline's and the memory of releases tried's among them (which name a play's release by its title),
  * name the download by its id and a release by its place among the row's ([naming]), never by the release's name; the
  * pipeline says an attempt's failure by its kind alone, as its words can name a file.
@@ -174,6 +194,25 @@ class DownloadResolver(
     private val lastRelease: suspend (watchKey: String) -> RememberedRelease? = { null },
     /** The walk's memory of the indexers' limits (L443): the runner's, which the turn's search reads too. */
     private val limits: DownloadSearch.Limits = DownloadSearch.Limits.None,
+    /**
+     * What the debrid services prepared, by listing id (L181): a torrent's listing is put there as it is prepared, as a
+     * play's is, and the row keeps its own copy of it ([Storage.keepListing], L420).
+     */
+    private val listings: DebridListingStore,
+    /** Account [accountId]'s service while it is on and debrid shows (L422's one gated lookup); null otherwise. */
+    private val accounts: suspend (accountId: String) -> DebridService? = { null },
+    /** The service accounts on, by id, in the user's order: the routes a torrent is tried by (L228, L460). */
+    private val accountsOn: suspend () -> List<String> = { emptyList() },
+    /** The torrent indexers whose "Use with your debrid service" is off now, by id: their torrents go to no service (L194). */
+    private val offService: suspend () -> Set<String> = { emptySet() },
+    /** What plays remember of the torrents service accounts failed (L174): passed over, and remembered, as a play's are. */
+    private val misses: ServiceMisses? = null,
+    /** The links a torrent's probe reads its file by, as a play's probe does (L172). */
+    private val links: ServiceLinks? = null,
+    /** What this device added to a service account: each add of a resolve is held by it until it ends (L421). */
+    private val adds: DebridAdds? = null,
+    /** Whether this build shows debrid (L192). */
+    private val shown: () -> Boolean = { DebridGate.shown },
 ) {
     /** What Resolve keeps in and asks of the download's places on the device: [DownloadStorage]'s ([of]). */
     interface Storage {
@@ -249,9 +288,32 @@ class DownloadResolver(
     sealed interface Resolution {
         /**
          * Found: [row] as it is now kept, its release, file and exact size, to be written from its safe offset (0 for a
-         * release other than the one its file was made from); [nzb] prepared, and its [file] in it.
+         * release other than the one its file was made from), by the writer of its source (L460).
          */
-        class Ready(val row: Download, val nzb: PreparedNzb, val file: FileCandidate) : Resolution
+        sealed interface Ready : Resolution {
+            val row: Download
+
+            /** The file's name, as its release lists it. */
+            val fileName: String
+
+            /** The file's exact size. */
+            val size: Long
+
+            /** A Usenet release: [nzb] prepared, and its [file] in it. */
+            class Usenet(override val row: Download, val nzb: PreparedNzb, val file: FileCandidate) : Ready {
+                override val fileName: String get() = file.name
+                override val size: Long get() = file.size
+            }
+
+            /**
+             * A torrent a debrid service has cached: [entry], the row's own copy of its listing (L420), and its [file] there,
+             * which the debrid writer asks the listing's account for.
+             */
+            class Service(override val row: Download, val entry: DebridListingStore.Entry, val file: ServiceFile) : Ready {
+                override val fileName: String get() = file.name
+                override val size: Long get() = file.size
+            }
+        }
 
         /** Ended: the row is Failed, for [reason] in its words. */
         data class Failed(val reason: String) : Resolution
@@ -273,13 +335,21 @@ class DownloadResolver(
     }
 
     /**
-     * Resolves download [id] (L338): opened again from its own NZB where it has one and the file is still there; else its
-     * turn ([turn]): its season's pack, its search and its candidates not tried yet, as the class says.
+     * Resolves download [id] (L338): opened again from its own NZB, or a torrent's from its listing's copy, where it has one
+     * and the file is still there; else its turn ([turn]): its season's pack, its search and its candidates not tried yet,
+     * as the class says. What its attempts add to a service account is born held by the resolve, as a play's is
+     * ([DebridAdds.Play], L421), and let go as it ends, however it ends: found, failed, waiting, or cut short by a pause.
      */
     suspend fun resolve(id: String): Resolution {
-        val row = downloads.get(id) ?: return Resolution.Gone
-        reopened(row)?.let { return it }
-        return turn(downloads.get(id) ?: return Resolution.Gone)
+        val play = DebridAdds.Play()
+        return try {
+            withContext(play) {
+                val row = downloads.get(id) ?: return@withContext Resolution.Gone
+                reopened(row) ?: turn(downloads.get(id) ?: return@withContext Resolution.Gone)
+            }
+        } finally {
+            adds?.release(play)
+        }
     }
 
     /**
@@ -363,6 +433,7 @@ class DownloadResolver(
     private suspend fun reopened(row: Download): Resolution? {
         val release = row.release ?: return null
         val size = row.size ?: return null
+        if (release.source == ReleaseFacts.TORRENT) return reopenedService(row, release, size)
         val source = storage.source(row.id) ?: return null
         providersReady(row.id)?.let { return it }
         val prepared = when (val outcome = preparerNow().prepare(source.nzb, release.title, source.password)) {
@@ -388,7 +459,7 @@ class DownloadResolver(
         // A season pack is kept for its season and its prepare held, as at any resolve's success: after a process death, the
         // season's next row takes both rather than grab or prepare it again.
         suspend fun ready(kept: Download) =
-            Resolution.Ready(kept, prepared, file).also { keepPack(kept, Replay.candidate(release), prepared, source.nzb, source.password, copied = false) }
+            Resolution.Ready.Usenet(kept, prepared, file).also { keepPack(kept, Replay.candidate(release), prepared, source.nzb, source.password, copied = false) }
         if (file.size == size) {
             log.info("download {}: opened again from its own NZB at {} of {} bytes", row.id, row.safeOffset, size)
             return ready(row)
@@ -400,6 +471,32 @@ class DownloadResolver(
         ) ?: return waiting(row.id, DownloadHostRules.STORAGE_UNAVAILABLE)
         downloads.update(again)
         return room(again) ?: ready(again)
+    }
+
+    /**
+     * A torrent row [row] opened again from the copy of its listing in its folder (L420, L460), its [release]'s file found
+     * there by its place, name and [size]: no prepare, no call and no provider wait, the writer asking a fresh link as it
+     * opens. Null where it has no copy (its process went before it was written) or its file is no longer listed so, the copy
+     * dropped first: then its candidates are resolved. While debrid is hidden it fails, with no call (L422).
+     */
+    private suspend fun reopenedService(row: Download, release: RememberedRelease, size: Long): Resolution? {
+        if (!shown()) return hidden(row.id)
+        val entry = storage.listing(row.id) ?: return null
+        val name = row.fileName ?: release.fileName
+        val file = entry.prepared.listing.files.firstOrNull { it.index == release.fileIndex && it.name == name && it.size == size }
+        if (file == null) {
+            log.info("download {}: its listing's copy no longer lists its file: resolving it again", row.id)
+            storage.dropSource(row.id)
+            return null
+        }
+        log.info("download {}: opened again from its listing's copy at {} of {} bytes", row.id, row.safeOffset, size)
+        return Resolution.Ready.Service(row, entry, file)
+    }
+
+    /** Debrid hidden in this build (L422): a torrent's download fails, with no call. */
+    private suspend fun hidden(id: String): Resolution {
+        log.info("download {}: debrid is hidden in this build: its torrent fails, with no call", id)
+        return failed(id, DownloadHostRules.NOT_IN_THIS_VERSION)
     }
 
     /**
@@ -501,14 +598,33 @@ class DownloadResolver(
      * [named] (by key). One whose attempt had no answer (the providers out of reach, the attempt cut short, the volume away
      * as it was picked) is tried again first, from the NZB kept for it ([Storage.keepGrab]) and counted once: its grab is
      * spent already. A grab refused for its indexer's download or API limit is counted out, and that limit kept in [limited].
+     *
+     * A torrent (L460) is tried by its own source, on the service accounts on in the user's order, its file picked from the
+     * service's listing with no question; the providers are waited for only where a Usenet release is among them. While
+     * debrid is hidden a torrent goes to no service (L422), nor one of an indexer since kept from the service (L194): left
+     * out before any lookup, uncounted; with only such torrents left, the row fails "Not available in this version" while
+     * hidden. With no account on, the torrents wait for one. An attempt its account's own refusal ended (its outage, its
+     * refused key, its limit) had no answer about the release and isn't counted ([exhausted] says what the row does).
      */
     private suspend fun attempt(row: Download, candidates: List<RankedItem>, named: (String) -> String, limited: MutableMap<String, LimitWait>): Pass {
         val id = row.id
         val kept = storage.grab(id)?.takeIf { grab -> candidates.any { it.key == grab.key } }
         val counted = row.tried.filter { it != kept?.key }
         val left = tries() - counted.size
-        val items = candidates.filter { it.key !in counted }.distinctBy { it.key }
+        val untried = candidates.filter { it.key !in counted }.distinctBy { it.key }
+        val torrents = untried.any { it.item.infoHash != null }
+        val debrid = !torrents || shown()
+        val offService = if (torrents && debrid) offService() else emptySet()
+        val sendable = untried.filter { it.item.infoHash == null || (debrid && Replay.leftOut(it, offService) == null) }
+        val accountsNow = if (sendable.any { it.item.infoHash != null }) accountsOn() else emptyList()
+        // A torrent's routes are the accounts on now: one queued before an account was switched off never asks it.
+        val items = sendable.filter { it.item.infoHash == null || accountsNow.isNotEmpty() }.map { Replay.onAccounts(it, accountsNow) }
         if (left <= 0 || items.isEmpty()) {
+            if (left > 0 && !debrid) {
+                log.info("download {}: debrid is hidden in this build: its torrents left out, with no call", id)
+                return Pass.Failed(DownloadHostRules.NOT_IN_THIS_VERSION, none = true)
+            }
+            if (left > 0 && sendable.isNotEmpty()) return Pass.Ended(waiting(id, DownloadHostRules.CHECK_SERVICE))
             log.info("download {}: no release left to try, {} tried", id, row.tried.size)
             return Pass.Failed(NO_OTHER_RELEASE, none = true)
         }
@@ -521,7 +637,7 @@ class DownloadResolver(
         // Nothing is searched for an imported file (L454): its NZB is opened, which its row says until its file is checked.
         val opening = row.kind == DownloadKind.Release
         say(if (opening) DownloadHostRules.OPENING else DownloadHostRules.FINDING_RELEASES)
-        providersReady(id)?.let { return Pass.Ended(it) }
+        if (items.any { it.item.infoHash == null }) providersReady(id)?.let { return Pass.Ended(it) }
         val byKey = items.associateBy { it.key }
         val newznab = byKey.mapValues { it.value.item }
         // Import's own releases of NZBs the user opened (L457): their copy is their one source, and no indexer has them.
@@ -577,6 +693,8 @@ class DownloadResolver(
             }
         }
         val usenet = UsenetSource(nzbs, availability, preparerNow(), store, providersLeftOut, providerFallback, FileChooser.None)
+        // A torrent's from the accounts that have it cached (L460), its listing kept in the store and held by this resolve.
+        val service = ServiceSource(accounts, listings, FileChooser.None, misses = misses, links = links, onListed = { adds?.holdForPlay(it) })
         // The probe keeps its target in the store to read it; the pipeline lets go of it when the probe fails, and resolved()
         // once it is copied. Cut short as it reads, it lets go of it itself (L383).
         val probing = TrackProbe { target ->
@@ -590,8 +708,11 @@ class DownloadResolver(
         // An imported NZB's release is never skipped as found missing, nor remembered so (L457): it is the file the user chose,
         // and nothing else has it.
         val remembered = tried(newznab.filterKeys { it !in imported }, { indexerId -> configs[indexerId]?.name }, namedCandidate)
+        // A torrent's by what its accounts failed of it, as a play's that wasn't chosen (L174).
         val pipeline = PlayPipeline(
-            { usenet }, probing, maxAttempts = left, tried = remembered, named = namedCandidate, failureWords = { it::class.simpleName ?: "Failure" },
+            { candidate -> if (candidate.source == PlayCandidate.USENET) usenet else service }, probing, maxAttempts = left,
+            tried = triedBySource(remembered, misses?.forPlay(chosen = false) ?: TriedReleases.None), named = namedCandidate,
+            failureWords = { it::class.simpleName ?: "Failure" },
         )
         // Counted across its resolves: the second release in all is "release 2", whichever resolve tries it.
         val before = counted.size
@@ -615,6 +736,20 @@ class DownloadResolver(
         var refusals = 0
         val skipped = mutableListOf<String>()
         var ended: PipelineEvent? = null
+        // The last failure of the attempt under way, whichever account or step it came from.
+        var failedWith: AttemptFailure? = null
+        // The attempts their accounts' own refusals ended, uncounted: the last says what the row does (L460).
+        val stops = mutableListOf<AttemptFailure>()
+
+        // An attempt that failed on its account's outage, refused key or limit had no answer about its release.
+        suspend fun settle() {
+            val cut = current ?: return
+            val failure = failedWith?.takeIf { it.isServiceStop() } ?: return
+            counting = counting - cut
+            count(id, counting)
+            stops += failure
+            log.info("{}: its service's {}, not counted", named(cut), failure::class.simpleName)
+        }
         log.info("download {}: resolving: up to {} of the {} release{} not tried yet", id, minOf(left, items.size), items.size, if (items.size == 1) "" else "s")
         try {
             pipeline.play(items.map { it.playCandidate }, picker(row)).collect { event ->
@@ -622,6 +757,8 @@ class DownloadResolver(
                 lost?.let { throw OutOfReach(it) }
                 when (event) {
                     is PipelineEvent.AttemptStarted -> {
+                        settle()
+                        failedWith = null
                         attempt = before + event.attempt
                         of = before + event.of
                         current = event.candidate.id
@@ -636,9 +773,12 @@ class DownloadResolver(
                         is StepStatus.Running -> say(
                             if (opening && event.step in OPENS) DownloadHostRules.OPENING else DownloadHostRules.resolving(STEP_LABELS.getValue(event.step), attempt, of),
                         )
-                        is StepStatus.Failed -> when (val failure = status.failure) {
+                        is StepStatus.Failed -> when (val failure = status.failure.also { failedWith = it }) {
                             // The providers failing is no answer about the release, nor a connection lost.
                             is AttemptFailure.Provider -> Unit
+                            // Nor a service's outage, its refusal of the key or its limit (L460): its next account may still
+                            // have the release, and the attempt's end says whether it had an answer ([settle]).
+                            is AttemptFailure.ServiceDown, is AttemptFailure.KeyRefused, is AttemptFailure.ServiceLimit -> Unit
                             is AttemptFailure.Failed -> if (event.step in READS_PROVIDERS && failure.error.isLostConnection()) lost = failure.error else answer()
                             is AttemptFailure.FetchFailed -> {
                                 val limit = limitedBy
@@ -685,8 +825,14 @@ class DownloadResolver(
             return Pass.Ended(unreachable(id, e.error, DownloadHostRules.CANT_REACH_PROVIDER))
         }
         return when (val end = ended) {
-            is PipelineEvent.Succeeded -> resolved(id, end, byKey, end.target.candidate.id in copied, named)
-            is PipelineEvent.Exhausted -> exhausted(id, end, counting, skipped, indexerOutages > 0, refusals > 0, imported)
+            is PipelineEvent.Succeeded -> when (val target = end.target) {
+                is ServiceTarget -> resolvedService(id, end, target, byKey, named)
+                else -> resolved(id, end, byKey, target.candidate.id in copied, named)
+            }
+            is PipelineEvent.Exhausted -> {
+                settle()
+                exhausted(id, end, counting, skipped, indexerOutages > 0, refusals > 0, imported, stops.lastOrNull())
+            }
             else -> Pass.Failed(NO_OTHER_RELEASE)
         }
     }
@@ -745,12 +891,50 @@ class DownloadResolver(
             storage.dropGrab(id)
             keepPack(kept, byKey.getValue(target.candidate.id), target.prepared, target.nzbBytes, password, copied)
             log.info("download {}: resolved, {} bytes, {}", id, size, if (kept.oneVideo) "its release's one video" else "one of its release's videos")
-            return Pass.Ended(Resolution.Ready(kept, target.prepared, target.file))
+            return Pass.Ended(Resolution.Ready.Usenet(kept, target.prepared, target.file))
         } finally {
             // The probe kept its NZB in the store to read it: out again, unless a play kept it there before or holds it
             // now (L383, backlog 353).
             withContext(NonCancellable) { letGo(id, target) }
         }
+    }
+
+    /**
+     * [succeeded]'s torrent kept as the download's (L460), as the class says of a release: the room checked for its file's
+     * exact size first, nothing of the row changed for one that won't fit, which is passed over (L401); then the listing it
+     * was prepared as kept in the row's folder (L420), before the row takes the release: its content id for its release and
+     * its NZB's id, its source the torrent's, its file's place, name and size, and what the probe read. The release its file
+     * was made from goes on from the safe offset; another starts from 0, any file made for the one before deleted. No NZB is
+     * kept for it, and it put nothing in the NZB store. [named] names its release.
+     */
+    private suspend fun resolvedService(
+        id: String, succeeded: PipelineEvent.Succeeded, target: ServiceTarget, byKey: Map<String, RankedItem>, named: (String) -> String,
+    ): Pass {
+        val row = downloads.get(id) ?: return Pass.Ended(Resolution.Gone)
+        val size = target.file.size
+        val space = storage.space(id) ?: return Pass.Ended(waiting(id, DownloadHostRules.STORAGE_UNAVAILABLE))
+        if (!space.fits(size)) {
+            log.info("{}: passed over, {} bytes won't fit in the {} free", named(target.candidate.id), size, space.free)
+            return Pass.PassedOver
+        }
+        // Put in the store by this attempt's Preparing, or by its Opening where the account added it again.
+        val entry = checkNotNull(listings.get(target.listingId)) { "The listing just prepared is no longer kept" }
+        val release = savedRelease(byKey.getValue(target.candidate.id).item, target).toRemembered()
+        val same = row.size == size && row.release?.let { Replay.key(it) == target.candidate.id && it.fileName == release.fileName } == true
+        val base = (if (same) row else startOver(row)) ?: return Pass.Ended(waiting(id, DownloadHostRules.STORAGE_UNAVAILABLE))
+        storage.keepListing(id, entry)
+        val kept = base.copy(
+            release = release,
+            fileName = target.file.name,
+            size = size,
+            oneVideo = target.listing.files.count { it.isVideo } == 1,
+            video = succeeded.video?.let { json.encodeToString(VideoTiming.serializer(), VideoTiming.of(it)) },
+            tracks = succeeded.tracks?.let { json.encodeToString(ProbedTracksSerializer, it) },
+            updatedAt = clock.now(),
+        )
+        downloads.update(kept)
+        log.info("download {}: resolved on a debrid service, {} bytes, {}", id, size, if (kept.oneVideo) "its torrent's one video" else "one of its torrent's videos")
+        return Pass.Ended(Resolution.Ready.Service(kept, entry, target.file.file))
     }
 
     /**
@@ -840,9 +1024,13 @@ class DownloadResolver(
      * the others' are tried next, never the outage's backoff, which would ask the limited indexer again every few seconds.
      * Else it fails, in the last failure's words, or, every release left passed over as found missing before, in the play
      * sheet's words for those; an [imported] NZB's release that had no NZB, in Import's words for its copy gone (L457).
+     * A torrent left with no answer by its account's own refusal ([stop], uncounted, L460) has the row wait for that
+     * account: its outage on every account the torrent plays from is backed off from, as an indexer's is, in the debrid
+     * service's words; its refused key waits for a new one; its limit, for its end.
      */
     private suspend fun exhausted(
         id: String, ended: PipelineEvent.Exhausted, counted: List<String>, skipped: List<String>, indexerOut: Boolean, limited: Boolean, imported: Set<String>,
+        stop: AttemptFailure?,
     ): Pass {
         val last = ended.failedAttempts.lastOrNull()
             ?: return Pass.Failed(skipped.takeIf { it.isNotEmpty() }?.let(::skippedNotice) ?: NO_OTHER_RELEASE)
@@ -851,6 +1039,7 @@ class DownloadResolver(
             count(id, counted - candidate.id)
             providers(id, failure.error)?.let { return Pass.Ended(it) }
         }
+        stop?.let { return Pass.Ended(serviceWait(id, it)) }
         if (limited) return Pass.Limited
         // Releases left untried for want of their NZBs: the indexers are asked again once the wait is over (L382).
         if (indexerOut) return Pass.Out
@@ -869,12 +1058,27 @@ class DownloadResolver(
         else -> null
     }
 
+    /**
+     * What a torrent's account's own refusal ([stop]) makes the download do (L460, L474): its key refused waits for a new
+     * one, its limit for its end; its outage is backed off from, and the download resolved again.
+     */
+    private suspend fun serviceWait(id: String, stop: AttemptFailure): Resolution = when (stop) {
+        is AttemptFailure.KeyRefused -> waiting(id, DownloadHostRules.CHECK_SERVICE)
+        is AttemptFailure.ServiceLimit -> waiting(id, DownloadHostRules.SERVICE_LIMIT)
+        else -> unreachable(id, UsenetError.Network(null), DownloadHostRules.CANT_REACH_SERVICE)
+    }
+
     /** The indexers out of reach or failing: no NZB came, and the host backs off and resolves the download again (L382). */
     private suspend fun indexersOut(id: String): Resolution = unreachable(id, UsenetError.Network(null), DownloadHostRules.CANT_REACH_INDEXER)
 
     /** Out of reach for [error], the row saying so in [words] while the host backs off and resolves it again. */
     private suspend fun unreachable(id: String, error: UsenetError, words: String): Resolution {
-        log.info("download {}: {} ({})", id, if (words == DownloadHostRules.CANT_REACH_INDEXER) "the indexers couldn't give an NZB" else "the providers couldn't be reached", error::class.simpleName)
+        val who = when (words) {
+            DownloadHostRules.CANT_REACH_INDEXER -> "the indexers couldn't give an NZB"
+            DownloadHostRules.CANT_REACH_SERVICE -> "its debrid service couldn't be reached"
+            else -> "the providers couldn't be reached"
+        }
+        log.info("download {}: {} ({})", id, who, error::class.simpleName)
         downloads.setState(id, DownloadState.Resolving, words, clock.now())
         return Resolution.Unreachable(error, words)
     }
@@ -995,11 +1199,18 @@ class DownloadResolver(
         /** A release whose articles can't be read. */
         const val DAMAGED = "Release damaged"
 
+        /** A torrent its accounts no longer have cached (L460): the play's failure sheet's words. */
+        const val NO_LONGER_CACHED = "This release is no longer cached"
+
         /** As the player's launch reads its own: what a later version adds is passed over. */
         private val json = Json { ignoreUnknownKeys = true }
 
         /** The connection lost or timed out: said of no release, which may be whole (L382). */
         private fun UsenetError.isLostConnection() = this is UsenetError.Network || this is UsenetError.Timeout
+
+        /** A service's outage, its refusal of the account's key or its limit: the account's, never the release's (L460). */
+        private fun AttemptFailure.isServiceStop() =
+            this is AttemptFailure.ServiceDown || this is AttemptFailure.KeyRefused || this is AttemptFailure.ServiceLimit
 
         /**
          * The steps whose lost connection is no answer about the release: the check and the open, which ask the providers.
@@ -1029,6 +1240,13 @@ class DownloadResolver(
             is AttemptFailure.MissingArticles, AttemptFailure.Passworded, is AttemptFailure.NoPlayableAudio, is AttemptFailure.NoPlayableVideo,
             is AttemptFailure.Unreadable, is AttemptFailure.DiscCopy -> shortFailure(failure)
             AttemptFailure.NoVideo, is AttemptFailure.NoMatchingEpisode -> failure.text
+            // A torrent's (L460), as the play sheet says them where they name no service.
+            AttemptFailure.NoLongerCached -> NO_LONGER_CACHED
+            AttemptFailure.RemovedByService, is AttemptFailure.ServiceRefused, AttemptFailure.NoWorkingLink -> failure.text
+            // Its account's own refusals make the row wait ([serviceWait]); in a row's words where one ends it all the same.
+            is AttemptFailure.KeyRefused -> DownloadHostRules.CHECK_SERVICE
+            is AttemptFailure.ServiceLimit -> DownloadHostRules.SERVICE_LIMIT
+            is AttemptFailure.ServiceDown -> DownloadHostRules.CANT_REACH_SERVICE
             is AttemptFailure.FetchFailed -> "Couldn't get the NZB"
             is AttemptFailure.Unsupported -> "Can't be read: an archive of a kind not supported"
             is AttemptFailure.Failed -> when (failure.error) {
@@ -1065,11 +1283,28 @@ class DownloadResolver(
 
         /**
          * [candidate] as a play tries it: rebuilt as Replay rebuilds a release no search returned ([Replay.candidate]), its
-         * size and its indexer's passworded flag kept.
+         * size and its indexer's passworded flag kept; a torrent's as a torrent (L460), its hash from its content id, which
+         * [attempt] gives the accounts on.
          */
         private fun ranked(candidate: DownloadCandidate): RankedItem =
-            Replay.candidate(RememberedRelease(candidate.indexerId, candidate.guid, candidate.title, candidate.downloadTemplate, fileIndex = 0))
-                .let { it.copy(item = it.item.copy(sizeBytes = candidate.size, passworded = candidate.passworded)) }
+            Replay.candidate(
+                RememberedRelease(candidate.indexerId, candidate.guid, candidate.title, candidate.downloadTemplate, fileIndex = 0, source = candidate.source),
+            ).let { it.copy(item = it.item.copy(sizeBytes = candidate.size, passworded = candidate.passworded)) }
+
+        /**
+         * Whether [row] downloads a torrent (L422): its release is one; before it has one, every release it has left to try
+         * is one, or it waits on a debrid service in that wait's words.
+         */
+        internal fun torrent(row: Download): Boolean {
+            row.release?.let { return it.source == ReleaseFacts.TORRENT }
+            val left = row.candidates.filter { ranked(it).key !in row.tried }
+            return (left.isNotEmpty() && left.all { it.source == ReleaseFacts.TORRENT }) || row.reason in SERVICE_WAITS
+        }
+
+        /** The waits a row has only for a debrid service (L474). */
+        private val SERVICE_WAITS = setOf(
+            DownloadHostRules.CHECK_SERVICE, DownloadHostRules.CANT_REACH_SERVICE, DownloadHostRules.SERVICE_LIMIT, DownloadHostRules.WAITS_FOR_STREAM,
+        )
 
         /**
          * The app's: the engine checking every article of what would be written (L341), the container's preparer, store and
@@ -1077,9 +1312,11 @@ class DownloadResolver(
          * missing as a play that wasn't chosen reads it, and Settings' "Releases to try"; a season pack's prepare held for its
          * season handed back over the engine's prepare ([PlayingPack.preparer]), the download ranking's context, the turn's
          * search over the indexers a search asks ([DownloadSearch.of]), the indexers' limits kept in the walk's memory
-         * ([limits]: the runner's, L443), and the library's release that played a title last. A test
-         * gives its own [indexers] and [attempts], a [probe] that reads nothing where its releases are no film, a
-         * [prepareBackend] that counts the prepares, and a [search] of its own finder.
+         * ([limits]: the runner's, L443), and the library's release that played a title last; for torrents (L460), the
+         * listings the services prepare, the accounts on through the one gated lookup (L422), the torrent indexers kept
+         * from the service, the memory of what the accounts failed, the links a probe reads by, and what the accounts were
+         * added to. A test gives its own [indexers] and [attempts], a [probe] that reads nothing where its releases are no
+         * film, a [prepareBackend] that counts the prepares, and a [search] of its own finder.
          */
         @SuppressLint("VisibleForTests") // The coordinator's grab, read as each grab is made, so a test serves both.
         fun of(
@@ -1119,6 +1356,13 @@ class DownloadResolver(
             search = search,
             lastRelease = container.library::lastRelease,
             limits = limits,
+            listings = container.debridListings,
+            accounts = { id -> container.services.gated(id) },
+            accountsOn = { container.services.on().map { it.id } },
+            offService = { IndexerConfigs.offService(container.settings.settings.first()) },
+            misses = container.serviceMisses,
+            links = container.serviceLinks,
+            adds = container.debridAdds,
         )
     }
 }

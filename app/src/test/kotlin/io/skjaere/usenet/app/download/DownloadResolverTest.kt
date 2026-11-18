@@ -12,7 +12,10 @@ import io.skjaere.nzbstreamer.nzb.FilenameResolver
 import io.skjaere.nzbstreamer.nzb.NzbDocument
 import io.skjaere.nzbstreamer.nzb.NzbParser
 import io.skjaere.nzbstreamer.stream.StreamableFile
+import io.skjaere.usenet.app.debrid.DebridAdds
 import io.skjaere.usenet.app.debrid.DebridListingStore
+import io.skjaere.usenet.app.debrid.ServiceMisses
+import io.skjaere.usenet.app.debrid.ServiceRegistry
 import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.IMPORT_GONE
 import io.skjaere.usenet.app.play.MissingReleases
@@ -44,7 +47,18 @@ import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.PlaybackPrefs
 import io.skjaere.usenet.data.ReleaseChecks
 import io.skjaere.usenet.data.RememberedRelease
+import io.skjaere.usenet.data.ServiceAccount
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.debrid.DebridService
+import io.skjaere.usenet.debrid.InfoHash
+import io.skjaere.usenet.debrid.Prepared
+import io.skjaere.usenet.debrid.ServiceError
+import io.skjaere.usenet.debrid.ServiceException
+import io.skjaere.usenet.debrid.ServiceFile
+import io.skjaere.usenet.debrid.ServiceGate
+import io.skjaere.usenet.debrid.ServiceKind
+import io.skjaere.usenet.debrid.ServiceLink
+import io.skjaere.usenet.debrid.ServiceListing
 import io.skjaere.usenet.logging.LogBuffer
 import io.skjaere.usenet.newznab.IndexerConfig
 import io.skjaere.usenet.newznab.NewznabError
@@ -66,6 +80,7 @@ import io.skjaere.usenet.search.StageReport
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -289,6 +304,10 @@ class DownloadResolverTest {
         limits: DownloadSearch.Limits = DownloadSearch.Limits.None,
         searchIndexers: List<IndexerConfig> = listOf(indexer),
         fetchNzb: suspend (IndexerConfig, NewznabItem) -> NzbDownload = { from, item -> grab(item, from) },
+        shown: Boolean = true,
+        on: List<String> = listOf(ACCOUNT_A),
+        offService: Set<String> = emptySet(),
+        adds: DebridAdds? = null,
     ) = DownloadResolver(
         downloads = dao,
         storage = storage,
@@ -325,7 +344,172 @@ class DownloadResolverTest {
             lastPlayed[key]
         },
         limits = limits,
+        listings = listings,
+        accounts = { id ->
+            lookups += id
+            services[id]?.takeIf { shown && id in on }
+        },
+        accountsOn = {
+            onAsked.incrementAndGet()
+            if (shown) on else emptyList()
+        },
+        offService = { offService },
+        misses = misses,
+        adds = adds,
+        shown = { shown },
     )
+
+    /**
+     * A torrent a debrid service may have cached (L460), as the Torznab indexer listed it: its [hash], its release's [title]
+     * and its files (paths to sizes) as a service lists them, each with the service's own id.
+     */
+    private class Torrent(val hash: String, val title: String, files: List<Pair<String, Long>>) {
+        val files: List<ServiceFile> = files.mapIndexed { i, (path, size) -> ServiceFile(i, path, size, id = "${700 + i}") }
+        val key: String get() = "btih:$hash"
+        val candidate: DownloadCandidate get() = DownloadCandidate(TORZNAB, key, title, size = files.sumOf { it.size }, source = ReleaseFacts.TORRENT)
+
+        /** Its video for S02E04, by its name. */
+        fun episode(): ServiceFile = files.single { "S02E04" in it.path && it.path.endsWith(".mkv") }
+    }
+
+    /** A single episode's torrent: its info file, then its video. */
+    private val goodTorrent = Torrent(
+        "c0ffee01c0ffee02c0ffee03c0ffee04c0ffee05", "Harbor.Lights.S02E04.1080p.WEB-DL.AAC2.0.H.264-WREN",
+        listOf("Harbor.Lights.S02E04.1080p.WEB-DL.AAC2.0.H.264-WREN/wren.nfo" to 4_096L, "Harbor.Lights.S02E04.1080p.WEB-DL.AAC2.0.H.264-WREN/Harbor.Lights.S02E04.1080p.WEB-DL.AAC2.0.H.264-WREN.mkv" to 1_250_000_000L),
+    )
+
+    /** Another release of the episode, as a torrent. */
+    private val otherTorrent = Torrent(
+        "c0ffee11c0ffee12c0ffee13c0ffee14c0ffee15", "Harbor.Lights.S02E04.720p.WEB-DL.AAC2.0.H.264-WREN",
+        listOf("Harbor.Lights.S02E04.720p.WEB-DL.AAC2.0.H.264-WREN.mkv" to 700_000_000L),
+    )
+
+    /** The season in a folder, each episode's video named for it. */
+    private val packTorrent = Torrent(
+        "c0ffee21c0ffee22c0ffee23c0ffee24c0ffee25", "Harbor.Lights.S02.1080p.WEB-DL.AAC2.0.H.264-PACK",
+        (1..6).map { "Harbor.Lights.S02.1080p.WEB-DL.AAC2.0.H.264-PACK/Harbor.Lights.S02E%02d.1080p.WEB-DL.AAC2.0.H.264-PACK.mkv".format(it) to 1_100_000_000L + it },
+    )
+
+    /** A season pack whose videos are named for no episode: which is S02E04 is a question nobody is there to answer. */
+    private val unnamedTorrent = Torrent(
+        "c0ffee31c0ffee32c0ffee33c0ffee34c0ffee35", "Harbor.Lights.S02.720p.WEB.h264-PACK",
+        (1..6).map { "Harbor.Lights.S02.720p.WEB.h264-PACK/hl.part$it.mkv" to 800_000_000L + it },
+    )
+
+    /**
+     * A debrid account's service as Resolve asks it (L460): the torrents it has [cached], by hash, prepared as a service
+     * prepares one (its files handed to the pick before anything is added, nothing added for a pick of none), each add
+     * told to [watching]'s watch as TorBox's client tells its own; and a link to the picked file. [failsFor] fails a
+     * torrent's prepare with its error. A removal is [removed].
+     */
+    private inner class FakeService(private val id: String) : DebridService {
+        override val kind = ServiceKind.TorBox
+        val cached = mutableMapOf<String, List<ServiceFile>>()
+        val failsFor = mutableMapOf<String, ServiceError>()
+        val prepares: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        val added: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        val links = java.util.concurrent.atomic.AtomicInteger()
+        val removed: MutableList<String> = Collections.synchronizedList(mutableListOf())
+        var watching: DebridAdds? = null
+
+        override suspend fun test() = throw AssertionError("a download never tests a key")
+
+        override suspend fun check(hashes: List<InfoHash>) = throw AssertionError("a download never checks the cache")
+
+        override suspend fun prepare(hash: InfoHash, pick: suspend (ServiceListing) -> ServiceFile?): Prepared {
+            prepares += hash.hex
+            failsFor[hash.hex]?.let { throw ServiceException(it) }
+            val listing = ServiceListing(cached[hash.hex] ?: throw ServiceException(ServiceError.NotCached))
+            val picked = pick(listing) ?: return Prepared(hash, listing, null)
+            val handle = "${id.take(4)}-${hash.hex.take(6)}"
+            added += hash.hex
+            watching?.watch(accountOf(id))?.added(hash, handle)
+            return Prepared(hash, listing, picked, handle)
+        }
+
+        override suspend fun link(prepared: Prepared, file: ServiceFile): ServiceLink {
+            links.incrementAndGet()
+            return ServiceLink("https://cdn.example.org/dl/${file.index}", java.time.Instant.ofEpochMilli(NOW))
+        }
+
+        override suspend fun remove(handle: String) {
+            removed += handle
+        }
+    }
+
+    private val serviceA = FakeService(ACCOUNT_A)
+    private val serviceB = FakeService(ACCOUNT_B)
+    private val services = mapOf(ACCOUNT_A to serviceA, ACCOUNT_B to serviceB)
+
+    /** Each account the gated lookup was asked for, and how often the accounts on were read. */
+    private val lookups: MutableList<String> = Collections.synchronizedList(mutableListOf())
+    private val onAsked = java.util.concurrent.atomic.AtomicInteger()
+
+    /** The listings the services prepared, as the app's store keeps them. */
+    private val listings by lazy { DebridListingStore(File(nzbDir, "debrid/listings.json"), io = Dispatchers.Unconfined) }
+
+    /** What plays remember of the torrents the accounts failed, in the library's table in memory: a case's own. */
+    private var misses = ServiceMisses(TriedTable(NOW), now = { NOW })
+
+    /** [id]'s account as the settings save it: Remove after playing on, its key saved at [KEY_AT]. */
+    private fun accountOf(id: String) = ServiceAccount(id, ServiceKind.TorBox.name, keySavedAt = KEY_AT)
+
+    /** The wall clock of what plays and downloads added ([adds]): moved on by a test past a grace. */
+    private var addedNow = NOW
+
+    /** Where [adds] runs its sweeps on its own: cancelled at each case's end, so no sweep it began outlives the case. */
+    private val addsScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob())
+
+    /** What this device added to the accounts, in a file of the test's own, every account on with its gate open. */
+    private fun adds(): DebridAdds = DebridAdds(
+        File(nzbDir, "debrid/added.json"), accounts = { services.keys.map(::accountOf) },
+        usable = { id -> services[id]?.let { ServiceRegistry.Client(accountOf(id), ServiceKind.TorBox, it, ServiceGate()) } },
+        scope = addsScope, clock = { addedNow }, shown = { true }, io = Dispatchers.Unconfined, log = {},
+    ).also { adds -> services.values.forEach { it.watching = adds } }
+
+    /** A grace on, then a sweep of what plays and downloads added, as one runs then. */
+    private suspend fun sweptAfterGrace(adds: DebridAdds) {
+        addedNow += DebridAdds.GRACE.toMillis() + 1_000
+        adds.sweep()
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    fun cancelSweeps() {
+        addsScope.cancel()
+    }
+
+    /** Harbor Lights S02E04's download of [candidates] in download order (a Usenet fake's as [usenet] gives it). */
+    private suspend fun rowOf(vararg candidates: DownloadCandidate, tried: List<String> = emptyList(), edit: (Download) -> Download = { it }): Download {
+        val row = Download(
+            id = ID, watchKey = WatchKey.episode(SHOW, 2, 4), kind = DownloadKind.Episode, title = "Harbor Lights", showTmdbId = SHOW,
+            season = 2, episode = 4, seasonEpisodes = 6, episodeName = "Low Water", position = 0, candidates = candidates.toList(),
+            tried = tried, indexerSize = candidates.firstOrNull()?.size ?: 0, createdAt = 0, updatedAt = 0,
+        ).let(edit)
+        dao.insert(row)
+        return row
+    }
+
+    /** [fake] as a row's candidate, the indexer's release. */
+    private fun usenet(fake: Fake): DownloadCandidate {
+        fakes[fake.guid] = fake
+        return DownloadCandidate(INDEXER, fake.guid, fake.title, "http://indexer.invalid/api?t=get&id=${fake.guid}&apikey={apikey}", fake.size)
+    }
+
+    /** [torrent]'s file for S02E04 as a row keeps it once resolved on [account]: its release, file and size, and its listing's copy. */
+    private suspend fun resolvedOn(torrent: Torrent, account: String = ACCOUNT_A, offset: Long = 0): Download {
+        val file = torrent.episode()
+        val hash = InfoHash.of(torrent.hash)
+        val entry = DebridListingStore.Entry(DebridListingStore.idFor(account, hash), account, torrent.title, Prepared(hash, ServiceListing(torrent.files), file, "${account.take(4)}-1"))
+        val row = rowOf(torrent.candidate, tried = listOf(torrent.key)) {
+            it.copy(
+                release = RememberedRelease(TORZNAB, torrent.key, torrent.title, null, file.index, torrent.key, file.name, file.size, source = ReleaseFacts.TORRENT),
+                fileName = file.name, size = file.size, safeOffset = offset, relativePath = "downloads/$ID/v.mkv",
+            )
+        }
+        storage.keepListing(ID, entry)
+        storage.events.clear()
+        return row
+    }
 
     /** [fake] as the finder gives it: as its indexer lists it, ranked first-come. */
     private fun foundOf(fake: Fake): FoundRelease {
@@ -383,7 +567,7 @@ class DownloadResolverTest {
     @Test
     fun `a release missing articles in the full check falls to the next, which is grabbed checked opened and probed`() = runBlocking<Unit> {
         row(broken, single)
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(listOf(broken.guid, single.guid), grabbed)
         // Every article of the release was checked before it was opened: the broken one's, then the next one's.
         assertTrue(checked.any { it.startsWith(GONE) })
@@ -441,7 +625,7 @@ class DownloadResolverTest {
     @Test
     fun `a pack that needs the file question fails that attempt and the next is tried`() = runBlocking<Unit> {
         row(unnamedPack, single)
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         // Opened, then nobody asked which file is the episode: no probe of it, and the next release plays its part.
         assertEquals(listOf(unnamedPack.guid, single.guid), opened.map { it.first })
         assertEquals(listOf(key(single)), probed)
@@ -456,7 +640,7 @@ class DownloadResolverTest {
 
         reset()
         row(pack)
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         // The pack's episode, by its name, and not the release's one video: its others may be whole.
         assertEquals("Harbor.Lights.S02E04.1080p.WEB.h264-GRP.mkv", ready.file.name)
         assertFalse(stored().oneVideo)
@@ -525,7 +709,7 @@ class DownloadResolverTest {
         assertEquals(listOf(single.guid), grabbed)
 
         onCheck = {}
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(single.guid, ready.row.release?.guid)
         assertEquals(listOf(single.guid), grabbed)
         assertEquals(listOf(key(single)), stored().tried)
@@ -540,7 +724,7 @@ class DownloadResolverTest {
         // As a death mid-check leaves it: counted, its NZB kept.
         row(single, pack, tried = listOf(single))
         storage.grabs[ID] = DownloadStorage.Grab(key(single), DownloadStorage.Source(single.nzb, null))
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver(attempts = 1).resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(attempts = 1).resolve(ID))
         assertEquals(single.guid, ready.row.release?.guid)
         assertEquals(emptyList(), grabbed)
         assertEquals(listOf(key(single)), stored().tried)
@@ -549,7 +733,7 @@ class DownloadResolverTest {
     @Test
     fun `the store's entry the probe put is dropped and the NZB and its password are copied to the download's own folder`() = runBlocking<Unit> {
         row(passworded)
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         // The probe read it through the store; once resolved, downloads take no place there (L383).
         assertNull(store.get(ready.nzb.id))
         assertNull(store.stored(ready.nzb.id))
@@ -620,7 +804,7 @@ class DownloadResolverTest {
                 keep()
             }
         }
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertNotNull(store.get(id), "the play's entry is gone from memory")
         assertNotNull(store.stored(id), "the play's entry is gone from disk")
 
@@ -641,7 +825,7 @@ class DownloadResolverTest {
         episodes.forEach { (id, e) -> episode(id, e, pack, single) }
         val resolver = resolver()
         episodes.forEach { (id, e) ->
-            val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(id))
+            val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver.resolve(id))
             assertEquals("Harbor.Lights.S02E%02d.1080p.WEB.h264-GRP.mkv".format(e), ready.file.name)
             assertEquals(pack.guid, ready.row.release?.guid)
             assertContentEquals(pack.nzb, storage.sources[id]?.nzb)
@@ -665,19 +849,19 @@ class DownloadResolverTest {
         episode(E1, 1, pack, single)
         episode(E2, 2, pack, single)
         episode(E3, 3, pack, single)
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E1))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(E1))
         dao.setState(E1, DownloadState.Done, null, NOW)
 
         // A new process: the copies on disk, no prepare held.
         storage.packs = packs()
         val resolver = resolver()
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(E2))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver.resolve(E2))
         assertEquals("Harbor.Lights.S02E02.1080p.WEB.h264-GRP.mkv", ready.file.name)
         assertEquals(listOf(pack.guid), grabbed)
         assertEquals(listOf(pack.guid, pack.guid), opened.map { it.first })
         dao.setState(E2, DownloadState.Done, null, NOW)
 
-        val third = assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(E3))
+        val third = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver.resolve(E3))
         assertEquals("Harbor.Lights.S02E03.1080p.WEB.h264-GRP.mkv", third.file.name)
         assertEquals(listOf(pack.guid), grabbed)
         assertEquals(listOf(pack.guid, pack.guid), opened.map { it.first })
@@ -692,16 +876,16 @@ class DownloadResolverTest {
     fun `a row opened again from its own NZB after a process death holds its prepare for the season's next row`() = runBlocking<Unit> {
         episode(E1, 1, pack, single)
         episode(E2, 2, pack, single)
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E1))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(E1))
 
         // A new process as E1 is written: the copies on disk, no prepare held.
         storage.packs = packs()
         val resolver = resolver()
-        val reopened = assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(E1))
+        val reopened = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver.resolve(E1))
         assertEquals("Harbor.Lights.S02E01.1080p.WEB.h264-GRP.mkv", reopened.file.name)
         dao.setState(E1, DownloadState.Done, null, NOW)
 
-        val next = assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(E2))
+        val next = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver.resolve(E2))
         assertEquals("Harbor.Lights.S02E02.1080p.WEB.h264-GRP.mkv", next.file.name)
         assertEquals(listOf(pack.guid), grabbed)
         assertEquals(listOf(pack.guid, pack.guid), opened.map { it.first })
@@ -721,13 +905,13 @@ class DownloadResolverTest {
         assertNull(storage.packs.find(key(pack)))
 
         val resolver = resolver()
-        assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(E1))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver.resolve(E1))
         val copy = assertNotNull(storage.packs.find(key(pack)))
         assertEquals(DownloadNzbs.Meta(key(pack), pack.title, stored(E1).candidates.first(), SHOW, 2, leads = true), copy.meta)
         assertContentEquals(pack.nzb, copy.source.nzb)
         dao.setState(E1, DownloadState.Done, null, NOW)
 
-        val next = assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(E2))
+        val next = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver.resolve(E2))
         assertEquals("Harbor.Lights.S02E02.1080p.WEB.h264-GRP.mkv", next.file.name)
         assertEquals(emptyList(), grabbed)
         assertEquals(listOf(pack.guid), opened.map { it.first })
@@ -739,16 +923,16 @@ class DownloadResolverTest {
         episode(E1, 1, pack)
         episode(E2, 2, pack)
         episode(E4, 4, single, pack)
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E1))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(E1))
         dao.setState(E1, DownloadState.Done, null, NOW)
 
-        val own = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E4))
+        val own = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(E4))
         assertEquals(single.guid, own.row.release?.guid)
         assertEquals(listOf(pack.guid, single.guid), grabbed)
         assertNotNull(storage.packs.find(key(pack)))
         dao.setState(E4, DownloadState.Done, null, NOW)
 
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E2))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(E2))
         assertEquals(listOf(pack.guid, single.guid), grabbed)
     }
 
@@ -760,7 +944,7 @@ class DownloadResolverTest {
     fun `a copy is kept only while another row of the season is still to finish`() = runBlocking<Unit> {
         // Alone in its season.
         episode(E1, 1, pack)
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E1))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(E1))
         assertNull(storage.packs.find(key(pack)))
 
         // The season's others done, failed or removed; another season's, another show's and a film's still to finish.
@@ -771,14 +955,14 @@ class DownloadResolverTest {
         episode(E4, 4, pack) { it.copy(state = DownloadState.Deleting) }
         episode(OTHER_SEASON, 1, pack) { it.copy(season = 3, watchKey = WatchKey.episode(SHOW, 3, 1)) }
         episode(OTHER_SHOW, 1, pack) { it.copy(showTmdbId = 900003, watchKey = WatchKey.episode(900003, 2, 1)) }
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E1))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(E1))
         assertNull(storage.packs.find(key(pack)))
 
         // An episode's own release, with the season's others to come: no copy.
         reset()
         episode(E4, 4, single)
         episode(E2, 2, pack)
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E4))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(E4))
         assertNull(storage.packs.find(key(single)))
 
         // One of the season paused: kept for it, leading, with the indexer's password.
@@ -789,7 +973,7 @@ class DownloadResolverTest {
         )
         episode(E1, 1, locked) { it.copy(runtimeMinutes = 44) }
         episode(E2, 2, locked) { it.copy(state = DownloadState.Paused) }
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E1))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(E1))
         val copy = assertNotNull(storage.packs.find(key(locked)))
         assertEquals(DownloadNzbs.Meta(key(locked), locked.title, stored(E1).candidates.single(), SHOW, 2, leads = true), copy.meta)
         assertContentEquals(locked.nzb, copy.source.nzb)
@@ -799,12 +983,12 @@ class DownloadResolverTest {
         reset()
         episode(E1, 1, locked) { it.copy(runtimeMinutes = 44) }
         episode(E2, 2, locked)
-        assertIs<DownloadResolver.Resolution.Ready>(resolver(cap = 1).resolve(E1))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(cap = 1).resolve(E1))
         assertEquals(false, storage.packs.find(key(locked))?.meta?.leads)
         reset()
         episode(E1, 1, locked) { it.copy(runtimeMinutes = 44) }
         episode(E2, 2, locked)
-        assertIs<DownloadResolver.Resolution.Ready>(resolver(cap = 2).resolve(E1))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(cap = 2).resolve(E1))
         assertEquals(true, storage.packs.find(key(locked))?.meta?.leads)
     }
 
@@ -813,13 +997,13 @@ class DownloadResolverTest {
     fun `a release taken from the season's copy is named by its place in the log`() = runBlocking<Unit> {
         episode(E1, 1, pack)
         episode(E2, 2, single, pack)
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E1))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(E1))
         dao.setState(E1, DownloadState.Done, null, NOW)
         // The single is missing on the providers: the pack, its second, comes from the copy.
         val gone = Fake(single.guid, single.title, single.files, gone = true)
         fakes[single.guid] = gone
         val from = LogBuffer.snapshot().lastOrNull()?.seq ?: 0L
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E2))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(E2))
         val lines = LogBuffer.snapshot().filter { it.seq > from }.map { it.message }
         assertTrue(lines.any { "download $E2, release 2" in it && "copy" in it }, lines.toString())
         assertEquals(emptyList(), lines.filter { line -> listOf(pack.title, pack.guid, key(pack)).any { it in line } })
@@ -835,7 +1019,7 @@ class DownloadResolverTest {
     fun `a pack taken from its season's copy and cut off by a process death is tried again from what was kept, with no grab`() = runBlocking<Unit> {
         episode(E1, 1, pack, single)
         episode(E2, 2, pack, single)
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E1))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(E1))
         dao.setState(E1, DownloadState.Done, null, NOW)
 
         // E2's attempt of the pack, from the copy; the process dies as its articles are checked: what is on disk then.
@@ -854,7 +1038,7 @@ class DownloadResolverTest {
         storage.grabs += grabs
         storage.packs = packs()
 
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E2))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(E2))
         assertEquals(pack.guid, ready.row.release?.guid)
         assertEquals("Harbor.Lights.S02E02.1080p.WEB.h264-GRP.mkv", ready.file.name)
         assertEquals(listOf(pack.guid), grabbed)
@@ -874,7 +1058,7 @@ class DownloadResolverTest {
         episode(E1, 1, pack, single)
         episode(E2, 2, pack, single)
         episode(E3, 3, pack, single)
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E1))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(E1))
         dao.setState(E1, DownloadState.Done, null, NOW)
 
         storage.space = null
@@ -882,7 +1066,7 @@ class DownloadResolverTest {
         assertEquals(DownloadHostRules.STORAGE_UNAVAILABLE, stored(E2).reason)
 
         storage.space = ROOM
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(E2))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(E2))
         assertEquals(pack.guid, ready.row.release?.guid)
         assertEquals(listOf(pack.guid), grabbed)
         assertEquals(listOf(key(pack)), stored(E2).tried)
@@ -912,7 +1096,7 @@ class DownloadResolverTest {
         reset()
         row(single)
         storage.space = DownloadSpace(available = 1_200_000_000L + DownloadSpace.KEPT_FREE, used = 0, queued = 0)
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
     }
 
     @Test
@@ -925,7 +1109,7 @@ class DownloadResolverTest {
 
         // Back: the release that passed every step, from the NZB kept for it, with no second grab.
         storage.space = ROOM
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(single.guid, ready.row.release?.guid)
         assertEquals(listOf(single.guid), grabbed)
         assertEquals(listOf(key(single)), stored().tried)
@@ -967,7 +1151,7 @@ class DownloadResolverTest {
         val known = object : TriedReleases by TriedReleases.None {
             override suspend fun knownMissing(candidate: PlayCandidate) = if (candidate.id == key(broken)) "Skipped: missing on your providers (checked today)" else null
         }
-        assertIs<DownloadResolver.Resolution.Ready>(resolver(tried = known).resolve(ID))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(tried = known).resolve(ID))
         assertEquals(listOf(single.guid), grabbed)
 
         // Every release passed over so: it fails in the play sheet's words for them.
@@ -1030,14 +1214,14 @@ class DownloadResolverTest {
         assertEquals(emptyList(), opened)
         assertNotNull(storage.sources[ID])
         // Taken up: it goes on from its offset.
-        assertEquals(400_000_000L, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.safeOffset)
+        assertEquals(400_000_000L, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID)).row.safeOffset)
 
         reset()
         row(single)
         assertIs<DownloadResolver.Resolution.Unreachable>(resolver(providers = null).resolve(ID))
         assertEquals(emptyList(), grabbed)
         assertEquals(emptyList(), stored().tried)
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
 
         // None saved: the reopen waits for one too, before it opens anything.
         reset()
@@ -1063,7 +1247,7 @@ class DownloadResolverTest {
         // Each resolve after a wait opens the NZB grabbed the first time: no grab is spent while the providers are away.
         assertIs<DownloadResolver.Resolution.Unreachable>(resolver().resolve(ID))
         unreachable.opening = null
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(listOf(unreachable.guid), grabbed)
         assertEquals(listOf(key(unreachable)), stored().tried)
     }
@@ -1085,7 +1269,7 @@ class DownloadResolverTest {
         assertEquals(listOf(single.guid), grabbed)
 
         checkFails = null
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(single.guid, ready.row.release?.guid)
         assertEquals(listOf(single.guid), grabbed)
         assertEquals(listOf(key(single)), stored().tried)
@@ -1097,7 +1281,7 @@ class DownloadResolverTest {
         assertIs<UsenetError.Network>(assertIs<DownloadResolver.Resolution.Unreachable>(resolver().resolve(ID)).error)
         assertEquals(emptyList(), stored().tried)
         single.opening = null
-        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID)).row.release?.guid)
         assertEquals(listOf(single.guid), grabbed)
     }
 
@@ -1117,7 +1301,7 @@ class DownloadResolverTest {
             reset()
             row(single, next)
             probeAnswer = { key -> failed.takeIf { key == key(single) } }
-            val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID), "for $failed")
+            val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID), "for $failed")
             assertEquals(next.guid, ready.row.release?.guid, "for $failed")
             assertEquals(listOf(single.guid, next.guid), grabbed, "for $failed")
             assertEquals(listOf(key(single), key(next)), stored().tried, "for $failed")
@@ -1151,7 +1335,7 @@ class DownloadResolverTest {
 
         // Back: the first release, as it ranked.
         indexerFails = null
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(five[0].guid, ready.row.release?.guid)
         assertEquals(listOf(key(five[0])), stored().tried)
 
@@ -1199,7 +1383,7 @@ class DownloadResolverTest {
 
         // Gone: its first release, as it ranked, counted once.
         indexerFails = null
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(five[0].guid, ready.row.release?.guid)
         assertEquals(listOf(key(five[0])), stored().tried)
     }
@@ -1214,7 +1398,7 @@ class DownloadResolverTest {
         val elsewhere = Fake("hl-s02e04-other", "Harbor.Lights.S02E04.1080p.WEB.h264-WREN", listOf("o1.mkv" to 1_100_000_000L))
         refusing[INDEXER] = NewznabError.DownloadLimitReached("Download limit reached")
         row(single, elsewhere, edit = otherIndexer(elsewhere))
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(elsewhere.guid, ready.row.release?.guid)
         assertEquals(listOf(single.guid, elsewhere.guid), asks)
         assertEquals(listOf(ReleaseKey.of(OTHER_INDEXER, elsewhere.guid)), stored().tried)
@@ -1262,7 +1446,7 @@ class DownloadResolverTest {
 
         // The other indexer back while the limit lasts: its release is the download's.
         refusing.remove(OTHER_INDEXER)
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(elsewhere.guid, ready.row.release?.guid)
     }
 
@@ -1296,7 +1480,7 @@ class DownloadResolverTest {
         val elsewhere = Fake("hl-s02e04-other", "Harbor.Lights.S02E04.1080p.WEB.h264-WREN", listOf("o1.mkv" to 1_100_000_000L))
         refusing[INDEXER] = NewznabError.ApiLimitReached("Request limit reached")
         row(single, elsewhere, edit = otherIndexer(elsewhere))
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(elsewhere.guid, ready.row.release?.guid)
         assertEquals(listOf(single.guid, elsewhere.guid), asks)
         assertEquals(listOf(ReleaseKey.of(OTHER_INDEXER, elsewhere.guid)), stored().tried)
@@ -1314,14 +1498,14 @@ class DownloadResolverTest {
         val elsewhere = Fake("hl-s02e04-other", "Harbor.Lights.S02E04.1080p.WEB.h264-WREN", listOf("o1.mkv" to 1_100_000_000L))
         refusing[INDEXER] = NewznabError.DownloadLimitReached("Download limit reached")
         row(single, elsewhere, edit = otherIndexer(elsewhere))
-        assertEquals(elsewhere.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver(limits = memory).resolve(ID)).row.release?.guid)
+        assertEquals(elsewhere.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(limits = memory).resolve(ID)).row.release?.guid)
         assertEquals(listOf(single.guid, elsewhere.guid), asks)
 
         // The walk's next row: the limited indexer isn't asked.
         reset()
         refusing[INDEXER] = NewznabError.DownloadLimitReached("Download limit reached")
         row(single, elsewhere, edit = otherIndexer(elsewhere))
-        assertEquals(elsewhere.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver(limits = memory).resolve(ID)).row.release?.guid)
+        assertEquals(elsewhere.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(limits = memory).resolve(ID)).row.release?.guid)
         assertEquals(listOf(elsewhere.guid), asks)
 
         // Only the limited indexer's left to try: a wait for its limit, the one its refusal began, with no request.
@@ -1351,7 +1535,7 @@ class DownloadResolverTest {
         val pick = DownloadPick(3, "Harbor.Lights.4_6.mp4", 900_000_004L, PreparedNzb.idFor(unnamedPack.nzb))
         row(unnamedPack, elsewhere) { otherIndexer(elsewhere)(it).copy(pick = DownloadColumns.text(pick)) }
         storage.keepGrab(ID, key(unnamedPack), unnamedPack.nzb, null)
-        val chosen = assertIs<DownloadResolver.Resolution.Ready>(resolver(limits = memory).resolve(ID))
+        val chosen = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(limits = memory).resolve(ID))
         assertEquals(unnamedPack.guid, chosen.row.release?.guid)
         assertEquals("Harbor.Lights.4_6.mp4", chosen.file.name)
         assertEquals(emptyList(), asks)
@@ -1363,7 +1547,7 @@ class DownloadResolverTest {
         reset()
         keptForSeason(pack, leads = false)
         row(pack, single) { it.withFacts(searched = true) }
-        val copied = assertIs<DownloadResolver.Resolution.Ready>(resolver(limits = memory).resolve(ID))
+        val copied = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(limits = memory).resolve(ID))
         assertEquals(pack.guid, copied.row.release?.guid)
         assertEquals(emptyList(), asks)
         assertEquals(listOf(key(pack)), stored().tried)
@@ -1374,7 +1558,7 @@ class DownloadResolverTest {
         keptForSeason(pack, leads = false)
         refusing[INDEXER] = NewznabError.DownloadLimitReached("Download limit reached")
         row(single, pack) { it.withFacts(searched = true) }
-        val after = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val after = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(pack.guid, after.row.release?.guid)
         assertEquals(listOf(single.guid), asks)
         assertEquals(listOf(key(pack)), stored().tried)
@@ -1403,7 +1587,7 @@ class DownloadResolverTest {
         assertEquals(limit, DownloadColumns.limitWait(stored()))
         assertEquals(listOf(single.guid), asks)
 
-        val fromCopy = assertIs<DownloadResolver.Resolution.Ready>(resolver(limits = memory).resolve(E5))
+        val fromCopy = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(limits = memory).resolve(E5))
         assertEquals(pack.guid, fromCopy.row.release?.guid)
         assertEquals("Harbor.Lights.S02E05.1080p.WEB.h264-GRP.mkv", fromCopy.file.name)
         assertEquals(listOf(single.guid), asks, "the copy asks the indexer nothing")
@@ -1430,7 +1614,7 @@ class DownloadResolverTest {
         listedBy[elsewhere.guid] = OTHER_INDEXER
         findReports = listOf(IndexerReport(other, "TVDB id"))
         row { it.withFacts() }
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver(limits = memory, searchIndexers = listOf(indexer, other)).resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(limits = memory, searchIndexers = listOf(indexer, other)).resolve(ID))
         assertEquals(elsewhere.guid, ready.row.release?.guid)
         assertEquals(listOf(listOf(OTHER_INDEXER)), searchedAt, "the limited indexer left out of the search")
         assertEquals(listOf(elsewhere.guid), asks)
@@ -1461,7 +1645,7 @@ class DownloadResolverTest {
         listedBy[elsewhere.guid] = OTHER_INDEXER
         findReports = listOf(IndexerReport(other, "TVDB id"))
         row { it.withFacts() }
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver(limits = memory, searchIndexers = listOf(indexer, other)).resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(limits = memory, searchIndexers = listOf(indexer, other)).resolve(ID))
         assertEquals(elsewhere.guid, ready.row.release?.guid)
         assertEquals(listOf(listOf(OTHER_INDEXER)), searchedAt, "the limited indexer left out of the search")
         assertEquals(listOf(elsewhere.guid), asks)
@@ -1508,7 +1692,7 @@ class DownloadResolverTest {
     fun `a download resolved before is opened again from its own NZB, with no grab, and goes on from its offset`() = runBlocking<Unit> {
         row(passworded) { it.resolvedAs(passworded, "c90a4f.mkv", 1_300_000_000L).copy(safeOffset = 400_000_000L, gaps = listOf(DownloadGap(10, 20))) }
         storage.sources[ID] = DownloadStorage.Source(passworded.nzb, "s3cret-from-indexer")
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(emptyList(), grabbed)
         assertEquals<List<Pair<String, String?>>>(listOf(passworded.guid to "s3cret-from-indexer"), opened)
         assertEquals("c90a4f.mkv", ready.file.name)
@@ -1541,7 +1725,7 @@ class DownloadResolverTest {
             assertEquals(400_000_000L, stored().safeOffset, "for $failure")
 
             passworded.opening = null
-            val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID), "for $failure")
+            val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID), "for $failure")
             assertEquals(400_000_000L, ready.row.safeOffset, "for $failure")
             assertEquals(passworded.guid, ready.row.release?.guid, "for $failure")
         }
@@ -1555,7 +1739,7 @@ class DownloadResolverTest {
     fun `a reopen finds its file listed under another name at its place and size`() = runBlocking<Unit> {
         row(single) { it.resolvedAs(single, OBFUSCATED, 1_200_000_000L).copy(safeOffset = 500_000_000L, relativePath = "downloads/$ID/v.mkv") }
         storage.sources[ID] = DownloadStorage.Source(single.nzb, null)
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals("a8f3c1.mkv", ready.file.name)
         assertEquals(500_000_000L, ready.row.safeOffset)
         assertEquals(emptyList(), grabbed)
@@ -1567,7 +1751,7 @@ class DownloadResolverTest {
     fun `a file whose size no longer matches starts again from 0`() = runBlocking<Unit> {
         row(single) { it.resolvedAs(single, "a8f3c1.mkv", 1_200_000_001L).copy(safeOffset = 600_000_000L, relativePath = "downloads/$ID/v.mkv") }
         storage.sources[ID] = DownloadStorage.Source(single.nzb, null)
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(emptyList(), grabbed)
         assertEquals(0, ready.row.safeOffset)
         assertNull(ready.row.relativePath)
@@ -1596,7 +1780,7 @@ class DownloadResolverTest {
         row(single, pack, tried = listOf(single)) { it.resolvedAs(single, "gone.mkv", 1_300_000_000L) }
         storage.sources[ID] = DownloadStorage.Source(single.nzb, null)
         onGrab = { item -> storage.events += "grab ${item.guid}" }
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(listOf(pack.guid), grabbed)
         assertEquals(pack.guid, ready.row.release?.guid)
         assertContentEquals(pack.nzb, storage.sources[ID]?.nzb)
@@ -1614,6 +1798,7 @@ class DownloadResolverTest {
                 { _, _, _ -> TriedReleases.None }, { 10 }, providersChecked = { ++checks == 1 }, clock = { NOW },
                 heldPreparer = { NzbPreparer(prepareBackend, Dispatchers.Unconfined) }, downloadContext = { DownloadRanking.context(StaticDeviceCapabilities(), PlaybackPrefs(), DownloadPrefs(), "en") },
                 search = DownloadSearch(dao, { _, _, _ -> error("No search for a row without search facts") }, { listOf(indexer) }, { context(null) }, { storage.space(it) }),
+                listings = listings,
             ).resolve(ID),
         )
         assertNull(storage.sources[ID])
@@ -1624,7 +1809,7 @@ class DownloadResolverTest {
     fun `the release its file came from goes on from the offset, another starts from 0 with the old file deleted`() = runBlocking<Unit> {
         // Try again after "Storage is full": no copy, the same release picked again.
         row(single) { it.resolvedAs(single, "a8f3c1.mkv", 1_200_000_000L).copy(safeOffset = 700_000_000L, relativePath = "downloads/$ID/v.mkv") }
-        val same = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val same = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(listOf(single.guid), grabbed)
         assertEquals(700_000_000L, same.row.safeOffset)
         assertEquals("downloads/$ID/v.mkv", same.row.relativePath)
@@ -1632,7 +1817,7 @@ class DownloadResolverTest {
 
         reset()
         row(single, pack) { it.resolvedAs(broken, "b71d0e.mkv", 4_000_000_000L).copy(safeOffset = 700_000_000L, relativePath = "downloads/$ID/v.mkv") }
-        val other = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val other = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(0, other.row.safeOffset)
         assertNull(other.row.relativePath)
         assertEquals(listOf(ID), storage.deletedVideos)
@@ -1648,7 +1833,7 @@ class DownloadResolverTest {
         row(unnamedPack) { it.withFacts() }
         var atGrab: Download? = null
         onGrab = { if (atGrab == null) atGrab = stored() }
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(listOf(FACTS.request(2, 4)), searched)
         val first = assertNotNull(atGrab, "nothing was grabbed")
         assertEquals(listOf(broken.guid, single.guid), first.candidates.map { it.guid })
@@ -1676,7 +1861,7 @@ class DownloadResolverTest {
         onGrab = {}
         // A new process.
         storage.packs = packs()
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(single.guid, ready.row.release?.guid)
         assertEquals(1, searched.size, "searched once")
         assertEquals(listOf(single.guid), grabbed)
@@ -1694,7 +1879,7 @@ class DownloadResolverTest {
         row(single) { it.withFacts().resolvedAs(passworded, "c90a4f.mkv", 1_300_000_000L) }
         storage.sources[ID] = DownloadStorage.Source(passworded.nzb, "s3cret-from-indexer")
         fakes[passworded.guid] = passworded
-        assertEquals(passworded.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(passworded.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID)).row.release?.guid)
         assertEquals(emptyList(), grabbed)
         assertEquals(emptyList(), searched)
 
@@ -1702,7 +1887,7 @@ class DownloadResolverTest {
         reset()
         keptForSeason(pack)
         row(single) { it.withFacts().copy(pick = DownloadColumns.text(DownloadPick(0, "a8f3c1.mkv", 1_200_000_000L, PreparedNzb.idFor(single.nzb)))) }
-        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID)).row.release?.guid)
         assertEquals(listOf(single.guid), grabbed)
         assertEquals(emptyList(), searched)
 
@@ -1710,7 +1895,7 @@ class DownloadResolverTest {
         reset()
         keptForSeason(pack)
         row(single) { it.withFacts() }
-        val packed = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val packed = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(pack.guid, packed.row.release?.guid)
         assertEquals("Harbor.Lights.S02E04.1080p.WEB.h264-GRP.mkv", packed.file.name)
         assertEquals(emptyList(), grabbed)
@@ -1721,7 +1906,7 @@ class DownloadResolverTest {
         reset()
         finds = listOf(passworded)
         row(single) { it.withFacts() }
-        assertEquals(passworded.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(passworded.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID)).row.release?.guid)
         assertEquals(listOf(passworded.guid), grabbed)
         assertEquals(1, searched.size)
 
@@ -1729,14 +1914,14 @@ class DownloadResolverTest {
         reset()
         finds = listOf(passworded)
         row(single) { it.withFacts(searched = true) }
-        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID)).row.release?.guid)
         assertEquals(emptyList(), searched)
 
         // An episode queued from its own ⋮ keeps its releases' order: no pack first, no search.
         reset()
         keptForSeason(pack)
         row(single)
-        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID)).row.release?.guid)
         assertEquals(listOf(single.guid), grabbed)
         assertEquals(emptyList(), searched)
     }
@@ -1752,14 +1937,14 @@ class DownloadResolverTest {
         finds = listOf(small)
         keptForSeason(pack)
         row(single) { it.withFacts().copy(runtimeMinutes = 44) }
-        assertEquals(small.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver(cap = 1).resolve(ID)).row.release?.guid)
+        assertEquals(small.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(cap = 1).resolve(ID)).row.release?.guid)
         assertEquals(listOf(small.guid), grabbed)
         assertEquals(1, searched.size)
         // Under 2 GB an hour it leads.
         reset()
         keptForSeason(pack)
         row(single) { it.withFacts().copy(runtimeMinutes = 44) }
-        assertEquals(pack.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver(cap = 2).resolve(ID)).row.release?.guid)
+        assertEquals(pack.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(cap = 2).resolve(ID)).row.release?.guid)
 
         // Its share, about 1 GB, more than the 0.9 GB free.
         reset()
@@ -1767,7 +1952,7 @@ class DownloadResolverTest {
         keptForSeason(pack)
         row(single) { it.withFacts() }
         storage.space = DownloadSpace(available = 900_000_000L + DownloadSpace.KEPT_FREE, used = 0, queued = 0)
-        assertEquals(small.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(small.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID)).row.release?.guid)
         assertEquals(listOf(small.guid), grabbed)
 
         // A copy kept as not leading.
@@ -1775,7 +1960,7 @@ class DownloadResolverTest {
         finds = listOf(small)
         keptForSeason(pack, leads = false)
         row(single) { it.withFacts() }
-        assertEquals(small.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(small.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID)).row.release?.guid)
     }
 
     /**
@@ -1791,7 +1976,7 @@ class DownloadResolverTest {
         keptForSeason(gonePack)
         finds = listOf(gonePack, single)
         row { it.withFacts() }
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(single.guid, ready.row.release?.guid)
         // The pack from its copy, no grab; the single grabbed.
         assertEquals(listOf(single.guid), grabbed)
@@ -1837,7 +2022,7 @@ class DownloadResolverTest {
         storage.grabs += grabs
         storage.packs = packs()
 
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(pack.guid, ready.row.release?.guid)
         assertEquals("Harbor.Lights.S02E04.1080p.WEB.h264-GRP.mkv", ready.file.name)
         assertEquals(emptyList(), grabbed)
@@ -1856,7 +2041,7 @@ class DownloadResolverTest {
         keptForSeason(pack)
         row(single, tried = listOf(single)) { it.withFacts(searched = true) }
         storage.grabs[ID] = DownloadStorage.Grab(key(single), DownloadStorage.Source(single.nzb, null))
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver(attempts = 1).resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(attempts = 1).resolve(ID))
         assertEquals(single.guid, ready.row.release?.guid)
         assertEquals(emptyList(), grabbed)
         assertEquals(emptyList(), searched)
@@ -1867,7 +2052,7 @@ class DownloadResolverTest {
         keptForSeason(pack)
         row(single, tried = listOf(single)) { it.withFacts(searched = true) }
         storage.grabs[ID] = DownloadStorage.Grab(key(single), DownloadStorage.Source(single.nzb, null))
-        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).row.release?.guid)
+        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID)).row.release?.guid)
         assertEquals(emptyList(), grabbed)
         assertEquals(listOf(key(single)), stored().tried)
     }
@@ -1933,7 +2118,7 @@ class DownloadResolverTest {
         storage.space = DownloadSpace(available = 1_000_000_000L + DownloadSpace.KEPT_FREE, used = 0, queued = 0)
         val written = mutableListOf<String?>()
         dao.onUpdate = { written += it.release?.guid }
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(smaller.guid, ready.row.release?.guid)
         assertEquals(listOf(single.guid, smaller.guid), grabbed)
         assertEquals(listOf(key(single), key(smaller)), stored().tried)
@@ -1970,7 +2155,7 @@ class DownloadResolverTest {
             INDEXER, unnamedPack.guid, unnamedPack.title, null, fileIndex = 3, nzbId = PreparedNzb.idFor(unnamedPack.nzb), fileName = "Harbor.Lights.4_6.mp4",
             fileSize = 900_000_004L,
         )
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals("Harbor.Lights.4_6.mp4", ready.file.name)
         assertEquals(listOf(unnamedPack.guid), grabbed)
         assertEquals(listOf(key(unnamedPack)), probed)
@@ -1992,7 +2177,7 @@ class DownloadResolverTest {
             INDEXER, unnamedPack.guid, unnamedPack.title, null, fileIndex = 1, nzbId = PreparedNzb.idFor(unnamedPack.nzb), fileName = "Harbor.Lights.2-6.mp4",
             fileSize = 900_000_002L,
         )
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals("Harbor.Lights.4_6.mp4", ready.file.name)
         assertEquals(emptyList(), grabbed)
         assertEquals(listOf(unnamedPack.guid), opened.map { it.first })
@@ -2011,12 +2196,12 @@ class DownloadResolverTest {
     fun `a chosen file no longer in its pack falls back to the episode's file, else that attempt fails`() = runBlocking<Unit> {
         row(pack) { it.copy(pick = DownloadColumns.text(DownloadPick(9, "Harbor.Lights.S02E04.REPACK.mkv", 1_000_000_009L, PreparedNzb.idFor(pack.nzb)))) }
         storage.keepGrab(ID, key(pack), pack.nzb, null)
-        assertEquals("Harbor.Lights.S02E04.1080p.WEB.h264-GRP.mkv", assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).file.name)
+        assertEquals("Harbor.Lights.S02E04.1080p.WEB.h264-GRP.mkv", assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID)).file.name)
 
         reset()
         row(unnamedPack, single) { it.copy(pick = DownloadColumns.text(DownloadPick(9, "Harbor.Lights.9_6.mp4", 900_000_009L, PreparedNzb.idFor(unnamedPack.nzb)))) }
         storage.keepGrab(ID, key(unnamedPack), unnamedPack.nzb, null)
-        assertEquals("a8f3c1.mkv", assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID)).file.name)
+        assertEquals("a8f3c1.mkv", assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID)).file.name)
         assertEquals(listOf(single.guid), grabbed)
         assertEquals(listOf(key(single)), probed)
     }
@@ -2069,7 +2254,7 @@ class DownloadResolverTest {
     @Test
     fun `an imported file resolves from its NZB's copy with no indexer asked, its volumes checked, opened with its password and probed`() = runBlocking<Unit> {
         imported(pack, E03)
-        val ready = assertIs<DownloadResolver.Resolution.Ready>(resolver(fetchNzb = unasked).resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(fetchNzb = unasked).resolve(ID))
         assertEquals(E03, ready.file.name)
         assertEquals(1_000_000_003L, ready.file.size)
         assertEquals(emptyList(), asks)
@@ -2098,7 +2283,7 @@ class DownloadResolverTest {
         listOf(pack to E03, single to "a8f3c1.mkv").forEach { (fake, name) ->
             reset()
             imported(fake, name)
-            assertIs<DownloadResolver.Resolution.Ready>(resolver(fetchNzb = unasked).resolve(ID), name)
+            assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(fetchNzb = unasked).resolve(ID), name)
             assertEquals<List<String?>>(listOf("Opening…", "Checking availability", "Checking audio and video"), dao.reasons, name)
             assertTrue(dao.states.all { it == DownloadState.Resolving }, name)
         }
@@ -2113,7 +2298,7 @@ class DownloadResolverTest {
     @Test
     fun `an imported file is picked by its name and size, and one missing from its NZB fails, never taking the largest`() = runBlocking<Unit> {
         imported(pack, E03, index = 0)
-        assertEquals(E03, assertIs<DownloadResolver.Resolution.Ready>(resolver(fetchNzb = unasked).resolve(ID)).file.name)
+        assertEquals(E03, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(fetchNzb = unasked).resolve(ID)).file.name)
 
         // Not in the pack; there by its name at another size; in an NZB of one video, another name.
         listOf(
@@ -2147,7 +2332,7 @@ class DownloadResolverTest {
 
         triedAgain()
         probeAnswer = { null }
-        assertEquals(E03, assertIs<DownloadResolver.Resolution.Ready>(resolver(fetchNzb = unasked).resolve(ID)).file.name)
+        assertEquals(E03, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(fetchNzb = unasked).resolve(ID)).file.name)
         assertEquals(emptyList(), asks)
         assertEquals<List<Pair<String, String?>>>(listOf(pack.guid to TYPED, pack.guid to TYPED), opened)
         assertEquals(listOf(importKey(pack)), stored().tried)
@@ -2186,7 +2371,7 @@ class DownloadResolverTest {
         table.record(IMPORTED, nzbIdOf(pack), listOf(ReleaseChecks.provider(provider.id, provider.host, provider.port)), incomplete = false)
         val before = table.entries.toMap()
         imported(pack, E03)
-        assertIs<DownloadResolver.Resolution.Ready>(resolver(remembered = remembered, fetchNzb = unasked).resolve(ID))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(remembered = remembered, fetchNzb = unasked).resolve(ID))
         assertEquals(before, table.entries)
 
         // Its one file found missing on the provider as it is checked: nothing remembered of it either.
@@ -2207,9 +2392,9 @@ class DownloadResolverTest {
         imported(pack, E02, id = E1)
         imported(pack, E03, id = E2)
         val resolver = resolver(fetchNzb = unasked)
-        assertEquals(E02, assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(E1)).file.name)
+        assertEquals(E02, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver.resolve(E1)).file.name)
         dao.setState(E1, DownloadState.Done, null, NOW)
-        assertEquals(E03, assertIs<DownloadResolver.Resolution.Ready>(resolver.resolve(E2)).file.name)
+        assertEquals(E03, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver.resolve(E2)).file.name)
         assertEquals<List<Pair<String, String?>>>(listOf(pack.guid to TYPED), opened)
         assertEquals(listOf("${pack.guid}/$E02@fake", "${pack.guid}/$E03@fake"), checked)
         assertEquals(emptyList(), asks)
@@ -2248,7 +2433,7 @@ class DownloadResolverTest {
         storage.space = DownloadSpace(available = 1_100_000_000L + DownloadSpace.KEPT_FREE, used = 0, queued = 0)
         row { it.withFacts() }
         val from = LogBuffer.snapshot().lastOrNull()?.seq ?: 0L
-        assertIs<DownloadResolver.Resolution.Ready>(resolver().resolve(ID))
+        assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(ID))
         assertEquals(listOf(key(gonePack), key(tooBig), key(fits)), stored().tried)
         val lines = LogBuffer.snapshot().filter { it.seq > from && (it.tag == "DownloadResolver" || it.tag == "DownloadSearch") }.map { it.message }
         assertTrue(lines.any { "download $ID" in it && "pack" in it }, lines.toString())
@@ -2268,7 +2453,315 @@ class DownloadResolverTest {
         fileName = fileName, size = size, oneVideo = true,
     )
 
+    /**
+     * L460: a torrent's release is prepared by the service accounts on, in the user's order, its file picked with no
+     * question, and opened and probed as a play's is, with no wait for a Usenet provider (none is usable here). The listing
+     * it was prepared as is kept in the row's folder before the row takes the release (L420): its release and file by the
+     * torrent's content id, its source the torrent's; no NZB kept and no grab.
+     */
+    @Test
+    fun `a torrent is prepared on the accounts on with no provider wait, its listing's copy kept before the row takes it`() = runBlocking<Unit> {
+        // Not on the first account any more, on the second.
+        serviceB.cached[goodTorrent.hash] = goodTorrent.files
+        rowOf(goodTorrent.candidate)
+        dao.onUpdate = { row -> row.release?.let { storage.events += "row takes ${it.guid}" } }
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Service>(resolver(providers = false, on = listOf(ACCOUNT_A, ACCOUNT_B)).resolve(ID))
+        assertEquals(listOf(goodTorrent.hash), serviceA.prepares)
+        assertEquals(listOf(goodTorrent.hash), serviceB.prepares)
+        assertEquals(ACCOUNT_B, ready.entry.account)
+        assertEquals(goodTorrent.episode(), ready.file)
+        assertEquals(goodTorrent.episode(), ready.entry.prepared.picked)
+        // The copy first, then the row.
+        assertEquals(listOf("keep listing $ID", "row takes ${goodTorrent.key}"), storage.events.filter { it.startsWith("keep listing") || it.startsWith("row takes") })
+        assertEquals(ready.entry, storage.listings[ID])
+        val kept = stored()
+        assertEquals(DownloadState.Resolving, kept.state)
+        assertEquals(goodTorrent.key, kept.release?.guid)
+        assertEquals(goodTorrent.key, kept.release?.nzbId)
+        assertEquals(ReleaseFacts.TORRENT, kept.release?.source)
+        assertEquals(goodTorrent.episode().name, kept.fileName)
+        assertEquals(goodTorrent.episode().size, kept.size)
+        assertEquals(goodTorrent.episode().index, kept.release?.fileIndex)
+        assertTrue(kept.oneVideo, "the torrent's one video")
+        assertNotNull(kept.tracks)
+        assertEquals(listOf(goodTorrent.key), kept.tried)
+        assertEquals(listOf(goodTorrent.key), probed)
+        assertEquals(emptyMap(), storage.sources)
+        assertEquals(emptyMap(), storage.grabs)
+        assertEquals(emptyList(), grabbed)
+        assertEquals(emptyList(), checked)
+        // Its steps as the play sheet names a torrent's, never Usenet's.
+        assertTrue("Preparing" in dao.reasons, dao.reasons.toString())
+        assertFalse("Fetching NZB" in dao.reasons, dao.reasons.toString())
+    }
+
+    /**
+     * L460: a pack's file is the episode's, picked from the service's listing before anything is added (L179); a pack that
+     * names no file for the episode fails its attempt there, with nothing added to the account, and the next is tried.
+     */
+    @Test
+    fun `a pack torrent picks the episode's file, and one that names none fails its attempt with nothing added`() = runBlocking<Unit> {
+        serviceA.cached[unnamedTorrent.hash] = unnamedTorrent.files
+        serviceA.cached[packTorrent.hash] = packTorrent.files
+        rowOf(unnamedTorrent.candidate, packTorrent.candidate)
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Service>(resolver().resolve(ID))
+        assertEquals("Harbor.Lights.S02E04.1080p.WEB-DL.AAC2.0.H.264-PACK.mkv", ready.file.name)
+        assertEquals(listOf(unnamedTorrent.hash, packTorrent.hash), serviceA.prepares)
+        assertEquals(listOf(packTorrent.hash), serviceA.added)
+        assertEquals(listOf(unnamedTorrent.key, packTorrent.key), stored().tried)
+        assertFalse(stored().oneVideo, "one of the pack's videos")
+        assertEquals(listOf(packTorrent.key), probed)
+    }
+
+    /**
+     * L460: the service's own refusals are no answer about the release, and count no try: its outage on every account the
+     * torrent plays from backs off as an indexer's does, in the debrid words; a refused key and a limit wait. An outage on
+     * one account alone passes the release on to the next.
+     */
+    @Test
+    fun `a service's outage backs off and its refused key and limit wait, none counted`() = runBlocking<Unit> {
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        serviceA.failsFor[goodTorrent.hash] = ServiceError.Down
+        rowOf(goodTorrent.candidate)
+        val out = assertIs<DownloadResolver.Resolution.Unreachable>(resolver().resolve(ID))
+        assertEquals(DownloadHostRules.CANT_REACH_SERVICE, out.words)
+        assertEquals(DownloadState.Resolving, stored().state)
+        assertEquals(DownloadHostRules.CANT_REACH_SERVICE, stored().reason)
+        assertEquals(emptyList(), stored().tried)
+
+        listOf(ServiceError.KeyRefused to DownloadHostRules.CHECK_SERVICE, ServiceError.Limit(Duration.ofMinutes(30)) to DownloadHostRules.SERVICE_LIMIT).forEach { (error, words) ->
+            reset()
+            serviceA.cached[goodTorrent.hash] = goodTorrent.files
+            serviceA.failsFor[goodTorrent.hash] = error
+            rowOf(goodTorrent.candidate)
+            assertEquals(DownloadResolver.Resolution.Waiting(words), resolver().resolve(ID), "$error")
+            assertEquals(DownloadState.Waiting, stored().state)
+            assertEquals(words, stored().reason)
+            assertEquals(emptyList(), stored().tried, "$error")
+        }
+
+        // Out of reach on the first account alone: the second prepares it, and it counts.
+        reset()
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        serviceA.failsFor[goodTorrent.hash] = ServiceError.Down
+        serviceB.cached[goodTorrent.hash] = goodTorrent.files
+        rowOf(goodTorrent.candidate)
+        assertEquals(ACCOUNT_B, assertIs<DownloadResolver.Resolution.Ready.Service>(resolver(on = listOf(ACCOUNT_A, ACCOUNT_B)).resolve(ID)).entry.account)
+        assertEquals(listOf(goodTorrent.key), stored().tried)
+    }
+
+    /**
+     * L460: what fails the release on its accounts is the release's, counted, the row failing in the play sheet's words
+     * where they name no service, never "Couldn't open the release": not cached any more, taken down, refused for the
+     * plan, and no working link to its file. What its account failed is remembered as a play's is (L174): the torrent is
+     * passed over with no call by the next resolve that would try it there, and nothing counted.
+     */
+    @Test
+    fun `a torrent's own failures are counted and said in the play sheet's words`() = runBlocking<Unit> {
+        val io = ProbeResult.Failed(UsenetError.Network(null), null, java.io.IOException("the CDN's answer broke off"))
+        listOf<Pair<(FakeService) -> Unit, String>>(
+            { s: FakeService -> s.cached -= goodTorrent.hash } to "This release is no longer cached",
+            { s: FakeService -> s.failsFor[goodTorrent.hash] = ServiceError.Removed } to "Removed by the debrid service",
+            { s: FakeService -> s.failsFor[goodTorrent.hash] = ServiceError.Refused(tooLarge = true) } to "Too large for your debrid plan",
+            { _: FakeService -> probeAnswer = { io } } to "No longer available from the service",
+        ).forEach { (fault, words) ->
+            reset()
+            serviceA.cached[goodTorrent.hash] = goodTorrent.files
+            fault(serviceA)
+            rowOf(goodTorrent.candidate)
+            val failed = assertIs<DownloadResolver.Resolution.Failed>(resolver().resolve(ID))
+            assertEquals(words, failed.reason)
+            assertEquals(words, stored().reason)
+            assertEquals(DownloadState.Failed, stored().state)
+            assertEquals(listOf(goodTorrent.key), stored().tried, words)
+        }
+
+        // Not cached on its one account, remembered so: the next row of it passes it over with no call.
+        reset()
+        rowOf(goodTorrent.candidate)
+        assertIs<DownloadResolver.Resolution.Failed>(resolver().resolve(ID))
+        dao.delete(ID)
+        serviceA.prepares.clear()
+        rowOf(goodTorrent.candidate)
+        assertEquals(DownloadResolver.Resolution.Failed("Skipped 1 release no longer cached"), resolver().resolve(ID))
+        assertEquals(emptyList(), serviceA.prepares)
+        assertEquals(emptyList(), stored().tried)
+    }
+
+    /**
+     * L460: a torrent row a process left once its file was begun opens again from the copy of its listing in its folder,
+     * with no prepare, no call and no provider wait (none answers here): its file found there by its place, name and size,
+     * written on from its offset. With no copy (a death before it was written), or its file no longer listed so, it
+     * resolves again from its releases, its file starting again from 0.
+     */
+    @Test
+    fun `a torrent row opened again reads its listing's copy with no call, and resolves again with none`() = runBlocking<Unit> {
+        resolvedOn(goodTorrent, offset = 400_000_000)
+        val entry = assertNotNull(storage.listings[ID])
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Service>(resolver(providers = null).resolve(ID))
+        assertEquals(entry, ready.entry)
+        assertEquals(goodTorrent.episode(), ready.file)
+        assertEquals(400_000_000L, ready.row.safeOffset)
+        assertEquals(emptyList(), lookups)
+        assertEquals(emptyList(), serviceA.prepares)
+        assertEquals(emptyList(), storage.deletedVideos)
+
+        // No copy: its releases again, the next one, its file started again from 0.
+        reset()
+        resolvedOn(goodTorrent, offset = 400_000_000)
+        storage.listings.clear()
+        dao.update(stored().copy(candidates = listOf(goodTorrent.candidate, otherTorrent.candidate)))
+        serviceA.cached[otherTorrent.hash] = otherTorrent.files
+        val again = assertIs<DownloadResolver.Resolution.Ready.Service>(resolver().resolve(ID))
+        assertEquals(otherTorrent.files.single(), again.file)
+        assertEquals(0L, again.row.safeOffset)
+        assertEquals(listOf(ID), storage.deletedVideos)
+
+        // Its file listed at another size now: the copy dropped, and its releases again.
+        reset()
+        resolvedOn(goodTorrent, offset = 400_000_000)
+        dao.update(stored().copy(size = 999, candidates = listOf(goodTorrent.candidate, otherTorrent.candidate)))
+        serviceA.cached[otherTorrent.hash] = otherTorrent.files
+        assertEquals(otherTorrent.files.single(), assertIs<DownloadResolver.Resolution.Ready.Service>(resolver().resolve(ID)).file)
+        assertTrue("drop source $ID" in storage.events, storage.events.toString())
+    }
+
+    /** L460, L194: a torrent of an indexer whose "Use with your debrid service" is off now goes to no service: left out, uncounted. */
+    @Test
+    fun `a torrent of an indexer since kept from the service is left out with no call`() = runBlocking<Unit> {
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        rowOf(goodTorrent.candidate, usenet(single))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(offService = setOf(TORZNAB)).resolve(ID))
+        assertEquals(single.guid, ready.row.release?.guid)
+        assertEquals(listOf(key(single)), stored().tried)
+        assertEquals(emptyList(), lookups)
+        assertEquals(emptyList(), serviceA.prepares)
+        assertEquals(listOf(single.guid), grabbed)
+    }
+
+    /**
+     * L422: while debrid is hidden a torrent row's turn makes no call of any kind: before any lookup it fails "Not
+     * available in this version", nothing counted, and one opened again from its listing's copy too. A row with a Usenet
+     * release beside its torrent tries that one.
+     */
+    @Test
+    fun `hidden, a torrent row fails with no call, and a Usenet release beside it is tried`() = runBlocking<Unit> {
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        rowOf(goodTorrent.candidate)
+        val failed = assertIs<DownloadResolver.Resolution.Failed>(resolver(shown = false).resolve(ID))
+        assertEquals(DownloadHostRules.NOT_IN_THIS_VERSION, failed.reason)
+        assertEquals(DownloadHostRules.NOT_IN_THIS_VERSION, stored().reason)
+        assertEquals(emptyList(), stored().tried)
+        assertEquals(emptyList(), lookups)
+        assertEquals(0, onAsked.get())
+        assertEquals(emptyList(), grabbed)
+
+        reset()
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        rowOf(goodTorrent.candidate, usenet(single))
+        assertEquals(single.guid, assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(shown = false).resolve(ID)).row.release?.guid)
+        assertEquals(listOf(key(single)), stored().tried)
+        assertEquals(emptyList(), lookups)
+
+        reset()
+        resolvedOn(goodTorrent, offset = 400_000_000)
+        assertEquals(DownloadResolver.Resolution.Failed(DownloadHostRules.NOT_IN_THIS_VERSION), resolver(shown = false).resolve(ID))
+        assertEquals(emptyList(), lookups)
+        assertEquals(0, onAsked.get())
+    }
+
+    /** With every account switched off or signed out of since it was queued, a torrent row waits for one, nothing counted or asked. */
+    @Test
+    fun `with no account on, a torrent row waits for one`() = runBlocking<Unit> {
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        rowOf(goodTorrent.candidate)
+        assertEquals(DownloadResolver.Resolution.Waiting(DownloadHostRules.CHECK_SERVICE), resolver(on = emptyList()).resolve(ID))
+        assertEquals(emptyList(), stored().tried)
+        assertEquals(emptyList(), lookups)
+    }
+
+    /**
+     * L421: what Resolve's attempts add to an account is held by the resolve while it runs and let go as it ends, however it
+     * ends, so each add starts its grace then and a sweep a grace later removes it: an exhausted resolve, one that waits
+     * (the next torrent's key refused), and one cut short by a pause, held meanwhile.
+     */
+    @Test
+    fun `each attempt's add is held while Resolve runs and let go as it ends, however it ends`() = runBlocking<Unit> {
+        val noAudio = ProbeResult.NoPlayableAudio(listOf("DTS-HD MA"))
+        // Exhausted: added, then its audio isn't one this device plays.
+        var adds = adds()
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        probeAnswer = { noAudio }
+        rowOf(goodTorrent.candidate)
+        assertIs<DownloadResolver.Resolution.Failed>(resolver(adds = adds).resolve(ID))
+        assertEquals(listOf(goodTorrent.hash), serviceA.added)
+        sweptAfterGrace(adds)
+        assertEquals(1, serviceA.removed.size, "let go at the end, removed a grace later")
+
+        // Waiting: the first added and failed, the next's key refused.
+        reset()
+        java.io.File(nzbDir, "debrid/added.json").delete()
+        adds = adds()
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        serviceA.cached[otherTorrent.hash] = otherTorrent.files
+        serviceA.failsFor[otherTorrent.hash] = ServiceError.KeyRefused
+        probeAnswer = { key -> noAudio.takeIf { key == goodTorrent.key } }
+        rowOf(goodTorrent.candidate, otherTorrent.candidate)
+        assertEquals(DownloadResolver.Resolution.Waiting(DownloadHostRules.CHECK_SERVICE), resolver(adds = adds).resolve(ID))
+        sweptAfterGrace(adds)
+        assertEquals(1, serviceA.removed.size, "let go as it waits")
+
+        // Cut short as its probe reads: held meanwhile, past a grace, then let go.
+        reset()
+        java.io.File(nzbDir, "debrid/added.json").delete()
+        adds = adds()
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        val probing = CompletableDeferred<Unit>()
+        onProbe = {
+            probing.complete(Unit)
+            awaitCancellation()
+        }
+        rowOf(goodTorrent.candidate)
+        val resolving = launch(Dispatchers.Default) { resolver(adds = adds).resolve(ID) }
+        withTimeout(10_000) { probing.await() }
+        sweptAfterGrace(adds)
+        assertEquals(emptyList(), serviceA.removed.toList(), "held while it resolves")
+        resolving.cancelAndJoin()
+        sweptAfterGrace(adds)
+        assertEquals(1, serviceA.removed.size, "let go as it was cut short")
+    }
+
+    /**
+     * A torrent's lines in the app's log name the download by its id and the release by its place among the row's, never
+     * by its hash, its release's or file's name, or its account (L419, L208), whether it fails or is kept.
+     */
+    @Test
+    fun `a torrent's Resolve names it by its place, never by its hash, names or account`() = runBlocking<Unit> {
+        serviceA.cached[unnamedTorrent.hash] = unnamedTorrent.files
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        rowOf(unnamedTorrent.candidate, goodTorrent.candidate)
+        val from = LogBuffer.snapshot().lastOrNull()?.seq ?: 0L
+        assertIs<DownloadResolver.Resolution.Ready.Service>(resolver().resolve(ID))
+        val lines = LogBuffer.snapshot().filter { it.seq > from }.map { it.message }
+        val secret = listOf(goodTorrent.hash, unnamedTorrent.hash, goodTorrent.title, unnamedTorrent.title, "WREN", "hl.part") +
+            (goodTorrent.files + unnamedTorrent.files).map { it.name }
+        assertEquals(emptyList(), lines.filter { line -> secret.any { it in line } })
+        assertTrue(lines.any { "play_pipeline: download $ID, release 2 " in it }, lines.toString())
+    }
+
     private suspend fun reset() {
+        services.values.forEach {
+            it.cached.clear()
+            it.failsFor.clear()
+            it.prepares.clear()
+            it.added.clear()
+            it.removed.clear()
+            it.links.set(0)
+        }
+        lookups.clear()
+        onAsked.set(0)
+        misses = ServiceMisses(TriedTable(NOW), now = { NOW })
+        storage.listings.clear()
         dao.rows.value = emptyMap()
         dao.reasons.clear()
         dao.states.clear()
@@ -2441,6 +2934,14 @@ class DownloadResolverTest {
         const val OTHER_SEASON = "0b6c1d2e-s3e1"
         const val OTHER_SHOW = "0b6c1d2e-other"
         const val INDEXER = "fake-indexer"
+
+        /** The torrent indexer the torrents came from (L459). */
+        const val TORZNAB = "fake-torznab"
+
+        /** Two service accounts, as the settings give their ids, and when their keys were saved. */
+        const val ACCOUNT_A = "4c1d9e70-account-a"
+        const val ACCOUNT_B = "8f2a6b13-account-b"
+        const val KEY_AT = 1_790_000_000_000L
 
         /** The second indexer set up ([other]). */
         const val OTHER_INDEXER = "other-indexer"

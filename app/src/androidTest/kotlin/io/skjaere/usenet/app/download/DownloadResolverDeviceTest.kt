@@ -160,7 +160,7 @@ class DownloadResolverDeviceTest {
         row = added
 
         val resolver = DownloadResolver.of(container, storage, indexers = { listOf(INDEXER) }, attempts = { 3 })
-        val ready = withTimeout(120_000) { resolver.resolve(added.id) } as? DownloadResolver.Resolution.Ready
+        val ready = withTimeout(120_000) { resolver.resolve(added.id) } as? DownloadResolver.Resolution.Ready.Usenet
             ?: throw AssertionError("not resolved: ${container.data.downloads.get(added.id)?.let { "${it.state}, ${it.reason}" }}")
 
         // The first failed its full check, before anything of it was fetched; the pack played its part, and the third was
