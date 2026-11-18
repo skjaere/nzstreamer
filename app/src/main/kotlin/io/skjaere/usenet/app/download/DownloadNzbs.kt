@@ -45,7 +45,8 @@ import java.security.MessageDigest
  * written with its row under [changes], storage's, which a sweep outside reconcile reads the rows and deletes under
  * ([sweepRows], L456): no sweep takes a copy whose row came after its read.
  *
- * The password is never logged; a log line names a copy by its folder's first 8 hex digits.
+ * The password is never logged; a log line names a copy by its folder's first 8 hex digits, and a season's torrent pack by
+ * none: its key is a public hash's, whose digest anyone holding a list of hashes could match (L419).
  */
 class DownloadNzbs(
     private val dir: File,
@@ -89,7 +90,7 @@ class DownloadNzbs(
      */
     class Copy(val meta: Meta, val source: DownloadStorage.Source?) {
         // The release's title and key, and the password, are never in a log line.
-        override fun toString() = "Copy(${short(digest(meta.key))}, $source)"
+        override fun toString() = "Copy(${named(meta, digest(meta.key))}, $source)"
     }
 
     /** The prepare of copy [key]'s NZB, as Resolve last made it. */
@@ -124,11 +125,11 @@ class DownloadNzbs(
             val folder = folder(meta.key)
             kept(folder, meta.key, nzb, password)?.let { kept ->
                 _copies.update { copies -> if (copies.any { it.key == kept.key }) copies else copies + kept }
-                log.info("{} {}: kept as it was", what(kept), short(folder.name))
+                log.info("{} {}: kept as it was", what(kept), named(kept, folder.name))
                 return@withContext
             }
             if (!folder.isDirectory && !folder.mkdirs()) {
-                throw IOException("Couldn't make ${if (meta.nzb == null) "season pack" else "imported NZB copy"} ${short(folder.name)}'s folder")
+                throw IOException("Couldn't make ${if (meta.nzb == null) "season pack" else "imported NZB copy"} ${named(meta, folder.name)}'s folder")
             }
             // Kept again: no copy until its meta is back over what is written now.
             _copies.update { kept -> kept.filter { it.key != meta.key } }
@@ -142,7 +143,7 @@ class DownloadNzbs(
             if (nzb != null) {
                 log.info("{} {}: kept for its {}, {} bytes", what(meta), short(folder.name), if (meta.nzb == null) "season" else "downloads", nzb.size)
             } else {
-                log.info("{} {}: kept for its season, a torrent's, its meta alone", what(meta), short(folder.name))
+                log.info("{} {}: kept for its season, its meta alone", what(meta), named(meta, folder.name))
             }
         }
     }
@@ -190,11 +191,11 @@ class DownloadNzbs(
                     kept += meta
                     return@forEach
                 }
-                val named = meta?.let(::what) ?: "Season pack"
+                val kind = meta?.let(::what) ?: "Season pack"
                 if (entry.deleteRecursively() || !entry.exists()) {
-                    log.info("{} {}: dropped, {}", named, short(entry.name), if (meta == null) "no copy" else "no download of it to finish")
+                    log.info("{} {}: dropped, {}", kind, named(meta, entry.name), if (meta == null) "no copy" else "no download of it to finish")
                 } else {
-                    log.warn("{} {}: couldn't be dropped", named, short(entry.name))
+                    log.warn("{} {}: couldn't be dropped", kind, named(meta, entry.name))
                 }
             }
             _copies.value = kept.sortedBy { it.key }
@@ -282,6 +283,12 @@ class DownloadNzbs(
 
         /** How a log line names a copy's folder [name]: its first 8 hex digits; anything else in the folder by none. */
         private fun short(name: String): String = if (HEX.matches(name)) name.take(8) else "(not a copy)"
+
+        /**
+         * How a log line names [meta]'s copy in its folder [name]: as [short] does, but a season's torrent pack by none, its
+         * key being a public hash's (L419). One whose meta can't be read is named as any folder is.
+         */
+        private fun named(meta: Meta?, name: String): String = if (meta?.torrent == true) "(a torrent's)" else short(name)
     }
 }
 

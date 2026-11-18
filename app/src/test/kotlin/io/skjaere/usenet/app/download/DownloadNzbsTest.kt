@@ -259,7 +259,8 @@ class DownloadNzbsTest {
      * hash: written and found, among its season's copies as a Usenet copy is, and kept as it was where it is kept already
      * (its leads as the first row wrote it). It is held by a row of its show and season still to finish, and swept with
      * the season's last. A Usenet copy's meta with its NZB gone is no copy still. Neither on disk nor in a log line is it
-     * named by its hash, its key or its title.
+     * named by its hash, its key or its title; and as its key is a public hash's, whose digest anyone could match, no log
+     * line names its folder either, not even by its first digits (L419), as a Usenet copy's are.
      */
     @Test
     fun `a season's torrent pack is kept as its meta alone, found for its season, held by it and swept`() = runBlocking<Unit> {
@@ -270,6 +271,7 @@ class DownloadNzbsTest {
         assertEquals(torrentMeta, copy.meta)
         assertNull(copy.source)
         val folder = packs.folder(torrentKey)
+        assertFalse(folder.name.take(8) in "$copy", "$copy")
         assertEquals(sha256(torrentKey), folder.name)
         assertEquals(setOf(DownloadNzbs.META), folder.list()!!.toSet())
         assertEquals(listOf(key, torrentKey).sorted(), packs.forSeason(SHOW, 2).map { it.meta.key })
@@ -295,8 +297,9 @@ class DownloadNzbsTest {
         assertEquals(emptyList(), packs.forSeason(SHOW, 2))
 
         val lines = LogBuffer.snapshot().filter { it.seq > from }.map { it.message }
-        assertEquals(emptyList(), lines.filter { line -> listOf(HASH, torrentKey, TORRENT_TITLE, folder.name).any { it in line } })
-        assertTrue(lines.count { folder.name.take(8) in it } >= 2, lines.toString())
+        assertEquals(emptyList(), lines.filter { line -> listOf(HASH, torrentKey, TORRENT_TITLE, folder.name.take(8)).any { it in line } })
+        assertTrue(lines.count { "a torrent's" in it } >= 3, lines.toString())
+        assertTrue(lines.any { packs.folder(key).name.take(8) in it }, "a Usenet copy by its folder's first digits: $lines")
     }
 
     /**
