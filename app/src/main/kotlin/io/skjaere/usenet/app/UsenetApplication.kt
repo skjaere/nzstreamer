@@ -799,6 +799,18 @@ class AppContainer(private val context: Context) {
                 }
             }
         }
+        // A debrid account saved by the user (a key saved, an account added or switched on, a refused key taken again) ends
+        // the downloads' waits on a debrid service (L474), and schedules the host from the app in front; the app's own mark
+        // of a refused key, a refresh, a switch-off or a sign-out sets nothing going. Not while debrid is hidden, nor on a TV.
+        appScope.launch {
+            if (!DownloadHostRules.runs(television) || !DebridGate.shown) return@launch
+            saveOrLog("go on with the downloads as a debrid account is saved") {
+                DownloadHostRules.servicesSaves(settings.services).collect {
+                    downloads.servicesSaved()
+                    if (inFront.value.value) downloadHosts.schedule(DownloadHostRules.ScheduleCause.ServiceSaved)
+                }
+            }
+        }
         appScope.launch {
             if (!DownloadHostRules.runs(television)) return@launch
             saveOrLog("give the downloads' job its new needs") {

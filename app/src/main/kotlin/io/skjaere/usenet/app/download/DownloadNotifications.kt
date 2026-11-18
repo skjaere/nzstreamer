@@ -16,6 +16,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import io.skjaere.usenet.app.MainActivity
 import io.skjaere.usenet.app.R
+import io.skjaere.usenet.app.debrid.DebridGate
 import io.skjaere.usenet.app.download.DownloadNotice.Action
 import io.skjaere.usenet.app.download.DownloadNotice.Kind
 import io.skjaere.usenet.app.download.DownloadNotice.Progress
@@ -185,10 +186,11 @@ object DownloadNotices {
 
     /**
      * [row] failed: why, in technical words, and Choose release, which opens Downloads at its list. A file of an NZB opened
-     * on Import has no Choose release (nothing is chosen for it, L454): a tap opens Downloads, where Try again is.
+     * on Import has no Choose release (nothing is chosen for it, L454): a tap opens Downloads, where Try again is. In a
+     * build that hides debrid ([shown] false), a torrent's debrid reason reads "Not available in this version" (L422).
      */
-    fun failed(row: Download): DownloadNotice {
-        val words = checkNotNull(DownloadHostRules.words(row.copy(state = DownloadState.Failed)))
+    fun failed(row: Download, shown: Boolean = DebridGate.shown): DownloadNotice {
+        val words = checkNotNull(DownloadHostRules.words(row.copy(state = DownloadState.Failed), shown = shown))
         val actions = if (row.kind == DownloadKind.Release) emptyList() else listOf(Action.ChooseRelease)
         return DownloadNotice(Kind.Failed, row.id, words.title, words.text, actions = actions)
     }

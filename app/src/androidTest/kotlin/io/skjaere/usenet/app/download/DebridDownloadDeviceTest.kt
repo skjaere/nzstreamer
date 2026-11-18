@@ -1,6 +1,8 @@
 package io.skjaere.usenet.app.download
 
 import android.os.Build
+import android.os.Bundle
+import android.os.SystemClock
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
@@ -28,13 +30,16 @@ import io.skjaere.usenet.app.everyStep
 import io.skjaere.usenet.app.play.PlayerLaunch
 import io.skjaere.usenet.app.read
 import io.skjaere.usenet.app.waitFor
+import io.skjaere.usenet.core.StreamTraffic
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.RememberedRelease
+import io.skjaere.usenet.data.ServiceSignIn
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.debrid.InfoHash
+import io.skjaere.usenet.debrid.ServiceKind
 import io.skjaere.usenet.metadata.Episode
 import io.skjaere.usenet.metadata.EpisodeSummary
 import io.skjaere.usenet.metadata.ExternalIds
@@ -45,7 +50,9 @@ import io.skjaere.usenet.player.PlayUris
 import io.skjaere.usenet.releases.ReleaseFacts
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -54,6 +61,7 @@ import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeFalse
 import org.junit.Assume.assumeTrue
@@ -61,6 +69,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.nio.ByteBuffer
 import java.time.LocalDate
 import java.util.concurrent.ConcurrentHashMap
 
@@ -74,6 +83,11 @@ import java.util.concurrent.ConcurrentHashMap
  *   episode's row plays its file through the hook, asking nothing of the fakes.
  * - A torrent row a process left once its file was begun, its listing's copy in its folder: a cut mid-transfer opens again
  *   at the byte reached, with one more link asked of the account.
+ * - Its account's key refused: it waits "Check your debrid service", and stays so as the app marks the key; a key saved
+ *   again queues it, and it goes on to Done (L474).
+ * - A stream opened meanwhile (the test's own meter): its row on the Downloads page says "Waits while something streams",
+ *   nothing is asked while it lasts, and a fresh link follows 10 s after it ends (L471); M-wait reported.
+ * - A downloaded file played meanwhile opens no meter: the download goes on beside it, never waiting (L471).
  *
  * Kept apart (L464): the fakes' invented account alone, saved so the debug build's seeding never saves another; before and
  * after each case every download row deleted and the downloads' jobs cancelled, so no job Android runs later resolves a
@@ -228,7 +242,138 @@ class DebridDownloadDeviceTest {
      */
     @Test
     fun aCutMidTransferOpensAgainAtItsOffsetWithOneMoreLink() = runBlocking<Unit> {
-        // As Resolve leaves a torrent row: prepared on the account (the app's own client), its listing's copy kept.
+        val row = seededTorrent()
+        // Every body cut after CUT bytes: the sample's first, then its rest whole. The links made before expired.
+        DebridFakes.control("cdn?cut=$CUT")
+        DebridFakes.control("cdn-expire")
+        val before = calls()
+
+        val walk = walk()
+        val done = done(row)
+        walk.join()
+        assertWhole(done)
+        val after = calls()
+        assertEquals("a link for the first body and one more for the rest", before.getValue(REQUESTDL) + 2, after.getValue(REQUESTDL))
+        assertEquals("nothing else asked of the account: no prepare, no list", before - REQUESTDL, after - REQUESTDL)
+        assertEquals(mapOf(0L to 1, CUT to 1), cdnFrom())
+        assertEquals("one body open at once", 1, counts().getInt("cdnOpenMax"))
+    }
+
+
+    /**
+     * L474: the account's key refused as the torrent is written: the row waits "Check your debrid service", the walk
+     * ending, and stays so, at its offset, as the app marks the key refused (the app's own mark is no save of the user's).
+     * A key saved again (the same, taken by the service now) queues it again, and it goes on to Done, whole.
+     */
+    @Test
+    fun aRefusedKeyWaitsAsTheAppMarksItAndANewKeySavedGoesOn() = runBlocking<Unit> {
+        val row = seededTorrent()
+        DebridFakes.control("refuse-keys?on=true")
+        walk().join()
+        val waiting = rowNow(row.id)
+        assertEquals(DownloadState.Waiting, waiting.state)
+        assertEquals(DownloadHostRules.CHECK_SERVICE, waiting.reason)
+        waitFor("the key marked refused") { runBlocking { container.settings.services.first() }.firstOrNull { it.id == fakes.accountId && it.keyRefused } }
+        // The app's own mark sets nothing going: the row waits on, at its offset.
+        delay(SETTLE_MILLIS)
+        val still = rowNow(row.id)
+        assertEquals(DownloadState.Waiting, still.state)
+        assertEquals(DownloadHostRules.CHECK_SERVICE, still.reason)
+        assertEquals(waiting.safeOffset, still.safeOffset)
+
+        DebridFakes.control("refuse-keys?on=false")
+        container.settings.saveService(ServiceKind.TorBox.name, DebridFakes.TORBOX_KEY) { ServiceSignIn(DebridFakes.TORBOX_ACCOUNT) }
+        waitFor("queued again by the key saved") { rowNow(row.id).takeIf { it.state != DownloadState.Waiting } }
+        walk()
+        assertWhole(done(row))
+    }
+
+    /**
+     * L471 (W123): a stream opened meanwhile (the test's own meter on the container's StreamTraffic, as a play's or a cast's
+     * stream opens one) holds the download where it is: its row on the Downloads page says "Waits while something
+     * streams" with how far it is and Pause, no link is asked and no body begun while the stream lasts, and once it ends
+     * the download goes on with a fresh link, 10 s later, to Done, whole. It reports M-wait as the page sees it.
+     */
+    @Test
+    fun aStreamOpenedMeanwhileHoldsTheDownloadOnItsPageUntilItEnds() = runBlocking<Unit> {
+        val row = seededTorrent()
+        val seeds = DownloadsPageSeeds(context, container)
+        seeds.adopt(row)
+        compose.show(context) { DownloadsScreen(seeds.deps(), onBack = {}, onSettings = {}, onShow = {}, onOpenMovie = {}) }
+        DebridFakes.control("cdn?slow=$SLOW_KBPS")
+        DebridFakes.control("cdn-expire")
+        walk()
+        waitFor("1 MB written", DOWNLOAD_MILLIS) { written(row.id).takeIf { it >= 1_000_000 } }
+        var meter: StreamTraffic.Meter? = null
+        try {
+            val opened = SystemClock.elapsedRealtime()
+            meter = container.streamTraffic.open()
+            waitFor("the row waiting for the stream", 10_000) { rowNow(row.id).takeIf { it.reason == DownloadHostRules.WAITS_FOR_STREAM } }
+            val said = SystemClock.elapsedRealtime()
+            compose.waitFor(hasText("${DownloadHostRules.WAITS_FOR_STREAM} · ", substring = true))
+            assertTrue("the queue's Pause on its row", compose.exists(hasContentDescription(DownloadsPage.PAUSE)))
+            waitFor("the body let go at the fake", 5_000) { counts().getInt("cdnOpen").takeIf { it == 0 } }
+            val links = calls().getValue(REQUESTDL)
+            val bodies = cdnFrom()
+            val held = written(row.id)
+            delay(HELD_MILLIS)
+            assertEquals("no link asked while it streams", links, calls().getValue(REQUESTDL))
+            assertEquals("no body begun while it streams", bodies, cdnFrom())
+            assertEquals("nothing written while it streams", held, written(row.id))
+            assertEquals(DownloadState.Running, rowNow(row.id).state)
+
+            meter.close()
+            val ended = SystemClock.elapsedRealtime()
+            meter = null
+            waitFor("a fresh link", 30_000) { calls().getValue(REQUESTDL).takeIf { it > links } }
+            val next = SystemClock.elapsedRealtime()
+            assertTrue("went on ${next - ended} ms after the stream ended", next - ended >= ServiceDownloadWriter.QUIET.inWholeMilliseconds - POLL_SLACK_MILLIS)
+            val done = done(row)
+            assertWhole(done)
+            assertEquals("one link per stream start", links + 1, calls().getValue(REQUESTDL))
+            assertEquals("one body open at once", 1, counts().getInt("cdnOpenMax"))
+            compose.waitTill("the wait's words gone") { !compose.exists(hasText(DownloadHostRules.WAITS_FOR_STREAM, substring = true)) }
+            report(M_WAIT, "page case: meter open to the row's words ${said - opened} ms; the meter's close to the next link ${next - ended} ms (polled every 50 ms)")
+        } finally {
+            meter?.close()
+        }
+    }
+
+    /**
+     * L471: a downloaded file played here meanwhile opens no meter, so the debrid download goes on beside it, never
+     * waiting: the play's file is another episode's download, played through the hook's launch in the player.
+     */
+    @Test
+    fun aDownloadedFilePlayedMeanwhileHoldsNothing() = runBlocking<Unit> {
+        val played = finishedEpisode()
+        val row = seededTorrent()
+        DebridFakes.control("cdn?slow=$PLAYED_KBPS")
+        DebridFakes.control("cdn-expire")
+        val reasons = ConcurrentHashMap.newKeySet<String>()
+        var streamed = false
+        val scope = CoroutineScope(Dispatchers.Default).also { watching += it }
+        scope.launch { container.data.downloads.all().collect { rows -> rows.firstOrNull { it.id == row.id }?.reason?.let(reasons::add) } }
+        scope.launch { container.streamTraffic.streaming.collect { if (it) streamed = true } }
+        walk()
+        waitFor("1 MB written", DOWNLOAD_MILLIS) { written(row.id).takeIf { it >= 1_000_000 } }
+        val launch = checkNotNull(DownloadLaunch.of(played))
+        ActivityScenario.launch<PlayerActivity>(PlayerActivity.intent(context, launch)).use { scenario ->
+            waitFor("the player playing the file", PLAYER_MILLIS) { scenario.read { it.player?.takeIf { p -> p.playbackState == Player.STATE_READY && p.currentPosition > 0 } } }
+            val before = written(row.id)
+            delay(HELD_MILLIS)
+            assertTrue("the download went on beside the play", written(row.id) > before)
+        }
+        assertWhole(done(row))
+        assertFalse("no meter opened by the file's play", streamed)
+        assertFalse("never waited: $reasons", DownloadHostRules.WAITS_FOR_STREAM in reasons)
+        assertEquals("one link: never stopped", 1, calls().getValue(REQUESTDL))
+    }
+
+    /**
+     * A torrent row as Resolve leaves one, the case's own: S01E02's torrent prepared on the fake account (the app's own
+     * client), its listing's copy in its folder, its release and file the row's, nothing written yet.
+     */
+    private suspend fun seededTorrent(): Download {
         val account = fakes.accountId
         val service = container.services.gated(account) ?: throw AssertionError("the fake account isn't on")
         val prepared = service.prepare(InfoHash.of(GOOD_HASH)) { listing -> listing.files.firstOrNull { it.path.endsWith(".mkv") } }
@@ -245,21 +390,46 @@ class DebridDownloadDeviceTest {
         )
         container.downloadStorage.add(row)
         container.downloadStorage.keepListing(row.id, entry)
-        // Every body cut after CUT bytes: the sample's first, then its rest whole. The links made before expired.
-        DebridFakes.control("cdn?cut=$CUT")
-        DebridFakes.control("cdn-expire")
-        val before = calls()
+        return row
+    }
 
-        // The walk, as a host runs it.
-        val walk = CoroutineScope(Dispatchers.Default).also { watching += it }.launch { container.downloads.run(DownloadHost.Service) }
-        val done = done(row)
-        walk.join()
-        assertWhole(done)
-        val after = calls()
-        assertEquals("a link for the first body and one more for the rest", before.getValue(REQUESTDL) + 2, after.getValue(REQUESTDL))
-        assertEquals("nothing else asked of the account: no prepare, no list", before - REQUESTDL, after - REQUESTDL)
-        assertEquals(mapOf(0L to 1, CUT to 1), cdnFrom())
-        assertEquals("one body open at once", 1, counts().getInt("cdnOpenMax"))
+    /** S01E01 downloaded, finished: chapters.mkv written as its file, its row Done, among the runner's finished ones. */
+    private suspend fun finishedEpisode(): Download {
+        val bytes = DownloadFixtures.media(PLAYED)
+        val name = "Harbor.Lights.S01E01.720p.WEB.h264-KESTREL.mkv"
+        val storage = container.downloadStorage
+        val id = Download.newId()
+        storage.open(id, name, bytes.size.toLong()).use { channel ->
+            val buffer = ByteBuffer.wrap(bytes)
+            while (buffer.hasRemaining()) channel.write(buffer)
+            channel.force(true)
+        }
+        storage.finish(id, name)
+        val size = bytes.size.toLong()
+        val row = Download(
+            id = id, watchKey = WatchKey.episode(SHOW, 1, 1), kind = DownloadKind.Episode, title = "Harbor Lights", showTmdbId = SHOW, season = 1, episode = 1,
+            seasonEpisodes = EPISODES.size, episodeName = EPISODES[0], state = DownloadState.Done, position = -1,
+            release = RememberedRelease("fake-prowlarr", "hl-s01e01-kestrel", name.removeSuffix(".mkv"), null, 0, "nzb-hl-s01e01", name, size),
+            fileName = name, size = size, indexerSize = size, safeOffset = size, relativePath = storage.relativePath(id, name), createdAt = 1, completedAt = 2,
+            updatedAt = 2,
+        )
+        storage.add(row)
+        waitFor("the finished episode among the runner's") { container.downloads.done.value[row.watchKey]?.takeIf { it.id == id } }
+        return row
+    }
+
+    /** The walk, as a host runs it, in the case's own scope. */
+    private fun walk(): Job = CoroutineScope(Dispatchers.Default).also { watching += it }.launch { container.downloads.run(DownloadHost.Service) }
+
+    /** Download [id] from the table now. */
+    private fun rowNow(id: String): Download = runBlocking { container.data.downloads.get(id) } ?: throw AssertionError("download $id gone")
+
+    /** What the runner says of download [id]'s file written now: the live write's bytes while it is written. */
+    private fun written(id: String): Long = container.downloads.state.value.firstOrNull { it.row.id == id }?.written ?: 0
+
+    /** Says [line] under [key] through the instrumentation's status, as the pairs do: the run's output keeps it. */
+    private fun report(key: String, line: String) {
+        instrumentation.sendStatus(STATUS, Bundle().apply { putString(key, line) })
     }
 
     private val today = LocalDate.now()
@@ -294,6 +464,28 @@ class DebridDownloadDeviceTest {
 
         /** Where the CDN cuts the first body: a little over half of the fake's sample. */
         const val CUT = 5_000_000L
+
+        /** The fake CDN's pace for a download that must still run while a case acts: the sample in about 11 s. */
+        const val SLOW_KBPS = 800
+
+        /** The fake CDN's pace while a downloaded file plays beside the download: the sample in about half a minute. */
+        const val PLAYED_KBPS = 300
+
+        /** How long a case watches nothing move while it is held, or the download go on beside a play. */
+        const val HELD_MILLIS = 3_000L
+
+        /** How long a case lets the app's own watches settle before it reads what they left. */
+        const val SETTLE_MILLIS = 2_000L
+
+        /** The polls' slack in a measured wait. */
+        const val POLL_SLACK_MILLIS = 200L
+
+        /** The asset a finished download's file is written from: a short film with chapters. */
+        const val PLAYED = "chapters.mkv"
+
+        /** The instrumentation status's key for M-wait, and its result code (as the writer's device class reports it). */
+        const val M_WAIT = "M-wait"
+        const val STATUS = 2
 
         const val SEEDING_MILLIS = 60_000L
         const val SEARCH_MILLIS = 60_000L

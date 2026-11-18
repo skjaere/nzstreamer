@@ -3,12 +3,17 @@ package io.skjaere.usenet.app.download
 import android.annotation.SuppressLint
 import android.app.job.JobParameters
 import io.skjaere.usenet.app.casting.CastWakeLock
+import io.skjaere.usenet.app.debrid.DebridGate
 import io.skjaere.usenet.app.play.ReleaseName
+import io.skjaere.usenet.core.AttemptFailure
 import io.skjaere.usenet.core.formatSize
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadPrefs
 import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.data.ServiceAccount
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import java.util.Locale
 
 /** What runs the downloads in the background (L334). */
@@ -117,6 +122,48 @@ object DownloadHostRules {
     /** Waits for what the job's constraints watch: the job runs again once they are met, so the row can run. */
     private val NEED_WAITS = setOf(WAITING_FOR_WIFI, WAITING_FOR_NETWORK, WAITING_TO_CHARGE)
 
+    /** The waits for the providers and the indexers, which a provider saved queues again (L388). */
+    val PROVIDER_WAITS: Set<String> = setOf(CHECK_PROVIDER, CANT_REACH_PROVIDER, CANT_REACH_INDEXER)
+
+    /**
+     * A debrid account's waits (L461, L474): its key refused, its service out of reach for an hour, and its limit. The
+     * user's save of the accounts ([servicesSaved]) queues them again, as a provider saved queues [PROVIDER_WAITS].
+     */
+    val SERVICE_WAITS: Set<String> = setOf(CHECK_SERVICE, CANT_REACH_SERVICE, SERVICE_LIMIT)
+
+    /** The waits Resume queues again: the providers', the services', storage's, and the limits', each its download's alone. */
+    val RESUMED_WAITS: Set<String> = PROVIDER_WAITS + SERVICE_WAITS + STORAGE_UNAVAILABLE + LIMIT_REACHED
+
+    /**
+     * Whether a download's wait for [reason] ends the walk, and so its host (L388): every wait but a limit's, an indexer's
+     * or a debrid account's, which holds its download alone while the walk goes on to the rows that need nothing of it
+     * (L399b, L461, C14).
+     */
+    fun endsWalk(reason: String?): Boolean = reason != LIMIT_REACHED && reason != SERVICE_LIMIT
+
+    /**
+     * Whether the debrid accounts the settings held [before] and hold [after] differ by a save of the user's (L474): the
+     * accounts on (switched on, not signed out, the key not refused) by their ids and when their keys were saved, a save
+     * being that set gaining one (a key saved, an account added or switched on, a refused key taken again by Test). The
+     * app's own mark of a refused key, a plan refreshed, an account switched off or signed out of sets nothing going: a
+     * refused key's download stays waiting for a new one.
+     */
+    fun servicesSaved(before: List<ServiceAccount>, after: List<ServiceAccount>): Boolean = (on(after) - on(before)).isNotEmpty()
+
+    /** Each save of the user's ([servicesSaved]) as the accounts [services] move; their first read is none. */
+    fun servicesSaves(services: Flow<List<ServiceAccount>>): Flow<Unit> = flow {
+        var before: List<ServiceAccount>? = null
+        services.collect { after ->
+            val was = before
+            before = after
+            if (was != null && servicesSaved(was, after)) emit(Unit)
+        }
+    }
+
+    /** The accounts on in [accounts], by id and when their keys were saved. */
+    private fun on(accounts: List<ServiceAccount>): Set<Pair<String, Long>> =
+        accounts.filter { it.enabled && !it.deleted && !it.keyRefused }.mapTo(HashSet()) { it.id to it.keySavedAt }
+
     /** States that hold the whole queue until Resume (L380). */
     private val HOLDS = setOf(DownloadState.Paused, DownloadState.Stopped)
 
@@ -176,10 +223,10 @@ object DownloadHostRules {
     /**
      * The rows that can run, in [rows]' order (L388): Queued; Waiting for a network or for charging, which the job's
      * constraints and the service's callbacks wait for; and Running or Resolving, as a kill left them. None while a row
-     * is Paused or Stopped, which hold the whole queue (L380). The waits for the provider, for storage and for an indexer's
-     * limit don't run: Save or Resume makes them Queued again, a storage wait can run again at the app's start once its
-     * folder is there ([storageBack]), and the runner queues a limit's wait again at the app's start once the limit has
-     * ended (L434).
+     * is Paused or Stopped, which hold the whole queue (L380). The waits for the provider, for a debrid service, for storage
+     * and for a limit don't run: Save or Resume makes them Queued again, a storage wait can run again at the app's start
+     * once its folder is there ([storageBack]), and the runner queues a limit's wait, an indexer's or a debrid account's,
+     * again at the app's start once the limit has ended (L434, L461).
      */
     fun runnable(rows: List<Download>, storageBack: Boolean = false): List<Download> {
         if (rows.any { it.state in HOLDS }) return emptyList()
@@ -209,7 +256,7 @@ object DownloadHostRules {
     fun tapToResume(row: Download): NotificationWords = NotificationWords(title(row), "Paused: no connection · Tap to resume", null)
 
     /** What asks the host to start (L388), always from the visible app. */
-    enum class ScheduleCause { Download, Resume, ProviderSaved, SwitchChanged, AppStart }
+    enum class ScheduleCause { Download, Resume, ProviderSaved, ServiceSaved, SwitchChanged, AppStart }
 
     /**
      * How the job stands for the app's schedule (L335, L404): [waiting] to run, scheduled and not executing, nothing of the
@@ -248,10 +295,11 @@ object DownloadHostRules {
     /**
      * What [row]'s notification says (L358), [written] bytes of it written at [bytesPerSecond] (null: not known yet), with
      * [more] queued behind it: its title, the show and its episode or the film, as the row keeps them, never the release's
-     * name; its state's words, with how far it is where it is under way; and what else waits. Null for a removed one, which
-     * is hidden at once (L379).
+     * name; its state's words, with how far it is where it is under way; and what else waits. A failed one's debrid reason
+     * reads as [shownReason] says it in a build that hides debrid ([shown] false). Null for a removed one, which is hidden
+     * at once (L379).
      */
-    fun words(row: Download, written: Long = row.safeOffset, bytesPerSecond: Long? = null, more: Int = 0): NotificationWords? {
+    fun words(row: Download, written: Long = row.safeOffset, bytesPerSecond: Long? = null, more: Int = 0, shown: Boolean = DebridGate.shown): NotificationWords? {
         val total = row.size ?: row.indexerSize
         fun far(words: String) = if (total > 0) "$words · ${progress(written, total)}" else words
         val text = when (row.state) {
@@ -263,7 +311,7 @@ object DownloadHostRules {
             DownloadState.Waiting -> row.reason?.let { if (it in NEED_WAITS) far(it) else it } ?: far("Waiting")
             DownloadState.Stopped -> STOPPED_BY_ANDROID
             DownloadState.Done -> listOfNotNull("Downloaded", missing(row.gaps.size), formatSize(total)).joinToString(" · ")
-            DownloadState.Failed -> listOfNotNull("Couldn't download it.", failure(row)?.let { if (it.endsWith('.')) it else "$it." }).joinToString(" ")
+            DownloadState.Failed -> listOfNotNull("Couldn't download it.", failure(row, shown)?.let { if (it.endsWith('.')) it else "$it." }).joinToString(" ")
             DownloadState.Deleting -> return null
         }
         return NotificationWords(title(row), text, if (more > 0) "$more more queued" else null)
@@ -286,11 +334,29 @@ object DownloadHostRules {
 
     /**
      * Why [row] failed, as its notification says it: a release that lacked parts (the play sheet's "Release incomplete",
-     * and a long gap) by how many releases were tried; any other reason as the row keeps it.
+     * and a long gap) by how many releases were tried; any other reason as the row keeps it, read as [shownReason] says.
      */
-    private fun failure(row: Download): String? = when (row.reason) {
+    private fun failure(row: Download, shown: Boolean): String? = when (row.reason) {
         DownloadResolver.INCOMPLETE -> if (row.tried.size > 1) "Your provider is missing parts of all ${row.tried.size} releases tried" else "Your provider is missing parts of this release"
-        else -> row.reason
+        else -> shownReason(row.reason, shown)
+    }
+
+    /**
+     * A failed download's [reason] as the pages and its notification say it (L422): in a build that hides debrid ([shown]
+     * false), one of a debrid service's ([SERVICE_REASONS]: a torrent's, which a build that showed debrid left) reads
+     * [NOT_IN_THIS_VERSION], so no debrid word shows; any other as it is.
+     */
+    fun shownReason(reason: String?, shown: Boolean = DebridGate.shown): String? = if (!shown && reason in SERVICE_REASONS) NOT_IN_THIS_VERSION else reason
+
+    /**
+     * The reasons only a torrent's download fails or waits with (L460, L474): the debrid words, and the play sheet's for a
+     * torrent's own failures, as Resolve says them ([DownloadResolver.reason]).
+     */
+    private val SERVICE_REASONS: Set<String> by lazy {
+        setOf(CANT_REACH_SERVICE, CHECK_SERVICE, SERVICE_LIMIT, SERVICE_KEPT_FAILING, CANT_RESUME, WAITS_FOR_STREAM) + listOf(
+            AttemptFailure.NoLongerCached, AttemptFailure.RemovedByService, AttemptFailure.ServiceRefused(tooLarge = true),
+            AttemptFailure.ServiceRefused(tooLarge = false), AttemptFailure.NoWorkingLink,
+        ).map(DownloadResolver::reason)
     }
 
     private fun missing(parts: Int): String? = when (parts) {

@@ -106,6 +106,33 @@ class TitleDownloadsTest {
     }
 
     /**
+     * L471, L474: a debrid download waiting while something streams says so muted, as a need's wait is, with how far it is,
+     * on its episode's row, the Movie page's and Search's button, Home's and Import's rows (all read this line), and keeps
+     * Pause; its service out of reach while its writer backs off is said in the warning colour, as the provider's is; its
+     * account's waits that only Resume or a save end say their words in the warning colour, with Resume download.
+     */
+    @Test
+    fun `a debrid download's stream wait is said muted with how far it is, its account's waits in the warning colour`() {
+        val streams = TitleDownload.of(
+            DownloadRunner.Item(row("s", 5, DownloadState.Running, size = 1_300_000_000, file = true).copy(reason = DownloadHostRules.WAITS_FOR_STREAM), 546_000_000, null),
+        )
+        assertEquals(listOf(PageLine("Waits while something streams · 42%", Tone.Muted)), TitleDownloads.line(streams))
+        assertEquals("Waits while something streams, 42 percent", TitleDownloads.spoken(streams))
+        assertEquals(listOf(DownloadEntry.Pause, DownloadEntry.Remove), TitleDownloads.entries(streams, source = true))
+        val button = TitleDownloads.button(streams)
+        assertEquals(TitleDownloads.DOWNLOADING, button.text)
+        assertEquals(PageLine("Waits while something streams · 42%", Tone.Muted), button.second)
+
+        assertEquals(listOf(PageLine("Can't reach your debrid service · 42%", Tone.Warn)), TitleDownloads.line(streams.copy(reason = DownloadHostRules.CANT_REACH_SERVICE)))
+        DownloadHostRules.SERVICE_WAITS.forEach { reason ->
+            val waiting = TitleDownload.of(DownloadRunner.Item(row("w", 6, DownloadState.Waiting).copy(reason = reason), 0, null))
+            assertEquals(listOf(PageLine(reason, Tone.Warn)), TitleDownloads.line(waiting), reason)
+            assertEquals(listOf(DownloadEntry.Resume, DownloadEntry.Remove), TitleDownloads.entries(waiting, source = true), reason)
+            assertEquals(PageLine(reason, Tone.Warn), TitleDownloads.button(waiting).second, reason)
+        }
+    }
+
+    /**
      * C4, L415: with Delete once watched on, a finished download that will go and isn't due yet says "Deleting tomorrow": on
      * the episode row after its size (or its missing parts), and TalkBack hears it as part of the row's state; on the Movie
      * page's and Search's card's button under "Downloaded", in its detail's place. A show's downloads by episode carry it,

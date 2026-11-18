@@ -236,6 +236,7 @@ class DownloadRunnerTest {
         television: Boolean = false,
         exit: DownloadExit? = null,
         missing: suspend (RememberedRelease, List<ProviderConfig>, String) -> Unit = { release, asked, _ -> recorded += release.guid to asked.map { it.id } },
+        limitLeft: suspend (String) -> kotlin.time.Duration? = { null },
     ): DownloadRunner {
         clock = Clock { NOW + testScheduler.currentTime }
         return DownloadRunner(
@@ -245,7 +246,7 @@ class DownloadRunnerTest {
                 inUse = { providers }, lastExit = { exit }, television = television, host = { host }, network = network,
                 receiverSwitch = { switches += it }, debug = DownloadDebug.On(File(dir, "debug"), clock), longGapBytes = LONG_GAP, clock = clock,
                 timeSource = testScheduler.timeSource, io = StandardTestDispatcher(testScheduler), undoMillis = DownloadRunner.UNDO_MILLIS, limits = limits,
-                watched = watched, prefs = prefs, serviceWriter = serviceWriter(),
+                watched = watched, prefs = prefs, serviceWriter = serviceWriter(), limitLeft = limitLeft,
             ),
             work,
         )
@@ -2672,6 +2673,16 @@ class DownloadRunnerTest {
                 }
                 return said
             }
+            // A torrent row opened again from its listing's copy, its file found there, with no call (L460).
+            val torrent = row.release?.takeIf { it.source == "torrent" }
+            if (torrent != null && row.size != null) {
+                storage.listing(id)?.let { entry ->
+                    entry.prepared.listing.files.firstOrNull { it.index == torrent.fileIndex && it.size == row.size }?.let { file ->
+                        reopened += id
+                        return Resolution.Ready.Service(row, entry, file)
+                    }
+                }
+            }
             val source = storage.source(id)
             if (row.release != null && row.size != null && source != null) {
                 reopened += id
@@ -2760,11 +2771,18 @@ class DownloadRunnerTest {
         override suspend fun link(prepared: Prepared, file: ServiceFile): ServiceLink {
             links.incrementAndGet()
             linkFails?.let { throw ServiceException(it) }
+            linkFailsOnce?.let {
+                linkFailsOnce = null
+                throw ServiceException(it)
+            }
             return ServiceLink("https://cdn.example.org/dl/${file.index}", java.time.Instant.ofEpochMilli(NOW))
         }
     }
 
     @Volatile private var linkFails: ServiceError? = null
+
+    /** The next link refused so, the ones after it given. */
+    @Volatile private var linkFailsOnce: ServiceError? = null
     private val torrentReads = TorrentReads()
 
     /** Whether something streams here (L471): a play's or a cast's meter open. */
@@ -2908,6 +2926,188 @@ class DownloadRunnerTest {
         advanceUntilIdle()
         assertEquals(DownloadState.Failed, stored(B).state)
         assertEquals(DownloadHostRules.NOT_IN_THIS_VERSION, stored(B).reason)
+    }
+
+    /**
+     * L461: a debrid account's limit whose gate opens within 5 minutes is waited out in place: the row keeps the queue's
+     * turn, saying the limit's words while it waits (the rows behind it wait too), then goes on from its listing's copy with
+     * no call of Resolve's, from its safe offset, to Done. Resolve's own limit is waited out so too, and the account's
+     * gate says how long, not the answer: here it opens in 4 minutes though the answer said 2 hours.
+     */
+    @Test
+    fun `a debrid account's limit ending within 5 minutes is waited out in place, the row keeping the queue's turn`() = test {
+        torrentRow(A, 1, 0)
+        val behind = fake("hl-behind")
+        row(B, 2, 1, behind)
+        linkFailsOnce = ServiceError.Limit(java.time.Duration.ofMinutes(3))
+        val runner = runner()
+        host(runner)
+        runCurrent()
+        assertEquals(DownloadState.Running, stored(A).state)
+        assertEquals(DownloadHostRules.SERVICE_LIMIT, stored(A).reason)
+        advanceTimeBy(3 * MINUTE - 1_000)
+        runCurrent()
+        assertEquals(DownloadHostRules.SERVICE_LIMIT, stored(A).reason)
+        assertEquals(listOf(A), resolver.calls, "nothing behind it resolved meanwhile")
+        assertEquals(DownloadState.Queued, stored(B).state)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Done, stored(A).state)
+        assertNull(stored(A).reason)
+        assertNull(stored(A).limitWait)
+        assertContentEquals(torrentReads.data, storage.video(A).readBytes())
+        assertEquals(listOf(A, A, B), resolver.calls)
+        assertEquals(listOf(A), resolver.reopened, "opened again from its listing's copy")
+        assertEquals(DownloadState.Done, stored(B).state)
+
+        val started = testScheduler.currentTime
+        torrentRow(C, 3, 2)
+        resolver.scripted.addFirst(Resolution.Limited(ACCOUNT, clock.now() + 2 * HOUR))
+        val gated = runner(limitLeft = { if (it == ACCOUNT) 4.minutes else null })
+        host(gated)
+        runCurrent()
+        assertEquals(DownloadState.Resolving, stored(C).state)
+        assertEquals(DownloadHostRules.SERVICE_LIMIT, stored(C).reason)
+        advanceTimeBy(4 * MINUTE - 1_000)
+        runCurrent()
+        assertEquals(DownloadHostRules.SERVICE_LIMIT, stored(C).reason)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Done, stored(C).state)
+        assertTrue(testScheduler.currentTime - started >= 4 * MINUTE, "went on once the gate opened")
+        assertTrue(testScheduler.currentTime - started < HOUR, "not at the answer's 2 hours")
+    }
+
+    /**
+     * L461, C14: a debrid account's limit whose gate stays shut longer makes its download wait in the limit's words, its
+     * end kept as the Service kind's limit wait, the walk going on to the next row, which needs nothing of that account
+     * (here a Usenet one), the host ending once nothing more can run. The app's start queues it again once its end has
+     * passed, not before; Resume and a services save at once; a provider saved doesn't. Resolve's own limit waits so too.
+     */
+    @Test
+    fun `a debrid account's limit lasting longer waits with its end kept, the walk going on to the next`() = test {
+        val runner = runner()
+        torrentRow(A, 1, 0)
+        val usenet = fake("hl-usenet")
+        row(B, 2, 1, usenet)
+        linkFails = ServiceError.Limit(java.time.Duration.ofHours(2))
+        val walk = host(runner)
+        advanceUntilIdle()
+        assertTrue(walk.isCompleted, "the walk ends once nothing more can run, and its host")
+        val waiting = stored(A)
+        assertEquals(DownloadState.Waiting, waiting.state)
+        assertEquals(DownloadHostRules.SERVICE_LIMIT, waiting.reason)
+        val wait = assertNotNull(DownloadColumns.limitWait(waiting))
+        assertEquals(LimitWait.Kind.Service, wait.kind)
+        assertEquals(ACCOUNT, wait.indexerId)
+        assertEquals(2 * HOUR, wait.end() - wait.since)
+        assertNotNull(storage.listing(A), "its listing's copy kept for its turn after the limit")
+        assertEquals(DownloadState.Done, stored(B).state)
+        assertContentEquals(usenet.data, storage.video(B).readBytes())
+        assertEquals(emptyList(), runner.runnable(), "the limit's wait can't run")
+
+        // The app's start: not before its end.
+        runner.limitsEnded()
+        assertEquals(DownloadState.Waiting, stored(A).state)
+        advanceTimeBy(wait.end() - clock.now() - 1)
+        runner.limitsEnded()
+        assertEquals(DownloadState.Waiting, stored(A).state)
+        advanceTimeBy(1)
+        runner.limitsEnded()
+        assertEquals(DownloadState.Queued, stored(A).state)
+        assertNull(stored(A).reason)
+
+        // Resume and a services save: at once. A provider saved isn't the account's.
+        dao.setState(A, DownloadState.Waiting, DownloadHostRules.SERVICE_LIMIT, clock.now())
+        runner.resume()
+        assertEquals(DownloadState.Queued, stored(A).state)
+        dao.setState(A, DownloadState.Waiting, DownloadHostRules.SERVICE_LIMIT, clock.now())
+        runner.retryNow()
+        assertEquals(DownloadState.Waiting, stored(A).state)
+        runner.servicesSaved()
+        assertEquals(DownloadState.Queued, stored(A).state)
+
+        // Resolve's own limit, as long: the same wait, the walk going on.
+        linkFails = null
+        resolver.answers[A] = Resolution.Limited(ACCOUNT, clock.now() + HOUR)
+        val next = fake("hl-next")
+        row(C, 3, 2, next)
+        host(runner).join()
+        advanceUntilIdle()
+        assertEquals(DownloadState.Waiting, stored(A).state)
+        assertEquals(DownloadHostRules.SERVICE_LIMIT, stored(A).reason)
+        assertEquals(HOUR, DownloadColumns.limitWait(stored(A))!!.let { it.end() - it.since })
+        assertEquals(DownloadState.Done, stored(C).state)
+    }
+
+    /**
+     * L474: a debrid download whose service stays out of reach says so while its writer backs off, keeping the queue's
+     * turn, and after an hour of it waits in those words, ending the walk (the row behind it left queued). A provider saved
+     * doesn't queue it again; a services save does, and it goes on from its listing's copy to Done. Its refused key waits
+     * the same way until a services save.
+     */
+    @Test
+    fun `a debrid download out of reach for an hour waits, ending the walk, until a services save`() = test {
+        torrentRow(A, 1, 0)
+        val behind = fake("hl-behind")
+        row(B, 2, 1, behind)
+        torrentReads.unreached = Int.MAX_VALUE
+        val runner = runner()
+        val walk = host(runner)
+        advanceTimeBy(30 * MINUTE)
+        runCurrent()
+        assertEquals(DownloadState.Running, stored(A).state)
+        assertEquals(DownloadHostRules.CANT_REACH_SERVICE, stored(A).reason)
+        advanceUntilIdle()
+        assertTrue(walk.isCompleted)
+        assertEquals(DownloadState.Waiting, stored(A).state)
+        assertEquals(DownloadHostRules.CANT_REACH_SERVICE, stored(A).reason)
+        assertEquals(DownloadState.Queued, stored(B).state)
+        assertEquals(listOf(A), resolver.calls)
+        runner.retryNow()
+        assertEquals(DownloadState.Waiting, stored(A).state)
+        runner.servicesSaved()
+        assertEquals(DownloadState.Queued, stored(A).state)
+        torrentReads.unreached = 0
+        host(runner)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Done, stored(A).state)
+        assertContentEquals(torrentReads.data, storage.video(A).readBytes())
+        assertEquals(DownloadState.Done, stored(B).state)
+
+        // Its key refused: a wait a services save ends too, as Resume does.
+        torrentRow(C, 3, 2)
+        linkFails = ServiceError.KeyRefused
+        host(runner).join()
+        assertEquals(DownloadHostRules.CHECK_SERVICE, stored(C).reason)
+        linkFails = null
+        runner.servicesSaved()
+        assertEquals(DownloadState.Queued, stored(C).state)
+    }
+
+    /**
+     * L471: a debrid download waiting while something streams keeps the queue's turn, as any running row does: the rows
+     * behind it wait however long it streams, and go on once it is done. Pause holds it there as it holds any.
+     */
+    @Test
+    fun `a debrid download waiting while something streams keeps the queue's turn`() = test {
+        torrentRow(A, 1, 0)
+        val behind = fake("hl-behind")
+        row(B, 2, 1, behind)
+        streaming.value = true
+        val runner = runner()
+        host(runner)
+        runCurrent()
+        assertEquals(DownloadState.Running, stored(A).state)
+        assertEquals(DownloadHostRules.WAITS_FOR_STREAM, stored(A).reason)
+        advanceTimeBy(HOUR)
+        runCurrent()
+        assertEquals(DownloadHostRules.WAITS_FOR_STREAM, stored(A).reason)
+        assertEquals(DownloadState.Queued, stored(B).state)
+        assertEquals(listOf(A), resolver.calls)
+        streaming.value = false
+        advanceUntilIdle()
+        assertEquals(DownloadState.Done, stored(A).state)
+        assertEquals(DownloadState.Done, stored(B).state)
+        assertEquals(listOf(A, B), resolver.calls)
     }
 
     /** L475: what a running row says while its writer holds it, by the row's source and the writer's flags. */

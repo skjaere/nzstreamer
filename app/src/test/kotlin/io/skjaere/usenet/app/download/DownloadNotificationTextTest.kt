@@ -15,6 +15,7 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.debrid.ServiceKind
 import io.skjaere.usenet.releases.ReleaseKey
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -188,6 +189,47 @@ class DownloadNotificationTextTest {
             listOf(notice.title, notice.text, notice.subText.orEmpty()).forEach { line ->
                 listOf("plover", "idx-", "search limit", "download limit").forEach { assertFalse(it in line, "\"$line\" holds \"$it\"") }
             }
+        }
+    }
+
+    /**
+     * L471, L474: a debrid download's notification says its waits and failures as its row keeps them: the stream's wait
+     * with how far it is ("Waits while something streams · 0.6 of 1.3 GB", the bar and the queue's Pause, as the provider
+     * out of reach is said while the writer backs off); the account's waits their words alone; its failures in their
+     * words. While debrid is hidden (L422), a failed one's debrid reason reads "Not available in this version", a Usenet
+     * reason as it is. No word names a service, and none shows on a secure lock screen.
+     */
+    @Test
+    fun `a debrid download's waits and failures are said in their words, and hidden its debrid failure is not available`() {
+        val torrent = episode(DownloadState.Running, reason = DownloadHostRules.WAITS_FOR_STREAM).copy(size = 1_300_000_000, indexerSize = 1_300_000_000)
+        val streaming = ongoing(item(torrent, written = 600_000_000))
+        assertEquals("Waits while something streams · 0.6 of 1.3 GB", streaming.text)
+        assertEquals(Progress(462, indeterminate = false), streaming.progress)
+        assertEquals(listOf(Action.Pause, Action.Cancel), streaming.actions)
+        assertEquals("Can't reach your debrid service · 0.6 of 1.3 GB", ongoing(item(torrent.copy(reason = DownloadHostRules.CANT_REACH_SERVICE), written = 600_000_000)).text)
+        DownloadHostRules.SERVICE_WAITS.forEach { reason ->
+            val notice = ongoing(item(torrent.copy(state = DownloadState.Waiting, reason = reason)))
+            assertEquals(reason, notice.text)
+            assertNull(notice.progress, reason)
+        }
+        val failures = listOf(
+            DownloadHostRules.SERVICE_KEPT_FAILING, DownloadHostRules.CANT_RESUME, DownloadResolver.NO_LONGER_CACHED, "Removed by the debrid service",
+            "Too large for your debrid plan", "The debrid service won’t play this release", "No longer available from the service",
+        )
+        failures.forEach { reason ->
+            val row = episode(DownloadState.Failed, reason = reason, tried = 1)
+            assertEquals("Couldn't download it. $reason.", DownloadNotices.failed(row, shown = true).text)
+            assertEquals("Couldn't download it. Not available in this version.", DownloadNotices.failed(row, shown = false).text, reason)
+        }
+        assertEquals("Couldn't download it. Won't fit.", DownloadNotices.failed(episode(DownloadState.Failed, reason = DownloadResolver.WONT_FIT, tried = 1), shown = false).text)
+        assertEquals(
+            "Couldn't download it. Your provider is missing parts of this release.",
+            DownloadNotices.failed(episode(DownloadState.Failed, reason = DownloadResolver.INCOMPLETE, tried = 1), shown = false).text,
+        )
+        val notices = listOf(streaming) + failures.map { DownloadNotices.failed(episode(DownloadState.Failed, reason = it, tried = 1), shown = true) }
+        notices.forEach { notice ->
+            assertEquals(NotificationCompat.VISIBILITY_SECRET, notice.visibility)
+            listOf(notice.title, notice.text).forEach { line -> ServiceKind.entries.forEach { assertFalse(it.displayName in line, line) } }
         }
     }
 

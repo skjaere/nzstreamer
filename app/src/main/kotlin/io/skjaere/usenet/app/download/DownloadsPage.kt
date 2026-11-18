@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.download
 
+import io.skjaere.usenet.app.debrid.DebridGate
 import io.skjaere.usenet.app.link.PlayTarget
 import io.skjaere.usenet.app.link.deviceName
 import io.skjaere.usenet.app.link.onTvLine
@@ -274,15 +275,20 @@ data class DownloadsPage(
          * up now ([indexers], its name by id; one no longer set up is "Your indexer's"), which limit, its end where the
          * indexer said one, on the device's clock ([zone]), and what makes it go on. Null for any other row, and for one
          * whose limit's facts can't be read. Only the page names the indexer: its notification and its log lines say the
-         * fixed words.
+         * fixed words. Under "Your debrid service's limit is reached", what makes it go on alone, whatever its end and
+         * whichever account (L461): the account is never named, as no debrid word names a service (L474).
          */
         fun limitLine(row: Download, indexers: Map<String, String>, zone: ZoneId): String? {
-            if (row.state != DownloadState.Waiting || row.reason != DownloadHostRules.LIMIT_REACHED) return null
+            if (row.state != DownloadState.Waiting) return null
+            if (row.reason == DownloadHostRules.SERVICE_LIMIT) return GOES_ON
+            if (row.reason != DownloadHostRules.LIMIT_REACHED) return null
             val wait = DownloadColumns.limitWait(row) ?: return null
             val whose = indexers[wait.indexerId]?.takeIf { it.isNotBlank() }?.let { "$it's" } ?: "Your indexer's"
             val which = when (wait.kind) {
                 LimitWait.Kind.Download -> "download limit"
                 LimitWait.Kind.Search -> "search limit"
+                // An account's limit has the line above: an indexer's row never keeps one.
+                LimitWait.Kind.Service -> return GOES_ON
             }
             val until = wait.until ?: return "$whose $which. $GOES_ON"
             return "$whose $which, until ${CLOCK.format(Instant.ofEpochMilli(until).atZone(zone))}. $THEN_GOES_ON"
@@ -347,8 +353,9 @@ data class DownloadsPage(
          * the row the queue is at ([current]): Pause while it runs or waits for its network or the charger, Resume while
          * it is held, or waits for what only a Resume or a saved provider ends. Where its season's pack serves it ([pack],
          * [fromPack], L406): queued, "Queued · from the season pack"; its file made, "From the season pack" under its bytes.
-         * Waiting on its indexer's limit, the [limit] line ([limitLine], L434) under the wait's words. A file of an NZB
-         * opened on Import, queued, says "Queued" alone: nothing is searched for it (L454).
+         * Waiting on a limit, the [limit] line ([limitLine], L434, L461) under the wait's words. A file of an NZB opened on
+         * Import, queued, says "Queued" alone: nothing is searched for it (L454). A debrid download waiting while something
+         * streams says so in the secondary tone, the bar muted, with Pause (L471): it goes on by itself once it is over.
          */
         fun active(item: DownloadRunner.Item, current: Boolean, pack: Boolean = false, limit: String? = null): ActiveWords {
             val row = item.row
@@ -385,7 +392,9 @@ data class DownloadsPage(
                         val line = listOfNotNull(bytes, rate?.let { "${formatSize(it)}/s" }, left?.let { "about $it" }).joinToString(" · ").ifEmpty { null }
                         ActiveWords(listOf(PageLine("$DOWNLOADING$far", Tone.Accent)), if (made) PageBar.Part(share, Tone.Accent) else null, line, RowButton.Pause)
                     }
-                    // The provider out of reach while the writer backs off (L382).
+                    // Waiting while something streams (L471): nothing is wrong, it goes on by itself.
+                    DownloadHostRules.WAITS_FOR_STREAM -> ActiveWords(listOf(PageLine("$reason$far", Tone.Secondary)), held, bytes, RowButton.Pause)
+                    // The provider or the debrid service out of reach while the writer backs off (L382, L474).
                     else -> ActiveWords(listOf(PageLine("$reason$far", Tone.Warn)), held, bytes, RowButton.Pause)
                 }
                 DownloadState.Paused -> ActiveWords(listOf(PageLine("$PAUSED$far", Tone.Muted)), held, bytes, RowButton.Resume)
@@ -408,14 +417,15 @@ data class DownloadsPage(
 
         /**
          * Why [row] failed, in technical words (L366): "✕ Your provider is missing parts of this release" for a release
-         * that lacked parts, else the reason its row keeps; then how many releases were tried, where any were: never for a
-         * file of an NZB opened on Import, which is its own one release (L454).
+         * that lacked parts, else the reason its row keeps, a torrent's debrid one "Not available in this version" in a
+         * build that hides debrid ([shown] false, L422, [DownloadHostRules.shownReason]); then how many releases were
+         * tried, where any were: never for a file of an NZB opened on Import, which is its own one release (L454).
          */
-        fun failure(row: Download): List<PageLine> {
+        fun failure(row: Download, shown: Boolean = DebridGate.shown): List<PageLine> {
             val reason = when (row.reason) {
                 DownloadResolver.INCOMPLETE -> MISSING_PARTS
                 null -> FAILED
-                else -> row.reason!!
+                else -> DownloadHostRules.shownReason(row.reason, shown)!!
             }
             val tried = row.tried.size
             return listOfNotNull(

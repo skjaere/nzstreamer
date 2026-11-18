@@ -47,6 +47,19 @@ class DownloadColumnsTest {
         assertNull(DownloadColumns.limitWait(other)?.until)
     }
 
+    /**
+     * L461: a debrid account's limit a row waits out comes back as written: the Service kind, the account's id in the id's
+     * field, when it was met and when its gate opens; as JSON, with the kind by its name.
+     */
+    @Test
+    fun aDebridAccountsLimitComesBackWithItsServiceKind() {
+        val service = LimitWait(indexerId = "4c1d9e70-account-a", kind = LimitWait.Kind.Service, since = 1_700_000_000_000, until = 1_700_007_200_000)
+        val text = DownloadColumns.text(service)
+        assertEquals("""{"indexerId":"4c1d9e70-account-a","kind":"Service","since":1700000000000,"until":1700007200000}""", text)
+        assertEquals(service, DownloadColumns.limitWait(row().copy(limitWait = text)))
+        assertEquals(1_700_007_200_000, DownloadColumns.limitWait(row().copy(limitWait = text))?.end())
+    }
+
     @Test
     fun aRowWithoutThemHasNone() {
         val row = row()

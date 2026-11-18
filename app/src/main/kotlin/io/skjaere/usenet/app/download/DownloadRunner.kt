@@ -63,6 +63,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.nio.channels.FileChannel
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
@@ -218,6 +220,11 @@ class DownloadRunnerDeps(
      * the writer above writes a Usenet release's: the app's follows the same [network] and the debug build's throttle.
      */
     val serviceWriter: ServiceDownloadWriter,
+    /**
+     * How long debrid account [accountId]'s gate stays shut for its limit, as the gate says it now with no call (L461);
+     * null while it is open, or for an account not on: the limit's own end is read instead.
+     */
+    val limitLeft: suspend (accountId: String) -> Duration? = { null },
 ) {
     /** The writer (item 6), over [opener], following [network] as the runner does. */
     val writer = DownloadWriter(
@@ -232,10 +239,11 @@ class DownloadRunnerDeps(
          * the memory of releases found missing, the process's last exit, and the host by the API level and the debug
          * override, and the boot and update receiver switched as it says (L375); the walk's memory of the indexers' limits,
          * which Resolve's turns keep ([limits], L443); the library's finished downloads marked watched and Settings ›
-         * Downloads, which Delete once watched reads (L412); and the debrid writer (L419) over the accounts on through the
-         * one gated lookup (L422), an account's refused key as the settings mark it, the listings the services prepared,
-         * the streams' signal (L471), the downloads' folders, the same network and the debug build's throttle. A test
-         * gives its own [resolve] and [debug], and the writer's [longGapBytes] given small.
+         * Downloads, which Delete once watched reads (L412); the debrid writer (L419) over the accounts on through the one
+         * gated lookup (L422), an account's refused key as the settings mark it, the listings the services prepared, the
+         * streams' signal (L471), the downloads' folders, the same network and the debug build's throttle; and how long an
+         * account's gate stays shut for its limit (L461). A test gives its own [resolve] and [debug], and the writer's
+         * [longGapBytes] given small.
          */
         fun of(
             container: AppContainer,
@@ -265,6 +273,7 @@ class DownloadRunnerDeps(
                 limits = limits,
                 watched = container.data.downloadWatches.watched(),
                 prefs = container.settings.downloads,
+                limitLeft = { id -> container.services.limitLeft(id) },
                 serviceWriter = ServiceDownloadWriter(
                     accounts = { id -> container.services.gated(id) },
                     keyRefused = { id -> container.settings.services.first().any { it.id == id && it.enabled && !it.deleted && it.keyRefused } },
@@ -326,10 +335,13 @@ interface DownloadHolds {
  *   providers, as a play remembers it (L342).
  * - Pause holds the whole queue: the running item stops at its safe offset, keeping its file and room; nothing else
  *   starts until Resume (L380). "Stopped by Android" holds it the same way (L359).
- * - The waits for the providers and for storage end the walk, so the host ends (L388); the other rows wait their turn.
- *   An indexer's limit with nothing else to try holds that download alone (L399, L399b): it waits, and the walk goes on
- *   to the next, the limited indexer kept out of the later turns (L443), ending once nothing more can run. Resume queues
- *   it again at once, and the app's start once the limit has ended ([limitsEnded], L434).
+ * - The waits for the providers, for a debrid service and for storage end the walk, so the host ends (L388, L474); the
+ *   other rows wait their turn. An indexer's limit with nothing else to try holds that download alone (L399, L399b): it
+ *   waits, and the walk goes on to the next, the limited indexer kept out of the later turns (L443), ending once nothing
+ *   more can run. Resume queues it again at once, and the app's start once the limit has ended ([limitsEnded], L434). A
+ *   debrid account's limit is waited out in place while its gate opens within 5 minutes; longer, it holds its download
+ *   alone in the same way (L461, C14). A provider saved queues the providers' waits again ([retryNow]); a debrid account
+ *   saved, the account's ([servicesSaved], L474).
  * - The NZB and its password go once the file is complete, the item fails or is cancelled (L346); a season pack's copy
  *   goes at the end of the last download of its season still to finish, whichever end it is, one removed counting as
  *   still to finish while its Undo can bring it back (L394, [Storage.sweepPacks]).
@@ -998,8 +1010,9 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
     /**
      * Lets the queue go on (L380): a Paused or Stopped download back at its head, and those waiting for the providers, for
-     * storage or for an indexer's limit queued again; then the visible app schedules the host. A wait before a reopen ends
-     * now (L381), and the walk's memory of the indexers' limits is forgotten, so a turn asks them again at once (L434).
+     * a debrid service, for storage or for a limit, an indexer's or a debrid account's, queued again (L474); then the
+     * visible app schedules the host. A wait before a reopen ends now (L381), and the walk's memory of the indexers' limits
+     * is forgotten, so a turn asks them again at once (L434).
      */
     suspend fun resume() {
         if (!runs) return
@@ -1012,7 +1025,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 dao.move(row.id, head - held.size + i)
                 dao.setState(row.id, DownloadState.Queued, null, now())
             }
-            val waits = rows.filter { it.state == DownloadState.Waiting && it.reason in ENDING_WAITS }
+            val waits = rows.filter { it.state == DownloadState.Waiting && it.reason in DownloadHostRules.RESUMED_WAITS }
             waits.forEach { dao.setState(it.id, DownloadState.Queued, null, now()) }
             if (held.size + waits.size > 0) log.info("Downloads: resumed, {} held and {} waiting queued again", held.size, waits.size)
         }
@@ -1020,19 +1033,20 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     }
 
     /**
-     * At the app's start, before its schedule (L434): each download waiting on an indexer's limit is queued again once that
-     * limit has ended, where the indexer said, else 30 minutes after it began ([LimitWait.end]); one whose limit's facts
-     * can't be read, at once. Before then it waits on, so a switch away from the app and back doesn't ask the indexer again.
+     * At the app's start, before its schedule (L434): each download waiting on an indexer's limit, or a debrid account's
+     * (L461), is queued again once that limit has ended, where the indexer said or the account's gate opens, else 30
+     * minutes after it began ([LimitWait.end]); one whose limit's facts can't be read, at once. Before then it waits on, so
+     * a switch away from the app and back doesn't ask the indexer or the account again.
      */
     suspend fun limitsEnded() {
         if (!runs) return
         changes.withLock {
             val at = now()
             val ended = dao.queue().first().filter { row ->
-                row.state == DownloadState.Waiting && row.reason == DownloadHostRules.LIMIT_REACHED && (DownloadColumns.limitWait(row)?.end() ?: at) <= at
+                row.state == DownloadState.Waiting && row.reason in LIMITS && (DownloadColumns.limitWait(row)?.end() ?: at) <= at
             }
             ended.forEach { dao.setState(it.id, DownloadState.Queued, null, at) }
-            if (ended.isNotEmpty()) log.info("Downloads: {} waiting on an indexer's limit queued again, the limit ended", ended.size)
+            if (ended.isNotEmpty()) log.info("Downloads: {} waiting on a limit queued again, the limit ended", ended.size)
         }
     }
 
@@ -1044,9 +1058,24 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         if (!runs) return
         wake()
         changes.withLock {
-            dao.queue().first().filter { it.state == DownloadState.Waiting && it.reason in PROVIDER_WAITS }.forEach {
+            dao.queue().first().filter { it.state == DownloadState.Waiting && it.reason in DownloadHostRules.PROVIDER_WAITS }.forEach {
                 dao.setState(it.id, DownloadState.Queued, null, now())
             }
+        }
+    }
+
+    /**
+     * A debrid account saved by the user (L474, [DownloadHostRules.servicesSaved]: a key saved, an account added or
+     * switched on, a refused key taken again): the waits between reopens end, and the downloads waiting on a debrid
+     * service (its key, its outage, its limit) are queued again, as [retryNow] queues the providers' for a provider saved.
+     */
+    suspend fun servicesSaved() {
+        if (!runs) return
+        wake()
+        changes.withLock {
+            val waits = dao.queue().first().filter { it.state == DownloadState.Waiting && it.reason in DownloadHostRules.SERVICE_WAITS }
+            waits.forEach { dao.setState(it.id, DownloadState.Queued, null, now()) }
+            if (waits.isNotEmpty()) log.info("Downloads: a debrid account saved, {} waiting on a debrid service queued again", waits.size)
         }
     }
 
@@ -1514,8 +1543,11 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 }
                 // An indexer's limit holds this download alone (L399b): the walk goes on to the next, which may need
                 // nothing of that indexer (its season's copy, an NZB kept for it) or take another's releases, the limited
-                // indexer kept out of its turn (L443). A wait for the providers or for storage holds every download alike.
-                is Resolution.Waiting -> return if (resolution.reason == DownloadHostRules.LIMIT_REACHED) Walk.Next else Walk.End
+                // indexer kept out of its turn (L443). A wait for the providers, a debrid service or storage holds every
+                // download alike.
+                is Resolution.Waiting -> return if (DownloadHostRules.endsWalk(resolution.reason)) Walk.End else Walk.Next
+                // A debrid account's limit: waited out here while it ends soon, else this download's alone (L461).
+                is Resolution.Limited -> serviceLimit(id, DownloadState.Resolving, resolution.account, resolution.until)?.let { return it }
                 is Resolution.Unreachable -> {
                     val since = outOfReach ?: deps.timeSource.markNow().also { outOfReach = it }
                     if (since.elapsedNow() >= DownloadWriter.UNREACHABLE_FOR) {
@@ -1537,6 +1569,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                     outOfReach = null
                     when (val written = write(id, resolution)) {
                         is Written.Ended -> return written.walk
+                        // Its account's limit waited out in place: resolved again, from its listing's copy.
+                        Written.Again -> Unit
                         is Written.GaveUp -> {
                             gaveUp = written.words
                             if (!discard(id)) return Walk.End
@@ -1552,6 +1586,9 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /** How a write went for the walk. */
     private sealed interface Written {
         data class Ended(val walk: Walk) : Written
+
+        /** Stopped for a while it has waited out in place: resolved and written again, from its safe offset. */
+        data object Again : Written
 
         /** Its release given up as it was written, [words] the failure's where none is left to try (null: Resolve's own). */
         data class GaveUp(val words: String?) : Written
@@ -1655,7 +1692,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      * What the walk does after the debrid writer wrote download [id]'s file [fileName] of [size] as [outcome] says (L419).
      * A torrent lost on its account and on every other is given up, never remembered missing on the providers, which were
      * never asked: the next release is resolved, and with none the row fails in the words Resolve gives that failure
-     * (L460). Its waits end the walk, as the providers' do.
+     * (L460). Its waits end the walk, as the providers' do, but its account's limit, which is waited out in place while
+     * it ends soon and else holds this download alone (L461).
      */
     private suspend fun serviceEnded(id: String, outcome: ServiceDownloadWriter.Outcome, fileName: String, size: Long): Written = when (outcome) {
         ServiceDownloadWriter.Outcome.Done -> try {
@@ -1669,9 +1707,12 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             log.info("download {}: its torrent given up ({})", id, outcome.why)
             Written.GaveUp(lostWords(outcome.why))
         }
-        is ServiceDownloadWriter.Outcome.Waiting -> {
-            waiting(id, outcome.wait.reason)
-            Written.Ended(Walk.End)
+        is ServiceDownloadWriter.Outcome.Waiting -> when (val wait = outcome.wait) {
+            is ServiceDownloadWriter.Wait.Limit -> serviceLimit(id, DownloadState.Running, wait.account, wait.until)?.let { Written.Ended(it) } ?: Written.Again
+            else -> {
+                waiting(id, wait.reason)
+                Written.Ended(Walk.End)
+            }
         }
         is ServiceDownloadWriter.Outcome.Failed -> {
             failed(id, outcome.reason)
@@ -1773,6 +1814,32 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         log.info("download {}: failed", id)
     }
 
+    /**
+     * L461: download [id] stopped by debrid account [account]'s limit, its gate shut until [until] (the wall clock's
+     * milliseconds) as the limit's answer said. While the gate opens within [LIMIT_IN_PLACE_MILLIS] (as the deps' limitLeft
+     * reads it, else as that answer said), the limit is waited out here: the row keeps the queue's turn in [state], saying
+     * the limit's words, and null is returned for the walk to go on with it; Resume, a save or the network's return ends
+     * the wait sooner. Longer, the row waits for it, its end kept as the Service kind's limit wait, for Resume, a services
+     * save or the app's start after it; the walk goes on to the rows that need nothing of that account (C14), and the
+     * account's shut gate answers the rows that need it with no call.
+     */
+    private suspend fun serviceLimit(id: String, state: DownloadState, account: String?, until: Long): Walk? {
+        val at = now()
+        val left = (account?.let { deps.limitLeft(it) }?.inWholeMilliseconds ?: (until - at)).coerceAtLeast(0)
+        if (left <= LIMIT_IN_PLACE_MILLIS) {
+            val mark = wakes.mark()
+            dao.setState(id, state, DownloadHostRules.SERVICE_LIMIT, at)
+            log.info("download {}: its debrid account's limit ends in {} s: waiting it out in place", id, left / 1000)
+            wakes.pause(left.milliseconds, mark)
+            return null
+        }
+        val row = dao.get(id) ?: return Walk.Next
+        val wait = LimitWait(account.orEmpty(), LimitWait.Kind.Service, at, at + left)
+        dao.update(row.copy(state = DownloadState.Waiting, reason = DownloadHostRules.SERVICE_LIMIT, limitWait = DownloadColumns.text(wait), updatedAt = at))
+        log.info("download {}: its debrid account's limit lasts {} min more: waiting for it", id, left / 60_000)
+        return Walk.Next
+    }
+
     /** Download [id] waits, for [reason]: the walk ends, and its host (L388). */
     private suspend fun waiting(id: String, reason: String) {
         dao.setState(id, DownloadState.Waiting, reason, now())
@@ -1844,11 +1911,11 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             DownloadState.Queued, DownloadState.Resolving, DownloadState.Running, DownloadState.Paused, DownloadState.Waiting, DownloadState.Stopped,
         )
 
-        /** The waits for the providers and the indexers, which a provider saved or Resume queues again (L388). */
-        private val PROVIDER_WAITS = setOf(DownloadHostRules.CHECK_PROVIDER, DownloadHostRules.CANT_REACH_PROVIDER, DownloadHostRules.CANT_REACH_INDEXER)
+        /** The limits a download waits out, an indexer's or a debrid account's, which the app's start queues again once ended. */
+        private val LIMITS = setOf(DownloadHostRules.LIMIT_REACHED, DownloadHostRules.SERVICE_LIMIT)
 
-        /** The waits Resume queues again: those that end the host (L388), and an indexer's limit, its download's alone (L399b). */
-        private val ENDING_WAITS = PROVIDER_WAITS + DownloadHostRules.STORAGE_UNAVAILABLE + DownloadHostRules.LIMIT_REACHED
+        /** How soon a debrid account's gate must open for its limit to be waited out in place (L461): 5 minutes. */
+        const val LIMIT_IN_PLACE_MILLIS = 5 * 60_000L
 
         /** Every download has a release to try, but one whose turn searches for its releases ([search], L392). */
         private fun requireReleases(candidates: List<DownloadCandidate>, search: SeasonSearch?) =

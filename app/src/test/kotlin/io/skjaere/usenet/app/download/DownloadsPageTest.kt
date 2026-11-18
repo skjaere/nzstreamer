@@ -20,6 +20,7 @@ import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.data.WatchState
+import io.skjaere.usenet.debrid.ServiceKind
 import io.skjaere.usenet.newznab.NewznabItem
 import io.skjaere.usenet.newznab.TvIds
 import io.skjaere.usenet.releases.RankedRelease
@@ -378,6 +379,66 @@ class DownloadsPageTest {
         val other = DownloadsPage.of(listOf(item(provider)), indexers = mapOf("idx-a" to "Indexer A")).downloading.single()
         assertNull(other.limit)
         assertEquals(listOf(PageLine(DownloadHostRules.CHECK_PROVIDER, Tone.Warn)), DownloadsPage.active(other.item, other.current, other.pack, other.limit).lines)
+    }
+
+    /**
+     * L461, L471, L474: a debrid download's waits and failures in the page's words, each as the Usenet one it mirrors. The
+     * stream's wait in the secondary tone, how far it is, its bytes, the bar muted and Pause; the service out of reach
+     * while the writer backs off in the warning colour with Pause, and after an hour, as its key refused, its words alone
+     * with Resume; its limit with the line saying what makes it go on, alone, whatever its end and whichever account; its
+     * failures with how many releases were tried. While debrid is hidden (L422), a failed row's debrid reason reads "Not
+     * available in this version", a Usenet reason as it is. No word names a service.
+     */
+    @Test
+    fun `a debrid download's waits and failures say themselves in the page's words, the stream's wait in the secondary tone`() {
+        val running = episode("run", 5, DownloadState.Running, size = 3_100_000_000, file = true, written = 1_302_000_000)
+        fun lines(row: Download, current: Boolean = true) = DownloadsPage.active(item(row), current)
+        val streams = lines(running.copy(reason = DownloadHostRules.WAITS_FOR_STREAM))
+        assertEquals(listOf(PageLine("Waits while something streams · 42%", Tone.Secondary)), streams.lines)
+        assertEquals("1.3 of 3.1 GB", streams.bytes)
+        assertEquals(PageBar.Part(0.42f, Tone.Muted), streams.bar)
+        assertEquals(RowButton.Pause, streams.button)
+
+        val backingOff = lines(running.copy(reason = DownloadHostRules.CANT_REACH_SERVICE))
+        assertEquals(listOf(PageLine("Can't reach your debrid service · 42%", Tone.Warn)), backingOff.lines)
+        assertEquals(RowButton.Pause, backingOff.button)
+        val hour = lines(running.copy(state = DownloadState.Waiting, reason = DownloadHostRules.CANT_REACH_SERVICE))
+        assertEquals(listOf(PageLine("Can't reach your debrid service", Tone.Warn)), hour.lines)
+        assertEquals("1.3 of 3.1 GB", hour.bytes)
+        assertEquals(RowButton.Resume, hour.button)
+        val key = lines(episode("key", 6, DownloadState.Waiting, reason = DownloadHostRules.CHECK_SERVICE))
+        assertEquals(listOf(PageLine("Check your debrid service", Tone.Warn)), key.lines)
+        assertNull(key.bytes)
+        assertEquals(RowButton.Resume, key.button)
+
+        fun limited(wait: LimitWait?): ActiveWords {
+            val row = running.copy(state = DownloadState.Waiting, reason = DownloadHostRules.SERVICE_LIMIT, limitWait = wait?.let(DownloadColumns::text))
+            val page = DownloadsPage.of(listOf(item(row)), indexers = mapOf("acc-a" to "Indexer A"), zone = java.time.ZoneOffset.UTC).downloading.single()
+            return DownloadsPage.active(page.item, page.current, page.pack, page.limit)
+        }
+        val goesOn = listOf(PageLine("Your debrid service's limit is reached", Tone.Warn), PageLine("It goes on when NZStreamer next opens, or on Resume.", Tone.Muted))
+        val limit = limited(LimitWait("acc-a", LimitWait.Kind.Service, 1, 7_200_001))
+        assertEquals(goesOn, limit.lines)
+        assertEquals(RowButton.Resume, limit.button)
+        assertEquals(goesOn, limited(null).lines)
+
+        val failed = episode("f", 5, DownloadState.Failed, reason = DownloadHostRules.SERVICE_KEPT_FAILING, tried = listOf("btih:aa"))
+        assertEquals(listOf(PageLine("✕ Your debrid service kept failing", Tone.Warn), PageLine("1 release tried", Tone.Muted)), DownloadsPage.failure(failed, shown = true))
+        assertEquals(PageLine("✕ Its server can't resume this file", Tone.Warn), DownloadsPage.failure(failed.copy(reason = DownloadHostRules.CANT_RESUME), shown = true).first())
+        val debrid = listOf(
+            DownloadHostRules.SERVICE_KEPT_FAILING, DownloadHostRules.CANT_RESUME, DownloadResolver.NO_LONGER_CACHED, "Removed by the debrid service",
+            "Too large for your debrid plan", "The debrid service won’t play this release", "No longer available from the service",
+            DownloadHostRules.CHECK_SERVICE, DownloadHostRules.CANT_REACH_SERVICE, DownloadHostRules.SERVICE_LIMIT,
+        )
+        debrid.forEach { reason ->
+            assertEquals(PageLine("✕ Not available in this version", Tone.Warn), DownloadsPage.failure(failed.copy(reason = reason), shown = false).first(), reason)
+            assertEquals(PageLine("✕ $reason", Tone.Warn), DownloadsPage.failure(failed.copy(reason = reason), shown = true).first(), reason)
+        }
+        assertEquals(PageLine("✕ Won't fit", Tone.Warn), DownloadsPage.failure(failed.copy(reason = DownloadResolver.WONT_FIT), shown = false).first())
+        assertEquals(PageLine("✕ Your provider is missing parts of this release", Tone.Warn), DownloadsPage.failure(failed.copy(reason = DownloadResolver.INCOMPLETE), shown = false).first())
+
+        val said = listOf(streams, backingOff, hour, key, limit).flatMap { it.lines } + debrid.flatMap { DownloadsPage.failure(failed.copy(reason = it), shown = true) }
+        assertEquals(emptyList(), said.filter { line -> ServiceKind.entries.any { it.displayName in line.text } })
     }
 
     @Test

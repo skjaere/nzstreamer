@@ -105,6 +105,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  *   and greys the TV "Plays from the title's page" (L418, L453).
  * - With Kitchen display connected (Cast's fakes, L73), a film's ▶ is read with the device's name, and its tap casts the
  *   film's file there through the launcher (L418, L470), nothing played here.
+ * - A debrid download's rows (L461, L471, L474), seeded: the stream's wait with how far it is and Pause, the service out of
+ *   reach, the key, the limit with what makes it go on, and the failures, each whole at twice the text size.
  *
  * Where a case chose a device or paired a TV, Play on is put back to This phone, the TV forgotten and Cast's seams reset.
  */
@@ -497,6 +499,41 @@ class DownloadsPageDeviceTest {
         compose.waitFor(hasText("S01E02 · 1.3 GB"))
         val screen = context.resources.displayMetrics.widthPixels
         listOf(DownloadsPage.FILES.uppercase(), "Quiet Meridian", "S01E02 · 1.3 GB", E2).forEach { compose.assertWhole(it, screen) }
+    }
+
+    /**
+     * L461, L471, L474: a debrid download's rows in their words, seeded as the runner leaves them: the one the queue is at
+     * waiting while something streams, with how far it is, its bytes and Pause; its service out of reach after an hour,
+     * its key refused, and its account's limit with what makes it go on, each with Resume's words where it is the queue's;
+     * failed, kept failing, its server unable to resume, and not available in a build that hides debrid, each with how
+     * many releases were tried. Every line whole at twice the text size.
+     */
+    @Test
+    fun aDebridDownloadsRowsSayTheirWordsWholeAtTwiceTheTextSize() {
+        val now = System.currentTimeMillis()
+        seeds.seed(
+            episode(2, 5, DownloadState.Running, size = 3_100_000_000, file = true, written = 1_302_000_000, reason = DownloadHostRules.WAITS_FOR_STREAM, position = 0),
+        )
+        seeds.seed(episode(2, 6, DownloadState.Waiting, size = 3_100_000_000, file = true, written = 1_302_000_000, reason = DownloadHostRules.CANT_REACH_SERVICE, position = 1))
+        seeds.seed(episode(2, 7, DownloadState.Waiting, reason = DownloadHostRules.CHECK_SERVICE, position = 2))
+        seeds.seed(
+            episode(2, 8, DownloadState.Waiting, size = 3_100_000_000, file = true, written = 1_302_000_000, reason = DownloadHostRules.SERVICE_LIMIT, position = 3)
+                .copy(limitWait = DownloadColumns.text(LimitWait("dl-page-account", LimitWait.Kind.Service, now, now + 2 * 3_600_000))),
+        )
+        seeds.seed(episode(2, 4, DownloadState.Failed, reason = DownloadHostRules.SERVICE_KEPT_FAILING, tried = listOf("btih:a"), position = 4))
+        seeds.seed(episode(1, 3, DownloadState.Failed, show = QM, title = "Quiet Meridian", reason = DownloadHostRules.CANT_RESUME, tried = listOf("btih:b"), position = 5))
+        seeds.seed(episode(1, 2, DownloadState.Failed, show = QM, title = "Quiet Meridian", reason = DownloadHostRules.NOT_IN_THIS_VERSION, position = 6))
+        show(seeds.deps(), fontScale = 2f)
+        compose.waitFor(hasText("Waits while something streams · 42%"))
+        val screen = context.resources.displayMetrics.widthPixels
+        listOf(
+            "Waits while something streams · 42%", "1.3 of 3.1 GB", DownloadHostRules.CANT_REACH_SERVICE, DownloadHostRules.CHECK_SERVICE,
+            DownloadHostRules.SERVICE_LIMIT, "It goes on when NZStreamer next opens, or on Resume.", "✕ Your debrid service kept failing",
+            "✕ Its server can't resume this file", "✕ Not available in this version", "1 release tried",
+        ).forEach { compose.assertWhole(it, screen) }
+        // The row the queue is at keeps the queue's Pause while it waits for the stream to end.
+        assertTrue(compose.scrolledTo(hasContentDescription(DownloadsPage.PAUSE)))
+        assertFalse("no Resume on the row waiting for a stream", exists(hasText(DownloadsPage.RESUME) and hasClickAction()))
     }
 
     private val castButton = SemanticsMatcher.keyIsDefined(CastButtonLook)

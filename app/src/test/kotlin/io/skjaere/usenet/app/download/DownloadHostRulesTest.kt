@@ -11,8 +11,12 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadPrefs
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.RememberedRelease
+import io.skjaere.usenet.data.ServiceAccount
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.debrid.ServiceKind
+import kotlinx.coroutines.flow.count
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -146,6 +150,80 @@ class DownloadHostRulesTest {
             words,
         )
         assertEquals(emptyList(), words.filter { word -> ServiceKind.entries.any { it.displayName in word } })
+    }
+
+    /**
+     * L461, L474, C14: a debrid account's waits. Its key refused and its service out of reach for an hour end the walk,
+     * and its host, as the provider's do; its limit holds its download alone, the walk going on, as an indexer's does.
+     * Resume queues each of them again, a services save the account's three alone, a provider saved none of them. None
+     * is a need's wait, nor runs; the failures and the stream's wait are no wait that ends anything.
+     */
+    @Test
+    fun `the debrid waits end the host but for the limit, and Resume and a services save queue them again`() {
+        val service = listOf(DownloadHostRules.CHECK_SERVICE, DownloadHostRules.CANT_REACH_SERVICE, DownloadHostRules.SERVICE_LIMIT)
+        assertEquals(service.toSet(), DownloadHostRules.SERVICE_WAITS)
+        assertTrue(DownloadHostRules.endsWalk(DownloadHostRules.CHECK_SERVICE))
+        assertTrue(DownloadHostRules.endsWalk(DownloadHostRules.CANT_REACH_SERVICE))
+        assertFalse(DownloadHostRules.endsWalk(DownloadHostRules.SERVICE_LIMIT))
+        // As the Usenet ones are.
+        listOf(DownloadHostRules.CHECK_PROVIDER, DownloadHostRules.CANT_REACH_PROVIDER, DownloadHostRules.CANT_REACH_INDEXER, DownloadHostRules.STORAGE_UNAVAILABLE)
+            .forEach { assertTrue(DownloadHostRules.endsWalk(it), it) }
+        assertFalse(DownloadHostRules.endsWalk(DownloadHostRules.LIMIT_REACHED))
+        service.forEach { reason ->
+            assertTrue(reason in DownloadHostRules.RESUMED_WAITS, reason)
+            assertFalse(reason in DownloadHostRules.PROVIDER_WAITS, reason)
+            assertFalse(DownloadHostRules.waitsForNeed(reason), reason)
+        }
+        assertEquals(emptyList(), DownloadHostRules.runnable(service.map { row(it, DownloadState.Waiting, reason = it) }, storageBack = true))
+        // The Usenet ones Resume queues again, still; a provider saved queues none of the account's.
+        listOf(DownloadHostRules.CHECK_PROVIDER, DownloadHostRules.CANT_REACH_PROVIDER, DownloadHostRules.CANT_REACH_INDEXER).forEach {
+            assertTrue(it in DownloadHostRules.PROVIDER_WAITS, it)
+            assertTrue(it in DownloadHostRules.RESUMED_WAITS, it)
+            assertFalse(it in DownloadHostRules.SERVICE_WAITS, it)
+        }
+        assertTrue(DownloadHostRules.STORAGE_UNAVAILABLE in DownloadHostRules.RESUMED_WAITS)
+        assertTrue(DownloadHostRules.LIMIT_REACHED in DownloadHostRules.RESUMED_WAITS)
+        listOf(DownloadHostRules.SERVICE_KEPT_FAILING, DownloadHostRules.CANT_RESUME, DownloadHostRules.NOT_IN_THIS_VERSION, DownloadHostRules.WAITS_FOR_STREAM)
+            .forEach { assertFalse(it in DownloadHostRules.RESUMED_WAITS, it) }
+        // A save schedules the host from the visible app as a provider's does, once.
+        assertTrue(schedules(ScheduleCause.ServiceSaved))
+        assertFalse(schedules(ScheduleCause.ServiceSaved, walking = true))
+        assertFalse(schedules(ScheduleCause.ServiceSaved, pending = WAITING))
+        assertFalse(schedules(ScheduleCause.ServiceSaved, visible = false))
+    }
+
+    /**
+     * L474: the services' watch hears the user's saves alone: the accounts on (switched on, not signed out, the key not
+     * refused) by their ids and when their keys were saved, a save being that set gaining one. A key saved, an account
+     * added or switched on, a refused key taken again by Test: yes. The app's own mark of a refused key, a plan's refresh,
+     * Remove after playing switched, an account switched off or signed out: no. The settings' first read is no save.
+     */
+    @Test
+    fun `a services save is the user's own, never the app's mark of a refused key, a refresh, a switch-off or a sign-out`() = runBlocking<Unit> {
+        val torBox = ServiceAccount("acc-a", ServiceKind.TorBox.name, keySavedAt = 10)
+        val premiumize = ServiceAccount("acc-b", ServiceKind.Premiumize.name, keySavedAt = 20)
+        fun saved(before: List<ServiceAccount>, after: List<ServiceAccount>) = DownloadHostRules.servicesSaved(before, after)
+        assertTrue(saved(listOf(torBox), listOf(torBox.copy(keySavedAt = 11))), "a new key")
+        assertTrue(saved(listOf(torBox), listOf(torBox, premiumize)), "an account added")
+        assertTrue(saved(emptyList(), listOf(torBox)), "the first account")
+        assertTrue(saved(listOf(torBox.copy(enabled = false)), listOf(torBox)), "switched on")
+        assertTrue(saved(listOf(torBox.copy(keyRefused = true)), listOf(torBox)), "a refused key taken again")
+        assertTrue(saved(listOf(torBox), listOf(premiumize)), "one signed out and another added")
+        assertFalse(saved(listOf(torBox), listOf(torBox.copy(keyRefused = true))), "the app's mark of a refused key")
+        assertFalse(saved(listOf(torBox), listOf(torBox.copy(plan = "Pro", planUntil = 5, accountName = "quay.viewer@example.org", updatedAt = 3))), "a plan refreshed")
+        assertFalse(saved(listOf(torBox), listOf(torBox.copy(removeAfterPlay = false))), "Remove after playing switched")
+        assertFalse(saved(listOf(torBox, premiumize), listOf(torBox.copy(enabled = false), premiumize)), "switched off")
+        assertFalse(saved(listOf(torBox, premiumize), listOf(premiumize)), "signed out")
+        assertFalse(saved(listOf(torBox), listOf(torBox.copy(deleted = true))), "signed out, kept as removed")
+        assertFalse(saved(listOf(torBox.copy(keyRefused = true)), listOf(torBox.copy(keyRefused = true, keySavedAt = 11))), "a new key, refused already")
+        assertFalse(saved(listOf(torBox), listOf(torBox)), "nothing changed")
+
+        // As the settings move: their first read is none, then each save once.
+        val moves = listOf(
+            listOf(torBox), listOf(torBox.copy(keyRefused = true)), listOf(torBox.copy(keyRefused = true, plan = "Pro")), listOf(torBox), listOf(torBox),
+            listOf(torBox, premiumize),
+        )
+        assertEquals(2, DownloadHostRules.servicesSaves(flowOf(*moves.toTypedArray())).count())
     }
 
     /**

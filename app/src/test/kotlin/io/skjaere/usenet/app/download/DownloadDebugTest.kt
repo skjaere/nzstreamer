@@ -115,6 +115,7 @@ class DownloadDebugTest {
                 "1763164800000 schedule cause=Download result=scheduled",
                 "1763164800000 schedule cause=Resume result=scheduled",
                 "1763164800000 schedule cause=ProviderSaved result=scheduled",
+                "1763164800000 schedule cause=ServiceSaved result=scheduled",
                 "1763164800000 schedule cause=SwitchChanged result=scheduled",
                 "1763164800000 schedule cause=AppStart result=scheduled",
                 "1763164800000 schedule cause=AppStart result=scheduled",

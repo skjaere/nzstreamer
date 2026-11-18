@@ -32,6 +32,7 @@ import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.minutes
 
 /**
  * The service accounts' clients (L196, L175): the accounts that are on, in the stored order (L228); one client per account, with its own gate,
@@ -139,6 +140,29 @@ class ServiceRegistryTest {
         now = now.plus(Duration.ofMinutes(21))
         assertEquals(listOf("tb", "pm"), registry.usable(shown = true).map { it.account.id })
         assertEquals(emptyList(), marked)
+    }
+
+    /**
+     * L461: how long an account's gate stays shut for its limit, as the downloads' runner asks it to wait one out in place:
+     * read from the gate, asking the service nothing; none while it is open, once the wait is over, or shut for a refused
+     * key; none for an account with no client.
+     */
+    @Test
+    fun `an account's limit says how long its gate stays shut, asking nothing`() = runBlocking<Unit> {
+        assertNull(registry.limitLeft("tb"))
+        val torBox = registry.usable(shown = true).single { it.kind == ServiceKind.TorBox }
+        torBox.fake().answer = ServiceError.Limit(Duration.ofMinutes(4))
+        assertFailsWith<ServiceException> { torBox.service.check(emptyList()) }
+        now = now.plus(Duration.ofMinutes(1))
+        assertEquals(3.minutes, registry.limitLeft("tb"))
+        assertNull(registry.limitLeft("pm"))
+        assertEquals(1, torBox.fake().calls, "nothing asked")
+        now = now.plus(Duration.ofMinutes(3))
+        assertNull(registry.limitLeft("tb"))
+        torBox.fake().answer = ServiceError.KeyRefused
+        assertFailsWith<ServiceException> { torBox.service.check(emptyList()) }
+        assertNull(registry.limitLeft("tb"), "shut for its key, not a limit")
+        assertNull(registry.limitLeft("nobody"))
     }
 
     @Test

@@ -2514,9 +2514,10 @@ class DownloadResolverTest {
     }
 
     /**
-     * L460: the service's own refusals are no answer about the release, and count no try: its outage on every account the
-     * torrent plays from backs off as an indexer's does, in the debrid words; a refused key and a limit wait. An outage on
-     * one account alone passes the release on to the next.
+     * L460, L461: the service's own refusals are no answer about the release, and count no try: its outage on every account
+     * the torrent plays from backs off as an indexer's does, in the debrid words; a refused key waits; a limit is handed to
+     * the runner with its account and when its gate opens (an hour where the answer named no wait), which waits it out in
+     * place or has the row wait. An outage on one account alone passes the release on to the next.
      */
     @Test
     fun `a service's outage backs off and its refused key and limit wait, none counted`() = runBlocking<Unit> {
@@ -2529,15 +2530,24 @@ class DownloadResolverTest {
         assertEquals(DownloadHostRules.CANT_REACH_SERVICE, stored().reason)
         assertEquals(emptyList(), stored().tried)
 
-        listOf(ServiceError.KeyRefused to DownloadHostRules.CHECK_SERVICE, ServiceError.Limit(Duration.ofMinutes(30)) to DownloadHostRules.SERVICE_LIMIT).forEach { (error, words) ->
+        reset()
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        serviceA.failsFor[goodTorrent.hash] = ServiceError.KeyRefused
+        rowOf(goodTorrent.candidate)
+        assertEquals(DownloadResolver.Resolution.Waiting(DownloadHostRules.CHECK_SERVICE), resolver().resolve(ID))
+        assertEquals(DownloadState.Waiting, stored().state)
+        assertEquals(DownloadHostRules.CHECK_SERVICE, stored().reason)
+        assertEquals(emptyList(), stored().tried)
+
+        listOf(Duration.ofMinutes(30) to 30 * 60_000L, null to 60 * 60_000L).forEach { (wait, left) ->
             reset()
             serviceA.cached[goodTorrent.hash] = goodTorrent.files
-            serviceA.failsFor[goodTorrent.hash] = error
+            serviceA.failsFor[goodTorrent.hash] = ServiceError.Limit(wait)
             rowOf(goodTorrent.candidate)
-            assertEquals(DownloadResolver.Resolution.Waiting(words), resolver().resolve(ID), "$error")
-            assertEquals(DownloadState.Waiting, stored().state)
-            assertEquals(words, stored().reason)
-            assertEquals(emptyList(), stored().tried, "$error")
+            assertEquals(DownloadResolver.Resolution.Limited(ACCOUNT_A, NOW + left), resolver().resolve(ID), "$wait")
+            // The runner says how it waits: in place, or as the row's wait.
+            assertEquals(DownloadState.Resolving, stored().state, "$wait")
+            assertEquals(emptyList(), stored().tried, "$wait")
         }
 
         // Out of reach on the first account alone: the second prepares it, and it counts.

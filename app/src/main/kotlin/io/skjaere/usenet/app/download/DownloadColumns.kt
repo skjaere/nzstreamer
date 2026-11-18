@@ -68,12 +68,13 @@ data class DownloadPick(val index: Int, val name: String, val size: Long, val nz
 /**
  * An indexer's limit a row waits out ([Download.limitWait], L434): the indexer's id ([indexerId]), which limit ([kind]),
  * when it was met ([since], epoch milliseconds) and when it ends where the indexer said ([until]: a search limit's
- * Retry-After; a download limit comes without one). The row's reason is fixed words; the page names the indexer from
+ * Retry-After; a download limit comes without one). Or a debrid account's ([Kind.Service], L461): the account's id in
+ * [indexerId]'s place, and [until] when its gate opens. The row's reason is fixed words; the page names the indexer from
  * this at draw time, so no notification or log line does.
  */
 @Serializable
 data class LimitWait(val indexerId: String, val kind: Kind, val since: Long, val until: Long? = null) {
-    enum class Kind { Download, Search }
+    enum class Kind { Download, Search, Service }
 
     /**
      * When it is taken to have ended (L434, L443): where the indexer said, else [GUESS_MILLIS] after it was met, so a switch

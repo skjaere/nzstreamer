@@ -19,6 +19,7 @@ import io.skjaere.usenet.app.play.ProbedTracksSerializer
 import io.skjaere.usenet.app.play.RememberedFile
 import io.skjaere.usenet.app.play.Replay
 import io.skjaere.usenet.app.play.STEP_LABELS
+import io.skjaere.usenet.app.play.UsableRoutes
 import io.skjaere.usenet.app.play.VideoTiming
 import io.skjaere.usenet.app.play.WatchTarget
 import io.skjaere.usenet.app.play.indexerGrab
@@ -146,8 +147,9 @@ import kotlin.time.Duration.Companion.seconds
  * listing before anything is added, with no question, opened and probed. Only a release from Usenet waits for the
  * providers. Its listing is kept in the row's folder before the row takes it (L420), and the debrid writer writes its file
  * from that copy ([Resolution.Ready.Service]); a row opened again reads the copy, with no call. Its account's outage,
- * refused key or limit is no answer about the release: uncounted, the row backs off or waits in the debrid service's words;
- * what fails the release there is counted, in the play sheet's words where they name no service. While debrid is hidden,
+ * refused key or limit is no answer about the release: uncounted, the row backs off or waits in the debrid service's words,
+ * and its limit goes to the runner with when the account's gate opens ([Resolution.Limited], L461); what fails the release
+ * there is counted, in the play sheet's words where they name no service. While debrid is hidden,
  * or for an indexer whose "Use with your debrid service" is off, a torrent goes to no service. What the attempts add to an
  * account is held while the resolve runs and let go as it ends (L421).
  *
@@ -329,6 +331,17 @@ class DownloadResolver(
          * off and resolves it again, as the writer does for a reopen that got no connection (L382). Nothing was counted.
          */
         data class Unreachable(val error: UsenetError, val words: String = DownloadHostRules.CANT_REACH_PROVIDER) : Resolution
+
+        /**
+         * A debrid account's limit stopped what was left to try (L461): no answer about the release, nothing counted, the row
+         * as it was. The limited [account] (null where none was named) and when its gate opens ([until], the wall clock's
+         * milliseconds: an hour where the service named no wait), for the runner to wait it out in place while that is
+         * near, else to have the row wait for it.
+         */
+        data class Limited(val account: String?, val until: Long) : Resolution {
+            // No account in a log line.
+            override fun toString() = "Limited(until=$until)"
+        }
 
         /** The row is gone: removed meanwhile. */
         data object Gone : Resolution
@@ -1060,11 +1073,16 @@ class DownloadResolver(
 
     /**
      * What a torrent's account's own refusal ([stop]) makes the download do (L460, L474): its key refused waits for a new
-     * one, its limit for its end; its outage is backed off from, and the download resolved again.
+     * one; its limit goes to the runner with when the account's gate opens (L461); its outage is backed off from, and the
+     * download resolved again.
      */
     private suspend fun serviceWait(id: String, stop: AttemptFailure): Resolution = when (stop) {
         is AttemptFailure.KeyRefused -> waiting(id, DownloadHostRules.CHECK_SERVICE)
-        is AttemptFailure.ServiceLimit -> waiting(id, DownloadHostRules.SERVICE_LIMIT)
+        is AttemptFailure.ServiceLimit -> {
+            val left = stop.wait ?: ServiceDownloadWriter.LIMIT_WITHOUT_WAIT
+            log.info("download {}: its debrid account's limit reached, its gate open again in {} s", id, left.inWholeSeconds)
+            Resolution.Limited(stop.route?.let(UsableRoutes::accountOf), clock.now() + left.inWholeMilliseconds)
+        }
         else -> unreachable(id, UsenetError.Network(null), DownloadHostRules.CANT_REACH_SERVICE)
     }
 

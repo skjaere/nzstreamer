@@ -115,13 +115,14 @@ object TitleDownloads {
      * The episode row's line under the date (DlPhoneEpisodeRow): "Downloaded · 1.3 GB", "Downloaded · 2 parts missing" (what
      * is missing in the warning colour), "Downloading · 42%", "Queued for download", "Paused · 18%", "Download failed",
      * "Finding releases…", "Trying release 2 of 3", "Waiting for Wi-Fi"; and, not drawn, the other waits, a stop by Android
-     * and the provider out of reach as it is written, in the Downloads page's words. A finished one going tomorrow ends
+     * and the provider or the debrid service out of reach as it is written, in the Downloads page's words, and a debrid
+     * download's wait while something streams muted, as a need's wait is (L471). A finished one going tomorrow ends
      * " · Deleting tomorrow" (L415).
      */
     fun line(download: TitleDownload): List<PageLine> = when (download.state) {
         DownloadState.Queued -> listOf(PageLine(QUEUED, Tone.Muted))
         DownloadState.Resolving -> trying(download)?.let { listOf(PageLine(it, Tone.Accent)) } ?: listOf(PageLine(finding(download), Tone.Muted))
-        DownloadState.Running -> download.reason?.let { listOf(PageLine(far(it, download), Tone.Warn)) } ?: listOf(PageLine(far(DOWNLOADING, download), Tone.Accent))
+        DownloadState.Running -> download.reason?.let { listOf(PageLine(far(it, download), held(it))) } ?: listOf(PageLine(far(DOWNLOADING, download), Tone.Accent))
         DownloadState.Paused -> listOf(PageLine(far(PAUSED, download), Tone.Muted))
         DownloadState.Stopped -> listOf(PageLine(far(DownloadHostRules.STOPPED_BY_ANDROID, download), Tone.WarnStrong))
         DownloadState.Waiting -> listOf(PageLine(download.reason ?: WAITING, if (holdsOnNeed(download)) Tone.Muted else Tone.Warn))
@@ -182,8 +183,8 @@ object TitleDownloads {
      * The Movie page's and Search's card's Download (DlPhoneMovie): "Download"; "Queued for download"; "Finding releases…";
      * "Downloading" with "42% of 4.2 GB" or "Trying release 2 of 3"; "Queued for download" with "Waiting for Wi-Fi";
      * "Paused" with "42% of 4.2 GB"; "Downloaded" with "4.2 GB" or "2 parts missing", or "Deleting tomorrow" while it is
-     * going (L415); "Download failed" with "3 releases tried". The detail muted, but in the warning colour where something
-     * went wrong.
+     * going (L415); "Download failed" with "3 releases tried"; and, not drawn, "Downloading" with "Waits while something
+     * streams · 42%" (L471). The detail muted, but in the warning colour where something went wrong.
      */
     fun button(download: TitleDownload?): DownloadButtonWords {
         if (download == null || download.state == DownloadState.Deleting) return DownloadButtonWords(DownloadEntry.Download.label, null, DownloadMark.Download)
@@ -193,7 +194,9 @@ object TitleDownloads {
             DownloadState.Queued -> DownloadButtonWords(QUEUED, null, mark)
             DownloadState.Resolving -> trying(download)?.let { DownloadButtonWords(DOWNLOADING, PageLine(it, Tone.Muted), mark) }
                 ?: DownloadButtonWords(finding(download), null, mark)
-            DownloadState.Running -> DownloadButtonWords(DOWNLOADING, download.reason?.let { PageLine(it, Tone.Warn) } ?: far, mark)
+            DownloadState.Running -> DownloadButtonWords(DOWNLOADING, download.reason?.let { reason ->
+                if (reason == DownloadHostRules.WAITS_FOR_STREAM) PageLine(far(reason, download), Tone.Muted) else PageLine(reason, Tone.Warn)
+            } ?: far, mark)
             DownloadState.Waiting -> DownloadButtonWords(QUEUED, PageLine(download.reason ?: WAITING, if (holdsOnNeed(download)) Tone.Muted else Tone.Warn), mark)
             DownloadState.Paused -> DownloadButtonWords(PAUSED, far, mark)
             DownloadState.Stopped -> DownloadButtonWords(DownloadHostRules.STOPPED_BY_ANDROID, far, mark)
@@ -265,6 +268,12 @@ object TitleDownloads {
         1 -> "1 part missing"
         else -> "$parts parts missing"
     }
+
+    /**
+     * The tone of what holds a download as it is written ([reason]): muted while it waits for a stream to end (L471), which
+     * ends by itself; in the warning colour while its source is out of reach.
+     */
+    private fun held(reason: String): Tone = if (reason == DownloadHostRules.WAITS_FOR_STREAM) Tone.Muted else Tone.Warn
 
     /** A wait for a network or the charger, which ends by itself: the queue is there, and Pause holds it. */
     private fun holdsOnNeed(download: TitleDownload): Boolean = DownloadHostRules.waitsForNeed(download.reason)

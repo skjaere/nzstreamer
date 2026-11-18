@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.time.toKotlinDuration
 
 /**
  * The service accounts' clients (L196, L175). An account is on while it is switched on, its service is one this version
@@ -77,6 +78,13 @@ class ServiceRegistry(
      */
     suspend fun gated(id: String, shown: Boolean = DebridGate.shown): DebridService? =
         on(shown).firstOrNull { it.id == id }?.let { service(it.id)?.service }
+
+    /**
+     * How long account [id]'s gate stays shut for its limit (L461), as the gate says now, asking nothing: null while it is
+     * open or shut for a refused key, and for an account with no client (none saved, or its key unreadable).
+     */
+    suspend fun limitLeft(id: String): kotlin.time.Duration? =
+        (service(id)?.gate?.closed() as? ServiceError.Limit)?.retryAfter?.toKotlinDuration()
 
     /** Account [id]'s client, on or off, for its own page; null for none, or one whose key can't be read. */
     suspend fun service(id: String): Client? = accounts().firstOrNull { it.record.id == id }?.takeIf { kindOf(it.record) != null && it.apiKey != null }?.let { client(it) }
