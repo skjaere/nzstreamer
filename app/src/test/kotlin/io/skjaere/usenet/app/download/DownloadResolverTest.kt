@@ -2668,6 +2668,33 @@ class DownloadResolverTest {
         assertTrue("drop source $ID" in storage.events, storage.events.toString())
     }
 
+    /**
+     * L424, L460: a torrent lost on its account mid-file goes on from another, whose listing the writer keeps as the row's
+     * copy, its file found there by its path and size at whatever place that service lists it. A row opened again after the
+     * move (Pause and Resume, a process death, a limit waited out in place) finds its file in that copy by its name and
+     * size where its place differs, and goes on from its offset with no call: nothing dropped, nothing started again.
+     */
+    @Test
+    fun `a torrent row moved to another account's listing opens again from it, its file listed at another place there`() = runBlocking<Unit> {
+        resolvedOn(goodTorrent, offset = 400_000_000)
+        // The second account lists the video first, then the info file.
+        val moved = listOf(goodTorrent.files[1].copy(index = 0, id = "900"), goodTorrent.files[0].copy(index = 1, id = "901"))
+        val hash = InfoHash.of(goodTorrent.hash)
+        val entry = DebridListingStore.Entry(
+            DebridListingStore.idFor(ACCOUNT_B, hash), ACCOUNT_B, goodTorrent.title, Prepared(hash, ServiceListing(moved), moved[0], "${ACCOUNT_B.take(4)}-1"),
+        )
+        storage.keepListing(ID, entry)
+        storage.events.clear()
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Service>(resolver(on = listOf(ACCOUNT_A, ACCOUNT_B)).resolve(ID))
+        assertEquals(entry, ready.entry)
+        assertEquals(moved[0], ready.file)
+        assertEquals(400_000_000L, ready.row.safeOffset)
+        assertEquals(emptyList(), lookups)
+        assertEquals(emptyList(), serviceB.prepares)
+        assertEquals(emptyList(), storage.deletedVideos)
+        assertFalse("drop source $ID" in storage.events, storage.events.toString())
+    }
+
     /** L460, L194: a torrent of an indexer whose "Use with your debrid service" is off now goes to no service: left out, uncounted. */
     @Test
     fun `a torrent of an indexer since kept from the service is left out with no call`() = runBlocking<Unit> {

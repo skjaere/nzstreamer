@@ -504,16 +504,19 @@ class DownloadResolver(
 
     /**
      * A torrent row [row] opened again from the copy of its listing in its folder (L420, L460), its [release]'s file found
-     * there by its place, name and [size]: no prepare, no call and no provider wait, the writer asking a fresh link as it
-     * opens. Null where it has no copy (its process went before it was written) or its file is no longer listed so, the copy
-     * dropped first: then its candidates are resolved. While debrid is hidden it fails, with no call (L422). A season's
-     * torrent pack is kept for its season, as at a resolve's success ([keepPack], L462).
+     * there by its place, name and [size], else by its name and size alone: the copy of another account's listing, which
+     * the writer keeps once it has moved the torrent there (L424), may list it at another place. No prepare, no call and
+     * no provider wait, the writer asking a fresh link as it opens. Null where it has no copy (its process went before it
+     * was written) or its file is no longer listed so, the copy dropped first: then its candidates are resolved. While
+     * debrid is hidden it fails, with no call (L422). A season's torrent pack is kept for its season, as at a resolve's
+     * success ([keepPack], L462).
      */
     private suspend fun reopenedService(row: Download, release: RememberedRelease, size: Long): Resolution? {
         if (!shown()) return hidden(row.id)
         val entry = storage.listing(row.id) ?: return null
         val name = row.fileName ?: release.fileName
-        val file = entry.prepared.listing.files.firstOrNull { it.index == release.fileIndex && it.name == name && it.size == size }
+        val files = entry.prepared.listing.files
+        val file = files.firstOrNull { it.index == release.fileIndex && it.name == name && it.size == size } ?: files.firstOrNull { it.name == name && it.size == size }
         if (file == null) {
             log.info("download {}: its listing's copy no longer lists its file: resolving it again", row.id)
             storage.dropSource(row.id)
