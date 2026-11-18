@@ -270,31 +270,41 @@ class DebridDownloadDeviceTest {
 
 
     /**
-     * L474: the account's key refused as the torrent is written: the row waits "Check your debrid service", the walk
-     * ending, and stays so, at its offset, as the app marks the key refused (the app's own mark is no save of the user's).
-     * A key saved again (the same, taken by the service now) queues it again, and it goes on to Done, whole.
+     * L474: the account's key refused as the torrent is written, mid-file: its body cut at [CUT] bytes, the next link is
+     * refused, and the row waits "Check your debrid service" at the offset it reached, the walk ending, and stays so, at
+     * that offset, as the app marks the key refused (the app's own mark is no save of the user's). A key saved again (the
+     * same, taken by the service now) queues it again, and it goes on from that offset to Done, whole: its second body
+     * from there, none from 0 again.
      */
     @Test
     fun aRefusedKeyWaitsAsTheAppMarksItAndANewKeySavedGoesOn() = runBlocking<Unit> {
         val row = seededTorrent()
+        // Paced, and cut at CUT: the key is refused while its first body comes, so the link after the cut is refused.
+        DebridFakes.control("cdn?slow=$SLOW_KBPS&cut=$CUT")
+        DebridFakes.control("cdn-expire")
+        val walk = walk()
+        waitFor("1 MB written", DOWNLOAD_MILLIS) { written(row.id).takeIf { it >= 1_000_000 } }
         DebridFakes.control("refuse-keys?on=true")
-        walk().join()
+        walk.join()
         val waiting = rowNow(row.id)
         assertEquals(DownloadState.Waiting, waiting.state)
         assertEquals(DownloadHostRules.CHECK_SERVICE, waiting.reason)
+        assertEquals("waiting at the offset it reached", CUT, waiting.safeOffset)
         waitFor("the key marked refused") { runBlocking { container.settings.services.first() }.firstOrNull { it.id == fakes.accountId && it.keyRefused } }
         // The app's own mark sets nothing going: the row waits on, at its offset.
         delay(SETTLE_MILLIS)
         val still = rowNow(row.id)
         assertEquals(DownloadState.Waiting, still.state)
         assertEquals(DownloadHostRules.CHECK_SERVICE, still.reason)
-        assertEquals(waiting.safeOffset, still.safeOffset)
+        assertEquals(CUT, still.safeOffset)
 
         DebridFakes.control("refuse-keys?on=false")
+        DebridFakes.control("cdn")
         container.settings.saveService(ServiceKind.TorBox.name, DebridFakes.TORBOX_KEY) { ServiceSignIn(DebridFakes.TORBOX_ACCOUNT) }
         waitFor("queued again by the key saved") { rowNow(row.id).takeIf { it.state != DownloadState.Waiting } }
         walk()
         assertWhole(done(row))
+        assertEquals("on from its offset, never from 0 again", mapOf(0L to 1, CUT to 1), cdnFrom())
     }
 
     /**
