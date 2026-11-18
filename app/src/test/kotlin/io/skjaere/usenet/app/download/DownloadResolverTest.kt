@@ -2702,22 +2702,34 @@ class DownloadResolverTest {
     /**
      * L194, L460: a torrent row whose indexer has been kept from the service since ("Use with your debrid service" off)
      * opens again on no service, its account asked nothing, not even for a link: another release of the row is tried, the
-     * file started again from 0; with none, it fails in the ranking's words.
+     * file started again from 0, and the add the download's lease held let go to its grace (L421), as nothing of the row
+     * reads it now; with none, its turn fails it as any row with nothing left to try, in words that name no service (L422
+     * reads none of them while hidden).
      */
     @Test
     fun `a torrent row whose indexer was kept from the service since opens again on no service`() = runBlocking<Unit> {
+        val adds = adds()
         resolvedOn(goodTorrent, offset = 400_000_000)
+        // Its add, as the download's first resolve made it and the lease held it.
+        val listing = assertNotNull(storage.listings[ID])
+        adds.watch(accountOf(ACCOUNT_A)).added(listing.prepared.hash, assertNotNull(listing.prepared.handle))
+        adds.holdOnly(DownloadLease(ID), listing.id)
         dao.update(stored().copy(candidates = listOf(goodTorrent.candidate, usenet(single))))
-        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(offService = setOf(TORZNAB)).resolve(ID))
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver(offService = setOf(TORZNAB), adds = adds).resolve(ID))
         assertEquals(single.guid, ready.row.release?.guid)
         assertEquals(0L, ready.row.safeOffset)
         assertEquals(listOf(ID), storage.deletedVideos)
         assertTrue("drop source $ID" in storage.events, storage.events.toString())
         assertEquals(emptyList(), lookups)
+        sweptAfterGrace(adds)
+        assertEquals(listOf(listing.prepared.handle), serviceA.removed, "the lease let go as the torrent was left")
 
+        // Nothing else to try: "No other release to try", as the turn says it, the copy dropped and nothing deleted.
         reset()
         resolvedOn(goodTorrent, offset = 400_000_000)
-        assertEquals(DownloadResolver.Resolution.Failed("Not used with your debrid service"), resolver(offService = setOf(TORZNAB)).resolve(ID))
+        assertEquals(DownloadResolver.Resolution.Failed(DownloadResolver.NO_OTHER_RELEASE), resolver(offService = setOf(TORZNAB)).resolve(ID))
+        assertEquals(DownloadResolver.NO_OTHER_RELEASE, stored().reason)
+        assertTrue("drop source $ID" in storage.events, storage.events.toString())
         assertEquals(emptyList(), lookups)
         assertEquals(emptyList(), storage.deletedVideos)
     }
