@@ -20,7 +20,7 @@ import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.debrid.DebridFakes
 import io.skjaere.usenet.app.debrid.DebridGate
 import io.skjaere.usenet.app.debrid.REMOVE_AFTER_PLAYING
-import io.skjaere.usenet.app.debrid.REMOVE_AFTER_PLAYING_HELP
+import io.skjaere.usenet.app.debrid.REMOVE_AFTER_PLAYING_TV_HELP
 import io.skjaere.usenet.app.debrid.SERVICES_FOOTNOTE
 import io.skjaere.usenet.app.debrid.TORRENT_INDEXERS_LINE
 import io.skjaere.usenet.app.debrid.USE_THIS_SERVICE
@@ -271,8 +271,9 @@ class DebridSourcesTvTest {
         waitFor(hasText(REMOVE_AFTER_PLAYING))
         remote.waitForFocus("Test")
         assertTrue(remote.press(KeyEvent.KEYCODE_DPAD_DOWN).startsWith(USE_THIS_SERVICE))
-        assertEquals("two Downs from Test", serviceSwitchSpoken(REMOVE_AFTER_PLAYING, REMOVE_AFTER_PLAYING_HELP), remote.press(KeyEvent.KEYCODE_DPAD_DOWN))
-        val switch = hasText(REMOVE_AFTER_PLAYING) and hasText(REMOVE_AFTER_PLAYING_HELP)
+        // A TV's line is a play's alone, as a TV never downloads (L421, W108).
+        assertEquals("two Downs from Test", serviceSwitchSpoken(REMOVE_AFTER_PLAYING, REMOVE_AFTER_PLAYING_TV_HELP), remote.press(KeyEvent.KEYCODE_DPAD_DOWN))
+        val switch = hasText(REMOVE_AFTER_PLAYING) and hasText(REMOVE_AFTER_PLAYING_TV_HELP)
         assertTrue("on, as saved", exists(switch and isOn()))
         remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
         waitFor(switch and isOff())

@@ -379,7 +379,8 @@ private fun ShowRow(row: DownloadsRow.Show, first: Boolean, last: Boolean, selec
 
 /**
  * A finished film: its year, length and size, its missing parts, and "Deleting tomorrow" while Delete once watched has it
- * going (L415); Play, read as [playLabel] (the Cast device it plays on, L470), and its ⋮. A tap plays it.
+ * going (L415), else "From the debrid service" for a torrent's while debrid shows (L463); Play, read as [playLabel] (the
+ * Cast device it plays on, L470), and its ⋮. A tap plays it.
  */
 @Composable
 private fun FilmRow(
@@ -409,7 +410,7 @@ private fun FilmRow(
     ) {
         Text(DownloadsPage.filmSub(row.row), style = AppType.secondary, color = colors.muted)
         DownloadsPage.missing(row.row)?.let { MissingLine(it) }
-        DownloadsPage.going(row)?.let { Text(it, style = AppType.secondary, color = colors.muted) }
+        DownloadsPage.extra(row)?.let { Text(it, style = AppType.secondary, color = colors.muted) }
     }
 }
 

@@ -24,6 +24,7 @@ import io.skjaere.usenet.app.cast.castRoute
 import io.skjaere.usenet.app.casting.CastLink
 import io.skjaere.usenet.app.casting.connectingTo
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.debrid.DebridGate
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.HL
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.assertWhole
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.episode
@@ -47,6 +48,7 @@ import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.data.WatchState
 import io.skjaere.usenet.data.WatchTitle
 import io.skjaere.usenet.player.PlayUris
+import io.skjaere.usenet.releases.ReleaseFacts
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -54,6 +56,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -70,6 +73,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  * - At twice the font size, nothing cut off.
  * - With Delete once watched on, Season 1's watched episodes say "Deleting tomorrow", whole at twice the font size too,
  *   and nothing does once it is off (C4, L415).
+ * - A finished torrent episode says "From the debrid service" under its row, whole at twice the font size (L463).
  * - The bar (L453): Select, then the Cast button; none in select mode.
  * - With Kitchen display connected (Cast's fakes, L73): Resume shows Google's Cast icon and "on Kitchen display", an
  *   episode's tap is read "Play on Kitchen display", and Resume casts the next episode's file there (L418, L470). While
@@ -216,6 +220,27 @@ class DownloadsShowDeviceTest {
         ).forEach { compose.assertWhole(it, width) }
         // Select becomes its icon, read as its word.
         assertTrue(compose.exists(hasContentDescription(DownloadsPage.SELECT)))
+    }
+
+    /**
+     * L463: a finished torrent episode (S02E02, its release the debrid service's) says "From the debrid service" under its
+     * size and length, in its row, so TalkBack hears it with the row, whole at twice the font size; the Usenet episodes say
+     * nothing of where they came from.
+     */
+    @Test
+    fun aFinishedTorrentEpisodeSaysItCameFromTheDebridService() = runBlocking<Unit> {
+        assumeTrue("debrid is hidden in this build", DebridGate.shown)
+        val breakwater = episodes[4]
+        val hash = "2f5a3c9e1b7d4f6a8c0e2b4d6f8a1c3e5b7d9f0a"
+        val name = "Harbor.Lights.S02.1080p.WEB-DL.AAC2.0.H.264-TIDE"
+        container.data.downloads.update(
+            breakwater.copy(release = RememberedRelease("dl-page-t", "btih:$hash", name, null, 1, "btih:$hash", breakwater.fileName, breakwater.size, source = ReleaseFacts.TORRENT)),
+        )
+        show(fontScale = 2f)
+        compose.waitFor(hasText("Resume S02E01 · 20:00"))
+        assertTrue(compose.scrolledTo(hasText(DownloadsPage.FROM_DEBRID, substring = true) and hasText("The Breakwater", substring = true)))
+        assertEquals("the torrent's alone", 1, compose.onAllNodes(hasText(DownloadsPage.FROM_DEBRID), useUnmergedTree = true).fetchSemanticsNodes().size)
+        compose.assertWhole(DownloadsPage.FROM_DEBRID, context.resources.displayMetrics.widthPixels)
     }
 
     /** L453: the bar's Select, then the Cast button (this phone's); none in select mode. */

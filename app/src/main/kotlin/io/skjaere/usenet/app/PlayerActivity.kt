@@ -4160,12 +4160,13 @@ class PlayerActivity : ComponentActivity() {
         @Volatile
         internal var readPlayback: suspend (AppContainer) -> PlaybackPrefs = { it.settings.playback.first() }
 
-        /** Test seam: the settings' indexers and service accounts File details name the release's source by, which a test can hold up. */
+        /**
+         * Test seam: the settings' indexers and service accounts File details name the release's source by, which a test can
+         * hold up; the torrent indexers only while debrid shows (L463).
+         */
         @VisibleForTesting
         @Volatile
-        internal var readIndexers: suspend (AppContainer) -> SourceNames = {
-            SourceNames(it.settings.indexers.first(), it.settings.torrentIndexers.first(), it.settings.services.first())
-        }
+        internal var readIndexers: suspend (AppContainer) -> SourceNames = { SourceNames.of(it.settings) }
 
         fun start(context: Context, uri: String, title: String) {
             context.startActivity(Intent(context, PlayerActivity::class.java).putExtra(EXTRA_URI, uri).putExtra(EXTRA_TITLE, title))

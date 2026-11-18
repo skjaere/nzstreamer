@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
+import io.skjaere.usenet.app.debrid.DebridGate
 import io.skjaere.usenet.app.debrid.ServiceRegistry
 import io.skjaere.usenet.app.ui.AppType
 import io.skjaere.usenet.app.ui.FactRow
@@ -42,6 +43,7 @@ import io.skjaere.usenet.core.ProviderConfig
 import io.skjaere.usenet.core.formatSize
 import io.skjaere.usenet.data.IndexerRecord
 import io.skjaere.usenet.data.ServiceAccount
+import io.skjaere.usenet.data.SettingsRepository
 import io.skjaere.usenet.data.TorrentIndexerRecord
 import io.skjaere.usenet.player.Fact
 import io.skjaere.usenet.player.PlayUris
@@ -49,6 +51,7 @@ import io.skjaere.usenet.player.UsenetDataSource
 import io.skjaere.usenet.player.VideoDetails
 import io.skjaere.usenet.releases.Hdr
 import io.skjaere.usenet.releases.ReleaseParser
+import kotlinx.coroutines.flow.first
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -56,14 +59,23 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /**
- * What File details name a play's source by, as the settings keep it: the [indexers] (Usenet's), the [torrentIndexers] and
- * the debrid [services] accounts.
+ * What File details name a play's source by, as the settings keep it: the [indexers] (Usenet's), the [torrentIndexers] (null
+ * where they aren't read: while debrid is hidden, L463) and the debrid [services] accounts.
  */
 data class SourceNames(
     val indexers: List<IndexerRecord>,
-    val torrentIndexers: List<TorrentIndexerRecord> = emptyList(),
+    val torrentIndexers: List<TorrentIndexerRecord>? = emptyList(),
     val services: List<ServiceAccount> = emptyList(),
-)
+) {
+    companion object {
+        /**
+         * The names [settings] keep now: the torrent indexers only while debrid shows ([shown]). Hidden, none is read, so a
+         * finished torrent download's Indexer row is left out rather than named from a list a shown build saved (L463).
+         */
+        suspend fun of(settings: SettingsRepository, shown: Boolean = DebridGate.shown): SourceNames =
+            SourceNames(settings.indexers.first(), if (shown) settings.torrentIndexers.first() else null, settings.services.first())
+    }
+}
 
 /**
  * Where the file playing came from, as File details show it ([FileDetails]): the release's name, the file's name and
@@ -87,8 +99,12 @@ data class FileOrigin(
     /** A finished download's play's Downloaded and Missing rows (L354), in the providers' place; null for another play. */
     val downloaded: Downloaded? = null,
 ) {
-    /** A finished download's file: when it was finished ([at], ms since the epoch; null when not known), and the stretches its download had no article for. */
-    data class Downloaded(val at: Long? = null, val missingParts: Int = 0)
+    /**
+     * A finished download's file: when it was finished ([at], ms since the epoch; null when not known), and the stretches its
+     * download had no article for; [fromService]: a torrent's, downloaded from the debrid service, said while debrid shows
+     * (L463).
+     */
+    data class Downloaded(val at: Long? = null, val missingParts: Int = 0, val fromService: Boolean = false)
 
     companion object {
         const val REMOVED = "An indexer since removed"
@@ -102,13 +118,15 @@ data class FileOrigin(
          * null when no longer held). Nothing comes from the indexer's search item, which a Resume doesn't have: it reads
          * as the play from search did. A file opened on Import says so, downloaded or cast too ([IMPORTED]). The indexer is
          * named from [names]' indexers of the release's source (a torrent's from the torrent indexers), disabled ones
-         * included (null until they are read); one no longer there is said to be removed. A debrid play names the service
-         * of the [account] its listing came from in place of the providers; a finished download's what is [downloaded] of
-         * it (when, and the parts missing; nothing known, none), as no providers are used (L354).
+         * included (null until they are read, and a torrent's while the torrent indexers aren't read, debrid hidden); one no
+         * longer there is said to be removed. A debrid play names the service of the [account] its listing came from in
+         * place of the providers; a finished download's what is [downloaded] of it (when, and the parts missing; nothing
+         * known, none), as no providers are used (L354), and a torrent's that it came from the debrid service while debrid
+         * shows ([shown], L463).
          */
         fun of(
             launch: PlayerLaunch?, uri: String, listing: FileListing<*>?, names: SourceNames?, providers: List<ProviderConfig>, connections: Int?, account: String? = null,
-            downloaded: Downloaded? = null,
+            downloaded: Downloaded? = null, shown: Boolean = DebridGate.shown,
         ): FileOrigin {
             val release = launch?.release
             val target = PlayUris.parse(uri)
@@ -120,7 +138,7 @@ data class FileOrigin(
                 // Import's own release of a file it opened (L454), played or downloaded: no indexer of the user's.
                 launch == null || launch.release.indexerId == IMPORTED -> OPENED_FILE
                 names == null -> null
-                torrent -> names.torrentIndexers.firstOrNull { it.id == launch.release.indexerId }?.name ?: REMOVED
+                torrent -> names.torrentIndexers?.let { read -> read.firstOrNull { it.id == launch.release.indexerId }?.name ?: REMOVED }
                 else -> names.indexers.firstOrNull { it.id == launch.release.indexerId }?.name ?: REMOVED
             }
             val fromService = target is PlayUris.Target.Service
@@ -136,7 +154,7 @@ data class FileOrigin(
                 providers = if (fromService || fromDownload) emptyList() else providers.map { it.name.ifBlank { it.host } },
                 connections = connections.takeUnless { fromService || fromDownload },
                 service = service,
-                downloaded = if (fromDownload) downloaded ?: Downloaded() else null,
+                downloaded = if (fromDownload) (downloaded ?: Downloaded()).let { if (torrent && shown) it.copy(fromService = true) else it } else null,
             )
         }
     }
@@ -155,8 +173,9 @@ data class FileOrigin(
  * them.
  *
  * A finished download's Source (L354) says, after its indexer, when it was downloaded to this phone, in [zone]'s days
- * ("12 Nov", with the year when it isn't [today]'s), that it plays from the file, and the parts its download had no
- * article for, skipped as it plays: no providers or connections, which it doesn't use.
+ * ("12 Nov", with the year when it isn't [today]'s), that it plays from the file (a torrent's, that it came from the debrid
+ * service, L463), and the parts its download had no article for, skipped as it plays: no providers or connections, which
+ * it doesn't use.
  */
 @androidx.annotation.OptIn(UnstableApi::class)
 class FileDetails(origin: FileOrigin, playing: Playing = Playing(), zone: ZoneId = ZoneId.systemDefault(), today: LocalDate = LocalDate.now(zone)) {
@@ -222,7 +241,10 @@ class FileDetails(origin: FileOrigin, playing: Playing = Playing(), zone: ZoneId
             origin.downloaded?.let { d ->
                 val day = d.at?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
                     ?.let { date -> date.format(if (date.year == today.year) DAY else DAY_YEAR) }
-                Row("Downloaded", day?.let { "$it, $TO_THIS_PHONE" } ?: TO_THIS_PHONE.replaceFirstChar { it.uppercase() }, "plays from the file, not streamed")
+                Row(
+                    "Downloaded", day?.let { "$it, $TO_THIS_PHONE" } ?: TO_THIS_PHONE.replaceFirstChar { it.uppercase() },
+                    if (d.fromService) "from the debrid service · plays from the file" else "plays from the file, not streamed",
+                )
             },
             origin.downloaded?.missingParts?.takeIf { it > 0 }?.let { n -> Row("Missing", if (n == 1) "1 part" else "$n parts", "skipped as it plays") },
             origin.providers.takeIf { it.isNotEmpty() }?.let { names ->

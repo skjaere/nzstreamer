@@ -104,6 +104,24 @@ class PrivacyTextTest {
         assertTrue(hidden.flatMap { it.paragraphs }.none { p -> torBox in p }, "hidden, a service named")
     }
 
+    /**
+     * L421: a download asks a debrid service for its file as a play does, its torrent may stay in the account's list, and
+     * the app removes the one it added a couple of minutes after the download finishes. Said in the debrid part alone, which
+     * the hidden form leaves out with the rest of it.
+     */
+    @Test
+    fun `the debrid part says a download asks a service, is kept in its list and goes once it finishes`() {
+        val debrid = sections.single { it.heading == DEBRID_HEADING }.paragraphs.single()
+        DOWNLOAD_PHRASES.forEach { phrase ->
+            assertTrue(phrase in debrid, phrase)
+            assertEquals(1, text.split(phrase).size - 1, "once: $phrase")
+            assertFalse(hidden.flatMap { it.paragraphs }.any { phrase in it }, "hidden: $phrase")
+        }
+        listOf("for what you play asks them", "keep what you play in your", "after you stop playing (or").forEach { before ->
+            assertFalse(before in text, "the words from before downloads: $before")
+        }
+    }
+
     @Test
     fun `its Google Cast part is the approved words exactly`() {
         assertEquals(CAST_PART, sections.single { it.heading == "Casting to Google Cast devices" }.paragraphs)
@@ -181,18 +199,28 @@ class PrivacyTextTest {
                 "providers and indexers, to your own torrent indexers and debrid services, to TMDB with your own key, to " +
                 "TheIntroDB while its switch is on, and to Google while its Cast software runs."
 
-        /** D2PhonePrivacy 2's two sentences (L255, choice 4): what a service keeps, and what the app removes from TorBox. */
+        /**
+         * L255's two sentences (choice 4): what a service keeps, and what the app removes from TorBox; with L421's words for a
+         * download's torrent, which stays in the account while it runs.
+         */
         const val REMOVED_SENTENCES =
-            "Some services keep what you play in your account’s list, as their own sites do. From a TorBox account the app " +
-                "removes the torrents it added, a couple of minutes after you stop playing (or the next time the app starts), " +
-                "unless you turn off Remove after playing; it removes nothing else."
+            "Some services keep what you play or download in your account’s list, as their own sites do. From a TorBox account " +
+                "the app removes the torrents it added, a couple of minutes after you stop playing, or after a download finishes " +
+                "(or the next time the app starts), unless you turn off Remove after playing; it removes nothing else."
 
-        /** L211's part, as drafted (read again before the site's page goes live), with L255's sentences. */
+        /** L211's part, as drafted (read again before the site's page goes live), with L255's sentences and L421's words. */
         const val DEBRID_PART =
             "The app sends your searches to the torrent indexers you add. It sends your debrid services the info hashes of " +
-                "the torrents they find, to ask which they have cached, and for what you play asks them for the file and a " +
-                "link to it. $REMOVED_SENTENCES Only the hash is sent, never a torrent file, its trackers or which indexer " +
-                "found it. It comes with none set up. Their own terms apply."
+                "the torrents they find, to ask which they have cached, and for what you play or download asks them for the " +
+                "file and a link to it. $REMOVED_SENTENCES Only the hash is sent, never a torrent file, its trackers or which " +
+                "indexer found it. It comes with none set up. Their own terms apply."
+
+        /** L421's three phrases in the debrid part: a download asks a service as a play does, and its torrent goes after it. */
+        val DOWNLOAD_PHRASES = listOf(
+            "for what you play or download asks them for the file",
+            "Some services keep what you play or download in your account’s list",
+            "a couple of minutes after you stop playing, or after a download finishes (or the next time the app starts)",
+        )
 
         /** Services the app doesn't sign in to, which the policy never names either (W69: Real-Debrid never). */
         val OTHER_SERVICES = listOf("Real-Debrid", "RealDebrid", "AllDebrid", "Debrid-Link", "Offcloud", "put.io", "EasyDebrid")

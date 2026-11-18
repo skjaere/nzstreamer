@@ -483,6 +483,10 @@ class DebridHiddenTest {
         assertFalse("torrent indexers" in page(shown = false).first().paragraphs.single(), "hidden, the opening's words")
         assertTrue(page(shown = true).any { it.heading == heading })
         assertTrue("torrent indexers and debrid services" in page(shown = true).first().paragraphs.single())
+        // L421's words for a download's torrent, as the rest of the part: shown, said; hidden, nowhere.
+        val download = listOf("play or download asks them", "a download finishes", "debrid")
+        assertTrue(download.all { words -> page(shown = true).flatMap { it.paragraphs }.any { words in it } })
+        assertTrue(download.none { words -> page(shown = false).flatMap { it.paragraphs }.any { words in it } }, "hidden, a debrid word")
     }
 
     /** L192: hidden, First run shows only Usenet's way (today's screen), and a saved torrent pair finishes nothing. */

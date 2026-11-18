@@ -171,6 +171,32 @@ class DownloadsPageTest {
     }
 
     /**
+     * L463: a finished torrent's film row says "From the debrid service" under its line while debrid shows, nothing while it
+     * is hidden; a Usenet film says nothing; one going tomorrow says that in its place; and a torrent still being written
+     * says nothing of where it comes from. The words name no service.
+     */
+    @Test
+    fun `a finished torrent's film says it came from the debrid service while debrid shows`() {
+        val torrent = film("cc", DownloadState.Done).copy(release = TORRENT_RELEASE)
+        val usenet = film("qm", DownloadState.Done, film = FILM + 1, title = "Quiet Meridian")
+        val page = DownloadsPage.of(listOf(torrent, usenet).map(::item), deleting = setOf("gone"))
+        fun row(key: String) = assertIs<DownloadsRow.Film>(page.downloaded.single { it.key == key })
+        assertEquals("From the debrid service", DownloadsPage.FROM_DEBRID)
+        assertEquals(DownloadsPage.FROM_DEBRID, DownloadsPage.extra(row("cc"), shown = true))
+        assertNull(DownloadsPage.extra(row("cc"), shown = false), "hidden")
+        assertNull(DownloadsPage.extra(row("qm"), shown = true), "a Usenet film")
+        // Going tomorrow: that, in its place.
+        val going = assertIs<DownloadsRow.Film>(DownloadsPage.of(listOf(item(torrent)), deleting = setOf("cc")).downloaded.single())
+        assertEquals(AutoDelete.DELETING_TOMORROW, DownloadsPage.extra(going, shown = true))
+        // Nothing while it is written: only a finished download says where it came from.
+        DownloadState.entries.filter { it != DownloadState.Done }.forEach { state ->
+            assertNull(DownloadsPage.cameFrom(torrent.copy(state = state), shown = true), "$state")
+        }
+        assertEquals(DownloadsPage.FROM_DEBRID, DownloadsPage.cameFrom(episode("e1", 1, DownloadState.Done).copy(release = TORRENT_RELEASE), shown = true))
+        ServiceKind.entries.forEach { assertFalse(it.displayName in DownloadsPage.FROM_DEBRID, it.displayName) }
+    }
+
+    /**
      * L411: each row draws the stored poster of the download its poster is: its own, or for a show's row the latest finished
      * episode with a poster, whose path the row shows; none where none of its downloads has one.
      */
@@ -780,6 +806,12 @@ class DownloadsPageTest {
         const val FILM = 990_519
         const val KESTREL = "Harbor.Lights.S02E04.Low.Water.1080p.WEB-DL.DDP5.1.H.265-KESTREL"
         const val ATMOS = "Harbor.Lights.S02E04.Low.Water.1080p.WEB-DL.DDP5.1.Atmos.H.264-TIDEPOOL"
+
+        /** A torrent's release as a finished download keeps it (L460): its content id, its file, its source. */
+        val TORRENT_RELEASE = RememberedRelease(
+            "prowlarr-1", "btih:2f5a3c9e1b7d4f6a8c0e2b4d6f8a1c3e5b7d9f0a", "Copper.Crown.2022.1080p.WEB-DL.AAC2.0.H.264-TIDE", null, 0,
+            "btih:2f5a3c9e1b7d4f6a8c0e2b4d6f8a1c3e5b7d9f0a", "Copper.Crown.2022.1080p.WEB-DL.AAC2.0.H.264-TIDE.mkv", 5_500_000_000, source = ReleaseFacts.TORRENT,
+        )
 
         /** Harbor Lights' six episodes: 11.2 GB. */
         val SIZES = listOf(1_700_000_000L, 1_700_000_000, 1_700_000_000, 2_100_000_000, 2_000_000_000, 2_000_000_000)

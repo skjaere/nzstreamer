@@ -53,12 +53,20 @@ const val USE_THIS_SERVICE = "Use this service"
 const val USE_THIS_SERVICE_HELP = "Off: torrents aren’t checked on it, and you stay signed in."
 
 /**
- * The service's page's second switch, under "Use this service" (D2PhoneServiceSwitch, L246, W83): what a play on this
- * device adds to the account goes a couple of minutes after the play stops, unless it is switched off. Words that name
- * no service, as only the kind decides where it shows ([removeAfterPlayingShown]).
+ * The service's page's second switch, under "Use this service" (D2PhoneServiceSwitch, L246, W83): what a play or a download
+ * on this device adds to the account goes a couple of minutes after the play stops or the download finishes (L421),
+ * unless it is switched off. Words that name no service, as only the kind decides where it shows
+ * ([removeAfterPlayingShown]).
  */
 const val REMOVE_AFTER_PLAYING = "Remove after playing"
-const val REMOVE_AFTER_PLAYING_HELP = "A torrent a play adds to your account is removed a couple of minutes after you stop watching."
+const val REMOVE_AFTER_PLAYING_HELP =
+    "A torrent a play or a download adds to your account is removed a couple of minutes after you stop watching or a download finishes."
+
+/** A TV's line under the switch: a play's alone, as a TV never downloads (W108). */
+const val REMOVE_AFTER_PLAYING_TV_HELP = "A torrent a play adds to your account is removed a couple of minutes after you stop watching."
+
+/** The line under Remove after playing: a phone's or a tablet's, which downloads too, else a [television]'s. */
+fun removeAfterPlayingHelp(television: Boolean): String = if (television) REMOVE_AFTER_PLAYING_TV_HELP else REMOVE_AFTER_PLAYING_HELP
 
 /** Whether [account]'s page has Remove after playing: only for a service whose plays add the torrent to the account (L246). */
 fun removeAfterPlayingShown(account: ServiceAccount): Boolean = kindOf(account)?.addsToAccount == true

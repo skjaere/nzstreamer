@@ -12,6 +12,7 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.MovieWatch
 import io.skjaere.usenet.data.WatchState
+import io.skjaere.usenet.releases.ReleaseFacts
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -180,6 +181,9 @@ data class DownloadsPage(
         const val QUEUED_FILE = "Queued"
         const val QUEUED_FROM_PACK = "Queued · from the season pack"
         const val FROM_PACK = "From the season pack"
+
+        /** Under a finished torrent's row, while debrid shows (L463): where it came from, naming no service (L474). */
+        const val FROM_DEBRID = "From the debrid service"
         const val PAUSED = "Paused"
         const val PAUSE = "Pause downloads"
         const val RESUME = "Resume"
@@ -450,6 +454,19 @@ data class DownloadsPage(
 
         /** "Deleting tomorrow" under a film going tomorrow (L415); null for one not going. */
         fun going(row: DownloadsRow.Film): String? = AutoDelete.DELETING_TOMORROW.takeIf { row.deleting }
+
+        /**
+         * The line under a film's row: "Deleting tomorrow" while it is going (L415), else where a finished torrent came from
+         * ([cameFrom]); null for any other.
+         */
+        fun extra(row: DownloadsRow.Film, shown: Boolean = DebridGate.shown): String? = going(row) ?: cameFrom(row.row, shown)
+
+        /**
+         * "From the debrid service" under [row] once it is downloaded from a torrent, while debrid shows ([shown], L463):
+         * nothing while it is written, and nothing in a build that hides debrid, where it plays its file all the same.
+         */
+        fun cameFrom(row: Download, shown: Boolean = DebridGate.shown): String? =
+            FROM_DEBRID.takeIf { shown && row.state == DownloadState.Done && row.release?.source == ReleaseFacts.TORRENT }
 
         /** "Deleting tomorrow" under a file going tomorrow (L415); null for one not going. */
         fun going(row: DownloadsRow.File): String? = AutoDelete.DELETING_TOMORROW.takeIf { row.deleting }

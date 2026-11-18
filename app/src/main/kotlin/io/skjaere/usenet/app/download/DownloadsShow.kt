@@ -1,6 +1,7 @@
 package io.skjaere.usenet.app.download
 
 import io.skjaere.usenet.app.collection.mmss
+import io.skjaere.usenet.app.debrid.DebridGate
 import io.skjaere.usenet.app.link.PlayTarget
 import io.skjaere.usenet.app.link.deviceName
 import io.skjaere.usenet.app.link.onTvLine
@@ -71,6 +72,13 @@ object DownloadsShow {
 
     /** "Deleting tomorrow" under an episode going tomorrow, among the runner's [deleting] (L415); null for one not going. */
     fun deleting(row: Download, deleting: Set<String>): String? = AutoDelete.DELETING_TOMORROW.takeIf { row.id in deleting }
+
+    /**
+     * The line under an episode: "Deleting tomorrow" while it is going ([deleting]), else "From the debrid service" for a
+     * torrent's while debrid shows ([DownloadsPage.cameFrom], L463); null for any other.
+     */
+    fun extra(row: Download, deleting: Set<String>, shown: Boolean = DebridGate.shown): String? =
+        deleting(row, deleting) ?: DownloadsPage.cameFrom(row, shown)
 
     /** "32:00 left" of an episode begun and not watched, as its row on the Show page says it; null otherwise. */
     fun left(state: WatchState?): String? = begun(state)?.let { "${mmss(it.durationMs - it.positionMs)} left" }

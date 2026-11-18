@@ -416,7 +416,9 @@ fun ServiceScreen(id: String, onBack: () -> Unit, onReplaceKey: (ServiceKind) ->
                 PageSwitch(USE_THIS_SERVICE, USE_THIS_SERVICE_HELP, record.enabled, vm::setEnabled)
                 if (removeAfterPlayingShown(record)) {
                     InsetDivider()
-                    PageSwitch(REMOVE_AFTER_PLAYING, REMOVE_AFTER_PLAYING_HELP, record.removeAfterPlay, vm::setRemoveAfterPlay)
+                    // A TV never downloads (W108): its line is a play's alone.
+                    val help = removeAfterPlayingHelp(television = LocalFormFactor.current == FormFactor.Tv)
+                    PageSwitch(REMOVE_AFTER_PLAYING, help, record.removeAfterPlay, vm::setRemoveAfterPlay)
                 }
             }
             Footnote(linksLine(kind))

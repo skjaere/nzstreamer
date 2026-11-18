@@ -6,7 +6,7 @@ The app sends your searches to the indexers you add, and asks your Usenet provid
 
 [debrid]## Your torrent indexers and debrid services
 
-The app sends your searches to the torrent indexers you add. It sends your debrid services the info hashes of the torrents they find, to ask which they have cached, and for what you play asks them for the file and a link to it. Some services keep what you play in your account’s list, as their own sites do. From a TorBox account the app removes the torrents it added, a couple of minutes after you stop playing (or the next time the app starts), unless you turn off Remove after playing; it removes nothing else. Only the hash is sent, never a torrent file, its trackers or which indexer found it. It comes with none set up. Their own terms apply.
+The app sends your searches to the torrent indexers you add. It sends your debrid services the info hashes of the torrents they find, to ask which they have cached, and for what you play or download asks them for the file and a link to it. Some services keep what you play or download in your account’s list, as their own sites do. From a TorBox account the app removes the torrents it added, a couple of minutes after you stop playing, or after a download finishes (or the next time the app starts), unless you turn off Remove after playing; it removes nothing else. Only the hash is sent, never a torrent file, its trackers or which indexer found it. It comes with none set up. Their own terms apply.
 
 [/debrid]## TMDB
 

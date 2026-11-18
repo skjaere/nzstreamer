@@ -71,6 +71,24 @@ class PrivacyPageTest {
         assertEquals(listOf(PrivacySection(null, listOf(PRIVACY_SEEDED))) + hidden, privacyPage(marked, seeded = true, shown = false))
     }
 
+    /**
+     * L421: the app's own policy, as the page shows it while debrid shows, says in its debrid part that a download asks a
+     * service, may stay in its list and goes once it finishes; hidden, none of it shows.
+     */
+    @Test
+    fun `the page says what a debrid download asks and leaves while debrid shows, and nothing of it hidden`() {
+        val asset = File("src/main/assets/privacy.txt").readText()
+        val phrases = listOf(
+            "for what you play or download asks them for the file",
+            "Some services keep what you play or download in your account’s list",
+            "a couple of minutes after you stop playing, or after a download finishes (or the next time the app starts)",
+        )
+        val shown = privacyPage(asset, seeded = false, shown = true).single { it.heading == "Your torrent indexers and debrid services" }.paragraphs
+        phrases.forEach { phrase -> assertTrue(shown.any { phrase in it }, phrase) }
+        val hidden = privacyPage(asset, seeded = false, shown = false).flatMap { it.paragraphs }
+        phrases.forEach { phrase -> assertFalse(hidden.any { phrase in it }, "hidden: $phrase") }
+    }
+
     @Test
     fun `any other build shows the policy alone`() {
         assertEquals(privacySections(policy), privacyPage(policy, seeded = false))

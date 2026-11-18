@@ -147,7 +147,7 @@ internal fun DownloadsShowScreen(
                     }
                     itemsIndexed(season.episodes, key = { _, it -> it.id }) { at, row ->
                         EpisodeItem(
-                            row, states[row.season!! to row.episode!!], DownloadsShow.deleting(row, deleting), first = at == 0, last = at == season.episodes.lastIndex,
+                            row, states[row.season!! to row.episode!!], DownloadsShow.extra(row, deleting), first = at == 0, last = at == season.episodes.lastIndex,
                             selected = selected?.let { row.id in it },
                             playAction = DownloadsShow.playAction(playOn),
                             onPlay = { vm.play(row) },
@@ -169,7 +169,8 @@ internal fun DownloadsShowScreen(
 
 /**
  * An episode downloaded, in the Show page's phone look: its number, its name, its size and length (and its parts
- * missing), what is left of it begun with its 2 dp bar, [going] ("Deleting tomorrow") under them, ✓ once watched, and its
+ * missing), what is left of it begun with its 2 dp bar, [going] ("Deleting tomorrow", else "From the debrid service" for a
+ * torrent's, L463) under them, ✓ once watched, and its
  * ⋮ beside it. A tap plays it, read as [playAction] (the Cast device it plays on, L470); a long press starts select mode
  * with it, where a tap selects it.
  */

@@ -7,10 +7,12 @@ import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadGap
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.data.WatchState
 import io.skjaere.usenet.link.KeyId
+import io.skjaere.usenet.releases.ReleaseFacts
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -130,8 +132,28 @@ class DownloadsShowTest {
         assertNull(DownloadsShow.deleting(row, emptySet()))
     }
 
+    /**
+     * L463: a finished torrent episode says "From the debrid service" under its line while debrid shows, nothing while it is
+     * hidden; a Usenet episode says nothing; one going tomorrow says that in its place.
+     */
+    @Test
+    fun `a finished torrent episode says it came from the debrid service while debrid shows`() {
+        val torrent = episode(2, 2).copy(
+            release = RememberedRelease(
+                "prowlarr-1", "btih:$HASH", "Harbor.Lights.S02.1080p.WEB-DL.AAC2.0.H.264-TIDE", null, 1, "btih:$HASH", source = ReleaseFacts.TORRENT,
+            ),
+        )
+        val usenet = episode(2, 1)
+        assertEquals("From the debrid service", DownloadsShow.extra(torrent, emptySet(), shown = true))
+        assertNull(DownloadsShow.extra(torrent, emptySet(), shown = false), "hidden")
+        assertNull(DownloadsShow.extra(usenet, emptySet(), shown = true), "a Usenet episode")
+        assertEquals("Deleting tomorrow", DownloadsShow.extra(torrent, setOf(torrent.id), shown = true))
+        assertEquals("Deleting tomorrow", DownloadsShow.extra(usenet, setOf(usenet.id), shown = false))
+    }
+
     private companion object {
         const val GB = 1_000_000_000L
+        const val HASH = "2f5a3c9e1b7d4f6a8c0e2b4d6f8a1c3e5b7d9f0a"
         const val HL = 990_617
 
         val NAMES = mapOf(1 to "Brine", 2 to "The Breakwater", 3 to "Fog Signal")

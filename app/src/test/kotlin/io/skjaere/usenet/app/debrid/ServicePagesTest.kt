@@ -291,20 +291,42 @@ class ServicePagesTest {
         assertFalse(removeAfterPlayingShown(premiumize))
         assertFalse(removeAfterPlayingShown(ServiceAccount("x", "AnotherService")))
         assertEquals("Remove after playing", REMOVE_AFTER_PLAYING)
-        assertEquals("A torrent a play adds to your account is removed a couple of minutes after you stop watching.", REMOVE_AFTER_PLAYING_HELP)
+        assertEquals(
+            "A torrent a play or a download adds to your account is removed a couple of minutes after you stop watching or a download finishes.",
+            REMOVE_AFTER_PLAYING_HELP,
+        )
         ServiceKind.entries.forEach { kind ->
-            assertFalse(kind.displayName in REMOVE_AFTER_PLAYING || kind.displayName in REMOVE_AFTER_PLAYING_HELP, "names ${kind.displayName}")
+            listOf(REMOVE_AFTER_PLAYING, REMOVE_AFTER_PLAYING_HELP, REMOVE_AFTER_PLAYING_TV_HELP).forEach { words ->
+                assertFalse(kind.displayName in words, "names ${kind.displayName}: $words")
+            }
         }
         assertTrue(torBox.removeAfterPlay, "on as saved")
         assertFalse(removeAfterPlayingShown(torBox.copy(kind = "Premiumize")), "the kind decides, not the account")
+    }
+
+    /**
+     * L421, W108: a phone's switch says a download's torrent goes too, a couple of minutes after the download finishes; a
+     * TV's keeps the line from before downloads, as a TV never downloads.
+     */
+    @Test
+    fun `Remove after playing's line says downloads on a phone, and keeps a play's alone on a TV`() {
+        assertEquals(REMOVE_AFTER_PLAYING_HELP, removeAfterPlayingHelp(television = false))
+        assertEquals("A torrent a play adds to your account is removed a couple of minutes after you stop watching.", REMOVE_AFTER_PLAYING_TV_HELP)
+        assertEquals(REMOVE_AFTER_PLAYING_TV_HELP, removeAfterPlayingHelp(television = true))
+        assertFalse("download" in REMOVE_AFTER_PLAYING_TV_HELP)
     }
 
     /** L251: TalkBack reads each of the service's page's switches as its words, then the line under them. */
     @Test
     fun `what TalkBack reads of the service's page's switches`() {
         assertEquals(
-            "Remove after playing, A torrent a play adds to your account is removed a couple of minutes after you stop watching.",
+            "Remove after playing, A torrent a play or a download adds to your account is removed a couple of minutes after you stop watching " +
+                "or a download finishes.",
             serviceSwitchSpoken(REMOVE_AFTER_PLAYING, REMOVE_AFTER_PLAYING_HELP),
+        )
+        assertEquals(
+            "Remove after playing, A torrent a play adds to your account is removed a couple of minutes after you stop watching.",
+            serviceSwitchSpoken(REMOVE_AFTER_PLAYING, REMOVE_AFTER_PLAYING_TV_HELP),
         )
         assertEquals("Use this service, Off: torrents aren’t checked on it, and you stay signed in.", serviceSwitchSpoken(USE_THIS_SERVICE, USE_THIS_SERVICE_HELP))
     }

@@ -3,6 +3,7 @@ package io.skjaere.usenet.app.download
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
@@ -80,7 +81,8 @@ import java.util.concurrent.ConcurrentHashMap
  * - The Show page's ⋮ on S01E02, Download: the sheet's best match a torrent the account has cached, "✓ Cached"; Download
  *   queues it, and the host Android schedules resolves it on the account and writes it with the debrid writer to Done, its
  *   file the fake's sample byte for byte (its SHA-256 /control/media's). Then, offline by the container's override, the
- *   episode's row plays its file through the hook, asking nothing of the fakes.
+ *   episode's row plays its file through the hook, asking nothing of the fakes; and the show's downloads say "From the
+ *   debrid service" under its row (L463).
  * - A torrent row a process left once its file was begun, its listing's copy in its folder: a cut mid-transfer opens again
  *   at the byte reached, with one more link asked of the account.
  * - Its account's key refused: it waits "Check your debrid service", and stays so as the app marks the key; a key saved
@@ -192,7 +194,9 @@ class DebridDownloadDeviceTest {
     fun fromTheShowPagesMenuACachedTorrentDownloadsWholeAndPlaysOffline() = runBlocking<Unit> {
         val room = container.downloadStorage.space()
         assumeTrue("no room on this emulator for the torrent's listed 1.5 GB: $room", room?.fits(LISTED) == true)
-        compose.show(context) { ShowScreen(SHOW, onBack = {}) }
+        // The Show page, and the show's downloads once the file is written.
+        val downloads = mutableStateOf(false)
+        compose.show(context) { if (downloads.value) DownloadsShowScreen(SHOW, onBack = {}, onOpenShow = {}) else ShowScreen(SHOW, onBack = {}) }
         val more = hasContentDescription("More for episode 2")
         compose.waitFor(more, 15_000)
         compose.onNode(more).performClick()
@@ -216,6 +220,11 @@ class DebridDownloadDeviceTest {
         assertTrue("its release one of the cached torrents: ${done.release?.title}", done.release?.title in CACHED)
         assertWhole(done)
         assertEquals("no Usenet grab", emptyList<String>(), done.tried.filterNot { it.startsWith("btih:") })
+
+        // L463: the show's downloads say where it came from, under its row; then back to the Show page.
+        compose.runOnIdle { downloads.value = true }
+        compose.waitFor(hasText(DownloadsPage.FROM_DEBRID, substring = true) and hasText(EPISODES[1], substring = true))
+        compose.runOnIdle { downloads.value = false }
 
         // Offline, by the override: the row still plays, from its file, through the hook.
         container.offlineOverride.value = true

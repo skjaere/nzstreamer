@@ -10,6 +10,7 @@ import io.skjaere.nzbstreamer.metadata.NzbMetadataResponse
 import io.skjaere.nzbstreamer.nzb.NzbDocument
 import io.skjaere.nzbstreamer.nzb.NzbFile
 import io.skjaere.nzbstreamer.stream.StreamableFile
+import io.skjaere.usenet.app.settings.memorySettings
 import io.skjaere.usenet.core.FileCandidate
 import io.skjaere.usenet.core.FileListing
 import io.skjaere.usenet.core.ListedFile
@@ -32,6 +33,8 @@ import io.skjaere.usenet.releases.AudioCodec
 import io.skjaere.usenet.releases.Hdr
 import io.skjaere.usenet.releases.MediaInfo
 import io.skjaere.usenet.releases.VideoCodec
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -426,6 +429,53 @@ class FileDetailsTest {
         listOf(hash, "acct-7f3e", "quay.viewer", "0f3e9a1c", "prowlarr.example.org", "900000042").forEach { secret ->
             assertFalse(secret in of(names).toString(), "\"$secret\" in ${of(names)}")
             assertFalse(secret in words(details), "\"$secret\" in the panel")
+        }
+    }
+
+    /**
+     * L463: a debrid download's Source names its torrent indexer, then says it was downloaded from the debrid service and
+     * plays from the file, while debrid shows. While debrid is hidden the torrent indexers aren't read ([SourceNames.of]),
+     * so its Indexer row is left out, never said to be removed, and Downloaded says what any download's says. A Usenet
+     * download's reads as before either way, and nothing names the service, the hash or the account.
+     */
+    @Test
+    fun `a debrid download says it came from the debrid service while debrid shows, and names no indexer while hidden`() = runBlocking<Unit> {
+        val hash = "2f5a3c9e1b7d4f6a8c0e2b4d6f8a1c3e5b7d9f0a"
+        val uri = PlayUris.download("3f2c9e1a-7b4d-4c2e-9a10-5e6f7a8b9c0d")
+        val settings = memorySettings(Dispatchers.Unconfined)
+        val mine = settings.saveIndexer(null, "My indexer", "https://indexer.example.com", "key-i")
+        val prowlarr = settings.saveTorrentIndexer(null, "Home Prowlarr", "https://prowlarr.example.org/1", "key-p")
+        val torrent = SavedRelease(prowlarr, "btih:$hash", name, null, 1, "btih:$hash", file, 8_424_000_000, source = "torrent")
+        val usenet = release.copy(indexerId = mine)
+        val shownNames = SourceNames.of(settings, shown = true)
+        val hiddenNames = SourceNames.of(settings, shown = false)
+        assertEquals(listOf("Home Prowlarr"), shownNames.torrentIndexers?.map { it.name })
+        assertNull(hiddenNames.torrentIndexers, "hidden, no torrent indexer read")
+        assertEquals(listOf("My indexer"), hiddenNames.indexers.map { it.name })
+        // The player's File details read their names so.
+        val player = File("src/main/kotlin/io/skjaere/usenet/app/PlayerActivity.kt").readText()
+        assertTrue("internal var readIndexers: suspend (AppContainer) -> SourceNames = { SourceNames.of(it.settings) }" in player)
+
+        fun details(saved: SavedRelease, names: SourceNames, shown: Boolean) = FileDetails(
+            FileOrigin.of(launch(saved).copy(uri = uri), uri, null, names, providers, 6, downloaded = FileOrigin.Downloaded(), shown = shown),
+            shield,
+        )
+        assertEquals(
+            listOf("Indexer: Home Prowlarr", "Downloaded: To this phone (from the debrid service · plays from the file)"),
+            rows(details(torrent, shownNames, shown = true)).toMap()["Source"],
+        )
+        val hidden = details(torrent, hiddenNames, shown = false)
+        assertEquals(listOf("Downloaded: To this phone (plays from the file, not streamed)"), rows(hidden).toMap()["Source"])
+        assertNull(row(hidden, "Indexer"))
+        listOf(true, false).forEach { shown ->
+            assertEquals(
+                listOf("Indexer: My indexer", "Downloaded: To this phone (plays from the file, not streamed)"),
+                rows(details(usenet, if (shown) shownNames else hiddenNames, shown)).toMap()["Source"], "shown $shown",
+            )
+        }
+        val words = words(details(torrent, shownNames, shown = true))
+        (listOf(hash, "prowlarr.example.org") + io.skjaere.usenet.debrid.ServiceKind.entries.map { it.displayName }).forEach { secret ->
+            assertFalse(secret in words, "\"$secret\" in the panel")
         }
     }
 
