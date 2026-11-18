@@ -239,7 +239,7 @@ internal fun skippedNotice(skipped: List<String>): String {
     if (discs > 0) return "Skipped $releases that failed before"
     val service = skipped.filterNot(::usenetSkip)
     val notCached = service.all { it == AttemptFailure.NoLongerCached.text }
-    if (service.size == count) return if (notCached) "Skipped $releases no longer cached" else "Skipped $releases the debrid service failed before"
+    if (service.size == count) return if (notCached) "Skipped $releases$NOT_CACHED" else "Skipped $releases$SERVICE_FAILED before"
     val passwords = skipped.count { it.startsWith("$SKIPPED$PASSWORD_NEEDED") }
     val what = when (passwords) {
         0 -> "found incomplete"
@@ -248,11 +248,17 @@ internal fun skippedNotice(skipped: List<String>): String {
     }
     val failed = when {
         service.isEmpty() -> ""
-        notCached -> " or no longer cached"
-        else -> " or that the debrid service failed"
+        notCached -> " or$NOT_CACHED"
+        else -> " or that$SERVICE_FAILED"
     }
     return "Skipped $releases $what$failed before"
 }
+
+/**
+ * Whether [notice], a [skippedNotice], says a debrid service failed some of what it skipped before, or no longer has it: a
+ * torrent's, alone or beside Usenet's. A build that hides debrid shows a download failed so in none of these words (L422).
+ */
+internal fun namesService(notice: String): Boolean = notice.startsWith("Skipped ") && (NOT_CACHED in notice || SERVICE_FAILED in notice)
 
 /** Whether [line], a skipped release's on the play sheet, is Usenet's ([skippedLine]), not a debrid service's failure's words. */
 internal fun usenetSkip(line: String): Boolean = line.startsWith(SKIPPED)
@@ -261,6 +267,10 @@ internal fun usenetSkip(line: String): Boolean = line.startsWith(SKIPPED)
 private fun discSkip(line: String): Boolean = line.startsWith("$SKIPPED$DISC_COPY")
 
 private const val SKIPPED = "Skipped: "
+
+/** What [skippedNotice] says of torrents no longer cached, and of those a debrid service failed otherwise. */
+private const val NOT_CACHED = " no longer cached"
+private const val SERVICE_FAILED = " the debrid service failed"
 
 private const val PASSWORD_NEEDED = "needs a password"
 

@@ -8,6 +8,7 @@ import io.skjaere.usenet.app.play.EpisodePlay
 import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.IMPORT_GONE
 import io.skjaere.usenet.app.play.MovieTarget
+import io.skjaere.usenet.app.play.skippedNotice
 import io.skjaere.usenet.app.search.MovieFind
 import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
@@ -415,6 +416,29 @@ class DownloadsPageTest {
      * failures with how many releases were tried. While debrid is hidden (L422), a failed row's debrid reason reads "Not
      * available in this version", a Usenet reason as it is. No word names a service.
      */
+    /**
+     * L422: what a debrid service failed before, as Resolve's memory of releases tried passes a torrent over for it, is a
+     * debrid word too. Hidden, a row failed so reads "Not available in this version" on the page as in its notification,
+     * whether the torrents were skipped alone or beside Usenet releases; a row whose Usenet releases alone were skipped
+     * reads as it is.
+     */
+    @Test
+    fun `hidden, a row failed for releases a debrid service failed before is not available, on the page and in its notification`() {
+        val missing = "Skipped: missing on your providers (checked today)"
+        val failed = episode("f", 5, DownloadState.Failed)
+        listOf(
+            listOf("No longer cached"), listOf("No longer cached", "Removed by the debrid service"), listOf(missing, "No longer cached"),
+            listOf(missing, "Too large for your debrid plan"),
+        ).map(::skippedNotice).forEach { reason ->
+            val row = failed.copy(reason = reason)
+            assertEquals(PageLine("✕ Not available in this version", Tone.Warn), DownloadsPage.failure(row, shown = false).first(), reason)
+            assertEquals("Couldn't download it. Not available in this version.", DownloadNotices.failed(row, shown = false).text, reason)
+            assertEquals(PageLine("✕ $reason", Tone.Warn), DownloadsPage.failure(row, shown = true).first(), reason)
+        }
+        val usenet = failed.copy(reason = skippedNotice(listOf(missing, missing)))
+        assertEquals(PageLine("✕ Skipped 2 releases found incomplete before", Tone.Warn), DownloadsPage.failure(usenet, shown = false).first())
+    }
+
     @Test
     fun `a debrid download's waits and failures say themselves in the page's words, the stream's wait in the secondary tone`() {
         val running = episode("run", 5, DownloadState.Running, size = 3_100_000_000, file = true, written = 1_302_000_000)

@@ -5,6 +5,7 @@ import android.app.job.JobParameters
 import io.skjaere.usenet.app.casting.CastWakeLock
 import io.skjaere.usenet.app.debrid.DebridGate
 import io.skjaere.usenet.app.play.ReleaseName
+import io.skjaere.usenet.app.play.namesService
 import io.skjaere.usenet.core.AttemptFailure
 import io.skjaere.usenet.core.formatSize
 import io.skjaere.usenet.data.Download
@@ -343,10 +344,12 @@ object DownloadHostRules {
 
     /**
      * A failed download's [reason] as the pages and its notification say it (L422): in a build that hides debrid ([shown]
-     * false), one of a debrid service's ([SERVICE_REASONS]: a torrent's, which a build that showed debrid left) reads
-     * [NOT_IN_THIS_VERSION], so no debrid word shows; any other as it is.
+     * false), one of a debrid service's ([SERVICE_REASONS]: a torrent's, which a build that showed debrid left), or the
+     * skipped releases' notice that names what a service failed before ([namesService]), reads [NOT_IN_THIS_VERSION], so no
+     * debrid word shows; any other as it is.
      */
-    fun shownReason(reason: String?, shown: Boolean = DebridGate.shown): String? = if (!shown && reason in SERVICE_REASONS) NOT_IN_THIS_VERSION else reason
+    fun shownReason(reason: String?, shown: Boolean = DebridGate.shown): String? =
+        if (!shown && reason != null && (reason in SERVICE_REASONS || namesService(reason))) NOT_IN_THIS_VERSION else reason
 
     /**
      * The reasons only a torrent's download fails or waits with (L460, L474): the debrid words, and the play sheet's for a
