@@ -3173,8 +3173,9 @@ class DownloadRunnerTest {
 
     /**
      * L421: a torrent's lease is let go at each end of its download: failed by its writer or by Resolve, cancelled, given
-     * up for the next release, replaced, deleted once its Undo is over, and Delete all. A Remove's Undo keeps it, the row
-     * brought back holding its add as it did.
+     * up for the next release (at the give-up, before the next is written), replaced, deleted once its Undo is over, and
+     * Delete all (one a play holds too, whose file stays until the play ends). A Remove's Undo keeps it, the row brought
+     * back holding its add as it did.
      */
     @Test
     fun `a torrent's lease is let go at Failed, Cancel, a give-up, a replace, the delete after an Undo and Delete all, and an Undo keeps it`() = test {
@@ -3234,13 +3235,19 @@ class DownloadRunnerTest {
         assertNull(dao.get(E))
         assertNull(leases.held[E], "let go with the delete after its Undo")
 
-        // Delete all.
+        // Delete all, its file held by a play meanwhile: hidden until the play ends, its torrent's add let go now.
         torrentRow(F, 6, 5)
         host(runner)
         runCurrent()
         assertEquals(torrentEntry.id, leases.held[F])
+        val play = Any()
+        assertTrue(runner.hold(play, F))
         runner.deleteAll()
+        assertEquals(DownloadState.Deleting, dao.get(F)?.state)
         assertNull(leases.held[F], "let go at Delete all")
+        runner.release(play, F)
+        runCurrent()
+        assertNull(dao.get(F))
         streaming.value = false
 
         // Given up as it is written for the next release: let go before the next is resolved.
@@ -3252,7 +3259,7 @@ class DownloadRunnerTest {
         assertEquals(DownloadState.Done, stored(G).state)
         assertEquals(next.guid, stored(G).release?.guid)
         assertNull(leases.held[G], "let go as its torrent was given up")
-        assertTrue(leases.events.indexOf("release $G") > leases.events.indexOf("hold $G"))
+        assertEquals(listOf("hold $G", "release $G", "release $G"), leases.events.filter { it.endsWith(" $G") }, "at the give-up, then again at Done")
     }
 
     /**
