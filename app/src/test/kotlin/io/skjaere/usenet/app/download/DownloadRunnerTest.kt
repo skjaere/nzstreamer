@@ -2670,6 +2670,29 @@ class DownloadRunnerTest {
         assertEquals(DownloadRunner.Packs(emptyMap(), setOf(torrent.key)), runner.packs.value)
     }
 
+    /**
+     * L421: the start's holds can meet a walk in the same process that finishes a download as they are taken (its file
+     * written whole before a kill, with no call): a lease taken after that walk let it go is let go again, so no add stays
+     * held for a finished download for the process's life.
+     */
+    @Test
+    fun `the start's hold of a download a walk finishes meanwhile is let go again`() = test {
+        torrentRow(A, 1, 0)
+        torrentRow(B, 2, 1)
+        var once = true
+        storage.onListing = { id ->
+            if (id == A && once) {
+                once = false
+                // The walk finishes it meanwhile: Done, its copy dropped, its lease let go.
+                dao.setState(A, DownloadState.Done, null, NOW)
+                storage.dropSource(A)
+                leases.release(A)
+            }
+        }
+        assertEquals(1, runner().holdListings())
+        assertEquals(mapOf(B to torrentEntry.id), leases.held.toMap())
+    }
+
     /** Resolve's fake, answering as DownloadResolver does, as the class says. */
     private inner class FakeResolver {
         val calls = mutableListOf<String>()
@@ -3561,8 +3584,11 @@ class DownloadRunnerTest {
             File(bookkeeping(id), DownloadStorage.LISTING).writeText(DebridListingStore.copyOf(entry))
         }
 
+        /** Called as each listing's copy has been read, before the call returns: what a walk does meanwhile. */
+        var onListing: suspend (id: String) -> Unit = {}
+
         override suspend fun listing(id: String) =
-            File(bookkeeping(id), DownloadStorage.LISTING).takeIf { it.isFile }?.readText()?.let(DebridListingStore::entryOf)
+            File(bookkeeping(id), DownloadStorage.LISTING).takeIf { it.isFile }?.readText()?.let(DebridListingStore::entryOf).also { onListing(id) }
 
         override suspend fun markRestarted(id: String) {
             events += "mark restarted $id"

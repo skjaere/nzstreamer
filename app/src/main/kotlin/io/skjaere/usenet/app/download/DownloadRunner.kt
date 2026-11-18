@@ -1427,14 +1427,20 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     /**
      * At the app's start, between [reconcile] and Delete once watched (L421, C6): each download still to finish whose
      * torrent's listing is copied in its folder has its add held by its own lease again, as the process before held it,
-     * before DebridAdds' first sweep, which waits for this. How many; none on a TV, nor in a build that hides debrid, whose
-     * start has failed them with their copies.
+     * before DebridAdds' first sweep, which waits for this. One a walk in this process finished meanwhile, letting its
+     * lease go before this took it (a file written whole before a kill, done with no call), is let go again. How many; none
+     * on a TV, nor in a build that hides debrid, whose start has failed them with their copies.
      */
     suspend fun holdListings(): Int {
         if (!runs) return 0
         val rows = dao.queue().first().filter { it.state in GOING_ON }
         val held = rows.count { row ->
-            deps.storage.listing(row.id)?.let { entry -> deps.leases.hold(row.id, entry.id) } != null
+            val entry = deps.storage.listing(row.id) ?: return@count false
+            deps.leases.hold(row.id, entry.id)
+            // Read again after the hold: a walk's end lets the lease go after its row's state and copy change.
+            val still = dao.get(row.id)?.state in GOING_ON && deps.storage.listing(row.id) != null
+            if (!still) deps.leases.release(row.id)
+            still
         }
         if (held > 0) log.info("Downloads: {} debrid download{} holding {} add{} at the start", held, if (held == 1) "" else "s", if (held == 1) "its" else "their", if (held == 1) "" else "s")
         return held
