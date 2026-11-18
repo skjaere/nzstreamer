@@ -131,7 +131,7 @@ object ImportKillSeed {
         val copy = storage.packs.find(key)
         expect(
             copy != null && copy.meta.nzb == nzbId && copy.meta.show == null && copy.meta.season == null && !copy.meta.leads &&
-                copy.source.nzb.contentEquals(nzb) && copy.source.password == null,
+                copy.source?.nzb?.contentEquals(nzb) == true && copy.source?.password == null,
         ) { "the NZB's copy isn't Import's, with no password, kept for its downloads" }
         expect(container.store.stored(nzbId) == null) { "the NZB store still keeps a file of the NZB" }
         val asked = container.indexerConfigs().size

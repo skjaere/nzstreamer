@@ -11,6 +11,7 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.logging.LogBuffer
+import io.skjaere.usenet.releases.ReleaseFacts
 import io.skjaere.usenet.releases.ReleaseKey
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -55,14 +56,14 @@ class DownloadNzbsTest {
         packs.write(meta, nzb, PASSWORD)
         val copy = assertNotNull(packs.find(key))
         assertEquals(meta, copy.meta)
-        assertContentEquals(nzb, copy.source.nzb)
-        assertEquals(PASSWORD, copy.source.password)
+        assertContentEquals(nzb, assertNotNull(copy.source).nzb)
+        assertEquals(PASSWORD, assertNotNull(copy.source).password)
         assertFalse(copy.toString().contains(PASSWORD))
 
         // Written again with none: no password left from the first.
         packs.write(meta.copy(leads = false), nzb, null)
         val again = assertNotNull(packs.find(key))
-        assertNull(again.source.password)
+        assertNull(assertNotNull(again.source).password)
         assertFalse(again.meta.leads)
         // Another key's is none.
         assertNull(packs.find(ReleaseKey.of(INDEXER, "hl-s02-other")))
@@ -170,8 +171,8 @@ class DownloadNzbsTest {
         val copy = assertNotNull(packs.find(importKey))
         assertEquals(imported, copy.meta)
         assertEquals(DownloadNzbs.Meta(importKey, IMPORT_TITLE, importCandidate, show = null, season = null, leads = false, nzb = NZB_SHA), copy.meta)
-        assertContentEquals(IMPORT_NZB, copy.source.nzb)
-        assertEquals(TYPED, copy.source.password)
+        assertContentEquals(IMPORT_NZB, assertNotNull(copy.source).nzb)
+        assertEquals(TYPED, assertNotNull(copy.source).password)
         assertFalse(TYPED in copy.toString())
 
         // A season pack's copy as DN2a wrote its meta: read as before, held by no NZB.
@@ -201,15 +202,15 @@ class DownloadNzbsTest {
         assertTrue(wrote.isSuccess, "written again: ${wrote.exceptionOrNull()}")
         val copy = assertNotNull(packs.find(importKey), "the copy taken away")
         assertEquals(imported, copy.meta)
-        assertContentEquals(IMPORT_NZB, copy.source.nzb)
-        assertEquals(TYPED, copy.source.password)
+        assertContentEquals(IMPORT_NZB, assertNotNull(copy.source).nzb)
+        assertEquals(TYPED, assertNotNull(copy.source).password)
         assertEquals(listOf(imported), packs.copies.value)
 
         assertTrue(inTheWay.delete())
         packs.write(second, IMPORT_NZB, "typed-again")
         val again = assertNotNull(packs.find(importKey))
         assertEquals(second, again.meta)
-        assertEquals("typed-again", again.source.password)
+        assertEquals("typed-again", assertNotNull(again.source).password)
     }
 
     /** L423: a season's later rows never take an imported NZB's copy as their season's pack, whatever its files are. */
@@ -251,6 +252,51 @@ class DownloadNzbsTest {
         packs.sweep(listOf(file("f1", 0, DownloadState.Done), file("f2", 1, DownloadState.Done)))
         assertNull(packs.find(importKey))
         assertEquals(emptyList(), File(dir, DownloadNzbs.PATH).list()!!.toList())
+    }
+
+    /**
+     * L462: a season's torrent pack is kept as its meta alone, with no NZB and no password, as its attempt prepares it by its
+     * hash: written and found, among its season's copies as a Usenet copy is, and kept as it was where it is kept already
+     * (its leads as the first row wrote it). It is held by a row of its show and season still to finish, and swept with
+     * the season's last. A Usenet copy's meta with its NZB gone is no copy still. Neither on disk nor in a log line is it
+     * named by its hash, its key or its title.
+     */
+    @Test
+    fun `a season's torrent pack is kept as its meta alone, found for its season, held by it and swept`() = runBlocking<Unit> {
+        val from = LogBuffer.snapshot().lastOrNull()?.seq ?: 0L
+        packs.write(meta, nzb, PASSWORD)
+        packs.write(torrentMeta, null, null)
+        val copy = assertNotNull(packs.find(torrentKey))
+        assertEquals(torrentMeta, copy.meta)
+        assertNull(copy.source)
+        val folder = packs.folder(torrentKey)
+        assertEquals(sha256(torrentKey), folder.name)
+        assertEquals(setOf(DownloadNzbs.META), folder.list()!!.toSet())
+        assertEquals(listOf(key, torrentKey).sorted(), packs.forSeason(SHOW, 2).map { it.meta.key })
+        assertNull(packs.forSeason(SHOW, 2).single { it.meta.key == torrentKey }.source)
+        assertEquals(setOf(key, torrentKey), packs.copies.value.mapTo(HashSet()) { it.key })
+
+        // Kept again for another row: as the first wrote it.
+        packs.write(torrentMeta.copy(leads = false), null, null)
+        assertTrue(assertNotNull(packs.find(torrentKey)).meta.leads)
+
+        // Held by a row of its season still to finish; another season's holds nothing of it.
+        packs.sweep(listOf(row("e2", 2, 2, DownloadState.Paused)))
+        assertNotNull(packs.find(torrentKey))
+        packs.sweep(listOf(row("e1", 2, 1, DownloadState.Done), row("e9", 3, 1, DownloadState.Queued)))
+        assertNull(packs.find(torrentKey))
+        assertFalse(folder.exists())
+        assertEquals(emptyList(), packs.copies.value)
+
+        // A Usenet copy's meta whose NZB is gone is no copy, torrent or not.
+        packs.write(meta, nzb, PASSWORD)
+        File(packs.folder(key), DownloadNzbs.NZB).delete()
+        assertNull(packs.find(key))
+        assertEquals(emptyList(), packs.forSeason(SHOW, 2))
+
+        val lines = LogBuffer.snapshot().filter { it.seq > from }.map { it.message }
+        assertEquals(emptyList(), lines.filter { line -> listOf(HASH, torrentKey, TORRENT_TITLE, folder.name).any { it in line } })
+        assertTrue(lines.count { folder.name.take(8) in it } >= 2, lines.toString())
     }
 
     /**
@@ -336,6 +382,11 @@ class DownloadNzbsTest {
         createdAt = 0, updatedAt = 0,
     )
 
+    /** The season as a torrent, as a row keeps its candidate: its content id for its guid (L459). */
+    private val torrentCandidate = DownloadCandidate(TORZNAB, "btih:$HASH", TORRENT_TITLE, size = 6_600_000_021L, source = ReleaseFacts.TORRENT)
+    private val torrentKey = ReleaseKey.of(TORZNAB, "btih:$HASH")
+    private val torrentMeta = DownloadNzbs.Meta(torrentKey, TORRENT_TITLE, torrentCandidate, SHOW, 2, leads = true)
+
     private val importCandidate = DownloadCandidate(IMPORTED, NZB_SHA, IMPORT_TITLE, size = 1_300_000_000)
     private val importKey = ReleaseKey.of(IMPORTED, NZB_SHA)
     private val imported = DownloadNzbs.Meta.imported(importCandidate)
@@ -355,6 +406,11 @@ class DownloadNzbsTest {
         const val SHOW = 900002
         const val OTHER_SHOW = 900003
         const val MOVIE = 990719
+
+        /** A torrent indexer, and its season pack of season 2: its v1 hash and its name. */
+        const val TORZNAB = "fake-torznab"
+        const val HASH = "c0ffee21c0ffee22c0ffee23c0ffee24c0ffee25"
+        const val TORRENT_TITLE = "Harbor.Lights.S02.1080p.WEB-DL.AAC2.0.H.264-PACK"
 
         /** An imported NZB: its id (the SHA-256 of its bytes), its title, the password typed for it on Import. */
         const val NZB_SHA = "5b1c9d0e7f3a2b4c6d8e0f1a3b5c7d9e1f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c"

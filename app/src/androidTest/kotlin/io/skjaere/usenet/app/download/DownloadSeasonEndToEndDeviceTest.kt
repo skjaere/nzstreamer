@@ -23,6 +23,7 @@ import io.skjaere.usenet.app.AppNav
 import io.skjaere.usenet.app.FakeTmdb
 import io.skjaere.usenet.app.ShowRoute
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.debrid.DebridFakes
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.exists
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.show
 import io.skjaere.usenet.app.download.DownloadsPageSeeds.Companion.waitFor
@@ -44,10 +45,17 @@ import io.skjaere.usenet.metadata.ExternalIds
 import io.skjaere.usenet.metadata.Season
 import io.skjaere.usenet.metadata.SeasonSummary
 import io.skjaere.usenet.metadata.ShowDetails
+import io.skjaere.usenet.releases.ReleaseFacts
 import io.skjaere.usenet.releases.ReleaseKey
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -62,6 +70,7 @@ import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.time.LocalDate
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -76,6 +85,16 @@ import java.util.concurrent.CopyOnWriteArrayList
  * the coordinator's seam: one in all. The page says "Queued · from the season pack" of the season's rows meanwhile, and
  * "From the season pack" of the one written from it; the copy goes with the season's last download. No Wi-Fi is toggled.
  * The debug build's throttle holds the writer to a few hundred KB a second, so each episode lasts long enough to be seen.
+ *
+ * Its torrent case (L462, W119) takes the season from one torrent pack over the fakes: the debrid fake's TorBox account
+ * the only source (no Usenet provider usable, every Usenet indexer off) and the Torznab fake's feed the only indexer
+ * ([FakeAccountOnly]). The season is queued as its sheet queues it, with its facts, behind the held film, and S01E03 moved
+ * to its head; the test's own walk then runs it. S01E03's turn searches and takes PACK_S01, the one release with S01E03,
+ * and its meta is kept for the season; S01E01 and S01E02 try that meta first, with no search, prepared again by its hash
+ * on the account, each its own file of the pack's listing. The Downloads page says "Queued · from the season pack" of
+ * them meanwhile. Every file is the fake's one sample, so the files are told by their place in the listing and their
+ * names. Kept apart as the debrid classes are (L464): every download row deleted and the downloads' jobs cancelled before
+ * and after it, the services pointed at the fake for it alone, the account signed out at its end.
  *
  * Put back after, whatever happened: the coordinator's grab, the downloads' rows and files, the pack's copy, their
  * notifications and jobs, the throttle's file, POST_NOTIFICATIONS as it was, and the settings as they were, the engine back
@@ -109,11 +128,12 @@ class DownloadSeasonEndToEndDeviceTest {
     /** When the test's own rows began: the show's rows from then on are the test's (the season's, once queued). */
     private var since: Long? = null
 
+    /** The torrent case's sources over the fakes, while it has them. */
+    private var fakes: FakeAccountOnly? = null
+
     @Before
     fun setUp() = runBlocking<Unit> {
         assumeFalse("downloads never run on a TV (L369)", container.television)
-        assumeTrue("mock NNTP server not reachable at 10.0.2.2:1119", reachable(1119))
-        assumeTrue("fake indexer not reachable at 10.0.2.2:8089 (mock-seed indexer)", reachable(8089))
         // The debug build's start saves its dev settings: before the test reads or takes any.
         withTimeout(SEEDING_MILLIS) { container.devSettingsSaved.await() }
         cancelJobs()
@@ -122,19 +142,6 @@ class DownloadSeasonEndToEndDeviceTest {
         if (left.isNotEmpty()) throw AssertionError("${left.size} download(s) still to finish or of the test's show before the test: ${left.map { it.id }}")
         since = System.currentTimeMillis()
         saved = container.settings.settings.first()
-        val settings = container.settings
-        // The mock alone, as a user saves a provider, the others hidden (their passwords kept); the fake indexer alone.
-        settings.restore(saved.copy(providers = saved.providers.map { it.copy(deleted = true) }))
-        mock = settings.saveProvider(ProviderRecord("", "Mock (season end to end)", "10.0.2.2", 1119, useTls = false, connections = 4), "")
-        settings.indexers.first().filter { it.enabled }.forEach { settings.setIndexerEnabled(it.id, false) }
-        settings.torrentIndexers.first().filter { it.enabled }.forEach { settings.setTorrentIndexerEnabled(it.id, false) }
-        settings.services.first().filter { it.enabled }.forEach { settings.setServiceEnabled(it.id, false) }
-        settings.saveIndexer(FAKE_INDEXER, "Fake (season end to end)", "http://10.0.2.2:8089", "fake-indexer-key")
-        // Whatever network the emulator calls its Wi-Fi, not on a charger only, and no Download size: the pack leads.
-        settings.setDownloadsUnmeteredOnly(false)
-        settings.setDownloadsWhileCharging(false)
-        settings.setDownloadSizeCap(null)
-        engineSetup("the engine on the mock alone") { container.engine.configuredProviders.first { it == listOf(mock) } }
         notificationsWere = context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) shell("pm grant $pkg ${Manifest.permission.POST_NOTIFICATIONS}")
         throttle.parentFile?.mkdirs()
@@ -144,6 +151,34 @@ class DownloadSeasonEndToEndDeviceTest {
             grabbed += item.guid
             realFetch(c, indexer, item)
         }
+    }
+
+    /** The Usenet case's sources: the mock alone, as a user saves a provider, the others hidden (their passwords kept); the fake indexer alone. */
+    private suspend fun usenetSources() {
+        assumeTrue("mock NNTP server not reachable at 10.0.2.2:1119", reachable(1119))
+        assumeTrue("fake indexer not reachable at 10.0.2.2:8089 (mock-seed indexer)", reachable(8089))
+        val settings = container.settings
+        settings.restore(saved.copy(providers = saved.providers.map { it.copy(deleted = true) }))
+        mock = settings.saveProvider(ProviderRecord("", "Mock (season end to end)", "10.0.2.2", 1119, useTls = false, connections = 4), "")
+        settings.indexers.first().filter { it.enabled }.forEach { settings.setIndexerEnabled(it.id, false) }
+        settings.torrentIndexers.first().filter { it.enabled }.forEach { settings.setTorrentIndexerEnabled(it.id, false) }
+        settings.services.first().filter { it.enabled }.forEach { settings.setServiceEnabled(it.id, false) }
+        settings.saveIndexer(FAKE_INDEXER, "Fake (season end to end)", "http://10.0.2.2:8089", "fake-indexer-key")
+        downloadRules()
+        engineSetup("the engine on the mock alone") { container.engine.configuredProviders.first { it == listOf(mock) } }
+    }
+
+    /** Whatever network the emulator calls its Wi-Fi, not on a charger only, and no Download size: the pack leads. */
+    private suspend fun downloadRules() {
+        container.settings.setDownloadsUnmeteredOnly(false)
+        container.settings.setDownloadsWhileCharging(false)
+        container.settings.setDownloadSizeCap(null)
+    }
+
+    /** No download row left of any test, and none of the downloads' jobs pending (L464). */
+    private suspend fun apart() {
+        container.data.downloads.all().first().forEach { container.downloadStorage.delete(it.id) }
+        cancelJobs()
     }
 
     @After
@@ -157,6 +192,7 @@ class DownloadSeasonEndToEndDeviceTest {
             }
         }
         PlaybackCoordinator.fetchNzb = realFetch
+        back { walking.forEach { it.cancel() } }
         back { cancelJobs() }
         // The walk ended before the rows, their files and the settings go back: a write or a turn's search still under way
         // (a case failing mid-season) would otherwise reach the saved providers or indexers, or leave a file behind.
@@ -169,10 +205,16 @@ class DownloadSeasonEndToEndDeviceTest {
             back { manager.cancel(row.id, DownloadNotifications.DONE_ID) }
             back { row.release?.let { container.library.forgetRelease(row.watchKey, it) } }
         }
+        // The torrent case's every row, the account's sources with them (L464).
+        fakes?.let { sources ->
+            back { apart() }
+            back { sources.close() }
+        }
         // The show's finished episodes are said in its one notification (L437).
         back { manager.cancel(DownloadNotice.showTag(SHOW), DownloadNotifications.DONE_ID) }
         if (since != null) {
             back { container.downloadStorage.packs.folder(pack).deleteRecursively() }
+            back { container.downloadStorage.packs.folder(TORRENT_PACK_KEY).deleteRecursively() }
             back { container.downloadStorage.sweepPacks() }
         }
         back { manager.cancel(DownloadNotifications.ONGOING_ID) }
@@ -192,6 +234,7 @@ class DownloadSeasonEndToEndDeviceTest {
 
     @Test
     fun aSeasonGrabsItsPackOnceItsOtherEpisodesComeFromItsCopy() = runBlocking<Unit> {
+        usenetSources()
         // The queue held by a paused download of a film whose indexer isn't set up: nothing runs meanwhile.
         val film = heldFilm()
         lateinit var nav: NavHostController
@@ -258,6 +301,108 @@ class DownloadSeasonEndToEndDeviceTest {
         waitFor("the season's copy dropped") { runBlocking { container.downloadStorage.packs.find(pack) }?.let { null } ?: Unit }
         assertFalse("the copy's folder", container.downloadStorage.packs.folder(pack).exists())
     }
+
+    /**
+     * L462 (W119): the season over the fakes from one torrent pack, as the class says. S01E03's turn searches and takes
+     * PACK_S01, its meta kept for the season ("Queued · from the season pack" of the others meanwhile, "From the season
+     * pack" under its bytes); S01E01 and S01E02 then take that meta first, with no search, the pack prepared again by its
+     * hash and found in the account, each its own file of the listing: told apart by their place in it and their names,
+     * as every file is the fake's sample. The meta goes with the season's last.
+     */
+    @Test
+    fun aSeasonTakesItsTorrentPackOnceItsOtherEpisodesTryItsMetaFirst() = runBlocking<Unit> {
+        apart()
+        fakes = FakeAccountOnly(torznab = true, providers = false, tmdb = false).also { it.open() }
+        assertTrue("no Usenet provider usable", container.settings.usableProviders().isEmpty())
+        downloadRules()
+        val room = container.downloadStorage.space()
+        assumeTrue("no room on this emulator for the pack's listed share of an episode, 1.5 GB: $room", room?.fits(PACK_SHARE) == true)
+        throttle.writeText("$TORRENT_THROTTLE")
+
+        // The season queued as its sheet queues it, behind a held film, its turns still to search; S01E03 at its head.
+        val film = heldFilm()
+        val facts = SeasonSearch("Harbor Lights", 2021, tvdb = 900001, tmdb = SHOW, imdb = "tt9000003", runtimeMinutes = RUNTIME, seasonEpisodes = EPISODES)
+        val queued = container.downloads.enqueueAll(
+            (1..EPISODES).map { e ->
+                DownloadRunner.QueueItem(
+                    DownloadTarget.episode(SHOW, "Harbor Lights", 1, e, seasonEpisodes = EPISODES, episodeName = "Episode $e", runtimeMinutes = RUNTIME),
+                    candidates = emptyList(), need = 0, search = facts,
+                )
+            },
+        )
+        made += queued.map { it.id }
+        assertEquals(EPISODES, queued.size)
+        val (e1, e2, e3) = queued.sortedBy { it.episode }.map { it.id }
+        container.downloads.move(e3, up = true)
+        container.downloads.move(e3, up = true)
+        container.downloads.cancel(film)
+        assertEquals(DownloadState.Paused, container.data.downloads.get(e3)?.state)
+        val seeds = DownloadsPageSeeds(context, container)
+        queued.forEach(seeds::adopt)
+        compose.show(context) { DownloadsScreen(seeds.deps(), onBack = {}, onSettings = {}, onShow = {}, onOpenMovie = {}) }
+
+        // Whether each row's turn had searched as its file began: Done drops a row's search facts.
+        val searchedAsWritten = ConcurrentHashMap<String, Boolean>()
+        CoroutineScope(Dispatchers.Default).also { walking += it }.launch {
+            container.data.downloads.all().collect { rows ->
+                rows.filter { it.id in made && it.state == DownloadState.Running }.forEach { row ->
+                    searchedAsWritten.putIfAbsent(row.id, DownloadColumns.search(row)?.searched == true)
+                }
+            }
+        }
+
+        // Resumed, and the walk run as a host runs it.
+        container.downloads.resume()
+        walk()
+        try {
+            compose.waitTill("the season's rows from its pack", DOWNLOAD_MILLIS) {
+                compose.exists(hasText(DownloadsPage.QUEUED_FROM_PACK)) && compose.exists(hasText(DownloadsPage.FROM_PACK))
+            }
+        } catch (e: AssertionError) {
+            throw AssertionError("${e.message}; the season's rows: ${described(queued.map { it.id })}", e)
+        }
+        val meta = container.downloadStorage.packs.find(TORRENT_PACK_KEY) ?: throw AssertionError("no meta of the torrent pack kept for the season")
+        assertTrue("the meta a torrent's, with no NZB", meta.meta.torrent && meta.source == null)
+        assertTrue("the meta leads", meta.meta.leads)
+
+        val done = listOf(e3, e1, e2).map { id ->
+            waitFor("download $id done", DOWNLOAD_MILLIS) {
+                val row = runBlocking { container.data.downloads.get(id) }
+                if (row?.state == DownloadState.Failed) throw AssertionError("download $id failed: ${row.reason}, ${row.tried.size} tried")
+                row?.takeIf { it.state == DownloadState.Done }
+            }
+        }
+        val (size, sha256) = JSONObject(DebridFakes.control("media")).let { it.getLong("size") to it.getString("sha256") }
+        done.forEach { row ->
+            val e = row.episode
+            assertEquals("S01E0$e's release", TORRENT_PACK_KEY, row.release?.guid)
+            assertEquals("S01E0$e's source", ReleaseFacts.TORRENT, row.release?.source)
+            assertEquals("S01E0$e's releases tried", listOf(TORRENT_PACK_KEY), row.tried)
+            assertEquals("S01E0$e's file by its place in the pack's listing", (e ?: 0) - 1, row.release?.fileIndex)
+            assertTrue("S01E0$e's file is its episode's: ${row.fileName}", row.fileName.orEmpty().contains("S01E0$e"))
+            val file = container.downloadStorage.file(row) ?: throw AssertionError("no file of S01E0$e")
+            assertEquals("S01E0$e's file", size, file.length())
+            assertEquals("S01E0$e's file is the fake's sample", sha256, DownloadFixtures.sha256(file))
+            // Its turn's search: S01E03's alone; the others took the meta first.
+            assertEquals("S01E0$e searched", e == 3, searchedAsWritten[row.id])
+        }
+        val counts = JSONObject(DebridFakes.control("counts"))
+        assertEquals("the pack added to the account once", 1, counts.getInt("adds"))
+        assertTrue("a link for each episode's file", counts.getJSONObject("calls").getInt("torbox requestdl") >= EPISODES)
+        waitFor("the season's meta dropped") { runBlocking { container.downloadStorage.packs.find(TORRENT_PACK_KEY) }?.let { null } ?: Unit }
+        assertFalse("the meta's folder", container.downloadStorage.packs.folder(TORRENT_PACK_KEY).exists())
+    }
+
+    /** Rows [ids] as a failure says them: each one's episode, state, reason and releases, all invented. */
+    private suspend fun described(ids: List<String>): String = ids.mapNotNull { container.data.downloads.get(it) }.joinToString("; ") { row ->
+        "S01E0${row.episode} ${row.state} (${row.reason}) tried ${row.tried.size} of ${row.candidates.map { it.title }}, release ${row.release?.title}"
+    }
+
+    /** The test's own walks, as a host runs one, and its watches: cancelled at its end. */
+    private val walking = CopyOnWriteArrayList<CoroutineScope>()
+
+    /** The walk, as a host runs it, in the test's own scope. */
+    private fun walk(): Job = CoroutineScope(Dispatchers.Default).also { walking += it }.launch { container.downloads.run(DownloadHost.Service) }
 
     /** A paused download of an invented film, at the queue's end, its release of an indexer that isn't set up. */
     private suspend fun heldFilm(): String {
@@ -348,6 +493,18 @@ class DownloadSeasonEndToEndDeviceTest {
 
         /** The writer's bytes a second (the debug build's throttle): a few seconds an episode, long enough to be seen. */
         const val THROTTLE = 256_000L
+
+        /** The debrid writer's, for the fake's 8.8 MB sample: about 9 s an episode, long enough to be seen. */
+        const val TORRENT_THROTTLE = 1_000_000L
+
+        /** The Torznab fake's season pack of season 1 (PACK_S01), its key the v1 hash's (L459). */
+        const val TORRENT_PACK_KEY = "btih:b8e5ad63c94db5348740caabfbdca0083423ad21"
+
+        /** What the Torznab fake lists the pack's share of one episode as (4.4 GB over 3), and so the room its turn needs. */
+        const val PACK_SHARE = 1_500_000_000L
+
+        /** The torrent case's episodes' runtime, as TMDB gives a show's: the pack's share is about 2 GB an hour. */
+        const val RUNTIME = 45
 
         const val SEEDING_MILLIS = 60_000L
         const val SEARCH_MILLIS = 60_000L

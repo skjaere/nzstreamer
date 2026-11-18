@@ -265,6 +265,9 @@ class DownloadResolverTest {
     /** What the turn's search finds, in its order (L392): each as the indexer lists it. */
     private var finds: List<Fake> = emptyList()
 
+    /** The torrents the turn's search finds after [finds], each as the Torznab indexer lists it (L459). */
+    private var torrentFinds: List<Torrent> = emptyList()
+
     /** The sizes the indexer lists for some of [finds], by guid, where they aren't their files' (a pack's share is an average). */
     private val listed = mutableMapOf<String, Long>()
 
@@ -330,7 +333,8 @@ class DownloadResolverTest {
                     searched += request
                     searchedAt += asked.map { it.id }
                     finds.forEach { fakes[it.guid] = it }
-                    emit(FinderEvent.Finished(FindResult(request, finds.map(::foundOf), emptyList(), listOf(StageReport(SearchStage.Episode, findReports)))))
+                    val found = finds.map(::foundOf) + torrentFinds.map(::foundOf)
+                    emit(FinderEvent.Finished(FindResult(request, found, emptyList(), listOf(StageReport(SearchStage.Episode, findReports)))))
                 }
             },
             indexers = { searchIndexers },
@@ -369,7 +373,10 @@ class DownloadResolverTest {
         val candidate: DownloadCandidate get() = DownloadCandidate(TORZNAB, key, title, size = files.sumOf { it.size }, source = ReleaseFacts.TORRENT)
 
         /** Its video for S02E04, by its name. */
-        fun episode(): ServiceFile = files.single { "S02E04" in it.path && it.path.endsWith(".mkv") }
+        fun episode(): ServiceFile = episode(4)
+
+        /** Its video for S02E0[episode], by its name. */
+        fun episode(episode: Int): ServiceFile = files.single { "S02E%02d".format(episode) in it.path && it.path.endsWith(".mkv") }
     }
 
     /** A single episode's torrent: its info file, then its video. */
@@ -523,6 +530,30 @@ class DownloadResolverTest {
         val ranked = RankedRelease(ReleaseFacts(item.key, fake.title, size), ReleaseParser.parse(fake.title), playable = true, score = 1.0, reasons = emptyList(), estimatedBitrate = null)
         return FoundRelease(item, ranked, SearchStage.Episode)
     }
+
+    /** [torrent] as the turn's search finds it: as the Torznab indexer lists it, its hash given, ranked first-come. */
+    private fun foundOf(torrent: Torrent): FoundRelease {
+        val size = torrent.candidate.size
+        val item = NewznabItem(
+            indexerId = TORZNAB, guid = torrent.key, title = torrent.title, sizeBytes = size, publishedAt = null, postedAt = null, categories = emptyList(),
+            grabs = null, passworded = false, files = null, tvdbId = null, tmdbId = null, imdbId = null, tvmazeId = null, season = null, episode = null,
+            coverUrl = null, mediaInfo = null, downloadTemplate = null, attributes = emptyMap(), infoHash = torrent.hash,
+        )
+        val ranked = RankedRelease(
+            ReleaseFacts(item.key, torrent.title, size, source = ReleaseFacts.TORRENT), ReleaseParser.parse(torrent.title), playable = true, score = 1.0,
+            reasons = emptyList(), estimatedBitrate = null,
+        )
+        return FoundRelease(item, ranked, SearchStage.Episode)
+    }
+
+    /** [torrent]'s meta kept for season 2 of the show, leading or not, as an earlier row of the season kept it (L462). */
+    private suspend fun keptForSeason(torrent: Torrent, leads: Boolean = true) {
+        storage.packs.write(DownloadNzbs.Meta(torrent.key, torrent.title, torrent.candidate, SHOW, 2, leads), null, null)
+    }
+
+    /** Harbor Lights S02E0[episode]'s download, [id], of the torrents [candidates] in download order, a row of [ID]'s season. */
+    private suspend fun torrentEpisode(id: String, episode: Int, vararg candidates: DownloadCandidate, edit: (Download) -> Download = { it }): Download =
+        rowOf(*candidates) { it.copy(id = id, watchKey = WatchKey.episode(SHOW, 2, episode), episode = episode, episodeName = null).let(edit) }
 
     /** [this] a season row (L392): the season sheet's search facts for its episode, its turn not yet searched. */
     private fun Download.withFacts(searched: Boolean = false) = copy(search = DownloadColumns.text(FACTS.copy(searched = searched)))
@@ -909,7 +940,7 @@ class DownloadResolverTest {
         assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver.resolve(E1))
         val copy = assertNotNull(storage.packs.find(key(pack)))
         assertEquals(DownloadNzbs.Meta(key(pack), pack.title, stored(E1).candidates.first(), SHOW, 2, leads = true), copy.meta)
-        assertContentEquals(pack.nzb, copy.source.nzb)
+        assertContentEquals(pack.nzb, assertNotNull(copy.source).nzb)
         dao.setState(E1, DownloadState.Done, null, NOW)
 
         val next = assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver.resolve(E2))
@@ -977,8 +1008,8 @@ class DownloadResolverTest {
         assertIs<DownloadResolver.Resolution.Ready.Usenet>(resolver().resolve(E1))
         val copy = assertNotNull(storage.packs.find(key(locked)))
         assertEquals(DownloadNzbs.Meta(key(locked), locked.title, stored(E1).candidates.single(), SHOW, 2, leads = true), copy.meta)
-        assertContentEquals(locked.nzb, copy.source.nzb)
-        assertEquals("s3cret-from-indexer", copy.source.password)
+        assertContentEquals(locked.nzb, assertNotNull(copy.source).nzb)
+        assertEquals("s3cret-from-indexer", assertNotNull(copy.source).password)
 
         // Above Download size for the episode (its share of 6 GB over 44 minutes is about 1.4 GB an hour): kept, not leading.
         reset()
@@ -2785,6 +2816,170 @@ class DownloadResolverTest {
         assertTrue(lines.any { "play_pipeline: download $ID, release 2 " in it }, lines.toString())
     }
 
+    /**
+     * L462, L432: a season's torrent pack is kept for its season as a Usenet pack's NZB is, by the same rule, as its meta
+     * alone (no NZB, no password: its attempt prepares it by its hash): only a torrent named as several episodes, and only
+     * while another row of its show and season is still to finish. It leads unless, ranked alone for downloading with the
+     * episode's runtime, it is above Download size.
+     */
+    @Test
+    fun `a season's torrent pack is kept as its meta alone, by the rule a Usenet pack is kept by`() = runBlocking<Unit> {
+        // Alone in its season.
+        serviceA.cached[packTorrent.hash] = packTorrent.files
+        torrentEpisode(E1, 1, packTorrent.candidate)
+        assertIs<DownloadResolver.Resolution.Ready.Service>(resolver().resolve(E1))
+        assertNull(storage.packs.find(packTorrent.key))
+
+        // The season's others done, failed or removed; another season's and another show's still to finish.
+        reset()
+        serviceA.cached[packTorrent.hash] = packTorrent.files
+        torrentEpisode(E1, 1, packTorrent.candidate)
+        torrentEpisode(E2, 2, packTorrent.candidate) { it.copy(state = DownloadState.Done) }
+        torrentEpisode(E3, 3, packTorrent.candidate) { it.copy(state = DownloadState.Failed) }
+        torrentEpisode(E4, 4, packTorrent.candidate) { it.copy(state = DownloadState.Deleting) }
+        torrentEpisode(OTHER_SEASON, 1, packTorrent.candidate) { it.copy(season = 3, watchKey = WatchKey.episode(SHOW, 3, 1)) }
+        torrentEpisode(OTHER_SHOW, 1, packTorrent.candidate) { it.copy(showTmdbId = 900003, watchKey = WatchKey.episode(900003, 2, 1)) }
+        assertIs<DownloadResolver.Resolution.Ready.Service>(resolver().resolve(E1))
+        assertNull(storage.packs.find(packTorrent.key))
+
+        // An episode's own torrent, with the season's others to come: none.
+        reset()
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        rowOf(goodTorrent.candidate)
+        torrentEpisode(E2, 2, packTorrent.candidate)
+        assertIs<DownloadResolver.Resolution.Ready.Service>(resolver().resolve(ID))
+        assertEquals(emptyList(), storage.packs.copies.value)
+
+        // One of the season paused: kept for it, its meta alone, leading.
+        reset()
+        serviceA.cached[packTorrent.hash] = packTorrent.files
+        torrentEpisode(E1, 1, packTorrent.candidate) { it.copy(runtimeMinutes = 44) }
+        torrentEpisode(E2, 2, packTorrent.candidate) { it.copy(state = DownloadState.Paused) }
+        assertIs<DownloadResolver.Resolution.Ready.Service>(resolver().resolve(E1))
+        val copy = assertNotNull(storage.packs.find(packTorrent.key))
+        assertEquals(DownloadNzbs.Meta(packTorrent.key, packTorrent.title, packTorrent.candidate, SHOW, 2, leads = true), copy.meta)
+        assertNull(copy.source)
+        assertEquals(setOf(DownloadNzbs.META), storage.packs.folder(packTorrent.key).list()!!.toSet())
+        assertEquals(1, storage.packWrites)
+        assertEquals(emptyMap(), storage.sources)
+
+        // Above Download size for the episode (its share of 6.6 GB over 44 minutes is about 1.5 GB an hour): kept, not leading.
+        reset()
+        serviceA.cached[packTorrent.hash] = packTorrent.files
+        torrentEpisode(E1, 1, packTorrent.candidate) { it.copy(runtimeMinutes = 44) }
+        torrentEpisode(E2, 2, packTorrent.candidate)
+        assertIs<DownloadResolver.Resolution.Ready.Service>(resolver(cap = 1).resolve(E1))
+        assertEquals(false, storage.packs.find(packTorrent.key)?.meta?.leads)
+        reset()
+        serviceA.cached[packTorrent.hash] = packTorrent.files
+        torrentEpisode(E1, 1, packTorrent.candidate) { it.copy(runtimeMinutes = 44) }
+        torrentEpisode(E2, 2, packTorrent.candidate)
+        assertIs<DownloadResolver.Resolution.Ready.Service>(resolver(cap = 2).resolve(E1))
+        assertEquals(true, storage.packs.find(packTorrent.key)?.meta?.leads)
+    }
+
+    /**
+     * L462, L431: the season's next row tries the torrent pack's meta first and alone, as a Usenet copy is tried: prepared
+     * on the account by its hash, the episode's own file picked from its listing with no question, with no search and no
+     * grab. The Downloads page says so of it as of a Usenet copy's ("Queued · from the season pack", then "From the
+     * season pack"). A meta kept already stays as the first row wrote it.
+     */
+    @Test
+    fun `a season's torrent pack is tried first and alone for the season's next row, by its hash, with no search`() = runBlocking<Unit> {
+        serviceA.cached[packTorrent.hash] = packTorrent.files
+        finds = listOf(single)
+        torrentEpisode(E1, 1, packTorrent.candidate)
+        torrentEpisode(E2, 2) { it.withFacts() }
+        assertIs<DownloadResolver.Resolution.Ready.Service>(resolver().resolve(E1))
+        dao.setState(E1, DownloadState.Done, null, NOW)
+        assertTrue(DownloadsPage.fromPack(stored(E2), DownloadRunner.Packs.of(storage.packs.copies.value)), "Queued · from the season pack")
+
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Service>(resolver().resolve(E2))
+        assertEquals(packTorrent.key, ready.row.release?.guid)
+        assertEquals(packTorrent.episode(2), ready.file)
+        assertEquals(packTorrent.episode(2).index, ready.row.release?.fileIndex)
+        assertEquals(ReleaseFacts.TORRENT, ready.row.release?.source)
+        assertEquals(listOf(packTorrent.hash, packTorrent.hash), serviceA.prepares)
+        assertEquals(emptyList(), searched)
+        assertEquals(emptyList(), grabbed)
+        assertEquals(listOf(packTorrent.key), stored(E2).tried)
+        assertTrue(DownloadsPage.fromPack(stored(E2), DownloadRunner.Packs.of(storage.packs.copies.value)), "From the season pack")
+        assertEquals(1, storage.packWrites)
+        assertEquals(emptyMap(), storage.sources)
+    }
+
+    /**
+     * L462, L431: a season's torrent pack that fails for its own sake (no longer cached) is one of the row's three tries,
+     * counted once, and the turn's search runs then, the pack left out of what it finds; one that finds nothing else fails
+     * in the pack's words. Its meta stays for the season's other rows.
+     */
+    @Test
+    fun `a season's torrent pack that fails for its own sake moves on to the search, counted once and left out of what it finds`() = runBlocking<Unit> {
+        keptForSeason(packTorrent)
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        torrentFinds = listOf(packTorrent, goodTorrent)
+        rowOf { it.withFacts() }
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Service>(resolver().resolve(ID))
+        assertEquals(goodTorrent.key, ready.row.release?.guid)
+        assertEquals(listOf(packTorrent.hash, goodTorrent.hash), serviceA.prepares)
+        assertEquals(1, searched.size)
+        assertEquals(listOf(packTorrent.key, goodTorrent.key), stored().tried)
+        assertEquals(listOf(goodTorrent.key), stored().candidates.map { it.guid })
+        assertNotNull(storage.packs.find(packTorrent.key))
+
+        // Nothing else found: it fails in the pack's words.
+        reset()
+        keptForSeason(packTorrent)
+        torrentFinds = listOf(packTorrent)
+        rowOf { it.withFacts() }
+        val failed = assertIs<DownloadResolver.Resolution.Failed>(resolver().resolve(ID))
+        assertEquals(DownloadResolver.NO_LONGER_CACHED, failed.reason)
+        assertEquals(listOf(packTorrent.key), stored().tried)
+        assertEquals(listOf(packTorrent.hash), serviceA.prepares)
+    }
+
+    /**
+     * L462, L422, L194: a season's torrent pack goes first only where it can go to a service now. While debrid is hidden,
+     * with no account on, or with its indexer kept from the service since, the turn goes on as with no copy: nothing is
+     * asked of an account, nothing counted, and the search finds what the sources on now give.
+     */
+    @Test
+    fun `a season's torrent pack is passed over with no call while debrid is hidden, no account is on or its indexer is kept from the service`() =
+        runBlocking<Unit> {
+            listOf<Pair<String, () -> DownloadResolver>>(
+                "hidden" to { resolver(shown = false) },
+                "no account on" to { resolver(on = emptyList()) },
+                "kept from the service" to { resolver(offService = setOf(TORZNAB)) },
+            ).forEach { (why, made) ->
+                reset()
+                keptForSeason(packTorrent)
+                serviceA.cached[packTorrent.hash] = packTorrent.files
+                finds = listOf(single)
+                rowOf { it.withFacts() }
+                val ready = assertIs<DownloadResolver.Resolution.Ready.Usenet>(made().resolve(ID), why)
+                assertEquals(single.guid, ready.row.release?.guid, why)
+                assertEquals(emptyList(), serviceA.prepares, why)
+                assertEquals(emptyList(), lookups, why)
+                assertEquals(1, searched.size, why)
+                assertEquals(listOf(key(single)), stored().tried, why)
+            }
+        }
+
+    /**
+     * L462 at a resolve's success, whichever way it succeeds, as a Usenet row's reopen keeps its copy: a process that died
+     * after a torrent row took its season pack and before its meta was written leaves none. The row, opened again from its
+     * listing's copy with no call, keeps the meta for the season's rows still to finish then.
+     */
+    @Test
+    fun `a torrent row opened again from its listing's copy keeps the season's meta a process death cut short`() = runBlocking<Unit> {
+        resolvedOn(packTorrent)
+        torrentEpisode(E2, 2, packTorrent.candidate)
+        assertNull(storage.packs.find(packTorrent.key))
+        assertIs<DownloadResolver.Resolution.Ready.Service>(resolver().resolve(ID))
+        assertEquals(emptyList(), lookups)
+        assertEquals(DownloadNzbs.Meta(packTorrent.key, packTorrent.title, packTorrent.candidate, SHOW, 2, leads = true), storage.packs.find(packTorrent.key)?.meta)
+    }
+
     private suspend fun reset() {
         services.values.forEach {
             it.cached.clear()
@@ -2817,6 +3012,7 @@ class DownloadResolverTest {
         checkFails = null
         probeAnswer = { null }
         finds = emptyList()
+        torrentFinds = emptyList()
         listed.clear()
         findReports = listOf(IndexerReport(indexer, "TVDB id"))
         searched.clear()
@@ -2945,7 +3141,7 @@ class DownloadResolverTest {
         /** How many times a season pack's copy was written. */
         var packWrites = 0
 
-        override suspend fun keepPack(meta: DownloadNzbs.Meta, nzb: ByteArray, password: String?) {
+        override suspend fun keepPack(meta: DownloadNzbs.Meta, nzb: ByteArray?, password: String?) {
             packWrites++
             packs.write(meta, nzb, password)
         }

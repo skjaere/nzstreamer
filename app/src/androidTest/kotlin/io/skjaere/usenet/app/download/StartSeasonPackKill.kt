@@ -119,7 +119,7 @@ object SeasonPackSeed {
             expect(storage.source(row.id) == null && storage.grab(row.id) == null) { "download ${row.id} keeps an NZB of its own" }
         }
         val copy = storage.packs.find(key)
-        expect(copy != null && copy.meta == meta && copy.source.nzb.contentEquals(nzb) && copy.source.password == null) {
+        expect(copy != null && copy.meta == meta && copy.source?.nzb?.contentEquals(nzb) == true && copy.source?.password == null) {
             "the season's copy isn't the pack's NZB, with no password, leading for its season"
         }
         expect(storage.packs.forSeason(show, SEASON).map { it.meta.key } == listOf(key)) { "the season has other copies than the pack's" }

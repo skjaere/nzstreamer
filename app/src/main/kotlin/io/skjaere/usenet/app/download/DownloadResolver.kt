@@ -134,7 +134,9 @@ import kotlin.time.Duration.Companion.seconds
  * that copy rather than grab it again, after the NZB kept for an attempt with no answer and before the indexer, and keeps
  * it for its attempt as a grab is kept. The pack as this process last prepared it is kept too ([Storage.holdPrepare]), and
  * handed back for that NZB rather than prepared again ([heldPreparer]); a new process prepares it again, from the copy or
- * from a row's own NZB as it opens again, once, with no grab.
+ * from a row's own NZB as it opens again, once, with no grab. A season's torrent pack is kept for its season by the same
+ * rule, as its meta alone (L462): a later row's turn tries it first as it tries a Usenet copy, prepared again by its hash
+ * on the accounts on, its episode's file picked from the listing, where it can go to a service now.
  *
  * A file of an NZB the user opened on Import (a Release row, L423, L457) has no search and no indexer: its one release is
  * Import's, whose NZB, with the password typed for it, its copy in `.packs/` gives as its grab. Its file is the one chosen on
@@ -236,11 +238,17 @@ class DownloadResolver(
 
         suspend fun dropGrab(id: String)
 
-        /** The season pack's NZB kept once for its season under its release's [key] (L394); null where none is. */
+        /**
+         * The season pack's NZB kept once for its season under its release's [key] (L394), or a torrent's meta alone (L462);
+         * null where none is.
+         */
         suspend fun pack(key: String): DownloadNzbs.Copy?
 
-        /** Keeps a season pack's [nzb] and its [password] (none: no file) once for its season, as [meta] says (L432). */
-        suspend fun keepPack(meta: DownloadNzbs.Meta, nzb: ByteArray, password: String?)
+        /**
+         * Keeps a season pack's [nzb] and its [password] (none: no file) once for its season, as [meta] says (L432); a
+         * torrent's meta alone, with no NZB (L462).
+         */
+        suspend fun keepPack(meta: DownloadNzbs.Meta, nzb: ByteArray?, password: String?)
 
         /** The last season pack's prepare kept for its season's next rows while its copy lasts; null where none is. */
         fun heldPrepare(): PreparedNzb?
@@ -274,7 +282,7 @@ class DownloadResolver(
                 override suspend fun deleteVideo(id: String) = storage.deleteVideo(id)
                 override suspend fun space(except: String) = storage.space(except)
                 override suspend fun pack(key: String) = storage.packs.find(key)
-                override suspend fun keepPack(meta: DownloadNzbs.Meta, nzb: ByteArray, password: String?) = storage.packs.write(meta, nzb, password)
+                override suspend fun keepPack(meta: DownloadNzbs.Meta, nzb: ByteArray?, password: String?) = storage.packs.write(meta, nzb, password)
                 override fun heldPrepare() = storage.packs.held()
                 override fun holdPrepare(key: String, prepared: PreparedNzb) = storage.packs.hold(key, prepared)
                 override suspend fun packs(show: Int, season: Int) = storage.packs.forSeason(show, season)
@@ -416,7 +424,8 @@ class DownloadResolver(
      * tried by it yet (one whose attempt had no answer, its NZB kept for it, is still to try), whose share of the episode
      * fits the room now and which, ranked alone for downloading with the episode's runtime, isn't above Download size. Null
      * where none is, or no try is left; and while another release's attempt had no answer, its NZB kept for it: that goes on
-     * first from what was kept, as the class says, as a copy tried before it would count it and write over its NZB.
+     * first from what was kept, as the class says, as a copy tried before it would count it and write over its NZB. A
+     * torrent's meta (L462) only where it can go to a service now ([toService]): else the turn goes on as with no copy.
      */
     private suspend fun packFirst(row: Download): DownloadNzbs.Copy? {
         val show = row.showTmdbId ?: return null
@@ -424,7 +433,8 @@ class DownloadResolver(
         val kept = storage.grab(row.id)?.key
         val tried = row.tried.filter { it != kept }
         if (row.kind != DownloadKind.Episode || tries() - tried.size <= 0) return null
-        val copies = storage.packs(show, season).filter { it.meta.leads && it.meta.key !in tried }
+        val copies = storage.packs(show, season)
+            .filter { it.meta.leads && it.meta.key !in tried && (!it.meta.torrent || toService(it.meta.candidate)) }
         if (copies.isEmpty()) return null
         val space = storage.space(row.id) ?: return null
         val copy = copies.firstOrNull { copy ->
@@ -432,6 +442,12 @@ class DownloadResolver(
         }
         return copy?.takeIf { kept == null || kept == it.meta.key }
     }
+
+    /**
+     * Whether the torrent [candidate] can go to a service now (L422, L194): debrid shown, an account on, and its indexer not
+     * kept from the service since. Asks no account anything: the settings alone.
+     */
+    private suspend fun toService(candidate: DownloadCandidate): Boolean = shown() && candidate.indexerId !in offService() && accountsOn().isNotEmpty()
 
     /** At most this many releases are tried for a download: three, or "Releases to try" where lower (L340). */
     private suspend fun tries(): Int = minOf(MAX_TRIES, attempts())
@@ -490,7 +506,8 @@ class DownloadResolver(
      * A torrent row [row] opened again from the copy of its listing in its folder (L420, L460), its [release]'s file found
      * there by its place, name and [size]: no prepare, no call and no provider wait, the writer asking a fresh link as it
      * opens. Null where it has no copy (its process went before it was written) or its file is no longer listed so, the copy
-     * dropped first: then its candidates are resolved. While debrid is hidden it fails, with no call (L422).
+     * dropped first: then its candidates are resolved. While debrid is hidden it fails, with no call (L422). A season's
+     * torrent pack is kept for its season, as at a resolve's success ([keepPack], L462).
      */
     private suspend fun reopenedService(row: Download, release: RememberedRelease, size: Long): Resolution? {
         if (!shown()) return hidden(row.id)
@@ -503,6 +520,8 @@ class DownloadResolver(
             return null
         }
         log.info("download {}: opened again from its listing's copy at {} of {} bytes", row.id, row.safeOffset, size)
+        // After a process death between the row taking its season's pack and the pack's meta: the season's next row takes it.
+        keepPack(row, Replay.candidate(release))
         return Resolution.Ready.Service(row, entry, file)
     }
 
@@ -694,11 +713,11 @@ class DownloadResolver(
                     log.info("download {}: its release tried again from the NZB kept for it, no grab", id)
                     return FetchedNzb(grab.source.nzb, grab.source.password)
                 }
-                storage.pack(candidate.id)?.let { copy ->
+                storage.pack(candidate.id)?.source?.let { copy ->
                     log.info("{}: from its season's copy, no grab", namedCandidate(candidate))
                     copied += candidate.id
-                    storage.keepGrab(id, candidate.id, copy.source.nzb, copy.source.password)
-                    return FetchedNzb(copy.source.nzb, copy.source.password)
+                    storage.keepGrab(id, candidate.id, copy.nzb, copy.password)
+                    return FetchedNzb(copy.nzb, copy.password)
                 }
                 // An imported NZB's copy gone with its last download: nothing has it now, so nothing is asked.
                 if (candidate.id in imported) throw FetchException(IMPORT_GONE)
@@ -918,8 +937,8 @@ class DownloadResolver(
      * was prepared as kept in the row's folder (L420), before the row takes the release: its content id for its release and
      * its NZB's id, its source the torrent's, its file's place, name and size, and what the probe read; and its add held by
      * the download's own lease (L421). The release its file was made from goes on from the safe offset; another starts from
-     * 0, any file made for the one before deleted. No NZB is kept for it, and it put nothing in the NZB store. [named]
-     * names its release.
+     * 0, any file made for the one before deleted. No NZB is kept for it, and it put nothing in the NZB store; a season's
+     * torrent pack is kept for its season as its meta alone ([keepPack], L462). [named] names its release.
      */
     private suspend fun resolvedService(
         id: String, succeeded: PipelineEvent.Succeeded, target: ServiceTarget, byKey: Map<String, RankedItem>, named: (String) -> String,
@@ -950,6 +969,7 @@ class DownloadResolver(
         // Held by the download's own lease before the resolve's Play lets its attempts' adds go (L421): the chosen one stays
         // in the account while the download runs, the others go a grace on.
         adds?.holdOnly(DownloadLease(id), entry.id)
+        keepPack(kept, byKey.getValue(target.candidate.id))
         log.info("download {}: resolved on a debrid service, {} bytes, {}", id, size, if (kept.oneVideo) "its torrent's one video" else "one of its torrent's videos")
         return Pass.Ended(Resolution.Ready.Service(kept, entry, target.file.file))
     }
@@ -973,10 +993,8 @@ class DownloadResolver(
         if (row.kind != DownloadKind.Episode || !(copied || item.offersFileChoice)) return
         try {
             if (!copied && storage.pack(item.key)?.source?.nzb?.contentEquals(nzb) != true) {
-                val others = downloads.queue().first().any { it.id != row.id && it.showTmdbId == show && it.season == season && it.state in DownloadRunner.GOING_ON }
-                val candidate = row.candidates.firstOrNull { ranked(it).key == item.key }
-                if (!others || candidate == null) return
-                storage.keepPack(DownloadNzbs.Meta(item.key, item.item.title, candidate, show, season, leads(row, item.key, candidate)), nzb, password)
+                val meta = seasonMeta(row, item, show, season) ?: return
+                storage.keepPack(meta, nzb, password)
                 log.info("download {}: its season pack kept for the season's other downloads", row.id)
             }
             storage.holdPrepare(item.key, prepared)
@@ -985,6 +1003,40 @@ class DownloadResolver(
         } catch (e: Exception) {
             log.warn("download {}: couldn't keep its season pack for the season: {}", row.id, e::class.simpleName)
         }
+    }
+
+    /**
+     * [keepPack]'s torrent branch (L462): [row]'s torrent, [item], kept once for its season by the same rule (L432), a
+     * torrent named as several episodes while another row of the show's season is still to finish, as its meta alone: no
+     * NZB, as the season's next row prepares it again by its hash on the accounts on. One kept already under its key (the
+     * meta this row's turn took first) stays as it was written. It holds nothing on the account (BQ3 b) and no prepare.
+     * Nothing of this fails the resolve: a meta that can't be kept costs the next row a search.
+     */
+    private suspend fun keepPack(row: Download, item: RankedItem) {
+        val show = row.showTmdbId ?: return
+        val season = row.season ?: return
+        if (row.kind != DownloadKind.Episode || !item.offersFileChoice) return
+        try {
+            if (storage.pack(item.key) != null) return
+            val meta = seasonMeta(row, item, show, season) ?: return
+            storage.keepPack(meta, nzb = null, password = null)
+            log.info("download {}: its season's torrent pack kept for the season's other downloads", row.id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("download {}: couldn't keep its season's torrent pack for the season: {}", row.id, e::class.simpleName)
+        }
+    }
+
+    /**
+     * What [row]'s release [item] is kept as for [show]'s [season] (L432): null where no other row of that season is still
+     * to finish, or [row] doesn't list it. It leads where it isn't above Download size ([leads]).
+     */
+    private suspend fun seasonMeta(row: Download, item: RankedItem, show: Int, season: Int): DownloadNzbs.Meta? {
+        val others = downloads.queue().first().any { it.id != row.id && it.showTmdbId == show && it.season == season && it.state in DownloadRunner.GOING_ON }
+        val candidate = row.candidates.firstOrNull { ranked(it).key == item.key }
+        if (!others || candidate == null) return null
+        return DownloadNzbs.Meta(item.key, item.item.title, candidate, show, season, leads(row, item.key, candidate))
     }
 
     /**

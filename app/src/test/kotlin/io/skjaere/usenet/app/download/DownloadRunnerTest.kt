@@ -2478,8 +2478,8 @@ class DownloadRunnerTest {
         assertEquals(listOf<Pair<List<String>, DownloadNzbs.Meta?>>(listOf(row.id) to meta), storage.adds, "one call, the row with its copy")
         val copy = assertNotNull(storage.packs.find(ReleaseKey.of(IMPORTED, IMPORT_SHA)))
         assertEquals(meta, copy.meta)
-        assertContentEquals(IMPORT_NZB, copy.source.nzb)
-        assertEquals("typed-on-import", copy.source.password)
+        assertContentEquals(IMPORT_NZB, assertNotNull(copy.source).nzb)
+        assertEquals("typed-on-import", assertNotNull(copy.source).password)
         // Not a season's pack: no row of it reads "from the season pack".
         runCurrent()
         assertEquals(DownloadRunner.Packs(), runner.packs.value)
@@ -3381,7 +3381,7 @@ class DownloadRunnerTest {
         override suspend fun add(row: Download, grab: DownloadStorage.Grab?, copy: DownloadNzbs.Copy?) {
             adds += listOf(row.id) to copy?.meta
             mark(row.id)
-            copy?.let { packs.write(it.meta, it.source.nzb, it.source.password) }
+            copy?.let { packs.write(it.meta, it.source?.nzb, it.source?.password) }
             grab?.let { keepGrab(row.id, it) }
             dao.insert(row)
         }
@@ -3390,7 +3390,7 @@ class DownloadRunnerTest {
         override suspend fun addAll(rows: List<Download>, putBack: List<Download>, copy: DownloadNzbs.Copy?) {
             adds += (rows + putBack).map { it.id } to copy?.meta
             rows.forEach { mark(it.id) }
-            copy?.let { packs.write(it.meta, it.source.nzb, it.source.password) }
+            copy?.let { packs.write(it.meta, it.source?.nzb, it.source?.password) }
             try {
                 dao.insertAll(rows, putBack)
             } catch (e: Exception) {

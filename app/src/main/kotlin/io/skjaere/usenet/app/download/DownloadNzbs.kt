@@ -5,6 +5,7 @@ import io.skjaere.usenet.data.Download
 import io.skjaere.usenet.data.DownloadCandidate
 import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.releases.ReleaseFacts
 import io.skjaere.usenet.releases.ReleaseKey
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -26,12 +27,14 @@ import java.security.MessageDigest
  * A season pack's NZB, kept once for its season (L394, L432, C1): the season's later rows take it from here rather than
  * grab it again, and the last copy's prepare is kept in memory ([hold]) so they don't prepare it again in this process.
  * And an NZB the user opened on Import, with the archive password typed for it (L423): kept for the downloads of its files,
- * whose turns take it as their grab, as no indexer has it.
+ * whose turns take it as their grab, as no indexer has it. A season's torrent pack is kept for its season too (L462), as its
+ * meta alone: it has no NZB, and the season's later rows prepare it again by its hash on a debrid account.
  *
  * Each copy is a folder of [dir] (filesDir's `downloads/.packs/`, out of backups and transfers with the rest of
  * `downloads/`) named by the SHA-256 of its release's key, never by the key: `nzb`, `password` where it has one, and
- * `meta` ([Meta]), each written whole then renamed, `meta` last, so a folder with no readable `meta` is no copy. A row id
- * never starts with ".", so reconcile tells the folder from a download's by its name.
+ * `meta` ([Meta]), each written whole then renamed, `meta` last, so a folder with no readable `meta` is no copy, nor one
+ * with no `nzb` but a torrent's. A row id never starts with ".", so reconcile tells the folder from a download's by its
+ * name.
  *
  * A season's copy is held while any row of its show and season is still to finish; an imported NZB's while a download of
  * one of its files is still to finish or failed (for its Try again), never once they are all done or gone (C11). Both are
@@ -66,6 +69,9 @@ class DownloadNzbs(
         val leads: Boolean,
         val nzb: String? = null,
     ) {
+        /** Whether it is a season's torrent pack (L462): kept with no NZB, its candidate a torrent's. */
+        val torrent: Boolean get() = candidate.source == ReleaseFacts.TORRENT
+
         companion object {
             /**
              * The copy of an NZB opened on Import, whose own release is [candidate] (its guid the NZB's id): keyed by the
@@ -77,8 +83,11 @@ class DownloadNzbs(
         }
     }
 
-    /** A copy as kept: its [meta], and its NZB with its password ([source]). */
-    class Copy(val meta: Meta, val source: DownloadStorage.Source) {
+    /**
+     * A copy as kept: its [meta], and its NZB with its password ([source]); none for a season's torrent pack (L462), whose
+     * attempt prepares it on a debrid account by its hash.
+     */
+    class Copy(val meta: Meta, val source: DownloadStorage.Source?) {
         // The release's title and key, and the password, are never in a log line.
         override fun toString() = "Copy(${short(digest(meta.key))}, $source)"
     }
@@ -107,9 +116,10 @@ class DownloadNzbs(
      * kept already of that same NZB with that same password is left as it was written (L456): another file of an imported
      * NZB queued, or one put back, would otherwise take away for a moment, while it is written again, the copy the NZB's
      * other downloads still to finish or failed open, and a write that failed part way, or a process that died in it, would
-     * leave them none.
+     * leave them none. A season's torrent pack has no NZB ([nzb] null, L462): its meta is kept alone, and one kept already
+     * under its key is left as it was.
      */
-    suspend fun write(meta: Meta, nzb: ByteArray, password: String?): Unit = turns.withLock {
+    suspend fun write(meta: Meta, nzb: ByteArray?, password: String?): Unit = turns.withLock {
         withContext(io) {
             val folder = folder(meta.key)
             kept(folder, meta.key, nzb, password)?.let { kept ->
@@ -123,12 +133,17 @@ class DownloadNzbs(
             // Kept again: no copy until its meta is back over what is written now.
             _copies.update { kept -> kept.filter { it.key != meta.key } }
             File(folder, META).delete()
-            writeWhole(File(folder, NZB), nzb)
+            val nzbFile = File(folder, NZB)
+            if (nzb != null) writeWhole(nzbFile, nzb) else nzbFile.delete()
             val passwordFile = File(folder, PASSWORD)
-            if (password != null) writeWhole(passwordFile, password.toByteArray()) else passwordFile.delete()
+            if (password != null && nzb != null) writeWhole(passwordFile, password.toByteArray()) else passwordFile.delete()
             writeWhole(File(folder, META), json.encodeToString(Meta.serializer(), meta).toByteArray())
             _copies.update { kept -> kept + meta }
-            log.info("{} {}: kept for its {}, {} bytes", what(meta), short(folder.name), if (meta.nzb == null) "season" else "downloads", nzb.size)
+            if (nzb != null) {
+                log.info("{} {}: kept for its {}, {} bytes", what(meta), short(folder.name), if (meta.nzb == null) "season" else "downloads", nzb.size)
+            } else {
+                log.info("{} {}: kept for its season, a torrent's, its meta alone", what(meta), short(folder.name))
+            }
         }
     }
 
@@ -136,23 +151,18 @@ class DownloadNzbs(
     suspend fun find(key: String): Copy? = turns.withLock {
         withContext(io) {
             val folder = folder(key)
-            val meta = meta(folder)?.takeIf { it.key == key } ?: return@withContext null
-            val nzb = File(folder, NZB).takeIf { it.isFile }?.readBytes() ?: return@withContext null
-            Copy(meta, DownloadStorage.Source(nzb, File(folder, PASSWORD).takeIf { it.isFile }?.readText()))
+            meta(folder)?.takeIf { it.key == key }?.let { copyOf(folder, it) }
         }
     }
 
     /**
-     * The copies kept for [show]'s [season] (L431), in their keys' order: a season row's turn tries one that leads first.
-     * Never an imported NZB's, which is no season's.
+     * The copies kept for [show]'s [season] (L431), in their keys' order, a torrent's among them (L462): a season row's turn
+     * tries one that leads first. Never an imported NZB's, which is no season's.
      */
     suspend fun forSeason(show: Int, season: Int): List<Copy> = turns.withLock {
         withContext(io) {
             dir.listFiles().orEmpty().filter { it.isDirectory }.mapNotNull { folder ->
-                val meta = meta(folder)?.takeIf { it.nzb == null && it.show == show && it.season == season && folder.name == digest(it.key) }
-                    ?: return@mapNotNull null
-                val nzb = File(folder, NZB).takeIf { it.isFile }?.readBytes() ?: return@mapNotNull null
-                Copy(meta, DownloadStorage.Source(nzb, File(folder, PASSWORD).takeIf { it.isFile }?.readText()))
+                meta(folder)?.takeIf { it.nzb == null && it.show == show && it.season == season && folder.name == digest(it.key) }?.let { copyOf(folder, it) }
             }.sortedBy { it.meta.key }
         }
     }
@@ -208,12 +218,26 @@ class DownloadNzbs(
     /** The last copy's prepare while its copy lasts; null when there is none, as in a new process. */
     fun held(): PreparedNzb? = held?.prepared
 
-    /** [folder]'s copy of [key] where it holds one, readable, of [nzb] with [password]: its meta; else null. */
-    private fun kept(folder: File, key: String, nzb: ByteArray, password: String?): Meta? {
+    /**
+     * [folder]'s copy of [key] where it holds one, readable, of [nzb] with [password]: its meta; else null. A torrent's
+     * ([nzb] null): its meta, with no NZB beside it.
+     */
+    private fun kept(folder: File, key: String, nzb: ByteArray?, password: String?): Meta? {
         val meta = meta(folder)?.takeIf { it.key == key } ?: return null
+        if (nzb == null) return meta.takeIf { !File(folder, NZB).exists() }
         if (File(folder, PASSWORD).takeIf { it.isFile }?.readText() != password) return null
         val kept = File(folder, NZB).takeIf { it.isFile && it.length() == nzb.size.toLong() } ?: return null
         return meta.takeIf { kept.readBytes().contentEquals(nzb) }
+    }
+
+    /**
+     * [folder]'s copy as [meta] says it is: its NZB and its password read; a season's torrent pack's with none (L462). Null
+     * for any other whose NZB isn't there.
+     */
+    private fun copyOf(folder: File, meta: Meta): Copy? {
+        if (meta.torrent) return Copy(meta, null)
+        val nzb = File(folder, NZB).takeIf { it.isFile }?.readBytes() ?: return null
+        return Copy(meta, DownloadStorage.Source(nzb, File(folder, PASSWORD).takeIf { it.isFile }?.readText()))
     }
 
     /** [folder]'s meta; null where it has none or it can't be read. */

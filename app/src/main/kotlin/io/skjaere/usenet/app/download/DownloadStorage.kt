@@ -124,7 +124,7 @@ class DownloadStorage(
             val folder = bookkeeping(row.id)
             mark(folder)
             try {
-                copy?.let { packs.write(it.meta, it.source.nzb, it.source.password) }
+                copy?.let { packs.write(it.meta, it.source?.nzb, it.source?.password) }
                 grab?.let { writeGrab(folder, it.key, it.source.nzb, it.source.password) }
                 downloads.insert(row)
             } catch (e: Throwable) {
@@ -150,7 +150,7 @@ class DownloadStorage(
                     made++
                     mark(folder)
                 }
-                copy?.let { packs.write(it.meta, it.source.nzb, it.source.password) }
+                copy?.let { packs.write(it.meta, it.source?.nzb, it.source?.password) }
                 downloads.insertAll(rows, putBack)
             } catch (e: Throwable) {
                 rows.zip(folders).take(made).forEach { (row, folder) -> dropUnlessRow(row.id, folder, e) }

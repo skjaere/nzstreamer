@@ -210,7 +210,7 @@ class ImportDownloadDeviceTest {
         assertEquals("the file's exact size", request.size, row.indexerSize)
         // The NZB kept for its downloads in `.packs/`, under Import's release of it (L423).
         val copy = container.downloadStorage.packs.find(ReleaseKey.of(IMPORTED, request.nzbId)) ?: throw AssertionError("no copy of the NZB kept")
-        assertArrayEquals(nzb, copy.source.nzb)
+        assertArrayEquals(nzb, copy.source?.nzb)
         assertEquals("its host asked for once", listOf(ScheduleCause.Download), scheduled.toList())
     }
 
@@ -373,7 +373,7 @@ class ImportDownloadDeviceTest {
         val back = waitFor("the failed one queued again") { runBlocking { container.data.downloads.get(failed.id) }?.takeIf { it.state == DownloadState.Queued } }
         assertEquals("one row for the file", 1, mine().count { it.watchKey == failed.watchKey })
         assertEquals(emptyList<String>(), back.tried)
-        assertArrayEquals(pack.nzb, (container.downloadStorage.packs.find(key) ?: throw AssertionError("no copy written again")).source.nzb)
+        assertArrayEquals(pack.nzb, (container.downloadStorage.packs.find(key) ?: throw AssertionError("no copy written again")).source?.nzb)
         waitFor("its host asked for") { Unit.takeIf { ScheduleCause.Download in scheduled } }
 
         // Remove, and its Undo.

@@ -15,8 +15,8 @@ import io.skjaere.usenet.search.EpisodeRequest
 import io.skjaere.usenet.search.FinderEvent
 import io.skjaere.usenet.search.RankedItem
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.filterIsInstance
-import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.lastOrNull
+import kotlinx.coroutines.flow.mapNotNull
 import org.slf4j.LoggerFactory
 import java.time.Duration
 
@@ -26,7 +26,8 @@ import java.time.Duration
  * the season's packs and its name) over the indexers a search asks ([indexers]: the torrent indexers only while debrid
  * shows and a service account is on, L422), ranked for downloading as the Download sheet ranks an episode's ([context],
  * W112): from the background host too, a torrent is checked against the services' caches by its hash alone, as a play's
- * search checks it, and one not cached stays hidden (L459). The row says "Finding releases…" meanwhile.
+ * search checks it, and taken once its check has settled; one not cached stays hidden (L459). The row says "Finding
+ * releases…" meanwhile.
  * - Found: up to 10 that fit the room now ([space], the row's own need counted out), in their order, written into the row
  *   as its releases, with what the first needs (a season pack's share of the episode) and its facts as searched: a
  *   process that dies after it resolves from that list, with no second search.
@@ -124,10 +125,14 @@ class DownloadSearch(
             .groupBy({ it.key }, { it.value }).mapValues { (_, waits) -> waits.maxBy { it.end() } }
         val asked = all.filter { it.id !in keptOut }
         log.info("download {}: searching for its releases, {} indexer{} asked, {} kept out", row.id, asked.size, if (asked.size == 1) "" else "s", keptOut.size)
+        // The finder is Finished before a torrent indexer's torrents are checked against the services' caches: they join
+        // after, each time with the whole result again, until every check has settled (L459). What it gives last is the one.
         val result = if (asked.isEmpty()) {
             null
         } else {
-            find(facts.request(season, episode), asked, context()).filterIsInstance<FinderEvent.Finished>().firstOrNull()?.result
+            find(facts.request(season, episode), asked, context())
+                .mapNotNull { event -> (event as? FinderEvent.Finished)?.result ?: (event as? FinderEvent.Joined)?.result }
+                .lastOrNull()
         }
         val reports = result?.stages.orEmpty().flatMap { it.indexers }
         val limited = reports.mapNotNull { report -> (report.error as? NewznabError.ApiLimitReached)?.let { report.indexer to it.retryAfter } }.distinctBy { it.first.id }

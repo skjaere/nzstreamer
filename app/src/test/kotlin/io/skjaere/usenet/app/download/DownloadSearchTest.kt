@@ -57,6 +57,12 @@ class DownloadSearchTest {
     private var hidden: List<FoundRelease> = emptyList()
     private var reports: List<IndexerReport> = emptyList()
 
+    /**
+     * The finder's answer once its torrents are checked, where it has one: the real finder is Finished before a torrent
+     * indexer's torrents are checked, and gives them after, as they join ([FinderEvent.Joined]).
+     */
+    private var joined: List<FoundRelease>? = null
+
     /** What the finder was asked, in order: the episode, the indexers, the ranking. */
     private val asked = mutableListOf<Triple<EpisodeRequest, List<String>, RankingContext>>()
 
@@ -68,6 +74,7 @@ class DownloadSearchTest {
             asked += Triple(request, indexers.map { it.id }, context)
             dao.rows.value[ID]?.let { meanwhile += it.state to it.reason }
             emit(FinderEvent.Finished(FindResult(request, playable, hidden, listOf(StageReport(SearchStage.Episode, reports)))))
+            joined?.let { emit(FinderEvent.Joined(FindResult(request, it, hidden, listOf(StageReport(SearchStage.Episode, reports))))) }
         }
     }
 
@@ -169,6 +176,26 @@ class DownloadSearchTest {
         assertEquals(listOf(cached.item.title, single.item.title), kept.map { it.title }, "the one not cached never kept")
         assertEquals(DownloadCandidate(A.id, "btih:0123456789abcdef0123456789abcdef01234567", cached.item.title, null, GB, source = "torrent"), kept.first())
         assertNull(kept[1].source)
+    }
+
+    /**
+     * L459, L462: the finder is Finished before a torrent indexer's torrents are checked against the services' caches; they
+     * join after, once checked. The turn's search takes what the finder gives last, so a cached torrent (a season's pack
+     * among them) is found from the background host as the sheets find it.
+     */
+    @Test
+    fun `a torrent the finder gives once checked, after it is Finished, is kept`() = runBlocking<Unit> {
+        val single = found("Harbor.Lights.S02E04.720p.WEB.h264-GRP", 2 * GB)
+        val pack = found("Harbor.Lights.S02.1080p.WEB-DL.H.264-TIDE", 8 * GB, torrent = true)
+        playable = listOf(single)
+        joined = listOf(pack, single)
+        reports = listOf(IndexerReport(A, "TVDB id", found = 2, accepted = 2))
+        val before = row(candidate("Harbor.Lights.S02E04.1080p.WEB.h264-KESTREL", 2 * GB))
+
+        assertIs<DownloadSearch.Searched.Found>(search().search(before))
+        assertEquals(listOf(pack.item.title, single.item.title), stored().candidates.map { it.title })
+        assertEquals(listOf("torrent", null), stored().candidates.map { it.source })
+        assertEquals(GB, stored().indexerSize, "the pack's share of the episode, a season of 8")
     }
 
     /**

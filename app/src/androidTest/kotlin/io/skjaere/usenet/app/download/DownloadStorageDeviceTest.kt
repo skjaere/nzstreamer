@@ -466,7 +466,7 @@ class DownloadStorageDeviceTest {
 
         val copy = checkNotNull(storage.packs.find(held.key))
         assertEquals(held, copy.meta)
-        assertEquals("typed-on-import", copy.source.password)
+        assertEquals("typed-on-import", copy.source?.password)
         assertNull(storage.packs.find(unheld.key))
         assertFalse(storage.packs.folder(unheld.key).exists())
         assertEquals(setOf(storage.packs.folder(held.key).name), File(files, DownloadNzbs.PATH).list()!!.toSet())
