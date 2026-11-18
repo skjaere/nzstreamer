@@ -421,7 +421,8 @@ class DownloadResolverTest {
             failsFor[hash.hex]?.let { throw ServiceException(it) }
             val listing = ServiceListing(cached[hash.hex] ?: throw ServiceException(ServiceError.NotCached))
             val picked = pick(listing) ?: return Prepared(hash, listing, null)
-            val handle = "${id.take(4)}-${hash.hex.take(6)}"
+            // The torrents' hashes share their first digits: each one's own handle in the account by its last.
+            val handle = "${id.take(4)}-${hash.hex.takeLast(6)}"
             added += hash.hex
             watching?.watch(accountOf(id))?.added(hash, handle)
             return Prepared(hash, listing, picked, handle)
@@ -2739,6 +2740,31 @@ class DownloadResolverTest {
         resolving.cancelAndJoin()
         sweptAfterGrace(adds)
         assertEquals(1, serviceA.removed.size, "let go as it was cut short")
+    }
+
+    /**
+     * L421: Resolve takes the download's own lease on the torrent it found before it lets its Play go: the chosen add stays
+     * held past any grace (the download writes it), while the attempts before it that added theirs are let go and removed a
+     * grace on; the download's end lets the chosen one go too.
+     */
+    @Test
+    fun `the chosen torrent's add is held by the download's lease, the attempt before it let go`() = runBlocking<Unit> {
+        val adds = adds()
+        serviceA.cached[otherTorrent.hash] = otherTorrent.files
+        serviceA.cached[goodTorrent.hash] = goodTorrent.files
+        // The first added, then its audio isn't one this device plays; the second found.
+        probeAnswer = { key -> ProbeResult.NoPlayableAudio(listOf("DTS-HD MA")).takeIf { key == otherTorrent.key } }
+        rowOf(otherTorrent.candidate, goodTorrent.candidate)
+        val ready = assertIs<DownloadResolver.Resolution.Ready.Service>(resolver(adds = adds).resolve(ID))
+        assertEquals(listOf(otherTorrent.hash, goodTorrent.hash), serviceA.added)
+        sweptAfterGrace(adds)
+        assertEquals(1, serviceA.removed.size, "the attempt before it let go")
+        assertEquals(listOf(ready.entry.id), adds.records().map { it.listingId }, "the chosen one held")
+        repeat(3) { sweptAfterGrace(adds) }
+        assertEquals(1, serviceA.removed.size, "held past its grace")
+        adds.release(DownloadLease(ID))
+        sweptAfterGrace(adds)
+        assertEquals(2, serviceA.removed.size, "let go at the download's end, removed a grace on")
     }
 
     /**

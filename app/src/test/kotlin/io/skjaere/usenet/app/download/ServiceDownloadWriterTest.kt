@@ -140,6 +140,7 @@ class ServiceDownloadWriterTest {
         httpsOnly: Boolean = true,
         throttle: Long? = null,
         letGo: kotlin.time.Duration = ServiceDownloadWriter.LET_GO,
+        leases: DownloadLeases = DownloadLeases.None,
     ) = ServiceDownloadWriter(
         reads,
         accounts = { id ->
@@ -159,6 +160,7 @@ class ServiceDownloadWriterTest {
         httpsOnly = { httpsOnly },
         timeSource = time,
         letGo = letGo,
+        leases = leases,
     )
 
     /** The writer on the test's virtual time, its reads on the test's dispatcher unless [io] says another. */
@@ -169,7 +171,8 @@ class ServiceDownloadWriterTest {
         httpsOnly: Boolean = true,
         throttle: Long? = null,
         io: CoroutineDispatcher = StandardTestDispatcher(testScheduler),
-    ) = writer(io, testScheduler.timeSource, { testScheduler.currentTime }, on, services, shown, httpsOnly, throttle)
+        leases: DownloadLeases = DownloadLeases.None,
+    ) = writer(io, testScheduler.timeSource, { testScheduler.currentTime }, on, services, shown, httpsOnly, throttle, leases = leases)
 
     /**
      * Writes [entry]'s file to [path] from [from], each open's offset in [opens] and each record in [records] and [events].
@@ -548,6 +551,34 @@ class ServiceDownloadWriterTest {
             assertEquals(listOf(400_000L, size), records, what)
             assertEquals(2_000, currentTime - at, what)
         }
+    }
+
+    /**
+     * L421, L424: the download's lease moves with its torrent: gone on its account and prepared on the next, the next
+     * account's listing is held by it alone, the one before let go to its grace (as DebridAdds' holdOnly does); a torrent
+     * the account adds again for a link is held under the same listing id.
+     */
+    @Test
+    fun `the download's lease moves to the next account's listing, the one before let go, and stays on a re-add's`() = runTest(timeout = 60.seconds) {
+        val held = CopyOnWriteArrayList<Pair<String, String>>()
+        val leases = object : DownloadLeases {
+            override fun hold(id: String, listingId: String) {
+                held += id to listingId
+            }
+
+            override fun release(id: String) = error("the writer never lets a lease go: the download's end does")
+        }
+        val moved = DebridListingStore.idFor(ACCOUNT_B, HASH)
+        reads.script(Script(cutAt = 400_000, opened = { a.failing = ServiceError.NotCached }))
+        assertEquals(Outcome.Done, writer(on = listOf(ACCOUNT_A, ACCOUNT_B), leases = leases).wrote())
+        assertEquals(listOf(ID to moved), held.toList())
+
+        reset()
+        held.clear()
+        val again = Prepared(HASH, ServiceListing(listingA.files.map { it.copy(id = "9${it.id}") }), fileA.copy(id = "971"), handle = "4102")
+        reads.script(Script(cutAt = 300_000), Script(cutAt = 300_000))
+        assertEquals(Outcome.Done, writer(leases = leases).wrote(onOpen = { offset -> if (offset == 300_000L) a.again = again }))
+        assertEquals(listOf(ID to entry.id), held.toList())
     }
 
     @Test

@@ -151,7 +151,7 @@ import kotlin.time.Duration.Companion.seconds
  * and its limit goes to the runner with when the account's gate opens ([Resolution.Limited], L461); what fails the release
  * there is counted, in the play sheet's words where they name no service. While debrid is hidden,
  * or for an indexer whose "Use with your debrid service" is off, a torrent goes to no service. What the attempts add to an
- * account is held while the resolve runs and let go as it ends (L421).
+ * account is held while the resolve runs and let go as it ends, the chosen one's by the download's own lease first (L421).
  *
  * Its log lines, the pipeline's and the memory of releases tried's among them (which name a play's release by its title),
  * name the download by its id and a release by its place among the row's ([naming]), never by the release's name; the
@@ -916,9 +916,10 @@ class DownloadResolver(
      * [succeeded]'s torrent kept as the download's (L460), as the class says of a release: the room checked for its file's
      * exact size first, nothing of the row changed for one that won't fit, which is passed over (L401); then the listing it
      * was prepared as kept in the row's folder (L420), before the row takes the release: its content id for its release and
-     * its NZB's id, its source the torrent's, its file's place, name and size, and what the probe read. The release its file
-     * was made from goes on from the safe offset; another starts from 0, any file made for the one before deleted. No NZB is
-     * kept for it, and it put nothing in the NZB store. [named] names its release.
+     * its NZB's id, its source the torrent's, its file's place, name and size, and what the probe read; and its add held by
+     * the download's own lease (L421). The release its file was made from goes on from the safe offset; another starts from
+     * 0, any file made for the one before deleted. No NZB is kept for it, and it put nothing in the NZB store. [named]
+     * names its release.
      */
     private suspend fun resolvedService(
         id: String, succeeded: PipelineEvent.Succeeded, target: ServiceTarget, byKey: Map<String, RankedItem>, named: (String) -> String,
@@ -946,6 +947,9 @@ class DownloadResolver(
             updatedAt = clock.now(),
         )
         downloads.update(kept)
+        // Held by the download's own lease before the resolve's Play lets its attempts' adds go (L421): the chosen one stays
+        // in the account while the download runs, the others go a grace on.
+        adds?.holdOnly(DownloadLease(id), entry.id)
         log.info("download {}: resolved on a debrid service, {} bytes, {}", id, size, if (kept.oneVideo) "its torrent's one video" else "one of its torrent's videos")
         return Pass.Ended(Resolution.Ready.Service(kept, entry, target.file.file))
     }

@@ -225,6 +225,11 @@ class DownloadRunnerDeps(
      * null while it is open, or for an account not on: the limit's own end is read instead.
      */
     val limitLeft: suspend (accountId: String) -> Duration? = { null },
+    /**
+     * What holds a torrent's add in its account for as long as its download runs (L421): held at each write of it, let go
+     * at its end. The app's is DebridAdds' lease of each download, which the debrid writer moves with the torrent (L424).
+     */
+    val leases: DownloadLeases = DownloadLeases.None,
 ) {
     /** The writer (item 6), over [opener], following [network] as the runner does. */
     val writer = DownloadWriter(
@@ -241,9 +246,10 @@ class DownloadRunnerDeps(
          * which Resolve's turns keep ([limits], L443); the library's finished downloads marked watched and Settings ›
          * Downloads, which Delete once watched reads (L412); the debrid writer (L419) over the accounts on through the one
          * gated lookup (L422), an account's refused key as the settings mark it, the listings the services prepared, the
-         * streams' signal (L471), the downloads' folders, the same network and the debug build's throttle; and how long an
-         * account's gate stays shut for its limit (L461). A test gives its own [resolve] and [debug], and the writer's
-         * [longGapBytes] given small.
+         * streams' signal (L471), the downloads' folders, the same network and the debug build's throttle; how long an
+         * account's gate stays shut for its limit (L461); and what this device added to the accounts, each torrent's add
+         * held by its download's lease, the writer moving it (L421). A test gives its own [resolve] and [debug], and the
+         * writer's [longGapBytes] given small.
          */
         fun of(
             container: AppContainer,
@@ -255,6 +261,7 @@ class DownloadRunnerDeps(
             longGapBytes: Long = DownloadWriter.LONG_GAP_BYTES,
         ): DownloadRunnerDeps {
             val places = DownloadRunner.Storage.of(storage)
+            val leases = DownloadLeases.of(container.debridAdds)
             return DownloadRunnerDeps(
                 downloads = container.data.downloads,
                 storage = places,
@@ -274,6 +281,7 @@ class DownloadRunnerDeps(
                 watched = container.data.downloadWatches.watched(),
                 prefs = container.settings.downloads,
                 limitLeft = { id -> container.services.limitLeft(id) },
+                leases = leases,
                 serviceWriter = ServiceDownloadWriter(
                     accounts = { id -> container.services.gated(id) },
                     keyRefused = { id -> container.settings.services.first().any { it.id == id && it.enabled && !it.deleted && it.keyRefused } },
@@ -283,6 +291,7 @@ class DownloadRunnerDeps(
                     folder = places,
                     network = container.validatedNetwork,
                     throttle = { debug.throttle },
+                    leases = leases,
                 ),
             )
         }
@@ -359,7 +368,10 @@ interface DownloadHolds {
  * - A torrent a debrid service has cached is written by the debrid writer from the row's copy of its listing (L419,
  *   L460), its bytes, its rate and what holds it read as the Usenet writer's are (L475). One lost on every account is
  *   given up as a Usenet release is, never remembered missing on the providers. In a build that hides debrid, the app's
- *   start fails the torrent rows a build that showed it left ([failHiddenTorrents], L422).
+ *   start fails the torrent rows a build that showed it left ([failHiddenTorrents], L422). Its add stays in the account
+ *   for as long as it runs, held by the download's own lease (L421): at each write, and at the app's start
+ *   ([holdListings]); let go at its end (Done, Failed, a give-up, Cancel, a replace, the delete after its Undo, Delete
+ *   all), never at a Remove's hide, whose Undo needs no new hold.
  *
  * Nothing runs on a TV (L369): every call but [reconcile] returns at once there, and nothing is held. Its log lines name a
  * download by its id, with sizes and a cause's kind: never its title, release or a host.
@@ -1093,6 +1105,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             delete(id)
             sweepPacks()
             passHold(row)
+            deps.leases.release(id)
             log.info("download {}: cancelled", id)
         }
     }
@@ -1156,8 +1169,9 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 } catch (e: Exception) {
                     log.warn("download {}: couldn't drop its NZB: {}", row.id, e::class.simpleName)
                 }
-                // One that plays keeps its file until its last hold ends (L413, holdsEnded).
+                // One that plays keeps its file until its last hold ends (L413, holdsEnded); its torrent's add goes now.
                 if (isHeld(row.id)) dao.setState(row.id, DownloadState.Deleting, null, now()) else delete(row.id)
+                deps.leases.release(row.id)
             }
             rows.size
         }
@@ -1253,6 +1267,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                     log.info("download {}: its file stays until its volume is back", id)
                 }
             }
+            // The torrent it was written from is no longer its (L421).
+            deps.leases.release(id)
             log.info("download {}: {} other release{} to try", id, candidates.size, if (candidates.size == 1) "" else "s")
         }
     }
@@ -1383,6 +1399,22 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
     }
 
     /**
+     * At the app's start, between [reconcile] and Delete once watched (L421, C6): each download still to finish whose
+     * torrent's listing is copied in its folder has its add held by its own lease again, as the process before held it,
+     * before DebridAdds' first sweep, which waits for this. How many; none on a TV, nor in a build that hides debrid, whose
+     * start has failed them with their copies.
+     */
+    suspend fun holdListings(): Int {
+        if (!runs) return 0
+        val rows = dao.queue().first().filter { it.state in GOING_ON }
+        val held = rows.count { row ->
+            deps.storage.listing(row.id)?.let { entry -> deps.leases.hold(row.id, entry.id) } != null
+        }
+        if (held > 0) log.info("Downloads: {} debrid download{} holding {} add{} at the start", held, if (held == 1) "" else "s", if (held == 1) "its" else "their", if (held == 1) "" else "s")
+        return held
+    }
+
+    /**
      * At the app's start, after [reconcile], in a build that hides debrid ([shown] false, L422): each torrent download a
      * build that showed it left still to finish ([DownloadResolver.torrent]: queued, under way, held or waiting) fails "Not
      * available in this version", with no call, its listing's copy gone with its source, so no stored debrid wait shows.
@@ -1399,6 +1431,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 left.forEach { row ->
                     dao.setState(row.id, DownloadState.Failed, DownloadHostRules.NOT_IN_THIS_VERSION, now())
                     deps.storage.dropSource(row.id)
+                    deps.leases.release(row.id)
                 }
                 left.firstOrNull { it.state in HOLDS }?.let { passHold(it) }
                 if (left.isNotEmpty()) {
@@ -1530,13 +1563,14 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
                 Resolution.Gone -> return Walk.Next
                 is Resolution.Failed -> {
                     val why = gaveUp
-                    // Failed by Resolve: its NZB goes too, whatever stops the walk meanwhile (L346).
+                    // Failed by Resolve: its NZB goes too, and a torrent's add, whatever stops the walk meanwhile (L346, L421).
                     withContext(NonCancellable) {
                         if (why != null && resolution.reason == DownloadResolver.NO_OTHER_RELEASE) {
                             dao.setState(id, DownloadState.Failed, why, now())
                         }
                         deps.storage.dropSource(id)
                         sweepPacks()
+                        deps.leases.release(id)
                     }
                     log.info("download {}: failed", id)
                     return Walk.Next
@@ -1605,10 +1639,13 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
 
     /**
      * [ready]'s file written into download [id]'s, from its safe offset, by its source's writer (L460): a Usenet release's
-     * by the engine's, a torrent's by the debrid writer from the row's copy of its listing (a whole file: no gaps). While
-     * it runs its row says what holds the writer ([sayHeld]); once it is closed the row says how it ended.
+     * by the engine's, a torrent's by the debrid writer from the row's copy of its listing (a whole file: no gaps), its add
+     * held by the download's lease first (L421). While it runs its row says what holds the writer ([sayHeld]); once it is
+     * closed the row says how it ended.
      */
     private suspend fun write(id: String, ready: Resolution.Ready): Written {
+        // A torrent's add held by the download's own lease while it is written and until it ends (L421).
+        if (ready is Resolution.Ready.Service) deps.leases.hold(id, ready.entry.id)
         val row = ready.row
         val size = ready.size
         val fileName = row.fileName ?: ready.fileName
@@ -1753,6 +1790,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
             )
             deps.storage.dropSource(id)
             sweepPacks()
+            deps.leases.release(id)
             deps.debug.trace(DownloadTrace.Completed(id, size))
             log.info("download {}: done, {} bytes, {} part{} missing", id, size, gaps.size, if (gaps.size == 1) "" else "s")
         }
@@ -1786,6 +1824,8 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
      */
     private suspend fun discard(id: String): Boolean = withContext(NonCancellable) {
         deps.storage.dropSource(id)
+        // A torrent given up: its add goes a grace on (L421).
+        deps.leases.release(id)
         dao.get(id)?.let { row ->
             dao.update(
                 row.copy(
@@ -1811,6 +1851,7 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         dao.setState(id, DownloadState.Failed, reason, now())
         deps.storage.dropSource(id)
         sweepPacks()
+        deps.leases.release(id)
         log.info("download {}: failed", id)
     }
 
@@ -1846,8 +1887,12 @@ class DownloadRunner(private val deps: DownloadRunnerDeps, private val scope: Co
         log.info("download {}: waiting: {}", id, reason)
     }
 
-    /** Deletes download [id] in the crash-safe order; a failure is logged, and the next start's reconcile finishes it. */
+    /**
+     * Deletes download [id] in the crash-safe order, its torrent's add let go (the delete after a Remove's Undo among them,
+     * L421); a failure is logged, and the next start's reconcile finishes it.
+     */
     private suspend fun delete(id: String) {
+        deps.leases.release(id)
         try {
             deps.storage.delete(id)
         } catch (e: CancellationException) {

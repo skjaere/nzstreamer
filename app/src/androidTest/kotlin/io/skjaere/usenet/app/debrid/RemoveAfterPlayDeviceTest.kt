@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.debrid
 
+import android.os.Build
 import android.os.SystemClock
 import android.view.KeyEvent
 import androidx.lifecycle.Lifecycle
@@ -11,24 +12,41 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.app.ImmersiveHintSeen
 import io.skjaere.usenet.app.PlayerActivity
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.download.DownloadDebug
+import io.skjaere.usenet.app.download.DownloadHost
+import io.skjaere.usenet.app.download.DownloadHostRules
+import io.skjaere.usenet.app.download.DownloadJobService
+import io.skjaere.usenet.app.download.DownloadStorage
+import io.skjaere.usenet.app.everyStep
 import io.skjaere.usenet.app.onMainThread
 import io.skjaere.usenet.app.play.EpisodePlay
 import io.skjaere.usenet.app.play.PlayRequest
 import io.skjaere.usenet.app.play.PlayState
 import io.skjaere.usenet.app.play.PlayerLaunch
 import io.skjaere.usenet.core.FilePicker
+import io.skjaere.usenet.core.StreamTraffic
+import io.skjaere.usenet.data.Download
+import io.skjaere.usenet.data.DownloadCandidate
+import io.skjaere.usenet.data.DownloadKind
+import io.skjaere.usenet.data.DownloadState
+import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.debrid.InfoHash
 import io.skjaere.usenet.debrid.ServiceKind
 import io.skjaere.usenet.newznab.TvIds
 import io.skjaere.usenet.player.PlayUris
+import io.skjaere.usenet.releases.ReleaseFacts
 import io.skjaere.usenet.search.FinderEvent
 import io.skjaere.usenet.search.RankedItem
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
@@ -42,6 +60,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -54,6 +73,11 @@ import java.net.URL
  * and plays on; the next episode of a pack within the grace adds nothing again; what a process that died left goes at the
  * next start's sweep; and an entry another device deletes mid-play is added again by the next refresh, the play going on.
  * The account is read as the app's key sees it, through the fake's own TorBox API; the titles and hashes are FakeTorrents'.
+ *
+ * A download's add (L421): held by the download's own lease while it runs, is paused and waits while something streams,
+ * however many graces pass; gone a grace after it is Done; and one already in the account is never removed. Its walk run
+ * by the case as a host runs it, its pace the debug build's throttle; before and after each case every download row
+ * deleted, the downloads' jobs cancelled and the throttle's file removed.
  */
 @RunWith(AndroidJUnit4::class)
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -67,8 +91,16 @@ class RemoveAfterPlayDeviceTest {
     private val container = context.container
     private val fixture = DebridSearchFixture()
 
+    /** The debug build's throttle of the downloads' writers, as the case sets it. */
+    private val throttle = File(File(context.filesDir, DownloadStorage.DIR), DownloadDebug.THROTTLE)
+
+    /** The walks a case ran, and its own stream's meter: stopped and closed at its end. */
+    private val walks = mutableListOf<CoroutineScope>()
+    private var meter: StreamTraffic.Meter? = null
+
     @Before
     fun setUp() {
+        downloadsApart()
         fixture.open()
         fixture.usenetIndexerOn(false)
         container.debridAdds.grace = GRACE_MS
@@ -76,10 +108,22 @@ class RemoveAfterPlayDeviceTest {
     }
 
     @After
-    fun tearDown() {
-        onMainThread { container.playback.cancel() }
-        container.debridAdds.grace = DebridAdds.GRACE.toMillis()
-        fixture.close()
+    fun tearDown() = runBlocking<Unit> {
+        everyStep(
+            { meter?.close() },
+            { walks.forEach { it.cancel() } },
+            { throttle.delete() },
+            { downloadsApart() },
+            { onMainThread { container.playback.cancel() } },
+            { container.debridAdds.grace = DebridAdds.GRACE.toMillis() },
+            { fixture.close() },
+        )
+    }
+
+    /** No download row left of any case, and none of the downloads' jobs pending (L464): Android runs none of them later. */
+    private fun downloadsApart() = runBlocking<Unit> {
+        container.data.downloads.all().first().forEach { container.downloadStorage.delete(it.id) }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) DownloadJobService.scheduler(context).cancelAll()
     }
 
     private fun episode(n: Int) = EpisodePlay(
@@ -254,6 +298,99 @@ class RemoveAfterPlayDeviceTest {
         assertFalse(GOOD_HASH in account())
     }
 
+    /**
+     * L421: a download's add is held by its own lease for as long as it runs, past any number of graces: while it is
+     * written (at the throttle's pace), paused, and waiting while something streams (the case's own meter); added once.
+     * It goes a grace after the download is Done, its file whole.
+     */
+    @Test
+    fun aDownloadsAddStaysWhileItRunsIsPausedAndWaitsAndGoesAGraceAfterDone() = runBlocking<Unit> {
+        // No listing an earlier case kept: the fake's ids start again at each reset (EGX-1).
+        container.debridListings.forget(InfoHash.of(GOOD_HASH))
+        val row = queuedDownload()
+        throttle.parentFile?.mkdirs()
+        throttle.writeText("$THROTTLE")
+        walk()
+        waitFor("the download written", timeoutMs = 60_000) {
+            container.downloads.state.value.firstOrNull { it.row.id == row.id && it.row.state == DownloadState.Running && it.written > 0 }
+        }
+        assertEquals("added once", 1, adds())
+        delay(3 * GRACE_MS)
+        assertEquals("nothing removed while it runs", 0, removals())
+        assertTrue(GOOD_HASH in account())
+
+        container.downloads.pause()
+        waitFor("the download paused") { row(row.id)?.takeIf { it.state == DownloadState.Paused } }
+        delay(3 * GRACE_MS)
+        assertEquals("nothing removed while it is paused", 0, removals())
+
+        meter = container.streamTraffic.open()
+        container.downloads.resume()
+        walk()
+        waitFor("the download waiting for the stream") { row(row.id)?.takeIf { it.reason == DownloadHostRules.WAITS_FOR_STREAM } }
+        delay(3 * GRACE_MS)
+        assertEquals("nothing removed while it waits", 0, removals())
+        assertTrue(GOOD_HASH in account())
+
+        throttle.delete()
+        meter?.close()
+        meter = null
+        waitFor("the download done", timeoutMs = DONE_MS) { row(row.id)?.takeIf { it.state == DownloadState.Done } }
+        val done = SystemClock.elapsedRealtime()
+        val removed = waitFor("the add removed a grace after Done", timeoutMs = GRACE_MS + REMOVE_WITHIN_MS) { removals().takeIf { it > 0 } }
+        assertTrue("removed ${SystemClock.elapsedRealtime() - done} ms after Done", SystemClock.elapsedRealtime() - done >= GRACE_MS - POLL_MS)
+        assertEquals("one removal", 1, removed)
+        assertFalse("the account no longer holds it", GOOD_HASH in account())
+        assertEquals("added once in all", 1, adds())
+    }
+
+    /**
+     * L232, L421: a torrent the account held before the download (another app's) is used as it is, nothing is sent to add
+     * it, and it is never removed, though the download ends and graces pass.
+     */
+    @Test
+    fun aTorrentTheAccountHeldBeforeADownloadStays() = runBlocking<Unit> {
+        container.debridListings.forget(InfoHash.of(GOOD_HASH))
+        DebridFakes.control("plant?hash=$GOOD_HASH")
+        val planted = account().getValue(GOOD_HASH)
+        val row = queuedDownload()
+        walk()
+        waitFor("the download done", timeoutMs = DONE_MS) { row(row.id)?.takeIf { it.state == DownloadState.Done } }
+        assertEquals("no add sent", 0, calls("torbox createtorrent"))
+        assertEquals("nothing added", 0, adds())
+        delay(3 * GRACE_MS + 1_000)
+        assertEquals("nothing removed", 0, removals())
+        assertEquals("the planted entry still there", planted, account()[GOOD_HASH])
+    }
+
+    // The downloads.
+
+    /**
+     * S01E02's download queued with GOOD's torrent alone, as the sheet queues a cached torrent: its turn resolves it on the
+     * account (an add where the account hasn't it) and the debrid writer writes it.
+     */
+    private fun queuedDownload(): Download = runBlocking {
+        val now = System.currentTimeMillis()
+        val key = "btih:$GOOD_HASH"
+        val row = Download(
+            id = Download.newId(), watchKey = WatchKey.episode(DebridSearchFixture.HARBOR_LIGHTS, 1, 2), kind = DownloadKind.Episode,
+            title = "Harbor Lights", showTmdbId = DebridSearchFixture.HARBOR_LIGHTS, season = 1, episode = 2, seasonEpisodes = 3,
+            episodeName = DebridSearchFixture.EPISODES[1], position = 0,
+            candidates = listOf(DownloadCandidate("fake-prowlarr", key, GOOD, size = LISTED, source = ReleaseFacts.TORRENT)), indexerSize = LISTED,
+            createdAt = now, updatedAt = now,
+        )
+        container.downloadStorage.add(row)
+        row
+    }
+
+    /** The downloads' walk, as a host runs it, in the case's own scope. */
+    private fun walk() {
+        CoroutineScope(Dispatchers.Default).also { walks += it }.launch { container.downloads.run(DownloadHost.Service) }
+    }
+
+    /** Download [id] from the table now. */
+    private fun row(id: String): Download? = runBlocking { container.data.downloads.get(id) }
+
     // The player.
 
     /** [launch] in the player until it plays; [then] with it, the player closed after if [then] left it open. */
@@ -348,6 +485,18 @@ class RemoveAfterPlayDeviceTest {
 
         /** How long past the grace a removal may take: the sweep's turn at the account's pace, and the fake's answer. */
         const val REMOVE_WITHIN_MS = 8_000L
+
+        /** The downloads' writer's pace for a case that must see its download run: the fake's sample in about 20 s. */
+        const val THROTTLE = 400_000L
+
+        /** How long a download over the fakes may take to be done. */
+        const val DONE_MS = 120_000L
+
+        /** The polls' step, the slack in a measured wait. */
+        const val POLL_MS = 100L
+
+        /** What the fake's Torznab feed lists GOOD's torrent as. */
+        const val LISTED = 1_470_000_000L
 
         /** How long the fake's video must run for a seek to 10 s before its end to land past the player's 50 s buffer. */
         const val MIN_VIDEO_MS = 80_000L

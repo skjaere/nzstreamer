@@ -10,6 +10,7 @@ import io.ktor.client.request.HttpResponseData
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import io.skjaere.usenet.app.download.DownloadLease
 import io.skjaere.usenet.data.ServiceAccount
 import io.skjaere.usenet.debrid.Account
 import io.skjaere.usenet.debrid.DebridService
@@ -96,10 +97,13 @@ class DebridAddsTest {
     private val lines = CopyOnWriteArrayList<String>()
     private val file by lazy { File(dir, "debrid/added.json") }
 
-    /** The app's records over [file], as a process makes them, on the test's clock. */
-    private fun TestScope.adds() = DebridAdds(
+    /**
+     * The app's records over [file], as a process makes them, on the test's clock; its sweeps waiting first for
+     * [startHolds], the downloads' holds a start takes (none to wait for unless a case gives them).
+     */
+    private fun TestScope.adds(startHolds: CompletableDeferred<Unit> = CompletableDeferred(Unit)) = DebridAdds(
         file, accounts = { accounts.value }, usable = ::usable, scope = backgroundScope,
-        clock = { testScheduler.currentTime }, shown = { shown }, io = Dispatchers.Unconfined, log = lines::add,
+        clock = { testScheduler.currentTime }, shown = { shown }, io = Dispatchers.Unconfined, log = lines::add, startHolds = startHolds,
     )
 
     /** The account's client as the registry's usable clients give it: with the account as read with the client's key. */
@@ -310,6 +314,85 @@ class DebridAddsTest {
         wait(Duration.ofSeconds(2))
         assertEquals(listOf("41"), service.removed.toList())
         assertEquals(listOf("42"), next.records().map { it.handle })
+    }
+
+    /**
+     * L421 (BQ7 b): a process's first sweep waits for the downloads' holds its start takes (every download still to finish
+     * with its listing's copy), so a long download's add that an earlier process left is never removed under it: a grace
+     * after the start nothing is asked while they are still being taken, and once they are, what none holds goes at once.
+     */
+    @Test
+    fun `the start's first sweep waits for the downloads' holds, then removes what none holds`() = runTest {
+        val earlier = adds()
+        withContext(DebridAdds.Play()) {
+            earlier.torBox().added(PACK, "41")
+            earlier.torBox().added(GOOD, "42")
+        }
+        // The process went mid-download; the next starts, its holds still to be taken.
+        val holds = CompletableDeferred<Unit>()
+        val next = adds(holds)
+        next.start(accounts)
+        wait(GRACE.plusSeconds(30))
+        assertEquals(emptyList(), service.asked.toList(), "nothing swept before the downloads' holds")
+        next.hold(DownloadLease("dl-good"), listing(GOOD))
+        holds.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("41"), service.removed.toList())
+        assertEquals(listOf("42"), next.records().map { it.handle })
+    }
+
+    /** L421 (BQ7 b): holds that are never said to be taken stop no sweep for good: 60 s on, it sweeps and says so. */
+    @Test
+    fun `a start whose downloads' holds aren't taken within 60 s sweeps all the same, and says so`() = runTest {
+        val earlier = adds()
+        withContext(DebridAdds.Play()) { earlier.torBox().added(PACK, "41") }
+        val next = adds(CompletableDeferred())
+        next.start(accounts)
+        wait(GRACE.plusSeconds(59))
+        assertEquals(emptyList(), service.asked.toList())
+        wait(Duration.ofSeconds(2))
+        assertEquals(listOf("41"), service.removed.toList())
+        assertTrue(lines.any { "downloads' holds" in it && "60 s" in it }, lines.toString())
+    }
+
+    /**
+     * L421: a download's own lease holds its add for as long as it runs, past its grace and past a day (never stale while
+     * held); moved to another listing (the next account's), the one before goes a grace later and the new one stays; let
+     * go at the download's end, it goes a grace after. Hidden, nothing is asked of the account.
+     */
+    @Test
+    fun `a download's lease holds its add past its grace and its day, moves alone, and lets it go a grace after it ends`() = runTest {
+        val adds = adds()
+        adds.torBox().added(PACK, "41")
+        adds.torBox().added(GOOD, "42")
+        val lease = DownloadLease("dl-1")
+        adds.holdOnly(lease, listing(PACK))
+        wait(Duration.ofDays(2))
+        assertEquals(listOf("42"), service.removed.toList(), "the one no lease holds went a grace on")
+        assertEquals(listOf("41"), adds.records().map { it.handle }, "held: never stale")
+        // Held again by the same lease: nothing changes.
+        adds.holdOnly(lease, listing(PACK))
+        adds.torBox().added(ORBIT, "43")
+        adds.holdOnly(lease, listing(ORBIT))
+        wait(GRACE.minusSeconds(1))
+        assertEquals(listOf("42"), service.removed.toList())
+        wait(Duration.ofSeconds(2))
+        assertEquals(listOf("42", "41"), service.removed.toList(), "the listing it moved from went a grace after")
+        wait(Duration.ofDays(2))
+        assertEquals(listOf("43"), adds.records().map { it.handle })
+        adds.release(lease)
+        wait(GRACE.minusSeconds(1))
+        assertEquals(listOf("42", "41"), service.removed.toList())
+        wait(Duration.ofSeconds(2))
+        assertEquals(listOf("42", "41", "43"), service.removed.toList())
+
+        // Hidden: a lease let go asks nothing.
+        adds.torBox().added(PACK, "44")
+        shown = false
+        adds.holdOnly(lease, listing(PACK))
+        adds.release(lease)
+        wait(GRACE.multipliedBy(3))
+        assertEquals(listOf("42", "41", "43"), service.asked.toList())
     }
 
     @Test

@@ -636,14 +636,16 @@ class AppContainer(private val context: Context) {
     val debridListings = DebridListingStore(File(context.filesDir, "$DEBRID_DIR/listings.json"))
 
     /**
-     * What this device's plays added to a TorBox account (#318, L232-L234, L245): removed a couple of minutes after nobody
-     * plays it, by the account's client while it is on and open, never while debrid is hidden.
+     * What this device's plays and downloads added to a TorBox account (#318, L232-L234, L245, L421): removed a couple of
+     * minutes after nobody plays it and its download has ended, by the account's client while it is on and open, never
+     * while debrid is hidden. Its sweeps wait first for the downloads' holds the app's start takes ([DebridAdds.startHolds]).
      */
     val debridAdds: DebridAdds = DebridAdds(
         File(context.filesDir, "$DEBRID_DIR/added.json"),
         accounts = { settings.services.first() },
         usable = { id -> services.usable().firstOrNull { it.account.id == id } },
         scope = appScope,
+        startHolds = CompletableDeferred(),
     )
 
     /** The links debrid plays read their files by (L172): Opening's first, then fresh ones from the account, in memory only. */
@@ -985,10 +987,17 @@ class UsenetApplication : Application(), SingletonImageLoader.Factory {
         registerActivityLifecycleCallbacks(container.inFront)
         // Before a host goes on with them: the downloads' folders and rows in step, and those the user stopped from
         // Android held until Resume (L359); in a build that hides debrid, the torrent downloads a build that showed it left
-        // failed, with no call (L422). Then Delete once watched, two minutes on, for the process's life (L414).
+        // failed, with no call (L422); the add of each torrent download still to finish held by its lease before the first
+        // sweep of what plays added, which waits for it, however that went (L421; at once on a TV). Then Delete once
+        // watched, two minutes on, for the process's life (L414), which never returns.
         container.appScope.launch {
             saveOrLog("reconcile the downloads") { container.downloads.reconcile() }
             saveOrLog("fail the torrent downloads while debrid is hidden") { container.downloads.failHiddenTorrents() }
+            try {
+                saveOrLog("hold the debrid downloads' adds") { container.downloads.holdListings() }
+            } finally {
+                container.debridAdds.startHolds.complete(Unit)
+            }
             saveOrLog("delete the downloads watched a day ago") { container.downloads.autoDelete() }
         }
         if (BuildConfig.SEED_DEV_SETTINGS) {

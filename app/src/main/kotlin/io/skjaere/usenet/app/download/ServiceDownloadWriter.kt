@@ -85,7 +85,8 @@ import kotlin.time.TimeSource
  *   for a new one ([Wait.KeyRefused]), at the refusal and at each open after it while no new key is saved ([keyRefused]);
  * - the torrent lost on its account (not cached any more, taken down, refused there, or the account switched off or
  *   signed out of) goes on from the safe offset on the next account on that lists its file at the same path and size,
- *   prepared there, the listing kept as the row's (L424); with none, the release is given up ([Outcome.NextRelease]);
+ *   prepared there, the listing kept as the row's and the download's lease moved to it (L424, L421); with none, the
+ *   release is given up ([Outcome.NextRelease]);
  * - storage with no room ([RecordedFile.StorageFailure]) fails it, its file and record kept;
  * - debrid hidden ([shown] false) at any open fails it ([DownloadHostRules.NOT_IN_THIS_VERSION]) with no call.
  *
@@ -140,6 +141,8 @@ class ServiceDownloadWriter(
     private val firstBackoff: Duration = FIRST_BACKOFF,
     /** How long a stream's stop gives a call on the read under way to come back before it aborts it ([LET_GO]). */
     private val letGo: Duration = LET_GO,
+    /** What holds the torrent's add in the account the write reads it from (L421): moved with it to the next account's. */
+    private val leases: DownloadLeases = DownloadLeases.None,
 ) {
     /** How a write ended. */
     sealed interface Outcome {
@@ -574,10 +577,12 @@ class ServiceDownloadWriter(
     }
 
     /**
-     * [entry] and its [file] as [run]'s from now on: kept as the row's copy, then in the shared store. One that isn't
-     * written leaves the copy before it, from which a later process finds the torrent again.
+     * [entry] and its [file] as [run]'s from now on: its add held by the download's lease alone, the listing before let go
+     * to its grace (L421, L424); kept as the row's copy, then in the shared store. One that isn't written leaves the copy
+     * before it, from which a later process finds the torrent again.
      */
     private suspend fun relisted(run: Run, entry: DebridListingStore.Entry, file: ServiceFile) {
+        leases.hold(run.id, entry.id)
         run.entry = entry
         run.file = file
         try {

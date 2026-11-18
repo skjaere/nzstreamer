@@ -246,7 +246,7 @@ class DownloadRunnerTest {
                 inUse = { providers }, lastExit = { exit }, television = television, host = { host }, network = network,
                 receiverSwitch = { switches += it }, debug = DownloadDebug.On(File(dir, "debug"), clock), longGapBytes = LONG_GAP, clock = clock,
                 timeSource = testScheduler.timeSource, io = StandardTestDispatcher(testScheduler), undoMillis = DownloadRunner.UNDO_MILLIS, limits = limits,
-                watched = watched, prefs = prefs, serviceWriter = serviceWriter(), limitLeft = limitLeft,
+                watched = watched, prefs = prefs, serviceWriter = serviceWriter(), limitLeft = limitLeft, leases = leases,
             ),
             work,
         )
@@ -2796,8 +2796,29 @@ class DownloadRunnerTest {
         torrentReads, accounts = { id -> torrentService.takeIf { id == ACCOUNT } }, keyRefused = { false },
         listings = DebridListingStore(File(dir, "listings.json"), io = Dispatchers.Unconfined), accountsOn = { listOf(ACCOUNT) }, streaming = streaming,
         folder = storage, network = network, clock = clock, dispatcher = StandardTestDispatcher(testScheduler), shown = { shown },
-        timeSource = testScheduler.timeSource,
+        timeSource = testScheduler.timeSource, leases = leases,
     )
+
+    /**
+     * The debrid downloads' leases (L421), as DebridAdds holds them by each download's own lease: the listing each holds
+     * now, and each hold and let-go in turn.
+     */
+    private class FakeLeases : DownloadLeases {
+        val held = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val events: MutableList<String> = java.util.concurrent.CopyOnWriteArrayList()
+
+        override fun hold(id: String, listingId: String) {
+            held[id] = listingId
+            events += "hold $id"
+        }
+
+        override fun release(id: String) {
+            held.remove(id)
+            events += "release $id"
+        }
+    }
+
+    private val leases = FakeLeases()
 
     /** The torrent's file, its listing on [ACCOUNT] as the row's copy keeps it. */
     private val torrentFile = ServiceFile(0, "Harbor.Lights.S02E04.1080p.WEB-DL.AAC2.0.H.264-WREN.mkv", SIZE.toLong(), id = "701")
@@ -3110,6 +3131,149 @@ class DownloadRunnerTest {
         assertEquals(listOf(A, B), resolver.calls)
     }
 
+    /**
+     * L421: a torrent's add is held by its download's own lease from each write of it on: through a stream's wait, a Pause
+     * and the Resume after it, opened again from its listing's copy; let go once it is Done. Its key's wait keeps it.
+     */
+    @Test
+    fun `a torrent's add is held by its download's lease at each write, through Pause, Resume and a wait, and let go at Done`() = test {
+        torrentRow(A, 1, 0)
+        var streamed = false
+        torrentReads.onRead = { at ->
+            if (at >= HOLD && !streamed) {
+                streamed = true
+                streaming.value = true
+            }
+        }
+        val runner = runner()
+        host(runner)
+        runCurrent()
+        assertEquals(DownloadHostRules.WAITS_FOR_STREAM, stored(A).reason)
+        assertEquals(torrentEntry.id, leases.held[A], "held as it is written, and while it waits")
+        runner.pause()
+        assertEquals(DownloadState.Paused, stored(A).state)
+        assertEquals(torrentEntry.id, leases.held[A], "kept through Pause")
+        streaming.value = false
+        runner.resume()
+        assertEquals(torrentEntry.id, leases.held[A], "kept through Resume")
+        host(runner)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Done, stored(A).state)
+        assertEquals(listOf(A), resolver.reopened)
+        assertNull(leases.held[A], "let go at Done")
+        assertEquals(listOf("hold $A", "hold $A", "release $A"), leases.events)
+
+        // Its key refused: it waits, its add held.
+        torrentRow(B, 2, 1)
+        linkFails = ServiceError.KeyRefused
+        host(runner).join()
+        assertEquals(DownloadHostRules.CHECK_SERVICE, stored(B).reason)
+        assertEquals(torrentEntry.id, leases.held[B], "kept through a wait")
+    }
+
+    /**
+     * L421: a torrent's lease is let go at each end of its download: failed by its writer or by Resolve, cancelled, given
+     * up for the next release, replaced, deleted once its Undo is over, and Delete all. A Remove's Undo keeps it, the row
+     * brought back holding its add as it did.
+     */
+    @Test
+    fun `a torrent's lease is let go at Failed, Cancel, a give-up, a replace, the delete after an Undo and Delete all, and an Undo keeps it`() = test {
+        val runner = runner()
+        // Failed by its writer (debrid hidden at its open).
+        shown = false
+        torrentRow(A, 1, 0)
+        host(runner).join()
+        advanceUntilIdle()
+        assertEquals(DownloadState.Failed, stored(A).state)
+        assertEquals(listOf("hold $A", "release $A"), leases.events)
+        shown = true
+
+        // Failed by Resolve, its add held from a write before.
+        row(B, 2, 1, fake("hl-b"))
+        leases.hold(B, torrentEntry.id)
+        resolver.answers[B] = Resolution.Failed(DownloadHostRules.NOT_IN_THIS_VERSION)
+        host(runner).join()
+        assertNull(leases.held[B], "let go at Resolve's failure")
+
+        // Cancel, while it waits for a stream.
+        streaming.value = true
+        torrentRow(C, 3, 2)
+        host(runner)
+        runCurrent()
+        assertEquals(torrentEntry.id, leases.held[C])
+        runner.cancel(C)
+        assertNull(leases.held[C], "let go at Cancel")
+
+        // Replace.
+        torrentRow(D, 4, 3)
+        host(runner)
+        runCurrent()
+        assertEquals(torrentEntry.id, leases.held[D])
+        runner.replace(D, listOf(fake("hl-d").candidate))
+        assertNull(leases.held[D], "let go at a replace")
+        runner.remove(listOf(D))
+        advanceTimeBy(DownloadRunner.UNDO_MILLIS + 1)
+        runCurrent()
+
+        // Remove: kept through its Undo, let go once the Undo is over and it is deleted.
+        torrentRow(E, 5, 4)
+        host(runner)
+        runCurrent()
+        runner.remove(listOf(E))
+        assertEquals(torrentEntry.id, leases.held[E], "kept while its Undo can bring it back")
+        runner.undoRemove(listOf(E))
+        assertEquals(torrentEntry.id, leases.held[E], "kept through the Undo")
+        host(runner)
+        runCurrent()
+        runner.remove(listOf(E))
+        advanceTimeBy(DownloadRunner.UNDO_MILLIS - 1)
+        runCurrent()
+        assertEquals(torrentEntry.id, leases.held[E])
+        advanceTimeBy(2)
+        runCurrent()
+        assertNull(dao.get(E))
+        assertNull(leases.held[E], "let go with the delete after its Undo")
+
+        // Delete all.
+        torrentRow(F, 6, 5)
+        host(runner)
+        runCurrent()
+        assertEquals(torrentEntry.id, leases.held[F])
+        runner.deleteAll()
+        assertNull(leases.held[F], "let go at Delete all")
+        streaming.value = false
+
+        // Given up as it is written for the next release: let go before the next is resolved.
+        val next = fake("hl-next")
+        torrentRow(G, 7, 0, next)
+        linkFails = ServiceError.NotCached
+        host(runner)
+        advanceUntilIdle()
+        assertEquals(DownloadState.Done, stored(G).state)
+        assertEquals(next.guid, stored(G).release?.guid)
+        assertNull(leases.held[G], "let go as its torrent was given up")
+        assertTrue(leases.events.indexOf("release $G") > leases.events.indexOf("hold $G"))
+    }
+
+    /**
+     * L421: at the app's start, between reconcile and Delete once watched, every download still to finish with its
+     * listing's copy has its add held by its lease (queued, paused or waiting), before the start's sweep; none finished,
+     * failed or Usenet's. Nothing on a TV.
+     */
+    @Test
+    fun `the app's start holds the add of every download still to finish with its listing's copy`() = test {
+        torrentRow(A, 1, 0)
+        torrentRow(B, 2, 1).also { dao.setState(B, DownloadState.Paused, null, NOW) }
+        torrentRow(C, 3, 2).also { dao.setState(C, DownloadState.Waiting, DownloadHostRules.SERVICE_LIMIT, NOW) }
+        torrentRow(D, 4, 3).also { dao.setState(D, DownloadState.Done, null, NOW) }
+        torrentRow(E, 5, 4).also { dao.setState(E, DownloadState.Failed, DownloadHostRules.SERVICE_KEPT_FAILING, NOW) }
+        row(F, 6, 5, fake("hl-f"))
+        assertEquals(0, runner(television = true).holdListings())
+        assertEquals(emptyMap(), leases.held.toMap())
+        assertEquals(3, runner().holdListings())
+        assertEquals(mapOf(A to torrentEntry.id, B to torrentEntry.id, C to torrentEntry.id), leases.held.toMap())
+    }
+
     /** L475: what a running row says while its writer holds it, by the row's source and the writer's flags. */
     @Test
     fun `a held write is said by its source and its writer's flags`() {
@@ -3382,6 +3546,10 @@ class DownloadRunnerTest {
         const val A = "dl-a"
         const val B = "dl-b"
         const val C = "dl-c"
+        const val D = "dl-d"
+        const val E = "dl-e"
+        const val F = "dl-f"
+        const val G = "dl-g"
         const val SAME = "dl-same"
         const val OTHER = "dl-other"
         const val STOPPED = "dl-stopped"

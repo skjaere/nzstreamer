@@ -7,6 +7,7 @@ import io.skjaere.usenet.debrid.DebridService
 import io.skjaere.usenet.debrid.InfoHash
 import io.skjaere.usenet.debrid.ServiceException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +19,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -39,10 +41,12 @@ import kotlin.coroutines.CoroutineContext
  *
  * Leases hold an add while it is used ([hold], [release]), each by its owner, idempotent per owner (L234): the play that
  * added it, from its birth ([Play], in the add's coroutine) until the play ends; the player from its launch until it
- * closes; a cast while it plays there. A lease names the listing, so whatever plays it holds every add made for it. Once
- * no lease holds a record and its last use is over [grace] old (W82: [GRACE], 2 minutes), [sweep] removes it: a sweep
- * runs a grace after a record's last lease goes, and a grace after the process starts ([start]), so a player made again
- * after the process went takes its lease first.
+ * closes; a cast while it plays there; a download, by its own lease, from Resolve's find to its end, moved with its
+ * torrent to another account's listing ([holdOnly], L421, L424). A lease names the listing, so whatever plays it holds
+ * every add made for it. Once no lease holds a record and its last use is over [grace] old (W82: [GRACE], 2 minutes),
+ * [sweep] removes it: a sweep runs a grace after a record's last lease goes, and a grace after the process starts
+ * ([start]), so a player made again after the process went takes its lease first; and a process's sweeps wait first, at
+ * most [START_HOLDS_WAIT_MS], for the downloads' leases its start takes ([startHolds], L421).
  *
  * A removal is asked only of an account that is on with its gate open ([usable]), and never while debrid is hidden
  * ([shown], L192): a record waits for those, and a delete the service doesn't confirm keeps its record; one left waiting
@@ -67,6 +71,12 @@ class DebridAdds(
     private val shown: () -> Boolean = { DebridGate.shown },
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val log: (String) -> Unit = { DEFAULT_LOG.info(it) },
+    /**
+     * Completed once the app's start has held the add of every download still to finish (L421): the sweeps wait for it
+     * first, so none removes a long download's torrent an earlier process left. The app's is made open, for its start to
+     * complete (at once on a TV); a test's records have none to wait for.
+     */
+    val startHolds: CompletableDeferred<Unit> = CompletableDeferred(Unit),
 ) {
     /**
      * One add a play made to [account]'s list that this device can remove: the service's [handle] for it (TorBox's torrent
@@ -150,6 +160,23 @@ class DebridAdds(
     }
 
     /**
+     * [owner]'s lease becomes the listing [listingId]'s alone, in one step (L421, L424): a download's, moved with its
+     * torrent to the next account's listing, holds the new one before the one before is let go, whose grace begins then.
+     * Held again on the same listing, nothing changes.
+     */
+    fun holdOnly(owner: Any, listingId: String) {
+        val left = synchronized(held) {
+            val before = leases[owner].orEmpty() - listingId
+            leases[owner] = hashSetOf(listingId)
+            val now = clock()
+            usedAt[listingId] = now
+            before.forEach { usedAt[it] = now }
+            before
+        }
+        if (left.isNotEmpty()) letGo(left)
+    }
+
+    /**
      * The listing [listingId] is held by the play this coroutine runs for ([Play]) until it ends, as a release it prepared:
      * one it added nothing for (the next episode of a pack, its torrent added by the play before) as much as one it added.
      * Nothing outside a play.
@@ -190,7 +217,11 @@ class DebridAdds(
             listings.forEach { usedAt[it] = now }
             listings
         }
-        // When it was let go, kept for a process that goes before the sweep.
+        letGo(listings)
+    }
+
+    /** [listings] let go now: when, kept for a process that goes before the sweep, and a sweep a grace on. */
+    private fun letGo(listings: Set<String>) {
         scope.launch {
             quietly("keep when an add was last used") {
                 lock.withLock {
@@ -210,6 +241,7 @@ class DebridAdds(
      * again as it ends, and one left waiting is tried again ([retryAfter]).
      */
     suspend fun sweep(): Unit = sweeping.withLock {
+        startHeld()
         val saved = accounts()
         drop(saved)
         val now = clock()
@@ -277,6 +309,18 @@ class DebridAdds(
         // again on its own; each try in a row waits longer, as a delete that errs reads the whole list.
         if (waiting) next = minOf(next ?: Long.MAX_VALUE, retryAfter(waited++)) else waited = 0
         next?.let(::later)
+    }
+
+    /**
+     * Waits for the downloads' leases the app's start takes ([startHolds]), at most [START_HOLDS_WAIT_MS] (BQ7 b): past it,
+     * the sweep goes on all the same and says so, and no later sweep waits again.
+     */
+    private suspend fun startHeld() {
+        if (startHolds.isCompleted) return
+        if (withTimeoutOrNull(START_HOLDS_WAIT_MS) { startHolds.await() } == null) {
+            startHolds.complete(Unit)
+            log("debrid: the downloads' holds weren't taken within ${START_HOLDS_WAIT_MS / 1000} s of the start: sweeping all the same")
+        }
     }
 
     /**
@@ -456,6 +500,9 @@ class DebridAdds(
         val RETRY_AT_MOST: Duration = Duration.ofHours(4)
 
         private val DAY = STALE.minus(GRACE).toMillis()
+
+        /** How long the start's sweep waits for the downloads' leases the start takes (L421, BQ7 b): 60 s. */
+        const val START_HOLDS_WAIT_MS = 60_000L
 
         /** A sweep's wait at the least: one asked for at once still lets its caller's writes go first. */
         private const val MIN_WAIT_MS = 50L
