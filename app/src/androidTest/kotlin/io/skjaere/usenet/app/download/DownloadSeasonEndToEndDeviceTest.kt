@@ -312,7 +312,10 @@ class DownloadSeasonEndToEndDeviceTest {
     @Test
     fun aSeasonTakesItsTorrentPackOnceItsOtherEpisodesTryItsMetaFirst() = runBlocking<Unit> {
         apart()
-        fakes = FakeAccountOnly(torznab = true, providers = false, tmdb = false).also { it.open() }
+        // Kept before it opens: an open cut short part way is put back by the tear-down all the same.
+        val sources = FakeAccountOnly(torznab = true, providers = false, tmdb = false)
+        fakes = sources
+        sources.open()
         assertTrue("no Usenet provider usable", container.settings.usableProviders().isEmpty())
         downloadRules()
         val room = container.downloadStorage.space()
