@@ -233,7 +233,7 @@ class SetupSeedTest {
         page = client.press(sent, "open:i1")
         page = client.press(page, "open:r1", client.openFields(page).map { if (it.first == "i.name") it.first to "Renamed" else it })
         client.press(page, "send", client.openFields(page).map { if (it.first == "r.name") it.first to "Quarry renamed" else it })
-        val received = events.filterIsInstance<SetupEvent.Received>().single().changes
+        val received = received().changes
         assertEquals(listOf("Renamed" to quoted, "Hidden" to "", "Longest" to longest), received.indexers.map { it.draft.name to it.draft.userAgent })
         assertEquals(listOf("Quarry renamed" to "QuarryFetch/1.0"), received.torrentIndexers.map { it.draft.name to it.draft.userAgent })
     }
@@ -265,6 +265,16 @@ class SetupSeedTest {
             assertTrue(client.answers.size > 5)
             client.answers.forEach { assertFalse("marker" in it.everything, "$mode: a saved secret on a page") }
         }
+    }
+
+    /**
+     * The one Received the server told. It tells the app after the answer is out, so the page can be back before the
+     * event is: wait for it, up to 10 s, rather than read the list at once.
+     */
+    private fun received(): SetupEvent.Received {
+        val until = System.nanoTime() + 10_000_000_000
+        while (events.none { it is SetupEvent.Received } && System.nanoTime() < until) Thread.sleep(20)
+        return events.filterIsInstance<SetupEvent.Received>().single()
     }
 
     /** A real server for [seed] on loopback, its tests answered at once, and a phone's browser on its page. */
