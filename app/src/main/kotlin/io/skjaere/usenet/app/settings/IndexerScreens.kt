@@ -41,6 +41,7 @@ import io.skjaere.usenet.app.ui.TopBar
 import io.skjaere.usenet.app.ui.TvTypingTip
 import io.skjaere.usenet.app.ui.colors
 import io.skjaere.usenet.app.ui.rememberFieldChain
+import io.skjaere.usenet.data.IndexerWithKey
 import io.skjaere.usenet.data.SettingsRepository
 import io.skjaere.usenet.newznab.CapsCache
 import io.skjaere.usenet.newznab.IndexerCaps
@@ -53,6 +54,7 @@ import io.skjaere.usenet.newznab.SearchPage
 import io.skjaere.usenet.newznab.SearchQuery
 import io.skjaere.usenet.newznab.SearchType
 import io.skjaere.usenet.newznab.UrlSecurity
+import io.skjaere.usenet.newznab.UserAgentRule
 import io.skjaere.usenet.newznab.ApiLimits
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -94,6 +96,7 @@ fun IndexersScreen(onBack: () -> Unit, onEdit: (String?) -> Unit) {
     }
 }
 
+/** An indexer's form, the Usenet one's and a torrent one's fields. [userAgent]: as typed, blank for the app's own (L546). */
 data class IndexerForm(
     val id: String,
     val name: String = "",
@@ -101,9 +104,22 @@ data class IndexerForm(
     val apiKey: String = "",
     val hasSavedKey: Boolean = false,
     val enabled: Boolean = true,
+    val userAgent: String = "",
 ) {
     val security: UrlSecurity get() = UrlSecurity.of(url.trim())
-    val valid: Boolean get() = url.isNotBlank() && security != UrlSecurity.Invalid && (apiKey.isNotBlank() || hasSavedKey)
+
+    /** What keeps [userAgent] from being sent, by the client's own rule (L548); null for blank too. */
+    val agentProblem: UserAgentRule.Problem? get() = UserAgentRule.problem(userAgent)
+
+    /** The User-Agent field's line: the help, or while the value has a problem, its words in the help's place (L546). */
+    val agentHelp: String
+        get() = when (agentProblem) {
+            UserAgentRule.Problem.Characters -> USER_AGENT_CHARACTERS
+            UserAgentRule.Problem.TooLong -> USER_AGENT_TOO_LONG
+            null -> USER_AGENT_HELP
+        }
+
+    val valid: Boolean get() = url.isNotBlank() && security != UrlSecurity.Invalid && (apiKey.isNotBlank() || hasSavedKey) && agentProblem == null
 }
 
 /**
@@ -112,17 +128,38 @@ data class IndexerForm(
  */
 internal fun newIndexerForm() = IndexerForm(UUID.randomUUID().toString())
 
-/** Saves [f], named after its host when no name was given; an empty key field keeps the saved key. Returns the id. */
+/** The form for editing a saved indexer: its key field starts empty, "Saved" while one is, and its User-Agent as saved. */
+internal fun indexerForm(saved: IndexerWithKey) = saved.record.let { r ->
+    IndexerForm(r.id, r.name, r.baseUrl, "", saved.apiKey != null, r.enabled, r.userAgent)
+}
+
+/**
+ * Saves [f], named after its host when no name was given; an empty key field keeps the saved key. The field shows the
+ * User-Agent, so what it holds is saved, trimmed, and an emptied one leaves none of its own. Returns the id.
+ */
 internal suspend fun SettingsRepository.save(f: IndexerForm): String {
     val name = f.name.trim().ifEmpty { runCatching { java.net.URI(f.url.trim()).host }.getOrNull() ?: "Indexer" }
-    return saveIndexer(f.id, name, f.url, f.apiKey.trim().takeIf { it.isNotEmpty() }, f.enabled)
+    return saveIndexer(f.id, name, f.url, f.apiKey.trim().takeIf { it.isNotEmpty() }, f.enabled, f.userAgent)
 }
+
+/** The indexer the form's Test asks, as typed (L552): its key the field's, else the saved one ([savedKey]). */
+internal fun indexerConfig(f: IndexerForm, savedKey: String?): IndexerConfig =
+    IndexerConfig(f.id, f.name, f.url.trim(), f.apiKey.trim().ifEmpty { savedKey.orEmpty() }, userAgent = f.userAgent.trim())
 
 /** An http address over the internet: the indexer form's warning, and the phone setup's for an indexer sent so. */
 const val INDEXER_PUBLIC_HTTP = "⚠ Not encrypted: your API key would be readable on its way over the internet. Use https:// if the indexer offers it."
 
 /** An http address on the home network: no warning, but said. */
 const val INDEXER_LOCAL_HTTP = "Plain http on your local network."
+
+/** Under both indexer forms' User-Agent field (W143). */
+const val USER_AGENT_HELP = "Optional. Without one, NZStreamer’s own is sent. Change it only if this indexer asks for one."
+
+/** In its place while the User-Agent has a char the client won't send ([UserAgentRule.Problem.Characters]). */
+const val USER_AGENT_CHARACTERS = "Only letters A–Z, digits, spaces and punctuation."
+
+/** In its place while the User-Agent is too long to send ([UserAgentRule.Problem.TooLong]). */
+const val USER_AGENT_TOO_LONG = "At most ${UserAgentRule.MAX_LENGTH} characters."
 
 /** How many of a torrent indexer's latest results its Test reads, to say how many have no info hash (L238). */
 internal const val TORRENT_TEST_RESULTS = 10
@@ -243,7 +280,7 @@ class IndexerEditViewModel(private val container: AppContainer, private val id: 
         id?.let {
             viewModelScope.launch {
                 container.settings.indexer(it)?.let { saved ->
-                    form.value = IndexerForm(it, saved.record.name, saved.record.baseUrl, "", saved.apiKey != null, saved.record.enabled)
+                    form.value = indexerForm(saved)
                     tests.formChanged(form.value)
                 }
             }
@@ -255,10 +292,9 @@ class IndexerEditViewModel(private val container: AppContainer, private val id: 
         tests.formChanged(form.value)
     }
 
-    private suspend fun config(f: IndexerForm): IndexerConfig {
-        val key = f.apiKey.trim().ifEmpty { container.settings.indexer(f.id)?.apiKey.orEmpty() }
-        return IndexerConfig(f.id, f.name, f.url.trim(), key)
-    }
+    // The saved key is read only when the field is empty, as it is used only then.
+    private suspend fun config(f: IndexerForm): IndexerConfig =
+        indexerConfig(f, savedKey = if (f.apiKey.isBlank()) container.settings.indexer(f.id)?.apiKey else null)
 
     fun runTest() = tests.start(form.value)
 
@@ -308,6 +344,11 @@ fun IndexerEditScreen(id: String?, onBack: () -> Unit, onPhoneSetup: (() -> Unit
             FormField(
                 "API key", form.apiKey, { v -> vm.update { it.copy(apiKey = v) } }, kind = FieldKind.Key, mono = true,
                 placeholder = if (form.hasSavedKey) "Saved" else null, help = "Stored encrypted on this device.", chain = chain,
+            )
+            // Above Test connection, which sends it (L546); empty, the client's own goes, which the placeholder shows.
+            FormField(
+                "User-Agent", form.userAgent, { v -> vm.update { it.copy(userAgent = v) } }, kind = FieldKind.Agent, mono = true,
+                placeholder = container.newznab.ownUserAgent, help = form.agentHelp, helpWarn = form.agentProblem != null, chain = chain,
             )
             SecondaryButton("Test connection", vm::runTest, Modifier.fillMaxWidth(), enabled = form.valid && test != IndexerTest.Running)
         }

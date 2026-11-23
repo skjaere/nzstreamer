@@ -52,6 +52,19 @@ class IndexerTestRunTest {
         assertEquals(IndexerTest.Idle, run.state.value)
     }
 
+    /** A Test sends the form's User-Agent (L552), so a result is for it too: changed alone, the result shown goes. */
+    @Test
+    fun `a change to the User-Agent alone clears a shown result`() = runTest {
+        val run = IndexerTestRun(backgroundScope, ::test)
+        run.start(form)
+        runCurrent()
+        started.single().second.complete(ok)
+        runCurrent()
+        assertEquals(ok, run.state.value)
+        run.formChanged(form.copy(userAgent = "ExampleReader/2.1"))
+        assertEquals(IndexerTest.Idle, run.state.value)
+    }
+
     /** The bug this fixes: a slow indexer's answer for the old address showed under the new one. */
     @Test
     fun `a test of older form values never shows its result`() = runTest {

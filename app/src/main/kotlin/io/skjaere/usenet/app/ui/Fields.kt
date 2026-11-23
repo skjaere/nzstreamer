@@ -59,6 +59,9 @@ enum class FieldKind(val secret: Boolean = false) {
     Port,
     Number,
     Username,
+
+    /** An indexer's User-Agent (L547): printable ASCII alone, which the client's rule takes. */
+    Agent,
     Password(secret = true),
 
     /** An API key or token. */
@@ -67,14 +70,16 @@ enum class FieldKind(val secret: Boolean = false) {
 
 /**
  * The keyboard for a field of [kind], on every device: the address layout for hosts and URLs, the password one for
- * passwords and keys, the number pad for numbers; no corrections or capitals where the keyboard changing a word would
- * break it (hosts, URLs, usernames, keys). [imeAction]: Next down a form, Done on its last field.
+ * passwords and keys, the number pad for numbers, an ASCII one for a User-Agent (a user's own layout would type letters
+ * the field refuses, and smart quotes and dashes); no corrections or capitals where the keyboard changing a word would
+ * break it (hosts, URLs, usernames, User-Agents, keys). [imeAction]: Next down a form, Done on its last field.
  */
 fun fieldKeyboard(kind: FieldKind, imeAction: ImeAction): KeyboardOptions = when (kind) {
     FieldKind.Text -> KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = imeAction)
     FieldKind.Host, FieldKind.Url -> KeyboardOptions(KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Uri, imeAction = imeAction)
     FieldKind.Port, FieldKind.Number -> KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = imeAction)
     FieldKind.Username -> KeyboardOptions(KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Text, imeAction = imeAction)
+    FieldKind.Agent -> KeyboardOptions(KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii, imeAction = imeAction)
     FieldKind.Password, FieldKind.Key -> KeyboardOptions(KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Password, imeAction = imeAction)
 }
 

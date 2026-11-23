@@ -63,6 +63,26 @@ class SaveSettingsFormTest {
         assertEquals("K1", settings.indexer(first)?.apiKey)
     }
 
+    /**
+     * L550: the form shows the User-Agent, so Save keeps what it holds, trimmed; emptied, the indexer has none of its own.
+     * Opened again, the field holds the saved value, so an edit that leaves it keeps it.
+     */
+    @Test
+    fun `an indexer's User-Agent is saved trimmed, empty means none, and an edit that leaves it keeps it`() = runBlocking<Unit> {
+        val id = settings.save(newIndexerForm().copy(url = "https://one.example.org/api", apiKey = "K1", userAgent = "  ExampleReader/2.1 "))
+        assertEquals("ExampleReader/2.1", settings.indexer(id)?.record?.userAgent)
+
+        val loaded = indexerForm(settings.indexer(id)!!)
+        assertEquals(IndexerForm(id, "one.example.org", "https://one.example.org/api", "", hasSavedKey = true, enabled = true, userAgent = "ExampleReader/2.1"), loaded)
+        settings.save(loaded.copy(name = "Renamed", enabled = false))
+        assertEquals(Triple("Renamed", false, "ExampleReader/2.1"), settings.indexer(id)!!.record.let { Triple(it.name, it.enabled, it.userAgent) })
+        assertEquals("K1", settings.indexer(id)?.apiKey)
+
+        settings.save(indexerForm(settings.indexer(id)!!).copy(userAgent = " \t"))
+        assertEquals("", settings.indexer(id)?.record?.userAgent)
+        assertEquals("", indexerForm(settings.indexer(id)!!).userAgent)
+    }
+
     @Test
     fun `saving a new indexer twice keeps one indexer`() = runBlocking<Unit> {
         val form = newIndexerForm().copy(url = "https://indexer.example.org/api", apiKey = "KEY")

@@ -34,10 +34,13 @@ class TestIndexerTest {
     private val asked = mutableListOf<String?>()
     /** Each search's `limit`, as sent. */
     private val limits = mutableListOf<String?>()
+    /** Each request's User-Agent, as sent, the caps' included. */
+    private val agents = mutableListOf<String?>()
 
     private val client = NewznabClient(
         HttpClient(
             MockEngine { request ->
+                agents += request.headers[HttpHeaders.UserAgent]
                 if (request.url.parameters["t"] == "caps") {
                     capsCalls++
                     respond(CAPS, capsAnswer, headersOf(HttpHeaders.ContentType, "application/xml"))
@@ -85,6 +88,25 @@ class TestIndexerTest {
         assertEquals(2, capsCalls)
         caps.get(config)
         assertEquals(3, capsCalls, "the searches' caps were kept")
+    }
+
+    /**
+     * L552: the indexer form's Test sends the User-Agent typed in it, trimmed, on its caps and its search, and the app's
+     * own while the field is blank; as the key, an empty key field tests with the saved one.
+     */
+    @Test
+    fun `the form's test sends the typed User-Agent, else the app's own`() = runBlocking<Unit> {
+        searchBody = NZB_SEARCH
+        val form = newIndexerForm().copy(url = " https://indexer.example.org/api ", apiKey = "KEY", userAgent = " ExampleReader/2.1 ")
+        assertIs<IndexerTest.Ok>(testIndexer(client, caps, indexerConfig(form, savedKey = null), shown = true))
+        assertEquals(listOf<String?>("ExampleReader/2.1", "ExampleReader/2.1"), agents)
+        agents.clear()
+        assertIs<IndexerTest.Ok>(testIndexer(client, caps, indexerConfig(form.copy(userAgent = "  "), savedKey = null), shown = true))
+        assertEquals(listOf<String?>(NewznabClient.DEFAULT_USER_AGENT, NewznabClient.DEFAULT_USER_AGENT), agents)
+
+        val config = indexerConfig(form, savedKey = "SAVED")
+        assertEquals(IndexerConfig(form.id, form.name, "https://indexer.example.org/api", "KEY", userAgent = "ExampleReader/2.1"), config)
+        assertEquals("SAVED", indexerConfig(form.copy(apiKey = " "), savedKey = "SAVED").apiKey)
     }
 
     /** L161: a torrent feed added under Indexers is found out by its one-item search, before any play grabs from it. */

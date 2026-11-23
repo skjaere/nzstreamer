@@ -41,6 +41,20 @@ class FieldKeyboardTest {
         assertEquals(KeyboardCapitalization.None, options.capitalization)
     }
 
+    /**
+     * L547: a User-Agent is printable ASCII alone, so the keyboard's ASCII layout, not the user's own whose letters it
+     * would refuse; no capitals or corrections, which would change it. No other kind takes that layout.
+     */
+    @Test
+    fun `a User-Agent takes the ascii keyboard, neither corrected nor capitalised`() {
+        val options = fieldKeyboard(FieldKind.Agent, ImeAction.Done)
+        assertEquals(KeyboardType.Ascii, options.keyboardType)
+        assertEquals(false, options.autoCorrectEnabled)
+        assertEquals(KeyboardCapitalization.None, options.capitalization)
+        assertEquals(listOf(FieldKind.Agent), FieldKind.entries.filter { fieldKeyboard(it, ImeAction.Next).keyboardType == KeyboardType.Ascii })
+        assertFalse(FieldKind.Agent.secret)
+    }
+
     @Test
     fun `the port and other numbers take the number pad`() {
         listOf(FieldKind.Port, FieldKind.Number).forEach { kind -> assertEquals(KeyboardType.Number, fieldKeyboard(kind, ImeAction.Done).keyboardType, "$kind") }
