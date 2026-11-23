@@ -247,6 +247,74 @@ class MultiIndexerSearchTest {
     }
 
     /**
+     * L553: an answer made with one User-Agent is never given for another, caps (kept 24 hours) and a search's answer (kept
+     * 15 minutes) alike. The same value, padded or not, reuses both.
+     */
+    @Test
+    fun `a changed User-Agent asks again for caps and the same search, and the same one reuses both`() = runBlocking<Unit> {
+        var now = Instant.parse("2026-11-23T12:00:00Z")
+        val clock = object : Clock() {
+            override fun getZone() = ZoneOffset.UTC
+            override fun withZone(zone: java.time.ZoneId?) = this
+            override fun instant() = now
+        }
+        val multi = MultiIndexerSearch(fake.client, CapsCache(fake.client, clock), clock = clock)
+        fun asked(function: String) = fake.requests.filter { it.url.parameters["t"] == function }
+        suspend fun searchAs(userAgent: String) =
+            assertIs<IndexerOutcome.Results>(multi.search(listOf(good.copy(userAgent = userAgent)), plan = plan).toList().single())
+
+        searchAs("")
+        searchAs("ExampleReader/2.1")
+        assertEquals(2, asked("caps").size)
+        assertEquals(2, asked("tvsearch").size)
+        now = now.plus(Duration.ofMinutes(10))
+        searchAs(" ExampleReader/2.1\t")
+        searchAs("")
+        assertEquals(2, asked("caps").size, "each value's caps were kept")
+        assertEquals(2, asked("tvsearch").size, "each value's answer was kept")
+        searchAs("QuarryFetch/1.0")
+        assertEquals(listOf("NZStreamer/0.1", "ExampleReader/2.1", "QuarryFetch/1.0"), asked("caps").map { it.headers[HttpHeaders.UserAgent] })
+        assertEquals(listOf("NZStreamer/0.1", "ExampleReader/2.1", "QuarryFetch/1.0"), asked("tvsearch").map { it.headers[HttpHeaders.UserAgent] })
+    }
+
+    /** L553: an API limit is the account's, its address's and key's, whatever asks: a new User-Agent doesn't end it. */
+    @Test
+    fun `an indexer kept out by its 429's Retry-After stays out whatever its User-Agent`() = runBlocking<Unit> {
+        val fake = FakeIndexers { request ->
+            if (request.url.parameters["t"] == "caps") {
+                xml(fixture("newznab-caps.xml"))
+            } else {
+                respond("nope", HttpStatusCode.TooManyRequests, headersOf(HttpHeaders.RetryAfter, "3600"))
+            }
+        }
+        val multi = MultiIndexerSearch(fake.client, CapsCache(fake.client))
+        fun searches() = fake.requests.count { it.url.parameters["t"] == "tvsearch" }
+        listOf("", "ExampleReader/2.1", "QuarryFetch/1.0", "").forEach { userAgent ->
+            val held = assertIs<IndexerOutcome.Failed>(multi.search(listOf(good.copy(userAgent = userAgent)), plan = plan).toList().single())
+            assertEquals(API_LIMIT_REACHED, assertIs<NewznabError.ApiLimitReached>(held.error).message)
+        }
+        assertEquals(1, searches(), "an indexer kept out was asked with another User-Agent")
+        assertEquals(1, fake.requests.count { it.url.parameters["t"] == "caps" })
+    }
+
+    /** A Test asks for caps anew with the form's User-Agent: the caps kept for the indexer's other values stay. */
+    @Test
+    fun `invalidate drops the caps kept for its own User-Agent only`() = runBlocking<Unit> {
+        val cache = CapsCache(fake.client)
+        val reader = good.copy(userAgent = "ExampleReader/2.1")
+        fun asked() = fake.requests.count { it.url.parameters["t"] == "caps" }
+        cache.get(good)
+        cache.get(reader)
+        assertEquals(2, asked())
+        cache.invalidate(reader)
+        cache.get(good)
+        assertEquals(2, asked(), "the caps kept for the client's own were dropped")
+        cache.get(reader)
+        assertEquals(3, asked())
+        assertEquals("ExampleReader/2.1", fake.requests.last().headers[HttpHeaders.UserAgent])
+    }
+
+    /**
      * L170: a torrent indexer asks the trackers' sites, which are slow, so it is given 25 s where a Usenet one keeps
      * 15 s, in both of the search's bounds and the client's own request timeout. On the test's clock: each indexer is
      * silent for 20 s.

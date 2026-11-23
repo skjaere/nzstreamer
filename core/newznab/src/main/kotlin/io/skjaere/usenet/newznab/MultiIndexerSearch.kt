@@ -43,8 +43,8 @@ class CapsCache(
     internal suspend fun kept(indexer: IndexerConfig): IndexerCaps? =
         mutex.withLock { entries[indexer.cacheKey()] }?.takeIf { (at, _) -> at.plus(ttl).isAfter(clock.instant()) }?.second
 
-    // A changed URL or key must not reuse the old answer.
-    private fun IndexerConfig.cacheKey() = "$id|$baseUrl|${apiKey.hashCode()}"
+    // A changed URL, key or User-Agent must not reuse the old answer (L553).
+    private fun IndexerConfig.cacheKey() = "$id|$baseUrl|${apiKey.hashCode()}|${userAgent.trim()}"
 }
 
 sealed interface IndexerOutcome {
@@ -137,8 +137,8 @@ class MultiIndexerSearch(
             found == null -> limited!!
             query == null -> IndexerOutcome.Skipped(indexer, "Doesn't support this search")
             else -> {
-                // Failures are never cached; a changed URL or key is a different entry.
-                val key = "${limitKey(indexer)}|$query"
+                // Failures are never cached; a changed URL, key or User-Agent is a different entry (L553).
+                val key = "${limitKey(indexer)}|${indexer.userAgent.trim()}|$query"
                 if (limited == null) {
                     IndexerOutcome.Results(indexer, page(indexer, key, fresh) { client.search(indexer, query) }, query)
                 } else {
@@ -214,7 +214,8 @@ class MultiIndexerSearch(
     companion object {
         /**
          * How an indexer's limit is kept: an indexer is one by its address and key too, so another account's limit isn't this
-         * one's. A download's walk keeps its own memory of limits by the same key.
+         * one's, but never by its User-Agent, as the limit is the account's whatever asks (L553). A download's walk keeps its
+         * own memory of limits by the same key.
          */
         fun limitKey(indexer: IndexerConfig): String = "${indexer.id}|${indexer.baseUrl}|${indexer.apiKey.hashCode()}"
     }
