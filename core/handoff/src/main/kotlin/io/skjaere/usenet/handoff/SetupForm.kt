@@ -36,10 +36,13 @@ data class ProviderDraft(
     }
 }
 
-/** An indexer as a card holds it; blanks are "". An empty [apiKey] keeps the saved one, as for a provider's password. */
-data class IndexerDraft(val name: String, val url: String, val apiKey: String) {
-    // The address too: a key may have been pasted into its query.
-    override fun toString() = "IndexerDraft(name=${shown(name)}, url=${shown(url)}, apiKey=${shown(apiKey)})"
+/**
+ * An indexer as a card holds it; blanks are "". An empty [apiKey] keeps the saved one, as for a provider's password. An
+ * empty [userAgent] is the app's own: no more than that, as the field shows its value.
+ */
+data class IndexerDraft(val name: String, val url: String, val apiKey: String, val userAgent: String = "") {
+    // The address too: a key may have been pasted into its query. A pasted browser string can tell who someone is (L554).
+    override fun toString() = "IndexerDraft(name=${shown(name)}, url=${shown(url)}, apiKey=${shown(apiKey)}, userAgent=${shown(userAgent)})"
 }
 
 /**
@@ -52,11 +55,13 @@ data class ServiceDraft(val kind: String, val key: String) {
 
 /**
  * A torrent indexer as a card holds it: an indexer's fields, and whether it is used with the debrid service
- * ([useWithService], ticked by default). An empty [key] keeps the saved one, as an indexer's.
+ * ([useWithService], ticked by default). An empty [key] keeps the saved one, as an indexer's; an empty [userAgent] is
+ * the app's own.
  */
-data class TorrentIndexerDraft(val name: String, val url: String, val key: String, val useWithService: Boolean) {
-    // The address too: a key may have been pasted into its query.
-    override fun toString() = "TorrentIndexerDraft(name=${shown(name)}, url=${shown(url)}, key=${shown(key)}, useWithService=$useWithService)"
+data class TorrentIndexerDraft(val name: String, val url: String, val key: String, val useWithService: Boolean, val userAgent: String = "") {
+    // The address too: a key may have been pasted into its query. The User-Agent as an indexer's.
+    override fun toString() =
+        "TorrentIndexerDraft(name=${shown(name)}, url=${shown(url)}, key=${shown(key)}, useWithService=$useWithService, userAgent=${shown(userAgent)})"
 }
 
 /**
@@ -218,6 +223,8 @@ object SetupForm {
             SetupField.Kind.Checkbox -> SetupRejection.Reason.Malformed.takeUnless { raw == "on" }
             // A radio's value as the page writes one: a word in lower case. Whether its card offers it is the layout's.
             SetupField.Kind.Choice -> SetupRejection.Reason.Malformed.takeUnless { raw.isNotEmpty() && raw.all { it in 'a'..'z' || it in '0'..'9' || it == '-' } }
+            // What the client sends, trimmed with Kotlin's trim() as the app's rule is (L548): neither may change its trim alone.
+            SetupField.Kind.Agent -> SetupRejection.Reason.Characters.takeIf { raw.trim().any { it !in ' '..'~' } }
         }
     }
 

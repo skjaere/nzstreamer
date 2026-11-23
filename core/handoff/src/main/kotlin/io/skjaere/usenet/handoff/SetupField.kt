@@ -22,12 +22,15 @@ enum class SetupField(val key: String, val section: SetupSection, val maxLength:
     IndexerName("i.name", SetupSection.Indexer, 100, Kind.Text, "Name"),
     IndexerUrl("i.url", SetupSection.Indexer, 2048, Kind.Text, "API URL"),
     IndexerKey("i.key", SetupSection.Indexer, 512, Kind.Key, "API key"),
+    /** The indexer's own User-Agent (L555): blank for the app's. No secret, so shown whole like the address (W144). */
+    IndexerAgent("i.ua", SetupSection.Indexer, 256, Kind.Agent, "User-Agent"),
     /** Which service the account is: one of the page's choices ([SetupSeed.serviceKinds]), by its value. */
     ServiceKind("s.kind", SetupSection.Service, CHOICE_MAX, Kind.Choice, "Service"),
     ServiceKey("s.key", SetupSection.Service, 512, Kind.Key, "API key"),
     TorrentIndexerName("r.name", SetupSection.TorrentIndexer, 100, Kind.Text, "Name"),
     TorrentIndexerUrl("r.url", SetupSection.TorrentIndexer, 2048, Kind.Text, "API URL"),
     TorrentIndexerKey("r.key", SetupSection.TorrentIndexer, 512, Kind.Key, "API key"),
+    TorrentIndexerAgent("r.ua", SetupSection.TorrentIndexer, 256, Kind.Agent, "User-Agent"),
     /** "Use with your debrid service" (W75): ticked by default, as the torrent indexer form's switch is on. */
     TorrentIndexerDebrid("r.debrid", SetupSection.TorrentIndexer, NUMBER_MAX, Kind.Checkbox, "Use with your debrid service"),
     TmdbKey("t.key", SetupSection.Tmdb, 1024, Kind.Key, "TMDB API key or read access token"),
@@ -35,9 +38,10 @@ enum class SetupField(val key: String, val section: SetupSection, val maxLength:
 
     /**
      * How a value is checked: what it may hold and whether it is trimmed. A [Choice] is a radio button's value, one of
-     * those the open card offers ([SetupLayout.choices]); a [Checkbox] sends "on" or nothing.
+     * those the open card offers ([SetupLayout.choices]); a [Checkbox] sends "on" or nothing. An [Agent] is a User-Agent,
+     * held to the app's own rule for one (L548), so what the page holds the app sends and what the app saves the page holds.
      */
-    internal enum class Kind { Text, Password, Key, Number, Checkbox, Choice }
+    internal enum class Kind { Text, Password, Key, Number, Checkbox, Choice, Agent }
 }
 
 /** A number's or the checkbox's bound as received; the number's own rule (at most nine digits) is checked after. */

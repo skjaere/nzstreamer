@@ -11,6 +11,7 @@ import io.skjaere.usenet.handoff.SetupAction.Send
 import io.skjaere.usenet.handoff.SetupAction.TestCard
 import io.skjaere.usenet.handoff.SetupAction.TestHttp
 import io.skjaere.usenet.handoff.SetupAction.Undo
+import io.skjaere.usenet.handoff.SetupField.IndexerAgent
 import io.skjaere.usenet.handoff.SetupField.IndexerKey
 import io.skjaere.usenet.handoff.SetupField.IndexerName
 import io.skjaere.usenet.handoff.SetupField.IndexerUrl
@@ -24,6 +25,7 @@ import io.skjaere.usenet.handoff.SetupField.ProviderUsername
 import io.skjaere.usenet.handoff.SetupField.ServiceKey
 import io.skjaere.usenet.handoff.SetupField.ServiceKind
 import io.skjaere.usenet.handoff.SetupField.TmdbKey
+import io.skjaere.usenet.handoff.SetupField.TorrentIndexerAgent
 import io.skjaere.usenet.handoff.SetupField.TorrentIndexerDebrid
 import io.skjaere.usenet.handoff.SetupField.TorrentIndexerKey
 import io.skjaere.usenet.handoff.SetupField.TorrentIndexerName
@@ -45,8 +47,8 @@ class SetupFlowTest {
     private val main = SavedProvider("prov-1", "Main provider", "news.example.invalid", 563, true, "someone", 20, true, SavedSecret.Saved)
     // Named after its host, so its name is blank as the provider form blanks it; switched off; no login.
     private val block = SavedProvider("prov-2", "", "block.example.invalid", 119, false, "", 8, false, SavedSecret.None)
-    private val indexerA = SavedIndexer("idx-1", "Indexer A", "https://indexer-a.example.invalid/api", false, true, SavedSecret.Saved)
-    private val home = SavedIndexer("idx-2", "Home", "http://192.168.1.10:9696/1", true, false, SavedSecret.Saved)
+    private val indexerA = SavedIndexer("idx-1", "Indexer A", "https://indexer-a.example.invalid/api", false, true, SavedSecret.Saved, "")
+    private val home = SavedIndexer("idx-2", "Home", "http://192.168.1.10:9696/1", true, false, SavedSecret.Saved, "")
     private val seed = SetupSeed(listOf(main, block), listOf(indexerA, home), SavedSecret.Saved)
 
     private val p1 = SetupSlot(Provider, 1)
@@ -66,7 +68,8 @@ class SetupFlowTest {
             ProviderUsername to user, ProviderPassword to pass, ProviderConnections to conns,
         ).toTypedArray()
 
-    private fun indexer(name: String = "", url: String = "", key: String = "") = arrayOf(IndexerName to name, IndexerUrl to url, IndexerKey to key)
+    private fun indexer(name: String = "", url: String = "", key: String = "", ua: String = "") =
+        arrayOf(IndexerName to name, IndexerUrl to url, IndexerKey to key, IndexerAgent to ua)
 
     /** [main]'s card as the page shows it, posted back as it is. */
     private val mainAsShown = provider("Main provider", "news.example.invalid", "563", true, "someone", "", "20")
@@ -95,7 +98,7 @@ class SetupFlowTest {
         ServiceChoice("torbox", "TorBox", "In TorBox: Settings › API key"),
     )
     private val torbox = SavedService("svc-1", "torbox", "quay.viewer@example.invalid", true, SavedSecret.Saved)
-    private val prowlarr = SavedTorrentIndexer("tor-1", "Home Prowlarr", "http://192.168.1.20:9696/3/api", false, true, true, SavedSecret.Saved)
+    private val prowlarr = SavedTorrentIndexer("tor-1", "Home Prowlarr", "http://192.168.1.20:9696/3/api", false, true, true, SavedSecret.Saved, "")
     private val debridSeed = seed.copy(serviceKinds = choices, services = listOf(torbox), torrentIndexers = listOf(prowlarr))
     private val s1 = SetupSlot(Service, 1)
     private val s2 = SetupSlot(Service, 2)
@@ -107,8 +110,9 @@ class SetupFlowTest {
     private fun service(kind: String? = null, key: String = "") = listOfNotNull(kind?.let { ServiceKind to it }, ServiceKey to key).toTypedArray()
 
     /** A torrent indexer card's fields as the page posts them: the box only when ticked. */
-    private fun torrent(name: String = "", url: String = "", key: String = "", debrid: Boolean = true) =
-        listOfNotNull(TorrentIndexerName to name, TorrentIndexerUrl to url, TorrentIndexerKey to key, (TorrentIndexerDebrid to "on").takeIf { debrid }).toTypedArray()
+    private fun torrent(name: String = "", url: String = "", key: String = "", debrid: Boolean = true, ua: String = "") = listOfNotNull(
+        TorrentIndexerName to name, TorrentIndexerUrl to url, TorrentIndexerKey to key, TorrentIndexerAgent to ua, (TorrentIndexerDebrid to "on").takeIf { debrid },
+    ).toTypedArray()
 
     private val prowlarrAsShown = torrent("Home Prowlarr", prowlarr.shownUrl)
 
@@ -144,7 +148,7 @@ class SetupFlowTest {
         assertEquals(mapOf(ServiceKind to "torbox"), account.values)
         assertEquals(listOf("TorBox", "quay.viewer@example.invalid"), listOf(account.savedName, account.account))
         val indexer = cards.card(r1)
-        assertEquals(mapOf(TorrentIndexerName to "Home Prowlarr", TorrentIndexerUrl to prowlarr.shownUrl, TorrentIndexerDebrid to "on"), indexer.values)
+        assertEquals(mapOf(TorrentIndexerName to "Home Prowlarr", TorrentIndexerUrl to prowlarr.shownUrl, TorrentIndexerAgent to "", TorrentIndexerDebrid to "on"), indexer.values)
         assertEquals(listOf(true, false, true), listOf(indexer.saved, indexer.changed, indexer.ready))
         assertIs<Applied.Shown>(shown.post(Send))
         assertEquals(SetupNotice.NothingToSend, shown.show().notice)
@@ -227,10 +231,10 @@ class SetupFlowTest {
         val flow = SetupFlow(SetupMode.Edit, debridSeed)
         flow.post(Add(TorrentIndexer))
         assertEquals(r2, flow.layout().open)
-        assertEquals(listOf("r.name", "r.url", "r.key", "r.debrid"), flow.layout().fields.map { it.key })
+        assertEquals(listOf("r.name", "r.url", "r.key", "r.ua", "r.debrid"), flow.layout().fields.map { it.key })
         assertTrue(flow.layout().offers(TestHttp))
         val blank = flow.view().card(r2)
-        assertEquals(mapOf(TorrentIndexerName to "", TorrentIndexerUrl to "", TorrentIndexerDebrid to "on"), blank.values)
+        assertEquals(mapOf(TorrentIndexerName to "", TorrentIndexerUrl to "", TorrentIndexerAgent to "", TorrentIndexerDebrid to "on"), blank.values)
         assertTrue(blank.blank)
         val quarry = torrent("Quarry", "https://quarry.example.invalid/api", "marker-key", debrid = false)
         val item = assertIs<Applied.Testing>(flow.post(SetupAction.Test, *quarry)).ticket.item
@@ -334,6 +338,107 @@ class SetupFlowTest {
         val hidden = SetupFlow(SetupMode.Edit, seed, from = sent)
         assertEquals(emptyList(), hidden.changes().services)
         assertEquals(emptyList(), hidden.changes().torrentIndexers)
+    }
+
+    // An indexer's own User-Agent (L555, L556): a field like its address, which a test sends, but no part of where its key goes.
+
+    private val ua = "ExampleReader/2.1 (compatible)"
+
+    /** A change to the User-Agent alone needs a test, as the TV's Save would test it, and only that value's test stands. */
+    @Test
+    fun `a saved card's User-Agent changed alone needs a test with it, and a pass with another doesn't stand`() {
+        val flow = SetupFlow(SetupMode.Edit, debridSeed)
+        flow.post(Open(i1))
+        flow.post(Open(r1), *indexer("Indexer A", indexerA.shownUrl, "", ua = ua))
+        flow.post(Open(p1), *torrent("Home Prowlarr", prowlarr.shownUrl, "", ua = "QuarryFetch/1.0"))
+        for (slot in listOf(i1, r1)) {
+            val card = flow.view().card(slot)
+            assertEquals(listOf(true, false, Need.Test), listOf(card.changed, card.ready, card.need), slot.key)
+        }
+        assertEquals(IndexerDraft("Indexer A", indexerA.shownUrl, "", ua), flow.changes().indexers.first().draft)
+        assertEquals(TorrentIndexerDraft("Home Prowlarr", prowlarr.shownUrl, "", true, "QuarryFetch/1.0"), flow.changes().torrentIndexers.single().draft)
+        // Its test sends the value, and passes for it alone.
+        val ticket = assertIs<Applied.Testing>(flow.post(TestCard(i1), *mainAsShown)).ticket
+        assertEquals(ua, assertIs<SetupTestItem.Indexer>(ticket.item).draft.userAgent)
+        assertEquals(ua, ticket.values[IndexerAgent])
+        flow.finish(ticket, works)
+        assertTrue(flow.view().card(i1).ready)
+        flow.post(Open(i1), *mainAsShown)
+        flow.post(Enter, *indexer("Indexer A", indexerA.shownUrl, "", ua = "QuarryFetch/1.0"))
+        val other = flow.view().card(i1)
+        assertEquals(listOf(null, true, false), listOf(other.result, other.changedSinceTest, other.ready))
+        flow.post(Open(p1), *indexer("Indexer A", indexerA.shownUrl, "", ua = ua))
+        assertEquals(works, flow.view().card(i1).result, "back to the value it passed with")
+        // Back to the saved one (none of its own): as saved, whatever was tested.
+        flow.post(Open(i1), *mainAsShown)
+        flow.post(Open(p1), *indexer("Indexer A", indexerA.shownUrl, ""))
+        assertEquals(listOf(false, true, null), flow.view().card(i1).let { listOf(it.changed, it.ready, it.need) })
+    }
+
+    @Test
+    fun `an untouched saved card sends its User-Agent back, and one posted back as shown is as saved`() {
+        val seed = debridSeed.copy(indexers = listOf(indexerA.copy(userAgent = ua), home), torrentIndexers = listOf(prowlarr.copy(userAgent = "QuarryFetch/1.0")))
+        val flow = SetupFlow(SetupMode.Edit, seed)
+        assertEquals(ua, flow.view().card(i1).values[IndexerAgent])
+        assertEquals("QuarryFetch/1.0", flow.view().card(r1).values[TorrentIndexerAgent])
+        flow.post(Open(i1))
+        flow.post(Open(r1), *indexer("Indexer A", indexerA.shownUrl, "", ua = ua))
+        flow.post(Open(p1), *torrent("Home Prowlarr", prowlarr.shownUrl, "", ua = "QuarryFetch/1.0"))
+        assertFalse(flow.view().changed)
+        flow.post(Drop(p2), *mainAsShown)
+        val sent = assertIs<Applied.Sent>(flow.post(Send, *mainAsShown)).changes
+        assertEquals(listOf(IndexerDraft("Indexer A", indexerA.shownUrl, "", ua), IndexerDraft("Home", home.shownUrl, "", "")), sent.indexers.map { it.draft })
+        assertEquals(TorrentIndexerDraft("Home Prowlarr", prowlarr.shownUrl, "", true, "QuarryFetch/1.0"), sent.torrentIndexers.single().draft)
+        // Emptied, it is a change: the app's own from then on.
+        val emptied = SetupFlow(SetupMode.Edit, seed)
+        emptied.post(Open(i1))
+        emptied.post(Open(p1), *indexer("Indexer A", indexerA.shownUrl, ""))
+        assertEquals(listOf(true, Need.Test), emptied.view().card(i1).let { listOf(it.changed, it.need) })
+        assertEquals("", emptied.changes().indexers.first().draft.userAgent)
+    }
+
+    /** Send again: what an earlier page sent comes back with its User-Agents; the key typed then stays, as the server is the same. */
+    @Test
+    fun `a page from an earlier one keeps its User-Agents, and a changed one keeps the key typed then`() {
+        val sent = SetupChanges(
+            providers = emptyList(),
+            indexers = listOf(
+                SetupChange(home.ref, IndexerDraft("Home", home.shownUrl, "marker-key", ua), removed = false),
+                SetupChange(null, IndexerDraft("", "https://new.example.invalid/api", "marker-new-key", "QuarryFetch/1.0"), removed = false),
+            ),
+            tmdbKey = null,
+            torrentIndexers = listOf(SetupChange(prowlarr.ref, TorrentIndexerDraft("Home Prowlarr", prowlarr.shownUrl, "marker-prowlarr", true, ua), removed = false)),
+        )
+        val flow = SetupFlow(SetupMode.Edit, debridSeed, from = sent)
+        val view = flow.view()
+        assertEquals(listOf("", ua, "QuarryFetch/1.0"), view.indexers.map { it.values[IndexerAgent] })
+        assertEquals(ua, view.card(r1).values[TorrentIndexerAgent])
+        assertEquals(listOf("", ua, "QuarryFetch/1.0"), flow.changes().indexers.map { it.draft.userAgent })
+        assertEquals(ua, flow.changes().torrentIndexers.single().draft.userAgent)
+        // Another User-Agent on the same address: still the server the key was sent for, so the key stays.
+        flow.post(Open(i2))
+        flow.post(Open(r1), *indexer("Home", home.shownUrl, "", ua = "QuarryFetch/1.0"))
+        flow.post(Open(p1), *torrent("Home Prowlarr", prowlarr.shownUrl, "", ua = ""))
+        assertEquals(listOf("marker-key", "QuarryFetch/1.0"), flow.changes().indexers[1].draft.let { listOf(it.apiKey, it.userAgent) })
+        assertEquals(listOf("marker-prowlarr", ""), flow.changes().torrentIndexers.single().draft.let { listOf(it.key, it.userAgent) })
+        // A key typed on this page stays too.
+        flow.post(Add(Indexer), *mainAsShown)
+        flow.post(Enter, *indexer("", "https://typed.example.invalid/api", "marker-typed", ua = ua))
+        flow.post(Enter, *indexer("", "https://typed.example.invalid/api", "", ua = ""))
+        assertEquals(listOf("marker-typed", ""), flow.changes().indexers.last().draft.let { listOf(it.apiKey, it.userAgent) })
+    }
+
+    /** What the page's parser would refuse, a value the app saved past the rule (one it changed since, say), can't go in an input. */
+    @Test
+    fun `a saved User-Agent the page can't hold makes its card read-only, and one at the limit doesn't`() {
+        val odd = SetupSeed(
+            indexers = listOf(indexerA.copy(userAgent = "ExampléReader/2.1"), home.copy(userAgent = "x".repeat(257)), indexerA.copy(ref = "idx-3", userAgent = "x".repeat(256))),
+            serviceKinds = choices,
+            torrentIndexers = listOf(prowlarr.copy(userAgent = "Quarry\tFetch"), prowlarr.copy(ref = "tor-2", userAgent = "QuarryFetch/1.0 " + "y".repeat(240))),
+        )
+        val view = SetupFlow(SetupMode.Edit, odd).view()
+        assertEquals(listOf(true, true, false), view.indexers.map { it.readOnly })
+        assertEquals(listOf(true, false), view.torrentIndexers.map { it.readOnly })
     }
 
     @Test

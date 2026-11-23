@@ -416,8 +416,9 @@ internal class SetupFlow(val mode: SetupMode, seed: SetupSeed, private val limit
             place(SetupSection.Provider, change.ref, values, d.password, change.removed)
         }
         for (change in from.indexers) {
-            val values = mapOf(SetupField.IndexerName to change.draft.name, SetupField.IndexerUrl to change.draft.url)
-            place(SetupSection.Indexer, change.ref, values, change.draft.apiKey, change.removed)
+            val d = change.draft
+            val values = mapOf(SetupField.IndexerName to d.name, SetupField.IndexerUrl to d.url, SetupField.IndexerAgent to d.userAgent)
+            place(SetupSection.Indexer, change.ref, values, d.apiKey, change.removed)
         }
         if (debrid) {
             for (change in from.services) {
@@ -431,6 +432,7 @@ internal class SetupFlow(val mode: SetupMode, seed: SetupSeed, private val limit
                 val values = mapOf(
                     SetupField.TorrentIndexerName to d.name,
                     SetupField.TorrentIndexerUrl to d.url,
+                    SetupField.TorrentIndexerAgent to d.userAgent,
                     SetupField.TorrentIndexerDebrid to if (d.useWithService) ON else "",
                 )
                 place(SetupSection.TorrentIndexer, change.ref, values, d.key, change.removed)
@@ -707,8 +709,9 @@ internal class SetupFlow(val mode: SetupMode, seed: SetupSeed, private val limit
         return Saved(p.ref, p.name, values, p.login, p.enabled, hiddenParts = false, readOnly = odd)
     }
 
+    /** Its User-Agent among the values: an untouched card sends it back, and one the page can't hold makes it read-only. */
     private fun saved(i: SavedIndexer): Saved {
-        val values = mapOf(SetupField.IndexerName to i.name, SetupField.IndexerUrl to i.shownUrl)
+        val values = mapOf(SetupField.IndexerName to i.name, SetupField.IndexerUrl to i.shownUrl, SetupField.IndexerAgent to i.userAgent)
         return Saved(i.ref, i.name, values, i.key, i.enabled, i.hiddenParts, readOnly = refused(values))
     }
 
@@ -722,6 +725,7 @@ internal class SetupFlow(val mode: SetupMode, seed: SetupSeed, private val limit
         val values = mapOf(
             SetupField.TorrentIndexerName to r.name,
             SetupField.TorrentIndexerUrl to r.shownUrl,
+            SetupField.TorrentIndexerAgent to r.userAgent,
             SetupField.TorrentIndexerDebrid to if (r.useWithService) ON else "",
         )
         return Saved(r.ref, r.name, values, r.key, r.enabled, r.hiddenParts, readOnly = refused(values))
@@ -809,7 +813,7 @@ internal class SetupFlow(val mode: SetupMode, seed: SetupSeed, private val limit
 
         /**
          * Where [values] send this card's password or key: a provider's host, port, TLS and username, an indexer's or a
-         * torrent indexer's address, a debrid account's service.
+         * torrent indexer's address, a debrid account's service. Not a User-Agent: another one asks the same server.
          */
         fun server(values: Map<SetupField, String>): Map<SetupField, String> = values.filterKeys {
             it == SetupField.ProviderHost || it == SetupField.ProviderPort || it == SetupField.ProviderTls || it == SetupField.ProviderUsername ||
@@ -836,7 +840,12 @@ internal class SetupFlow(val mode: SetupMode, seed: SetupSeed, private val limit
             connections = values[SetupField.ProviderConnections]?.takeIf { it.isNotEmpty() }?.toInt(),
         )
 
-        fun indexerDraft() = IndexerDraft(values[SetupField.IndexerName].orEmpty(), values[SetupField.IndexerUrl].orEmpty(), secret.orEmpty())
+        fun indexerDraft() = IndexerDraft(
+            values[SetupField.IndexerName].orEmpty(),
+            values[SetupField.IndexerUrl].orEmpty(),
+            secret.orEmpty(),
+            values[SetupField.IndexerAgent].orEmpty(),
+        )
 
         fun serviceDraft() = ServiceDraft(values[SetupField.ServiceKind].orEmpty(), secret.orEmpty())
 
@@ -845,6 +854,7 @@ internal class SetupFlow(val mode: SetupMode, seed: SetupSeed, private val limit
             values[SetupField.TorrentIndexerUrl].orEmpty(),
             secret.orEmpty(),
             useWithService = values[SetupField.TorrentIndexerDebrid] == ON,
+            userAgent = values[SetupField.TorrentIndexerAgent].orEmpty(),
         )
     }
 

@@ -91,7 +91,7 @@ class SetupFormTest {
         val limits = mapOf(
             SetupField.ProviderName to 100, SetupField.ProviderHost to 253, SetupField.ProviderUsername to 256,
             SetupField.ProviderPassword to 256, SetupField.IndexerName to 100, SetupField.IndexerUrl to 2048,
-            SetupField.IndexerKey to 512, SetupField.TmdbKey to 1024,
+            SetupField.IndexerKey to 512, SetupField.TmdbKey to 1024, SetupField.IndexerAgent to 256, SetupField.TorrentIndexerAgent to 256,
         )
         for ((field, limit) in limits) {
             assertEquals(limit, field.maxLength, field.name)
@@ -144,6 +144,81 @@ class SetupFormTest {
         }
         assertEquals("eyJ.a-b_c~!", fields(SetupSection.Tmdb, "t.key" to "  eyJ.a-b_c~!  ").fields[SetupField.TmdbKey])
         assertEquals("ABC123", fields(SetupSection.Indexer, "i.key" to " ABC123 ").fields[SetupField.IndexerKey])
+    }
+
+    // An indexer's own User-Agent (L555): the client's rule (L548), so what the page holds the app sends, and the reverse.
+
+    private val agents = listOf(SetupField.IndexerAgent, SetupField.TorrentIndexerAgent)
+
+    /** The 27 chars outside ' '..'~' that Kotlin's trim() drops (isWhitespace on the JVM: Java's whitespace or space chars). */
+    private val trimmed = listOf('\t', '\n', '\u000B', '\u000C', '\r', '\u001C', '\u001D', '\u001E', '\u001F', '\u00A0', '\u1680') +
+        ('\u2000'..'\u200A') + listOf('\u2028', '\u2029', '\u202F', '\u205F', '\u3000')
+
+    private fun shown(c: Char) = "U+%04X".format(c.code)
+
+    @Test
+    fun `a User-Agent is printable ascii once trimmed, and a char it can't hold is a problem, not a refusal`() {
+        for (field in agents) {
+            for (bad in listOf("Example\tReader/2.1", "a\r\nb", "a\u0000b", "a\u007Fb", "ExampléReader/2.1", "QuarryFetch’s/1.0", "Example😀Reader/2.1", "a\u00A0b")) {
+                val post = fields(field.section, field.key to bad)
+                assertEquals(mapOf(field to Reason.Characters), post.problems, "$field ${bad.map(::shown)}")
+                assertFalse(field in post.fields)
+            }
+            // Spaces inside, as product strings have, and every other printable char, trimmed at its ends; blank is the app's own.
+            val printable = (' '..'~').joinToString("")
+            assertEquals("a${printable}b", fields(field.section, field.key to "a${printable}b").fields[field])
+            assertEquals("ExampleReader/2.1 (compatible; QuarryFetch/1.0)", fields(field.section, field.key to "  ExampleReader/2.1 (compatible; QuarryFetch/1.0) ").fields[field])
+            assertEquals("", fields(field.section, field.key to " \t ").fields[field])
+            assertEquals("", fields(field.section, field.key to "").fields[field])
+        }
+    }
+
+    /** The limit is the page's maxlength, so counted before trimming, and before any char is looked at. */
+    @Test
+    fun `a User-Agent holds 256 chars as typed, and 257 are refused before its chars are looked at`() {
+        for (field in agents) {
+            assertEquals("x".repeat(256), fields(field.section, field.key to "x".repeat(256)).fields[field])
+            assertEquals("x".repeat(255), fields(field.section, field.key to "x".repeat(255) + " ").fields[field])
+            refused(field, Reason.TooLong, field.key to "x".repeat(257))
+            refused(field, Reason.TooLong, field.key to " " + "x".repeat(256))
+            refused(field, Reason.TooLong, field.key to "é" + "x".repeat(256))
+        }
+    }
+
+    @Test
+    fun `each char inside a User-Agent is held exactly when it is printable ascii`() {
+        val chars = (0..0xFFFF).map { it.toChar() }
+        for (field in agents) {
+            val wrong = chars.filter { c -> SetupForm.check(field, "a${c}b") != (if (c in ' '..'~') null else Reason.Characters) }
+            assertEquals(emptyList(), wrong.map(::shown), field.name)
+        }
+    }
+
+    @Test
+    fun `each char trim drops is dropped from either end of a User-Agent, and the value is kept`() {
+        assertEquals(trimmed.map(::shown), (0..0xFFFF).map { it.toChar() }.filter { it.isWhitespace() && it !in ' '..'~' }.map(::shown))
+        for (field in agents) for (c in trimmed) {
+            for (value in listOf("${c}ExampleReader/2.1", "ExampleReader/2.1$c", "$c$c ExampleReader/2.1 $c")) {
+                val post = fields(field.section, field.key to value)
+                assertEquals(emptyMap(), post.problems, "$field ${value.map(::shown)}")
+                assertEquals("ExampleReader/2.1", post.fields[field], "$field ${value.map(::shown)}")
+            }
+        }
+    }
+
+    /** It is no secret (W144), but a pasted browser string can tell who someone is, and logs get shared (L554). */
+    @Test
+    fun `the indexer drafts print whether a User-Agent is there, never what it is`() {
+        val indexer = IndexerDraft("Mine", "https://indexer.example.invalid/api", "k", userAgent = "ExampleReader/2.1 marker")
+        val torrent = TorrentIndexerDraft("Quarry", "https://quarry.example.invalid/api", "k", useWithService = true, userAgent = "QuarryFetch/1.0 marker")
+        val changes = SetupChanges(emptyList(), listOf(SetupChange(null, indexer, false)), null, torrentIndexers = listOf(SetupChange("r", torrent, false)))
+        val item = SetupTestItem.Indexer(SetupSlot(SetupSection.Indexer, 1), null, indexer, plainHttp = false)
+        for (printed in listOf(indexer.toString(), torrent.toString(), changes.toString(), item.toString())) assertFalse(printed.contains("marker"), printed)
+        assertTrue(indexer.toString().contains("userAgent=set") && torrent.toString().contains("userAgent=set"))
+        // Last, and blank unless given: the app's own.
+        val plain = IndexerDraft("Mine", "https://indexer.example.invalid/api", "k")
+        assertEquals(listOf("", ""), listOf(plain.userAgent, TorrentIndexerDraft("Quarry", "https://quarry.example.invalid/api", "k", true).userAgent))
+        assertTrue(plain.toString().endsWith("userAgent=none)"), plain.toString())
     }
 
     @Test
@@ -339,6 +414,7 @@ class SetupFormTest {
         val widest = listOf("add:provider", "add:indexer", "add:service", "add:torrent-indexer", "test-http", "test:p999", "drop:i999", "drop:r999")
             .maxBy { URLEncoder.encode(it, "UTF-8").length }
         assertEquals("add:torrent-indexer", widest)
+        val sizes = mutableMapOf<SetupSection, Int>()
         for (section in SetupSection.entries) {
             val fields = SetupField.entries.filter { it.section == section }
             // A box sends "on" or nothing, a radio one of its card's choices (a word at its most); every other field its most.
@@ -357,6 +433,7 @@ class SetupFormTest {
                 }
             } + "v=999999999&do=".length + URLEncoder.encode(widest, "UTF-8").length
             assertEquals(size, body.size, section.name)
+            sizes[section] = body.size
             assertTrue(body.size <= SetupLimits().body, "${section.name}: ${body.size} bytes")
             assertTrue(fields.size + 2 <= SetupForm.MAX_FIELDS, section.name)
             val choices = fields.filter { it.kind == SetupField.Kind.Choice }.map(::worst).toSet()
@@ -364,5 +441,7 @@ class SetupFormTest {
             assertFalse(read is SetupRejection, "${section.name}: $read")
         }
         assertEquals(listOf(64, 32 * 1024), listOf(SetupForm.MAX_FIELDS, SetupLimits().body))
+        // The worst is a torrent indexer card's, its User-Agent at its most (6 + 9 × 256 bytes of it, L555), with 6 KiB to spare.
+        assertEquals(SetupSection.TorrentIndexer to 26_320, sizes.maxBy { it.value }.toPair())
     }
 }

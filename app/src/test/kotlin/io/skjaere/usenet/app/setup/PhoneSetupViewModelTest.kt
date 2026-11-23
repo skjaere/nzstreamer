@@ -1128,7 +1128,7 @@ class PhoneSetupViewModelTest {
         assertEquals(
             SetupSeed(
                 listOf(SavedProvider(p, "Main", "news.example.net", 563, true, "alice", 8, false, SavedSecret.Unreadable)),
-                listOf(SavedIndexer(i, "Idx", "https://indexer.example.org/api", hiddenParts = true, enabled = true, key = SavedSecret.Saved)),
+                listOf(SavedIndexer(i, "Idx", "https://indexer.example.org/api", hiddenParts = true, enabled = true, key = SavedSecret.Saved, userAgent = "")),
                 SavedSecret.Saved,
                 SERVICE_CHOICES,
             ),

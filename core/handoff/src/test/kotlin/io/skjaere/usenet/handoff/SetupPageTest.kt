@@ -112,8 +112,8 @@ class SetupPageTest {
 
     private val main = SavedProvider("prov-1", "Main provider", "news.example.invalid", 563, true, "someone", 20, true, SavedSecret.Saved)
     private val block = SavedProvider("prov-2", "Old block", "block.example.invalid", 563, true, "someone", 8, true, SavedSecret.Saved)
-    private val indexerA = SavedIndexer("idx-1", "Indexer A", "https://indexer-a.example.invalid/api", false, true, SavedSecret.Saved)
-    private val home = SavedIndexer("idx-2", "Home", "http://192.168.1.10:9696/1", true, false, SavedSecret.Saved)
+    private val indexerA = SavedIndexer("idx-1", "Indexer A", "https://indexer-a.example.invalid/api", false, true, SavedSecret.Saved, "")
+    private val home = SavedIndexer("idx-2", "Home", "http://192.168.1.10:9696/1", true, false, SavedSecret.Saved, "")
     private val seed = SetupSeed(listOf(main, block), listOf(indexerA, home), SavedSecret.Saved)
     private val p1 = SetupSlot(SetupSection.Provider, 1)
     private val p2 = SetupSlot(SetupSection.Provider, 2)
@@ -128,8 +128,8 @@ class SetupPageTest {
             SetupField.ProviderUsername to user, SetupField.ProviderPassword to pass, SetupField.ProviderConnections to conns,
         ).toTypedArray()
 
-    private fun indexer(name: String = "", url: String = "", key: String = "") =
-        arrayOf(SetupField.IndexerName to name, SetupField.IndexerUrl to url, SetupField.IndexerKey to key)
+    private fun indexer(name: String = "", url: String = "", key: String = "", ua: String = "") =
+        arrayOf(SetupField.IndexerName to name, SetupField.IndexerUrl to url, SetupField.IndexerKey to key, SetupField.IndexerAgent to ua)
 
     private val typed = provider("Mine", "fill.example.invalid", "563", true, "me2", "marker-pass", "8")
 
@@ -180,7 +180,7 @@ class SetupPageTest {
         ServiceChoice("torbox", "TorBox", "In TorBox: Settings › API key"),
     )
     private val torbox = SavedService("svc-1", "torbox", "quay.viewer@example.org", true, SavedSecret.Saved)
-    private val lantern = SavedIndexer("idx-3", "Lantern Index", "https://lantern.example.org/api", false, true, SavedSecret.Saved)
+    private val lantern = SavedIndexer("idx-3", "Lantern Index", "https://lantern.example.org/api", false, true, SavedSecret.Saved, "")
     private val s1 = SetupSlot(SetupSection.Service, 1)
     private val r1 = SetupSlot(SetupSection.TorrentIndexer, 1)
     private val signedIn = SetupResult(SetupOutcome.Passed, "Signed in as quay.viewer@example.org · plan until 12 Jan 2027")
@@ -188,9 +188,9 @@ class SetupPageTest {
     private fun service(kind: String? = null, key: String = "") =
         listOfNotNull(kind?.let { SetupField.ServiceKind to it }, SetupField.ServiceKey to key).toTypedArray()
 
-    private fun torrent(name: String = "", url: String = "", key: String = "", debrid: Boolean = true) = listOfNotNull(
+    private fun torrent(name: String = "", url: String = "", key: String = "", debrid: Boolean = true, ua: String = "") = listOfNotNull(
         SetupField.TorrentIndexerName to name, SetupField.TorrentIndexerUrl to url, SetupField.TorrentIndexerKey to key,
-        (SetupField.TorrentIndexerDebrid to "on").takeIf { debrid },
+        SetupField.TorrentIndexerAgent to ua, (SetupField.TorrentIndexerDebrid to "on").takeIf { debrid },
     ).toTypedArray()
 
     /** DbPhoneSetupService 1: the edit page, TorBox chosen on a new Debrid service card, its key pasted. */
@@ -251,7 +251,7 @@ class SetupPageTest {
 
     @Test
     fun `the debrid sections follow Indexers as Settings orders them, and aren't there while the seed offers no service`() {
-        val saved = SetupSeed(listOf(main), listOf(lantern), SavedSecret.Saved, choices, listOf(torbox), listOf(SavedTorrentIndexer("tor-1", "Home Prowlarr", "http://192.168.1.20:9696/3/api", false, true, false, SavedSecret.Saved)))
+        val saved = SetupSeed(listOf(main), listOf(lantern), SavedSecret.Saved, choices, listOf(torbox), listOf(SavedTorrentIndexer("tor-1", "Home Prowlarr", "http://192.168.1.20:9696/3/api", false, true, false, SavedSecret.Saved, "")))
         val page = SetupFlow(SetupMode.Edit, saved).page()
         assertEquals(listOf("Usenet providers · tried in this order", "Indexers", "Debrid service", "Torrent indexers", "TMDB"), headings(page))
         assertTrue(page.contains("<p class=\"ct\">TorBox</p>\n<p class=\"cm\">quay.viewer@example.org · key saved</p>\n<p class=\"st\">Saved</p>"), page)
@@ -334,7 +334,7 @@ class SetupPageTest {
     fun `a torrent indexer card has an indexer's fields and its box, ticked by default, with its line`() {
         val page = torrentTyped().page()
         assertTrue(page.contains("<fieldset id=\"r1\">\n<legend>Torrent indexer 1</legend>\n"), page)
-        assertEquals(listOf("v", "r.name", "r.url", "r.key", "r.debrid"), inputs(page).map { it["name"] })
+        assertEquals(listOf("v", "r.name", "r.url", "r.key", "r.ua", "r.debrid"), inputs(page).map { it["name"] })
         assertEquals(listOf("url", "url"), inputs(page).single { it["name"] == "r.url" }.let { listOf(it["type"], it["inputmode"]) })
         assertEquals(listOf("Home Prowlarr", "http://192.168.1.20:9696/3/api", null), listOf("r.name", "r.url", "r.key").map { n -> inputs(page).single { it["name"] == n }["value"] })
         assertTrue(
@@ -344,7 +344,7 @@ class SetupPageTest {
             ),
             page,
         )
-        assertEquals(listOf(SetupPage.TYPED_KEPT, SetupPage.TORRENT_DEBRID_HELP), texts(page, "fh"))
+        assertEquals(listOf(SetupPage.TYPED_KEPT, SetupPage.USER_AGENT_HELP, SetupPage.TORRENT_DEBRID_HELP), texts(page, "fh"))
         assertFalse(page.contains("marker"))
         assertTrue(page.contains("<strong>Send to TV waits until Home Prowlarr is tested or not added.</strong>"), page)
         // Unticked, the box comes back unticked.
@@ -399,7 +399,7 @@ class SetupPageTest {
         assertFalse(service.contains(SetupPage.NONE_ADDED), "a debrid service being removed plays in nothing's place")
 
         // Home Prowlarr saved, nothing else: removed on step 2.
-        val prowlarr = SavedTorrentIndexer("tor-1", "Home Prowlarr", "http://192.168.1.20:9696/3/api", false, true, true, SavedSecret.Saved)
+        val prowlarr = SavedTorrentIndexer("tor-1", "Home Prowlarr", "http://192.168.1.20:9696/3/api", false, true, true, SavedSecret.Saved, "")
         val torrent = stepFour(SetupSeed(serviceKinds = choices, torrentIndexers = listOf(prowlarr)), r1)
         assertEquals(listOf("Usenet providers", "Indexers", "Torrent indexers", "TMDB"), headings(torrent))
         assertTrue(torrent.contains("<h2>Indexers</h2>\n<p class=\"hint\">${SetupPage.NO_INDEXER}</p>"), torrent)
@@ -509,14 +509,18 @@ class SetupPageTest {
             SetupField.ProviderPassword to listOf("password", null),
             SetupField.IndexerUrl to listOf("url", "url"),
             SetupField.IndexerKey to listOf(null, null),
+            SetupField.IndexerAgent to listOf(null, null),
             SetupField.ServiceKind to listOf("radio", null),
             SetupField.ServiceKey to listOf(null, null),
             SetupField.TorrentIndexerUrl to listOf("url", "url"),
             SetupField.TorrentIndexerKey to listOf(null, null),
+            SetupField.TorrentIndexerAgent to listOf(null, null),
             SetupField.TorrentIndexerDebrid to listOf("checkbox", null),
             SetupField.TmdbKey to listOf(null, null),
         )
         for ((field, kind) in keyboards) assertEquals(kind, seen.getValue(field).let { listOf(it["type"], it["inputmode"]) }, field.key)
+        // The page can't know the client's own value (core:handoff has none of the app's), so a User-Agent has no placeholder.
+        for (field in listOf(SetupField.IndexerAgent, SetupField.TorrentIndexerAgent)) assertFalse("placeholder" in seen.getValue(field), field.key)
     }
 
     @Test
@@ -909,6 +913,58 @@ class SetupPageTest {
         assertTrue(SetupPage.sent.contains("Nothing is saved until you choose Save there. You can close this page."))
     }
 
+    /**
+     * L555: an indexer's own User-Agent, under its key on both indexer cards: shown whole, as it is no secret (W144),
+     * escaped, with W143's line tied to it, no placeholder; read back as typed. A summary and step 4 say there is one.
+     */
+    @Test
+    fun `a User-Agent is shown as typed with its line under it, and a card's summary says it has one`() {
+        val hostile = "ExampleReader/2.1 \"><b>x</b> & 'y'"
+        val flow = stepTwo().apply { post(SetupAction.Enter, *indexer("Home Prowlarr", "http://192.168.1.10:9696/2/api", "", ua = hostile)) }
+        val page = flow.page()
+        assertEquals(listOf("v", "i.name", "i.url", "i.key", "i.ua"), inputs(page).map { it["name"] })
+        val input = inputs(page).single { it["name"] == "i.ua" }
+        assertEquals(listOf(null, "256", "i.ua-h"), listOf(input["type"], input["maxlength"], input["aria-describedby"]))
+        assertEquals(hostile, unescape(input["value"]!!))
+        for (banned in listOf("<b>", "'y'")) assertFalse(page.contains(banned), banned)
+        assertTrue(page.contains("<p id=\"i.ua-h\" class=\"fh\">${SetupPage.USER_AGENT_HELP}</p>\n"), page)
+        assertEquals("Optional. Without one, NZStreamer’s own is sent. Change it only if this indexer asks for one.", SetupPage.USER_AGENT_HELP)
+        assertEquals(hostile, assertIs<SetupPost>(parse(page, flow, SetupAction.Enter)).fields[SetupField.IndexerAgent])
+        // A char it can't hold: said above, and the field points at that as well as at its line.
+        val body = "v=${flow.version}&do=enter&i.name=Home&i.url=http%3A%2F%2F192.168.1.10%3A9696%2F2%2Fapi&i.key=&i.ua=Exampl%C3%A9Reader"
+        flow.apply(assertIs<SetupPost>(SetupForm.parse(body.toByteArray(), flow.layout())))
+        val problem = flow.page()
+        assertEquals("i.ua-p i.ua-h", inputs(problem).single { it["name"] == "i.ua" }["aria-describedby"])
+        assertTrue(problem.contains("<p id=\"i.ua-p\" class=\"result fail\">User-Agent: it has a character it can't hold, so it wasn't kept.</p>"), problem)
+
+        // Closed, a card says it has one of its own, never which: on the edit page and on step 4.
+        val saved = SetupSeed(
+            listOf(main), listOf(indexerA.copy(userAgent = "ExampleReader/2.1")), SavedSecret.Saved, choices, listOf(torbox),
+            listOf(SavedTorrentIndexer("tor-1", "Home Prowlarr", "http://192.168.1.20:9696/3/api", false, true, false, SavedSecret.Saved, "QuarryFetch/1.0")),
+        )
+        val edit = SetupFlow(SetupMode.Edit, saved).page()
+        assertTrue(edit.contains("<p class=\"cm\">https://indexer-a.example.invalid/api · key saved · custom User-Agent</p>"), edit)
+        assertTrue(edit.contains("<p class=\"cm\">http://192.168.1.20:9696/3/api · key saved · custom User-Agent · not used with your debrid service</p>"), edit)
+        assertEquals("custom User-Agent", SetupPage.CUSTOM_USER_AGENT)
+        for (value in listOf("ExampleReader", "QuarryFetch")) assertFalse(edit.contains(value), value)
+        assertFalse(SetupFlow(SetupMode.Edit, seed).page().contains(SetupPage.CUSTOM_USER_AGENT), "none of its own")
+        val four = wizard().apply {
+            tested(SetupAction.Test, *typed)
+            post(SetupAction.Next, *typed)
+            tested(SetupAction.Test, *indexer("Home Prowlarr", "http://192.168.1.10:9696/2/api", "marker-key", ua = "ExampleReader/2.1"))
+            post(SetupAction.Next, *indexer("Home Prowlarr", "http://192.168.1.10:9696/2/api", "", ua = "ExampleReader/2.1"))
+            post(SetupAction.Next, SetupField.TmdbKey to "")
+        }.page()
+        assertTrue(four.contains("<p class=\"ct\"><span class=\"tag\">New</span>Home Prowlarr</p>\n<p class=\"cm\">http://192.168.1.10:9696/2/api · key typed · custom User-Agent</p>"), four)
+        assertFalse(four.contains("ExampleReader"))
+        // Open, a saved card's value is in its input, and posted back as shown it is as saved.
+        val open = SetupFlow(SetupMode.Edit, saved).apply { post(SetupAction.Open(SetupSlot(SetupSection.TorrentIndexer, 1))) }
+        val openPage = open.page()
+        assertEquals("QuarryFetch/1.0", inputs(openPage).single { it["name"] == "r.ua" }["value"])
+        open.apply(assertIs<SetupPost>(parse(openPage, open, SetupAction.Open(SetupSlot.Tmdb))))
+        assertFalse(open.show().changed)
+    }
+
     /** Nothing saved can reach a page but through the view, whose cards hold no password or key. */
     @Test
     fun `a page from the flow is made from its view alone`() {
@@ -923,15 +979,19 @@ class SetupPageTest {
             SavedProvider::class.java.declaredFields.filterNot { java.lang.reflect.Modifier.isStatic(it.modifiers) }.map { it.name },
         )
         assertEquals(
-            listOf("ref", "name", "shownUrl", "hiddenParts", "enabled", "key"),
+            listOf("ref", "name", "shownUrl", "hiddenParts", "enabled", "key", "userAgent"),
             SavedIndexer::class.java.declaredFields.filterNot { java.lang.reflect.Modifier.isStatic(it.modifiers) }.map { it.name },
         )
         assertEquals(SavedSecret::class.java, SavedIndexer::class.java.getDeclaredField("key").type)
         assertEquals(SavedSecret::class.java, SetupSeed::class.java.getDeclaredField("tmdbKey").type)
-        // Printed, a seed names no host, name, username or address.
-        for (printed in listOf(main.toString(), home.toString())) {
-            for (value in listOf("news.example.invalid", "Main provider", "someone", "192.168.1.10")) assertFalse(printed.contains(value), printed)
+        // Printed, a seed names no host, name, username, address or User-Agent (L554): whether there is one.
+        val prowlarr = SavedTorrentIndexer("tor-1", "Home Prowlarr", "http://192.168.1.20:9696/3/api", false, true, true, SavedSecret.Saved, "QuarryFetch/1.0")
+        for (printed in listOf(main.toString(), home.toString(), home.copy(userAgent = "ExampleReader/2.1").toString(), prowlarr.toString())) {
+            for (value in listOf("news.example.invalid", "Main provider", "someone", "192.168.1.10", "192.168.1.20", "ExampleReader", "QuarryFetch")) {
+                assertFalse(printed.contains(value), printed)
+            }
         }
+        assertEquals(listOf("userAgent=none", "userAgent=set", "userAgent=set"), listOf(home, home.copy(userAgent = "ExampleReader/2.1"), prowlarr).map { Regex("userAgent=[a-z]+").find(it.toString())?.value })
     }
 
     private companion object {

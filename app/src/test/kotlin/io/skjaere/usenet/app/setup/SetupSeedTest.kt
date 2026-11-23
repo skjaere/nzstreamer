@@ -70,10 +70,10 @@ class SetupSeedTest {
         cipher.unreadable += "key-lost"
         assertEquals(
             listOf(
-                SavedIndexer(plain, "Prowlarr 1", "http://192.168.1.5:9696/1/api", hiddenParts = false, enabled = true, key = SavedSecret.Saved),
-                SavedIndexer(hidden, "Hidden", "https://indexer.example.org/api", hiddenParts = true, enabled = false, key = SavedSecret.Saved),
-                SavedIndexer(lost, "Lost", "https://lost.example.org/api", hiddenParts = false, enabled = true, key = SavedSecret.Unreadable),
-                SavedIndexer(none, "None", "https://none.example.org/api", hiddenParts = false, enabled = true, key = SavedSecret.None),
+                SavedIndexer(plain, "Prowlarr 1", "http://192.168.1.5:9696/1/api", hiddenParts = false, enabled = true, key = SavedSecret.Saved, userAgent = ""),
+                SavedIndexer(hidden, "Hidden", "https://indexer.example.org/api", hiddenParts = true, enabled = false, key = SavedSecret.Saved, userAgent = ""),
+                SavedIndexer(lost, "Lost", "https://lost.example.org/api", hiddenParts = false, enabled = true, key = SavedSecret.Unreadable, userAgent = ""),
+                SavedIndexer(none, "None", "https://none.example.org/api", hiddenParts = false, enabled = true, key = SavedSecret.None, userAgent = ""),
             ),
             settings.setupSeed().indexers,
         )
@@ -121,8 +121,8 @@ class SetupSeedTest {
         )
         assertEquals(
             listOf(
-                SavedTorrentIndexer(home, "Home Prowlarr", "http://192.168.1.20:9696/3/api", hiddenParts = true, enabled = true, useWithService = false, key = SavedSecret.Saved),
-                SavedTorrentIndexer(quarry, "Quarry", "https://quarry.example.invalid/api", hiddenParts = false, enabled = false, useWithService = true, key = SavedSecret.None),
+                SavedTorrentIndexer(home, "Home Prowlarr", "http://192.168.1.20:9696/3/api", hiddenParts = true, enabled = true, useWithService = false, key = SavedSecret.Saved, userAgent = ""),
+                SavedTorrentIndexer(quarry, "Quarry", "https://quarry.example.invalid/api", hiddenParts = false, enabled = false, useWithService = true, key = SavedSecret.None, userAgent = ""),
             ),
             seed.torrentIndexers,
         )
@@ -166,7 +166,11 @@ class SetupSeedTest {
             fields(SavedProvider::class.java),
         )
         assertEquals(
-            mapOf("ref" to "String", "name" to "String", "shownUrl" to "String", "hiddenParts" to "boolean", "enabled" to "boolean", "key" to "SavedSecret"),
+            // The User-Agent is shown whole on the page (W144): it is no secret.
+            mapOf(
+                "ref" to "String", "name" to "String", "shownUrl" to "String", "hiddenParts" to "boolean", "enabled" to "boolean", "key" to "SavedSecret",
+                "userAgent" to "String",
+            ),
             fields(SavedIndexer::class.java),
         )
         assertEquals(
@@ -176,7 +180,7 @@ class SetupSeedTest {
         assertEquals(
             mapOf(
                 "ref" to "String", "name" to "String", "shownUrl" to "String", "hiddenParts" to "boolean", "enabled" to "boolean", "useWithService" to "boolean",
-                "key" to "SavedSecret",
+                "key" to "SavedSecret", "userAgent" to "String",
             ),
             fields(SavedTorrentIndexer::class.java),
         )

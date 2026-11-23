@@ -37,7 +37,7 @@ class SetupServerTest {
     private val now = AtomicLong(1_000_000)
 
     private val main = SavedProvider("prov-1", "Main provider", "news.example.invalid", 563, true, "someone", 20, true, SavedSecret.Saved)
-    private val indexerA = SavedIndexer("idx-1", "Indexer A", "https://indexer-a.example.invalid/api", false, true, SavedSecret.Saved)
+    private val indexerA = SavedIndexer("idx-1", "Indexer A", "https://indexer-a.example.invalid/api", false, true, SavedSecret.Saved, "")
     private val seed = SetupSeed(listOf(main), listOf(indexerA))
     private val p1 = SetupSlot(SetupSection.Provider, 1)
     private val i1 = SetupSlot(SetupSection.Indexer, 1)

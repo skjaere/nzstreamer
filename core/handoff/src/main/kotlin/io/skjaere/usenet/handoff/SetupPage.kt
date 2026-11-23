@@ -9,9 +9,9 @@ const val SETUP_NOT_ENCRYPTED = "⚠ Not encrypted: what you send crosses your h
 /**
  * The pages a TV serves to the phone: the wizard's steps and the edit page, and fixed answers for what can happen to
  * them. Plain HTML with one inline style, no script and nothing from elsewhere. A page is made from the flow's view:
- * the cards the TV holds, saved ones' names, hosts, usernames, addresses and debrid accounts (never a password or key,
- * which the view can't hold), what the phone typed (never a password or key either), and the TV's words for each test,
- * all escaped. The fixed answers echo nothing.
+ * the cards the TV holds, saved ones' names, hosts, usernames, addresses, User-Agents and debrid accounts (never a
+ * password or key, which the view can't hold), what the phone typed (never a password or key either), and the TV's
+ * words for each test, all escaped. The fixed answers echo nothing.
  */
 object SetupPage {
     /** A card's words when the TV gave up waiting on its test. */
@@ -193,6 +193,13 @@ object SetupPage {
 
     /** Under a torrent indexer's "Use with your debrid service" (DbPhoneSetupService 4: a box, the page having no script). */
     const val TORRENT_DEBRID_HELP = "Some private trackers don’t allow debrid services. Untick it for those."
+    /**
+     * Under an indexer's own User-Agent (W143), in the app's forms' words. Unlike theirs, the field has no placeholder:
+     * the page can't know the client's own value.
+     */
+    const val USER_AGENT_HELP = "Optional. Without one, NZStreamer’s own is sent. Change it only if this indexer asks for one."
+    /** An indexer's or a torrent indexer's summary when it has a User-Agent of its own: never which. */
+    const val CUSTOM_USER_AGENT = "custom User-Agent"
     /** A torrent indexer's summary when its box is unticked, as its Settings row says it. */
     const val NOT_WITH_SERVICE = "not used with your debrid service"
     /** A debrid service card's summary with no key typed or saved. */
@@ -555,8 +562,9 @@ object SetupPage {
     }
 
     /**
-     * What a card is: "news.example.net:563 · TLS · me · password typed", an address and its key, a debrid account and
-     * its key, or the TMDB key's state. A card to be removed says nothing of its password or key: it goes with the card.
+     * What a card is: "news.example.net:563 · TLS · me · password typed", an address and its key (and whether it has a
+     * User-Agent of its own), a debrid account and its key, or the TMDB key's state. A card to be removed says nothing of
+     * its password or key: it goes with the card.
      */
     private fun StringBuilder.meta(card: CardView, kept: Boolean) {
         val v = card.values
@@ -574,7 +582,11 @@ object SetupPage {
                     secretOf("password").takeIf { user.isNotEmpty() || card.secret == SecretState.Typed },
                 ).joinToString(" · ")
             }
-            SetupSection.Indexer -> listOfNotNull(v[SetupField.IndexerUrl].orEmpty().ifEmpty { "No address yet" }, secretOf("key")).joinToString(" · ")
+            SetupSection.Indexer -> listOfNotNull(
+                v[SetupField.IndexerUrl].orEmpty().ifEmpty { "No address yet" },
+                secretOf("key"),
+                CUSTOM_USER_AGENT.takeIf { !v[SetupField.IndexerAgent].isNullOrEmpty() },
+            ).joinToString(" · ")
             SetupSection.Tmdb -> when (card.secret) {
                 SecretState.Typed -> "Key typed"
                 SecretState.Saved -> "A key is saved."
@@ -585,6 +597,7 @@ object SetupPage {
             SetupSection.TorrentIndexer -> listOfNotNull(
                 v[SetupField.TorrentIndexerUrl].orEmpty().ifEmpty { "No address yet" },
                 secretOf("key"),
+                CUSTOM_USER_AGENT.takeIf { !v[SetupField.TorrentIndexerAgent].isNullOrEmpty() },
                 NOT_WITH_SERVICE.takeIf { v[SetupField.TorrentIndexerDebrid] != "on" },
             ).joinToString(" · ")
         }
@@ -650,6 +663,7 @@ object SetupPage {
             field.isSecret -> kept(card)
             (field == SetupField.IndexerUrl || field == SetupField.TorrentIndexerUrl) && card.hiddenParts -> HIDDEN_PARTS_KEPT
             field == SetupField.TorrentIndexerDebrid -> TORRENT_DEBRID_HELP
+            field == SetupField.IndexerAgent || field == SetupField.TorrentIndexerAgent -> USER_AGENT_HELP
             else -> null
         }
         // Under a service's key, where each service the card offers keeps it: the page has no script to show one alone.
@@ -677,6 +691,7 @@ object SetupPage {
             SetupField.ServiceKey, SetupField.TorrentIndexerKey -> "$label<input $id $max $plain $NOT_A_LOGIN>\n$hint"
             SetupField.TorrentIndexerDebrid -> "<label class=\"check\"><input type=\"checkbox\" $id${if (value == "on") " checked" else ""}> ${field.label}</label>\n$hint"
             SetupField.ServiceKind -> radios(field, card)
+            SetupField.IndexerAgent, SetupField.TorrentIndexerAgent -> "$label<input $id $max $plain>\n$hint"
             SetupField.ProviderName, SetupField.ProviderUsername, SetupField.IndexerName, SetupField.TorrentIndexerName -> "$label<input $id $max $plain>\n"
         }
     }

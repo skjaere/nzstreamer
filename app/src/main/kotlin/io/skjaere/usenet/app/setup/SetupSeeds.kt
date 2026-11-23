@@ -18,8 +18,9 @@ import kotlinx.coroutines.flow.first
 /**
  * What is saved, as a session's page starts from it: every provider in the order they are tried and every indexer,
  * switched off or not, with what an untouched card sends back (a provider named as its host has no name, as its form
- * shows it), an indexer's address without its login, query or fragment ([shownAddress]), and of each password or key
- * only whether one is saved and can be read here. The record ids go as the refs, which stay on the TV.
+ * shows it), an indexer's address without its login, query or fragment ([shownAddress]) and its User-Agent whole, and
+ * of each password or key only whether one is saved and can be read here. The record ids go as the refs, which stay on
+ * the TV.
  *
  * While debrid is [shown] (L209), the page's debrid sections too: the services it offers, A to Z, each account of a
  * service this version knows (its name as the service gave it), and each torrent indexer as an indexer, with its switch.
@@ -32,7 +33,7 @@ internal suspend fun SettingsRepository.setupSeed(shown: Boolean = DebridGate.sh
     }
     val indexers = indexers.first().map { r ->
         val address = shownAddress(r.baseUrl)
-        SavedIndexer(r.id, r.name, address.url, address.hiddenParts, r.enabled, keyState(indexer(r.id)?.apiKey) { indexerKeyStored(r.id) })
+        SavedIndexer(r.id, r.name, address.url, address.hiddenParts, r.enabled, keyState(indexer(r.id)?.apiKey) { indexerKeyStored(r.id) }, r.userAgent)
     }
     val tmdb = when {
         tmdbKey() != null -> SavedSecret.Saved
@@ -47,7 +48,7 @@ internal suspend fun SettingsRepository.setupSeed(shown: Boolean = DebridGate.sh
     val torrentIndexers = torrentIndexers.first().map { r ->
         val address = shownAddress(r.baseUrl)
         val key = keyState(torrentIndexer(r.id)?.apiKey) { torrentIndexerKeyStored(r.id) }
-        SavedTorrentIndexer(r.id, r.name, address.url, address.hiddenParts, r.enabled, r.useWithService, key)
+        SavedTorrentIndexer(r.id, r.name, address.url, address.hiddenParts, r.enabled, r.useWithService, key, r.userAgent)
     }
     return SetupSeed(providers, indexers, tmdb, SERVICE_CHOICES, services, torrentIndexers)
 }

@@ -33,7 +33,8 @@ data class SavedProvider(
 /**
  * A saved indexer as the page may show it: [shownUrl] is its address without a query, a fragment or a login
  * (`scheme://host[:port]/path`), and [hiddenParts] says the saved one had some, kept on the TV. An address posted back
- * exactly as shown is the saved one. No field could hold an API key.
+ * exactly as shown is the saved one. [userAgent] is its own User-Agent as saved, "" for the app's: shown whole, as it is
+ * no secret (W144). No field could hold an API key.
  */
 data class SavedIndexer(
     val ref: String,
@@ -42,9 +43,11 @@ data class SavedIndexer(
     val hiddenParts: Boolean,
     val enabled: Boolean,
     val key: SavedSecret,
+    val userAgent: String,
 ) {
     override fun toString() =
-        "SavedIndexer(ref=$ref, name=${shown(name)}, shownUrl=${shown(shownUrl)}, hiddenParts=$hiddenParts, enabled=$enabled, key=$key)"
+        "SavedIndexer(ref=$ref, name=${shown(name)}, shownUrl=${shown(shownUrl)}, hiddenParts=$hiddenParts, enabled=$enabled, key=$key, " +
+            "userAgent=${shown(userAgent)})"
 }
 
 /**
@@ -81,10 +84,11 @@ data class SavedTorrentIndexer(
     val enabled: Boolean,
     val useWithService: Boolean,
     val key: SavedSecret,
+    val userAgent: String,
 ) {
     override fun toString() =
         "SavedTorrentIndexer(ref=$ref, name=${shown(name)}, shownUrl=${shown(shownUrl)}, hiddenParts=$hiddenParts, enabled=$enabled, " +
-            "useWithService=$useWithService, key=$key)"
+            "useWithService=$useWithService, key=$key, userAgent=${shown(userAgent)})"
 }
 
 /**

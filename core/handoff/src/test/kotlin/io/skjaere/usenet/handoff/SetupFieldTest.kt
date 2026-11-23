@@ -2,15 +2,16 @@ package io.skjaere.usenet.handoff
 
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 class SetupFieldTest {
     @Test
     fun `a kind's fields are its own, in the page's order`() {
         fun keys(section: SetupSection) = SetupField.entries.filter { it.section == section }.map { it.key }
         assertEquals(listOf("p.name", "p.host", "p.port", "p.tls", "p.user", "p.pass", "p.conns"), keys(SetupSection.Provider))
-        assertEquals(listOf("i.name", "i.url", "i.key"), keys(SetupSection.Indexer))
+        assertEquals(listOf("i.name", "i.url", "i.key", "i.ua"), keys(SetupSection.Indexer))
         assertEquals(listOf("s.kind", "s.key"), keys(SetupSection.Service))
-        assertEquals(listOf("r.name", "r.url", "r.key", "r.debrid"), keys(SetupSection.TorrentIndexer))
+        assertEquals(listOf("r.name", "r.url", "r.key", "r.ua", "r.debrid"), keys(SetupSection.TorrentIndexer))
         assertEquals(listOf("t.key"), keys(SetupSection.Tmdb))
         assertEquals(listOf("p.pass", "i.key", "s.key", "r.key", "t.key"), SetupField.entries.filter { it.isSecret }.map { it.key })
     }
@@ -24,8 +25,20 @@ class SetupFieldTest {
         assertEquals("Use with your debrid service", SetupField.TorrentIndexerDebrid.label)
         // As an indexer's: the same limits for the same things.
         assertEquals(
-            listOf(SetupField.IndexerName, SetupField.IndexerUrl, SetupField.IndexerKey, SetupField.IndexerKey).map { it.maxLength to it.label },
-            listOf(SetupField.TorrentIndexerName, SetupField.TorrentIndexerUrl, SetupField.TorrentIndexerKey, SetupField.ServiceKey).map { it.maxLength to it.label },
+            listOf(SetupField.IndexerName, SetupField.IndexerUrl, SetupField.IndexerKey, SetupField.IndexerAgent, SetupField.IndexerKey).map { it.maxLength to it.label },
+            listOf(SetupField.TorrentIndexerName, SetupField.TorrentIndexerUrl, SetupField.TorrentIndexerKey, SetupField.TorrentIndexerAgent, SetupField.ServiceKey)
+                .map { it.maxLength to it.label },
         )
+    }
+
+    /** L555: an indexer's own User-Agent, on both indexer cards, held to the app's rule (L548): 256 chars, not a secret. */
+    @Test
+    fun `both indexer cards have a User-Agent of their own kind, no secret`() {
+        for (field in listOf(SetupField.IndexerAgent, SetupField.TorrentIndexerAgent)) {
+            assertEquals(listOf(SetupField.Kind.Agent, 256, "User-Agent"), listOf(field.kind, field.maxLength, field.label), field.name)
+            assertFalse(field.isSecret, field.name)
+        }
+        assertEquals(listOf(SetupField.IndexerAgent), SetupField.entries.filter { it.kind == SetupField.Kind.Agent && it.section == SetupSection.Indexer })
+        assertEquals(listOf(SetupField.TorrentIndexerAgent), SetupField.entries.filter { it.kind == SetupField.Kind.Agent && it.section == SetupSection.TorrentIndexer })
     }
 }
