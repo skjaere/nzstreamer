@@ -682,14 +682,16 @@ class PhoneSetupViewModel(private val deps: PhoneSetupDeps) : ViewModel() {
                 ItemStatus.Failed(result.message, canRetry = true, canSaveAnyway = true)
             }
         }
-        is IndexerReview -> when (val result = deps.testIndexer(IndexerConfig(item.form.id, item.form.name, item.form.url.trim(), item.testKey.orEmpty()))) {
+        // Each with its own User-Agent, as it would be saved (L552).
+        is IndexerReview -> when (val result = deps.testIndexer(IndexerConfig(item.form.id, item.form.name, item.form.url.trim(), item.testKey.orEmpty(), userAgent = item.form.userAgent.trim()))) {
             is IndexerTest.Ok -> ItemStatus.Passed(indexerConnected(result))
             is IndexerTest.Failed -> ItemStatus.Failed(result.message, canRetry = true, canSaveAnyway = true)
             // The test only ever answers one of those.
             IndexerTest.Idle, IndexerTest.Running -> ItemStatus.Failed("The indexer's test didn't finish.", canRetry = true, canSaveAnyway = true)
         }
         is TorrentIndexerReview -> {
-            val config = IndexerConfig(item.form.fields.id, item.form.fields.name, item.form.fields.url.trim(), item.testKey.orEmpty(), kind = IndexerKind.Torznab)
+            val fields = item.form.fields
+            val config = IndexerConfig(fields.id, fields.name, fields.url.trim(), item.testKey.orEmpty(), kind = IndexerKind.Torznab, userAgent = fields.userAgent.trim())
             when (val result = deps.testIndexer(config)) {
                 is IndexerTest.Ok -> ItemStatus.Passed(indexerConnected(result))
                 is IndexerTest.Failed -> ItemStatus.Failed(result.message, canRetry = true, canSaveAnyway = true)

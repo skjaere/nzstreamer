@@ -121,6 +121,8 @@ class PhoneSetupViewModelTest {
         val testedKeys = mutableListOf<String>()
         val testedIndexerIds = mutableListOf<String>()
         val testedIndexerKinds = mutableListOf<IndexerKind>()
+        /** Each indexer test's address and the User-Agent it sent. */
+        val testedAgents = mutableListOf<Pair<String, String>>()
         /** The debrid keys signed in with, each on a client of its own (the registry's trial). */
         val serviceKeys = mutableListOf<Pair<ServiceKind, String>>()
         var service: (ServiceKind, String) -> Account = { _, _ -> QUAY_ACCOUNT }
@@ -137,7 +139,13 @@ class PhoneSetupViewModelTest {
                 FakeSession(opening, sessions.size, test.testScheduler.currentTime + sessionLifetime).also { sessions += it }
             },
             testProvider = { f, password -> testedPasswords += password; provider(f, password) },
-            testIndexer = { config -> testedKeys += config.apiKey; testedIndexerIds += config.id; testedIndexerKinds += config.kind; indexer(config) },
+            testIndexer = { config ->
+                testedKeys += config.apiKey
+                testedIndexerIds += config.id
+                testedIndexerKinds += config.kind
+                testedAgents += config.baseUrl to config.userAgent
+                indexer(config)
+            },
             validateTmdbKey = { tmdb(it) },
             now = { test.testScheduler.currentTime },
             pages = pages,
@@ -515,6 +523,61 @@ class PhoneSetupViewModelTest {
         // The providers list shows the phone's test for the provider as saved.
         assertEquals(true, f.providerTests.results.value[p.id]?.ok)
         assertTrue(f.vm.savedSomething.value)
+    }
+
+    /**
+     * L552, L557, L558: Save's test on the TV sends each indexer's own User-Agent and the record saved has it: a change of
+     * the User-Agent alone, and a rename that leaves one as saved. A pass from the phone stands for the User-Agent it sent
+     * alone, so a card sent with another is tested again.
+     */
+    @Test
+    fun `Save tests and saves each indexer's User-Agent, and a pass from the phone with another is tested again`() = runTest {
+        val f = Fixture(this)
+        val idx = f.settings.saveIndexer(null, "Idx", "https://indexer.example.org/api", "SAVED-KEY-0000-1111")
+        val kept = f.settings.saveIndexer(null, "Kept", "https://kept.example.org/api", "KEPT-KEY-0000-2222", userAgent = "QuarryFetch/1.0")
+        f.started()
+        val fresh = IndexerDraft("", "https://fresh.example.org/api", "FRESH-KEY-0000-3333", "ExampleReader/2.1")
+        val torrent = TorrentIndexerDraft("Quarry", "https://quarry.example.invalid/api", "TYPED-TORRENT-KEY", true, "QuarryFetch/1.0")
+        // The phone tested the new indexer as sent, and the torrent indexer with another User-Agent than the one sent.
+        f.phoneTest(Typed(null, fresh, null)).values.single().get(0, TimeUnit.SECONDS)
+        val r1 = SetupSlot(SetupSection.TorrentIndexer, 1)
+        val phone = f.session.tester.test(SetupTestItem.TorrentIndexer(r1, null, torrent.copy(userAgent = "QuarryFetch/0.9"), plainHttp = false))
+        runCurrent()
+        assertEquals(SetupOutcome.Passed, phone.get(0, TimeUnit.SECONDS).outcome)
+        assertEquals(listOf("ExampleReader/2.1", "QuarryFetch/0.9"), f.testedAgents.map { it.second })
+        f.testedAgents.clear()
+        f.receive(
+            SetupChanges(
+                emptyList(),
+                listOf(
+                    SetupChange(idx, IndexerDraft("Idx", "https://indexer.example.org/api", "", "ExampleReader/2.1"), removed = false),
+                    SetupChange(kept, IndexerDraft("Kept renamed", "https://kept.example.org/api", "", "QuarryFetch/1.0"), removed = false),
+                    SetupChange(null, fresh, removed = false),
+                ),
+                null,
+                torrentIndexers = listOf(SetupChange(null, torrent, removed = false)),
+            ),
+        )
+        assertEquals(
+            listOf("Indexer · Changes “Idx”", "Indexer · Changes “Kept”", "Indexer · New", "Torrent indexer · New"),
+            f.received.items.map { "${it.title} · ${it.heading}" },
+        )
+        assertEquals(listOf(false, false, true, false), f.received.items.map { it.tested })
+        f.vm.save()
+        runCurrent()
+        assertEquals(setOf(ItemStatus.Done(PHONE_SETUP_SAVED, ok = true)), assertIs<PhoneSetupState.Saved>(f.state).items.values.toSet())
+        assertEquals(
+            listOf(
+                "https://indexer.example.org/api" to "ExampleReader/2.1", "https://kept.example.org/api" to "QuarryFetch/1.0",
+                "https://quarry.example.invalid/api" to "QuarryFetch/1.0",
+            ),
+            f.testedAgents.sortedBy { it.first },
+            "the new indexer passed from the phone with it",
+        )
+        assertEquals(listOf("Idx", "ExampleReader/2.1", "SAVED-KEY-0000-1111"), f.settings.indexer(idx).let { listOf(it?.record?.name, it?.record?.userAgent, it?.apiKey) })
+        assertEquals(listOf("Kept renamed", "QuarryFetch/1.0", "KEPT-KEY-0000-2222"), f.settings.indexer(kept).let { listOf(it?.record?.name, it?.record?.userAgent, it?.apiKey) })
+        assertEquals("ExampleReader/2.1", f.settings.indexers.first().single { it.baseUrl == "https://fresh.example.org/api" }.userAgent)
+        assertEquals("QuarryFetch/1.0", f.settings.torrentIndexers.first().single().userAgent)
     }
 
     /** All or nothing: a failure on the TV holds up the save until it passes, is saved anyway or is left out. */

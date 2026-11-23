@@ -70,6 +70,9 @@ const val ONLY_PROVIDER_REMOVED = "This removes your only provider: nothing will
 /** A new key for a saved debrid account, or for one of its service signed in to on the TV meanwhile: Save replaces its key. */
 const val SERVICE_KEY_REPLACED = "Replaces the saved key"
 
+/** An empty side of a User-Agent's change line (L558): the client's own is sent. */
+const val OWN_USER_AGENT = "NZStreamer’s own"
+
 /** A torrent indexer sent with "Use with your debrid service" unticked. */
 const val NOT_USED_WITH_SERVICE = "Not used with your debrid service"
 
@@ -435,15 +438,20 @@ data class SetupReview(
             // A card left at the address the page showed is the saved address, whole.
             val url = before?.let { SavedSecretRule.indexerAddress(it.record.baseUrl, draft.url) } ?: draft.url.trim()
             val typedKey = draft.apiKey.trim()
+            // Saved trimmed, as the client sends it (L549).
+            val agent = draft.userAgent.trim()
             // Named after its host when the name is left blank, as its form saves it.
             val name = draft.name.trim().ifEmpty { runCatching { java.net.URI(url).host }.getOrNull() ?: "Indexer" }
-            if (before != null && typedKey.isEmpty() && url == before.record.baseUrl && name == before.record.name) return null
-            val form = before?.let { IndexerForm(it.record.id, draft.name.trim(), url, typedKey, hasSavedKey = it.apiKey != null, enabled = it.record.enabled) }
-                ?: newIndexerForm().copy(name = draft.name.trim(), url = url, apiKey = typedKey)
+            val asSaved = before != null && typedKey.isEmpty() && url == before.record.baseUrl && name == before.record.name && agent == before.record.userAgent
+            if (asSaved) return null
+            val form = before?.let { IndexerForm(it.record.id, draft.name.trim(), url, typedKey, hasSavedKey = it.apiKey != null, enabled = it.record.enabled, userAgent = agent) }
+                ?: newIndexerForm().copy(name = draft.name.trim(), url = url, apiKey = typedKey, userAgent = agent)
             val use = if (typedKey.isEmpty()) SavedSecretRule.key(before, ref in saved.storedKeys, draft.url) else null
             val problem = when {
                 url.isBlank() -> "No API URL was sent: fill it in on your phone and send again."
                 form.security == UrlSecurity.Invalid -> INDEXER_URL_SCHEME
+                // The page holds only what the rule takes: this guards against the two drifting apart.
+                form.agentProblem != null -> form.agentHelp
                 use == SavedUse.No(SavedRefusal.ServerChanged) -> INDEXER_ADDRESS_CHANGED
                 use == SavedUse.No(SavedRefusal.Unreadable) -> INDEXER_KEY_UNREADABLE
                 use == SavedUse.No(SavedRefusal.NoneSaved) -> INDEXER_NO_KEY
@@ -455,7 +463,7 @@ data class SetupReview(
                 use is SavedUse.Use -> use.secret
                 else -> null
             }
-            val tested = key != null && passes.indexer(url, key) != null
+            val tested = key != null && passes.indexer(url, key, agent) != null
             val keyLine = when {
                 typedKey.isNotEmpty() -> (if (before == null) "API key " else "New API key ") + maskKey(typedKey)
                 use is SavedUse.Use -> "Saved API key kept"
@@ -473,6 +481,7 @@ data class SetupReview(
                     ReviewLine(listOfNotNull(url, keyLine).joinToString(" · ")),
                     login?.let { ReviewLine("Host $it", warn = true) },
                     form.name.takeIf { it.isNotEmpty() }?.let { ReviewLine("Named “$it”") },
+                    agentLine(null, agent),
                     http,
                 )
                 IndexerReview(form.id, ReviewAction.New, form, draft, key, "New", lines, problem, tested, part)
@@ -481,6 +490,7 @@ data class SetupReview(
                 // The old address as the phone's page showed it: no more of it than that.
                 val lines = listOfNotNull(
                     named(r.name, name, cleared = null),
+                    agentLine(r.userAgent, agent),
                     ReviewLine("Address: ${shownAddress(r.baseUrl).url} → $url", warn = true).takeIf { url != r.baseUrl },
                     login?.takeIf { url != r.baseUrl }?.let { ReviewLine("Host $it", warn = true) },
                     keyLine?.let(::ReviewLine),
@@ -537,16 +547,20 @@ data class SetupReview(
             }
             val url = before?.let { SavedSecretRule.indexerAddress(it.record.baseUrl, draft.url) } ?: draft.url.trim()
             val typedKey = draft.key.trim()
+            val agent = draft.userAgent.trim()
             // Named after its host when the name is left blank, as its form saves it.
             val name = draft.name.trim().ifEmpty { runCatching { java.net.URI(url).host }.getOrNull() ?: "Torrent indexer" }
-            if (before != null && typedKey.isEmpty() && url == before.record.baseUrl && name == before.record.name && draft.useWithService == before.record.useWithService) return null
-            val fields = before?.let { IndexerForm(it.record.id, draft.name.trim(), url, typedKey, hasSavedKey = it.apiKey != null, enabled = it.record.enabled) }
-                ?: newIndexerForm().copy(name = draft.name.trim(), url = url, apiKey = typedKey)
+            val asSaved = before != null && typedKey.isEmpty() && url == before.record.baseUrl && name == before.record.name &&
+                draft.useWithService == before.record.useWithService && agent == before.record.userAgent
+            if (asSaved) return null
+            val fields = before?.let { IndexerForm(it.record.id, draft.name.trim(), url, typedKey, hasSavedKey = it.apiKey != null, enabled = it.record.enabled, userAgent = agent) }
+                ?: newIndexerForm().copy(name = draft.name.trim(), url = url, apiKey = typedKey, userAgent = agent)
             val form = TorrentIndexerForm(fields, draft.useWithService)
             val use = if (typedKey.isEmpty()) SavedSecretRule.torrentIndexerKey(before, ref in saved.storedKeys, draft.url) else null
             val problem = when {
                 url.isBlank() -> "No API URL was sent: fill it in on your phone and send again."
                 fields.security == UrlSecurity.Invalid -> INDEXER_URL_SCHEME
+                fields.agentProblem != null -> fields.agentHelp
                 use == SavedUse.No(SavedRefusal.ServerChanged) -> INDEXER_ADDRESS_CHANGED
                 use == SavedUse.No(SavedRefusal.Unreadable) -> INDEXER_KEY_UNREADABLE
                 use == SavedUse.No(SavedRefusal.NoneSaved) -> INDEXER_NO_KEY
@@ -558,7 +572,7 @@ data class SetupReview(
                 use is SavedUse.Use -> use.secret
                 else -> null
             }
-            val tested = key != null && passes.torrentIndexer(url, key) != null
+            val tested = key != null && passes.torrentIndexer(url, key, agent) != null
             val keyLine = when {
                 typedKey.isNotEmpty() -> (if (before == null) "API key " else "New API key ") + maskKey(typedKey)
                 use is SavedUse.Use -> "Saved API key kept"
@@ -576,6 +590,7 @@ data class SetupReview(
                     ReviewLine(listOfNotNull(url, keyLine).joinToString(" · ")),
                     login?.let { ReviewLine("Host $it", warn = true) },
                     fields.name.takeIf { it.isNotEmpty() }?.let { ReviewLine("Named “$it”") },
+                    agentLine(null, agent),
                     ReviewLine(NOT_USED_WITH_SERVICE).takeIf { !draft.useWithService },
                     http,
                 )
@@ -584,6 +599,7 @@ data class SetupReview(
                 val r = before.record
                 val lines = listOfNotNull(
                     named(r.name, name, cleared = null),
+                    agentLine(r.userAgent, agent),
                     ReviewLine("Address: ${shownAddress(r.baseUrl).url} → $url", warn = true).takeIf { url != r.baseUrl },
                     login?.takeIf { url != r.baseUrl }?.let { ReviewLine("Host $it", warn = true) },
                     keyLine?.let(::ReviewLine),
@@ -593,6 +609,16 @@ data class SetupReview(
                 val heading = "Changes “${r.name}”" + if (!r.enabled) " · switched off" else ""
                 TorrentIndexerReview(r.id, ReviewAction.Change, form, draft, key, heading, lines, problem, tested, part)
             }
+        }
+
+        /**
+         * An indexer's own User-Agent (L558): a new one's ([was] null) when it has one, a saved one's from and to when it
+         * changes, an empty side the client's own. Not a warning: it moves no key, and it is no secret (W144).
+         */
+        private fun agentLine(was: String?, now: String): ReviewLine? = when {
+            was == null -> ReviewLine("User-Agent: $now").takeIf { now.isNotEmpty() }
+            was == now -> null
+            else -> ReviewLine("User-Agent: ${was.ifEmpty { OWN_USER_AGENT }} → ${now.ifEmpty { OWN_USER_AGENT }}")
         }
 
         /** A name's change: named anew, or cleared ([cleared], when a blank name means something). */

@@ -4,6 +4,9 @@ import io.skjaere.usenet.app.settings.INDEXER_LOCAL_HTTP
 import io.skjaere.usenet.app.settings.INDEXER_PUBLIC_HTTP
 import io.skjaere.usenet.app.settings.ProviderLogin
 import io.skjaere.usenet.app.settings.ProviderTestResult
+import io.skjaere.usenet.app.settings.USER_AGENT_CHARACTERS
+import io.skjaere.usenet.app.settings.USER_AGENT_HELP
+import io.skjaere.usenet.app.settings.USER_AGENT_TOO_LONG
 import io.skjaere.usenet.data.IndexerRecord
 import io.skjaere.usenet.data.IndexerWithKey
 import io.skjaere.usenet.data.ProviderRecord
@@ -20,6 +23,7 @@ import io.skjaere.usenet.handoff.ServiceDraft
 import io.skjaere.usenet.handoff.SetupChange
 import io.skjaere.usenet.handoff.SetupChanges
 import io.skjaere.usenet.handoff.SetupMode
+import io.skjaere.usenet.handoff.SetupPage
 import io.skjaere.usenet.handoff.TorrentIndexerDraft
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -232,7 +236,7 @@ class SetupReviewTest {
         val passes = PassLog()
         val login = ProviderLogin.of("news.example.net", 563, "alice", true, "saved-pass")
         passes.passed(login, 20, ProviderTestResult(login, ok = true, message = "Connected and logged in to news.example.net"))
-        passes.passed("http://192.168.1.5:9696/1/api", "TYPED-KEY", "Connected")
+        passes.passed("http://192.168.1.5:9696/1/api", "TYPED-KEY", "", "Connected")
         passes.passed("tmdb-key-0123456789abcdef")
         val r = review(
             changes(
@@ -464,7 +468,7 @@ class SetupReviewTest {
         assertNull(item.testKey)
         assertTrue(item.lines.any { it.text == "Address: http://192.168.1.20:9696/3/api → https://tracker.example.invalid/3/api" && it.warn }, item.text())
         // A new one at a saved one's address is said to be the same; a pass from the phone counts for a torrent indexer alone.
-        val passes = PassLog().apply { passedTorrentIndexer("http://192.168.1.20:9696/3/api", "TYPED-TORRENT-KEY", "Connected") }
+        val passes = PassLog().apply { passedTorrentIndexer("http://192.168.1.20:9696/3/api", "TYPED-TORRENT-KEY", "", "Connected") }
         val same = review(debridChanges(torrentIndexers = listOf(SetupChange(null, TorrentIndexerDraft("", "http://192.168.1.20:9696/3/api", "TYPED-TORRENT-KEY", true), false))), debrid, passes).items.single()
         assertTrue(same.lines.any { it.text == "Same address as the saved “Home Prowlarr”" && it.warn }, same.text())
         assertTrue(same.tested)
@@ -472,6 +476,121 @@ class SetupReviewTest {
         // A typed key at the new address is the one it takes.
         val typed = review(debridChanges(torrentIndexers = listOf(SetupChange("tor-1", prowlarrAsShown.copy(url = "https://tracker.example.invalid/3/api", key = "TYPED-TORRENT-KEY"), false))), debrid).items.single()
         assertEquals(listOf(null, "TYPED-TORRENT-KEY"), listOf(typed.problem, assertIs<TorrentIndexerReview>(typed).testKey))
+    }
+
+    // An indexer's own User-Agent (L558): a change of its own, never a warning, and part of what a pass from the phone was of.
+
+    private val agent = "ExampleReader/2.1 (compatible)"
+    private val oneWithAgent = one.copy(record = one.record.copy(userAgent = agent))
+    private val prowlarrWithAgent = prowlarr.copy(record = prowlarr.record.copy(userAgent = "QuarryFetch/1.0"))
+
+    /** Dropped, a change to the User-Agent alone would leave the saved one, and the page would have said it was sent. */
+    @Test
+    fun `a User-Agent changed alone is a change, saved with the key kept, said from and to`() {
+        val r = review(changes(indexers = listOf(SetupChange("i-one", oneAsShown.copy(userAgent = agent), false), SetupChange("i-hid", hiddenAsShown, false))))
+        val i = assertIs<IndexerReview>(r.items.single())
+        assertEquals(listOf("Changes “One”", "i-one"), listOf(i.heading, i.key))
+        assertEquals(listOf(ReviewLine("User-Agent: NZStreamer’s own → $agent"), ReviewLine("Saved API key kept")), i.lines)
+        assertEquals(listOf(null, "KEY-ONE-0000-1111", agent), listOf(i.problem, i.testKey, i.form.userAgent))
+        assertEquals(listOf("Main", "block.example.com", "Hidden", "the TMDB key"), r.unchanged)
+        assertEquals("NZStreamer’s own", OWN_USER_AGENT)
+        // Back to the client's own, and from one to another; as shown it is unchanged, however it was padded.
+        val withAgent = saved.copy(indexers = listOf(oneWithAgent, hidden))
+        fun line(sent: String) = review(changes(indexers = listOf(SetupChange("i-one", oneAsShown.copy(userAgent = sent), false))), withAgent).items.single().lines.first()
+        assertEquals(ReviewLine("User-Agent: $agent → NZStreamer’s own"), line(""))
+        assertEquals(ReviewLine("User-Agent: $agent → QuarryFetch/1.0"), line("QuarryFetch/1.0"))
+        assertEquals(emptyList(), review(changes(indexers = listOf(SetupChange("i-one", oneAsShown.copy(userAgent = " $agent "), false))), withAgent).items)
+        // A rename keeps it: the form Save saves carries it.
+        val renamed = assertIs<IndexerReview>(review(changes(indexers = listOf(SetupChange("i-one", oneAsShown.copy(name = "Renamed", userAgent = agent), false))), withAgent).items.single())
+        assertEquals(listOf("Named “Renamed”", "Saved API key kept"), renamed.lines.map { it.text })
+        assertEquals(agent, renamed.form.userAgent)
+    }
+
+    @Test
+    fun `a torrent indexer's User-Agent changed alone is a change too`() {
+        val r = review(debridChanges(torrentIndexers = listOf(SetupChange("tor-1", prowlarrAsShown.copy(userAgent = "QuarryFetch/1.0"), false))), debrid)
+        val t = assertIs<TorrentIndexerReview>(r.items.single())
+        assertEquals(listOf("User-Agent: NZStreamer’s own → QuarryFetch/1.0", "Saved API key kept"), t.lines.map { it.text })
+        assertEquals(listOf("QuarryFetch/1.0", "SAVED-TORRENT-KEY"), listOf(t.form.fields.userAgent, t.testKey))
+        val withAgent = debrid.copy(torrentIndexers = listOf(prowlarrWithAgent))
+        assertEquals(emptyList(), review(debridChanges(torrentIndexers = listOf(SetupChange("tor-1", prowlarrAsShown.copy(userAgent = "QuarryFetch/1.0"), false))), withAgent).items)
+        val emptied = assertIs<TorrentIndexerReview>(review(debridChanges(torrentIndexers = listOf(SetupChange("tor-1", prowlarrAsShown, false))), withAgent).items.single())
+        assertEquals(listOf("User-Agent: QuarryFetch/1.0 → NZStreamer’s own", "Saved API key kept"), emptied.lines.map { it.text })
+        assertEquals("", emptied.form.fields.userAgent)
+        // Its switch and its User-Agent changed together: both said.
+        val both = review(debridChanges(torrentIndexers = listOf(SetupChange("tor-1", prowlarrAsShown.copy(useWithService = false, userAgent = agent), false))), withAgent)
+        assertEquals(
+            listOf("User-Agent: QuarryFetch/1.0 → $agent", "Saved API key kept", "Use with your debrid service switched off"),
+            both.items.single().lines.map { it.text },
+        )
+    }
+
+    @Test
+    fun `a new indexer says its User-Agent after its name, and the form to save carries it`() {
+        val r = review(
+            debridChanges(
+                torrentIndexers = listOf(SetupChange(null, TorrentIndexerDraft("Quarry", "https://quarry.example.invalid/api", "QUARRY-KEY-0000-9a9a", true, " QuarryFetch/1.0 "), false)),
+            ).copy(indexers = listOf(SetupChange(null, IndexerDraft("Lantern", "https://lantern.example.invalid/api", "LANTERN-KEY-0000-7b7b", agent), false))),
+            debrid,
+        )
+        val (i, t) = r.items
+        assertEquals(
+            listOf("https://lantern.example.invalid/api · API key •••• 7b7b", "Named “Lantern”", "User-Agent: $agent"),
+            i.lines.map { it.text },
+        )
+        assertEquals(
+            listOf("https://quarry.example.invalid/api · API key •••• 9a9a", "Named “Quarry”", "User-Agent: QuarryFetch/1.0"),
+            t.lines.map { it.text },
+        )
+        assertEquals(listOf(agent, "QuarryFetch/1.0"), listOf(assertIs<IndexerReview>(i).form.userAgent, assertIs<TorrentIndexerReview>(t).form.fields.userAgent))
+        assertTrue(i.lines.none { it.warn } && t.lines.none { it.warn })
+        // None of its own: no line.
+        val plain = review(changes(providers = emptyList(), indexers = listOf(SetupChange(null, IndexerDraft("Lantern", "https://lantern.example.invalid/api", "LANTERN-KEY-0000-7b7b"), false))), none)
+        assertTrue(plain.items.single().lines.none { "User-Agent" in it.text }, plain.items.single().text())
+    }
+
+    /** One account, whatever asks: a new card at a saved one's address is said to be the same, whichever User-Agent each has. */
+    @Test
+    fun `a new indexer at a saved one's address is the same, whatever its User-Agent`() {
+        val r = review(
+            debridChanges(torrentIndexers = listOf(SetupChange(null, TorrentIndexerDraft("", "http://192.168.1.20:9696/3/api", "K-0000-1111-2222", true, agent), false)))
+                .copy(indexers = listOf(SetupChange(null, IndexerDraft("", "https://192.168.1.5:9696/1", "K-0000-1111-2222", agent), false))),
+            debrid.copy(indexers = listOf(oneWithAgent.copy(record = oneWithAgent.record.copy(userAgent = "QuarryFetch/1.0")))),
+        )
+        assertTrue(r.items[0].lines.any { it.text == "Same address as the saved “One”" && it.warn }, r.items[0].text())
+        assertTrue(r.items[1].lines.any { it.text == "Same address as the saved “Home Prowlarr”" && it.warn }, r.items[1].text())
+    }
+
+    /** The page holds only what the rule takes; the review says so of anything else, as the forms do, should the two ever drift. */
+    @Test
+    fun `a User-Agent the client wouldn't send is a problem, in the forms' words`() {
+        fun problem(ua: String) = review(changes(providers = emptyList(), indexers = listOf(SetupChange(null, IndexerDraft("", "https://new.example.org/api", "K-0000-1111-2222", ua), false))), none)
+            .items.single().problem
+        assertEquals(listOf(USER_AGENT_CHARACTERS, USER_AGENT_CHARACTERS, USER_AGENT_TOO_LONG, null), listOf(problem("ExampléReader"), problem("a\tb"), problem("x".repeat(257)), problem(" ${"x".repeat(256)} ")))
+        val torrent = review(debridChanges(torrentIndexers = listOf(SetupChange("tor-1", prowlarrAsShown.copy(userAgent = "QuarryFetch’s"), false))), debrid).items.single()
+        assertEquals(USER_AGENT_CHARACTERS, torrent.problem)
+        assertNull(assertIs<TorrentIndexerReview>(torrent).testKey)
+        // The page's line under the field is the forms' help.
+        assertEquals(USER_AGENT_HELP, SetupPage.USER_AGENT_HELP)
+    }
+
+    /** L557: a pass from the phone is of the User-Agent it sent too. */
+    @Test
+    fun `a card passed from the phone with another User-Agent isn't tested, and with its own it is`() {
+        val passes = PassLog().apply {
+            passed("http://192.168.1.5:9696/1/api", "KEY-ONE-0000-1111", agent, "Connected")
+            passedTorrentIndexer("http://192.168.1.20:9696/3/api?apikey=hidden", "SAVED-TORRENT-KEY", "QuarryFetch/1.0", "Connected")
+        }
+        fun tested(indexerAgent: String, torrentAgent: String) = review(
+            // Each changed otherwise too, so each is an item whatever its User-Agent: neither change is one a test reads.
+            debridChanges(torrentIndexers = listOf(SetupChange("tor-1", prowlarrAsShown.copy(useWithService = false, userAgent = torrentAgent), false)))
+                .copy(indexers = listOf(SetupChange("i-one", oneAsShown.copy(name = "Renamed", userAgent = indexerAgent), false))),
+            debrid,
+            passes,
+        ).items.map { it.tested }
+        assertEquals(listOf(true, true), tested(agent, "QuarryFetch/1.0"))
+        assertEquals(listOf(false, false), tested("QuarryFetch/1.0", agent))
+        assertEquals(listOf(false, false), tested("", ""))
     }
 
     @Test

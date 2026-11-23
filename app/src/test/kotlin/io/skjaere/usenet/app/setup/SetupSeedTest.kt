@@ -63,14 +63,14 @@ class SetupSeedTest {
 
     @Test
     fun `indexers are seeded with their addresses shown and whether their keys can be read`() = runBlocking<Unit> {
-        val plain = settings.saveIndexer(null, "Prowlarr 1", "http://192.168.1.5:9696/1/api", "key-one")
+        val plain = settings.saveIndexer(null, "Prowlarr 1", "http://192.168.1.5:9696/1/api", "key-one", userAgent = "ExampleReader/2.1")
         val hidden = settings.saveIndexer(null, "Hidden", "https://u:p@indexer.example.org/api?apikey=K", "key-two", enabled = false)
         val lost = settings.saveIndexer(null, "Lost", "https://lost.example.org/api", "key-lost")
         val none = settings.saveIndexer(null, "None", "https://none.example.org/api", null)
         cipher.unreadable += "key-lost"
         assertEquals(
             listOf(
-                SavedIndexer(plain, "Prowlarr 1", "http://192.168.1.5:9696/1/api", hiddenParts = false, enabled = true, key = SavedSecret.Saved, userAgent = ""),
+                SavedIndexer(plain, "Prowlarr 1", "http://192.168.1.5:9696/1/api", hiddenParts = false, enabled = true, key = SavedSecret.Saved, userAgent = "ExampleReader/2.1"),
                 SavedIndexer(hidden, "Hidden", "https://indexer.example.org/api", hiddenParts = true, enabled = false, key = SavedSecret.Saved, userAgent = ""),
                 SavedIndexer(lost, "Lost", "https://lost.example.org/api", hiddenParts = false, enabled = true, key = SavedSecret.Unreadable, userAgent = ""),
                 SavedIndexer(none, "None", "https://none.example.org/api", hiddenParts = false, enabled = true, key = SavedSecret.None, userAgent = ""),
@@ -101,7 +101,9 @@ class SetupSeedTest {
         cipher.unreadable += "LOST-SERVICE-KEY"
         val pm = settings.saveService("Premiumize", "LOST-SERVICE-KEY") { ServiceSignIn("customer 900000042") }
         settings.setServiceEnabled(pm, false)
-        val home = settings.saveTorrentIndexer(null, "Home Prowlarr", "http://192.168.1.20:9696/3/api?apikey=marker-in-query", "SAVED-TORRENT-KEY", useWithService = false)
+        val home = settings.saveTorrentIndexer(
+            null, "Home Prowlarr", "http://192.168.1.20:9696/3/api?apikey=marker-in-query", "SAVED-TORRENT-KEY", useWithService = false, userAgent = "QuarryFetch/1.0",
+        )
         val quarry = settings.saveTorrentIndexer(null, "Quarry", "https://quarry.example.invalid/api", null, enabled = false)
         val seed = settings.setupSeed(shown = true)
         assertEquals(
@@ -121,12 +123,13 @@ class SetupSeedTest {
         )
         assertEquals(
             listOf(
-                SavedTorrentIndexer(home, "Home Prowlarr", "http://192.168.1.20:9696/3/api", hiddenParts = true, enabled = true, useWithService = false, key = SavedSecret.Saved, userAgent = ""),
+                SavedTorrentIndexer(home, "Home Prowlarr", "http://192.168.1.20:9696/3/api", hiddenParts = true, enabled = true, useWithService = false, key = SavedSecret.Saved, userAgent = "QuarryFetch/1.0"),
                 SavedTorrentIndexer(quarry, "Quarry", "https://quarry.example.invalid/api", hiddenParts = false, enabled = false, useWithService = true, key = SavedSecret.None, userAgent = ""),
             ),
             seed.torrentIndexers,
         )
-        assertFalse(listOf("SAVED-SERVICE-KEY", "LOST-SERVICE-KEY", "SAVED-TORRENT-KEY", "marker").any { it in seed.toString() }, seed.toString())
+        // Nor its User-Agent, which the page shows whole but a log line never does (L554).
+        assertFalse(listOf("SAVED-SERVICE-KEY", "LOST-SERVICE-KEY", "SAVED-TORRENT-KEY", "marker", "QuarryFetch").any { it in seed.toString() }, seed.toString())
         // Signed out of: no card. A service only a newer version knows: none either, as its radio couldn't show it.
         settings.signOut(pm)
         assertEquals(listOf(tb), settings.setupSeed(shown = true).services.map { it.ref })
@@ -196,26 +199,43 @@ class SetupSeedTest {
         assertEquals(listOf("None", "Saved", "Unreadable"), SavedSecret.entries.map { it.name })
     }
 
-    /** Values that didn't come back exactly as saved would make every saved card a change, or a test the user never asked for. */
+    /**
+     * Values that didn't come back exactly as saved would make every saved card a change, or a test the user never asked
+     * for: an indexer's and a torrent indexer's User-Agent too, which Send would otherwise clear (L556), one at the limit
+     * included, which the page must hold rather than show read-only.
+     */
     @Test
     fun `a card left as it was sends back what is saved, so nothing would change`() = runBlocking<Unit> {
         settings.saveProvider(ProviderRecord("", "Main", "news.example.net", 563, "alice", connections = 20), "pass-main")
         settings.saveProvider(ProviderRecord("", "block.example.com", "block.example.com", 119, "", useTls = false, connections = 4), "")
         val off = settings.saveProvider(ProviderRecord("", "", "third.example.net", 443, "bob", connections = 2), "pass-third")
         settings.setProviderEnabled(off, false)
-        settings.saveIndexer(null, "Prowlarr 1", "http://192.168.1.5:9696/1/api", "key-one")
+        val quoted = "ExampleReader/2.1 (compatible; \"quoted\" <b>)"
+        val longest = "ExampleReader/2.1 " + "z".repeat(238)
+        settings.saveIndexer(null, "Prowlarr 1", "http://192.168.1.5:9696/1/api", "key-one", userAgent = quoted)
         settings.saveIndexer(null, "Hidden", "https://u:p@indexer.example.org/api?apikey=K#top", "key-two")
-        val seed = settings.setupSeed()
+        settings.saveIndexer(null, "Longest", "https://longest.example.org/api", "key-three", userAgent = longest)
+        settings.saveTorrentIndexer(null, "Quarry", "https://quarry.example.invalid/api", "key-four", useWithService = false, userAgent = "QuarryFetch/1.0")
+        val seed = settings.setupSeed(shown = true)
+        assertEquals(256, longest.length)
         val client = open(SetupMode.Edit, seed)
         var page = client.get()
-        for (slot in listOf("p1", "p2", "p3", "i1", "i2")) {
+        for (slot in listOf("p1", "p2", "p3", "i1", "i2", "i3", "r1")) {
             page = client.press(page, "open:$slot")
             assertTrue(page.body.contains("<fieldset id=\"$slot\">"), slot)
+            if (slot == "i1") assertEquals(quoted, client.openFields(page).toMap()["i.ua"], "the saved one, whole")
         }
         val sent = client.press(page, "send")
         assertEquals(200, sent.status)
         assertTrue(sent.body.contains(SetupPage.NOTHING_TO_SEND), "a card left as it was counts as a change")
         assertTrue(events.none { it is SetupEvent.Received })
+        // Renamed, a card sends its User-Agent back as saved, so Save keeps it.
+        page = client.press(sent, "open:i1")
+        page = client.press(page, "open:r1", client.openFields(page).map { if (it.first == "i.name") it.first to "Renamed" else it })
+        client.press(page, "send", client.openFields(page).map { if (it.first == "r.name") it.first to "Quarry renamed" else it })
+        val received = events.filterIsInstance<SetupEvent.Received>().single().changes
+        assertEquals(listOf("Renamed" to quoted, "Hidden" to "", "Longest" to longest), received.indexers.map { it.draft.name to it.draft.userAgent })
+        assertEquals(listOf("Quarry renamed" to "QuarryFetch/1.0"), received.torrentIndexers.map { it.draft.name to it.draft.userAgent })
     }
 
     /** Marker secrets in every place a saved value keeps one: none of them reaches a page, a header or an answer. */

@@ -183,8 +183,8 @@ class PhoneTesterTest {
         val config = f.indexers.single()
         assertEquals(listOf(IndexerKind.Torznab, "http://192.168.1.20:9696/3/api", "TORRENT-KEY-0000-1111"), listOf(config.kind, config.baseUrl, config.apiKey))
         assertTrue(config.id.startsWith("phone-test-"), config.id)
-        assertEquals("Connected · Example 1.2", f.passes.torrentIndexer("http://192.168.1.20:9696/3/api", "TORRENT-KEY-0000-1111"))
-        assertNull(f.passes.indexer("http://192.168.1.20:9696/3/api", "TORRENT-KEY-0000-1111"), "a torrent indexer's pass is no indexer's")
+        assertEquals("Connected · Example 1.2", f.passes.torrentIndexer("http://192.168.1.20:9696/3/api", "TORRENT-KEY-0000-1111", ""))
+        assertNull(f.passes.indexer("http://192.168.1.20:9696/3/api", "TORRENT-KEY-0000-1111", ""), "a torrent indexer's pass is no indexer's")
         f.indexer = { c -> if (c.kind == IndexerKind.Torznab) IndexerTest.Failed(resultsOfOtherKind(IndexerKind.Torznab, shown = true)) else IndexerTest.Ok(IndexerCaps(), null) }
         assertEquals(failed("This indexer’s results are NZBs. Add it under Indexers instead."), run(tester, item(prowlarr.copy(url = "https://indexer.example.org/api"))))
         // An indexer card is still an indexer's.
@@ -511,17 +511,41 @@ class PhoneTesterTest {
         assertEquals(true, f.passes.provider(login, 12)?.ok)
         assertNull(f.passes.provider(login, 13), "other connections")
         assertNull(f.passes.provider(ProviderLogin.of("news.example.net", 443, "alice", true, "typed"), 12), "another password")
-        assertEquals("Connected · Example 1.2", f.passes.indexer("https://indexer.example.org/api", "INDEXER-KEY-0000-1111"))
-        assertNull(f.passes.indexer("https://indexer.example.org/api", "OTHER-KEY"))
+        assertEquals("Connected · Example 1.2", f.passes.indexer("https://indexer.example.org/api", "INDEXER-KEY-0000-1111", ""))
+        assertNull(f.passes.indexer("https://indexer.example.org/api", "OTHER-KEY", ""))
         assertTrue(f.passes.tmdb("tmdb-key-0123456789abcdef"))
         assertFalse(f.passes.tmdb("another-key"))
         // A failure isn't a pass.
         f.indexer = { IndexerTest.Failed("No answer within 15 s") }
         run(tester, item(indexer.copy(apiKey = "FAILING-KEY")))
-        assertNull(f.passes.indexer("https://indexer.example.org/api", "FAILING-KEY"))
+        assertNull(f.passes.indexer("https://indexer.example.org/api", "FAILING-KEY", ""))
         assertEquals(before, settings.settings.first())
         assertEquals("saved-pass", settings.provider(p)?.password)
         assertFalse(listOf("saved-pass", "INDEXER-KEY", "tmdb-key").any { it in f.passes.toString() }, f.passes.toString())
+    }
+
+    /**
+     * L552, L557: a card's test sends its own User-Agent (trimmed, the client's own when blank), and its pass is logged
+     * with it: a pass with one User-Agent doesn't stand for the card sent with another, or Save would skip the TV's test.
+     */
+    @Test
+    fun `a card's test sends its User-Agent, and its pass stands for that User-Agent alone`() = runTest {
+        val f = Fakes(this)
+        val tester = f.tester(this)
+        assertEquals(SetupOutcome.Passed, run(tester, item(indexer.copy(userAgent = " ExampleReader/2.1 "))).outcome)
+        assertEquals(SetupOutcome.Passed, run(tester, item(prowlarr.copy(userAgent = "QuarryFetch/1.0"))).outcome)
+        assertEquals(SetupOutcome.Passed, run(tester, item(indexer.copy(apiKey = "PLAIN-KEY"))).outcome)
+        assertEquals(listOf("ExampleReader/2.1", "QuarryFetch/1.0", ""), f.indexers.map { it.userAgent })
+        val url = "https://indexer.example.org/api"
+        assertEquals("Connected · Example 1.2", f.passes.indexer(url, "INDEXER-KEY-0000-1111", "ExampleReader/2.1"))
+        assertEquals("Connected · Example 1.2", f.passes.indexer(url, "INDEXER-KEY-0000-1111", " ExampleReader/2.1\t"), "as trimmed")
+        for (other in listOf("", "QuarryFetch/1.0", "ExampleReader/2.2")) assertNull(f.passes.indexer(url, "INDEXER-KEY-0000-1111", other), other)
+        assertEquals("Connected · Example 1.2", f.passes.indexer(url, "PLAIN-KEY", ""))
+        assertNull(f.passes.indexer(url, "PLAIN-KEY", "ExampleReader/2.1"), "the client's own is a User-Agent too")
+        val torrent = "http://192.168.1.20:9696/3/api"
+        assertEquals("Connected · Example 1.2", f.passes.torrentIndexer(torrent, "TORRENT-KEY-0000-1111", "QuarryFetch/1.0"))
+        for (other in listOf("", "ExampleReader/2.1")) assertNull(f.passes.torrentIndexer(torrent, "TORRENT-KEY-0000-1111", other), other)
+        assertFalse(listOf("ExampleReader", "QuarryFetch").any { it in f.passes.toString() }, f.passes.toString())
     }
 
     private companion object {

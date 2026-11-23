@@ -102,45 +102,51 @@ class SavedLookup(
 
 /**
  * The tests from the phone that passed this session, by exactly what each tested: a provider's login and connections, an
- * indexer's or a torrent indexer's address and key, a debrid service and key, a TMDB key, the secrets as digests. The
- * TV's review takes an item whose values it would save are here as tested, and Save doesn't test it again; a debrid
- * account's is kept with what the service said of it, which Save keeps with the key. In memory only, with the session
- * and its review.
+ * indexer's or a torrent indexer's address, key and User-Agent, a debrid service and key, a TMDB key, the secrets as
+ * digests. The TV's review takes an item whose values it would save are here as tested, and Save doesn't test it again;
+ * a debrid account's is kept with what the service said of it, which Save keeps with the key. In memory only, with the
+ * session and its review.
+ *
+ * An indexer's lookups take its User-Agent with no default (L557): a pass with one User-Agent must never stand for the
+ * card sent with another, which Save would then not test.
  */
 class PassLog {
     private val providers = ConcurrentHashMap<Pair<ProviderLogin, Int>, ProviderTestResult>()
-    private val indexers = ConcurrentHashMap<Pair<String, String>, String>()
-    private val torrentIndexers = ConcurrentHashMap<Pair<String, String>, String>()
+    private val indexers = ConcurrentHashMap<Triple<String, String, String>, String>()
+    private val torrentIndexers = ConcurrentHashMap<Triple<String, String, String>, String>()
     private val services = ConcurrentHashMap<Pair<ServiceKind, String>, ServiceSignIn>()
     private val tmdbKeys = ConcurrentHashMap.newKeySet<String>()
 
     /** How the provider that logs in with [login] and [connections] passed, or null when it didn't with exactly those. */
     fun provider(login: ProviderLogin, connections: Int): ProviderTestResult? = providers[login to connections]
 
-    /** What the indexer at [url] with [key] passed with ("Connected · …"), or null. */
-    fun indexer(url: String, key: String): String? = indexers[url.trim() to digest(key.trim())]
+    /** What the indexer at [url] with [key], sending [userAgent] ("" for the client's own), passed with ("Connected · …"), or null. */
+    fun indexer(url: String, key: String, userAgent: String): String? = indexers[indexerKey(url, key, userAgent)]
 
     fun tmdb(key: String): Boolean = digest(key.trim()) in tmdbKeys
 
-    /** What the torrent indexer at [url] with [key] passed with, or null: an indexer's pass is no torrent indexer's. */
-    fun torrentIndexer(url: String, key: String): String? = torrentIndexers[url.trim() to digest(key.trim())]
+    /** What the torrent indexer at [url] with [key] and [userAgent] passed with, or null: an indexer's pass is no torrent indexer's. */
+    fun torrentIndexer(url: String, key: String, userAgent: String): String? = torrentIndexers[indexerKey(url, key, userAgent)]
 
     /** What [kind]'s service said of the account [key] opens, when its test passed, or null. */
     fun service(kind: ServiceKind, key: String): ServiceSignIn? = services[kind to digest(key.trim())]
 
     internal fun passed(login: ProviderLogin, connections: Int, result: ProviderTestResult) = providers.put(login to connections, result)
 
-    internal fun passed(url: String, key: String, words: String) = indexers.put(url.trim() to digest(key.trim()), words)
+    internal fun passed(url: String, key: String, userAgent: String, words: String) = indexers.put(indexerKey(url, key, userAgent), words)
 
     internal fun passed(tmdbKey: String) = tmdbKeys.add(digest(tmdbKey.trim()))
 
-    internal fun passedTorrentIndexer(url: String, key: String, words: String) = torrentIndexers.put(url.trim() to digest(key.trim()), words)
+    internal fun passedTorrentIndexer(url: String, key: String, userAgent: String, words: String) = torrentIndexers.put(indexerKey(url, key, userAgent), words)
 
     internal fun passed(kind: ServiceKind, key: String, signIn: ServiceSignIn) = services.put(kind to digest(key.trim()), signIn)
 
     // The counts alone: addresses may hold a token, and the digests are of secrets.
     override fun toString() =
         "PassLog(providers=${providers.size}, indexers=${indexers.size}, torrentIndexers=${torrentIndexers.size}, services=${services.size}, tmdb=${tmdbKeys.size})"
+
+    /** The User-Agent trimmed, as the client sends it. */
+    private fun indexerKey(url: String, key: String, userAgent: String) = Triple(url.trim(), digest(key.trim()), userAgent.trim())
 
     private fun digest(secret: String): String =
         MessageDigest.getInstance("SHA-256").digest(secret.encodeToByteArray()).joinToString("") { "%02x".format(it) }
@@ -228,32 +234,36 @@ class PhoneTester(
      */
     private suspend fun indexer(item: SetupTestItem.Indexer): SetupResult {
         val record = item.ref?.let { saved.indexer(it) }
-        return anIndexer(item.draft.name, item.draft.url, item.draft.apiKey, item.plainHttp, record?.record?.baseUrl, IndexerKind.Newznab, passes::passed) {
-            SavedSecretRule.key(record, item.ref?.let { saved.keyStored(it) } == true, item.draft.url)
+        val draft = item.draft
+        return anIndexer(draft.name, draft.url, draft.apiKey, draft.userAgent, item.plainHttp, record?.record?.baseUrl, IndexerKind.Newznab, passes::passed) {
+            SavedSecretRule.key(record, item.ref?.let { saved.keyStored(it) } == true, draft.url)
         }
     }
 
     /** A torrent indexer card (L209): its own form's Test, a torrent indexer's, under the same rules as an indexer's. */
     private suspend fun torrentIndexer(item: SetupTestItem.TorrentIndexer): SetupResult {
         val record = item.ref?.let { saved.torrentIndexer(it) }
-        return anIndexer(item.draft.name, item.draft.url, item.draft.key, item.plainHttp, record?.record?.baseUrl, IndexerKind.Torznab, passes::passedTorrentIndexer) {
-            SavedSecretRule.torrentIndexerKey(record, item.ref?.let { saved.torrentIndexerKeyStored(it) } == true, item.draft.url)
+        val draft = item.draft
+        return anIndexer(draft.name, draft.url, draft.key, draft.userAgent, item.plainHttp, record?.record?.baseUrl, IndexerKind.Torznab, passes::passedTorrentIndexer) {
+            SavedSecretRule.torrentIndexerKey(record, item.ref?.let { saved.torrentIndexerKeyStored(it) } == true, draft.url)
         }
     }
 
     /**
      * An indexer's or a torrent indexer's ([kind]) test, as its form tests it: its address the saved one ([savedUrl])
-     * whole while the card shows it, its key typed or the saved one under [savedKey]'s rule. A torrent indexer's Test
-     * searches as a torrent indexer, so a feed of NZBs is said to be one in that form's words.
+     * whole while the card shows it, its key typed or the saved one under [savedKey]'s rule, its User-Agent as sent
+     * (L552). A torrent indexer's Test searches as a torrent indexer, so a feed of NZBs is said to be one in that form's
+     * words. A pass goes to [passed] with the User-Agent it sent.
      */
     private suspend fun anIndexer(
         name: String,
         sent: String,
         typedKey: String,
+        userAgent: String,
         plainHttp: Boolean,
         savedUrl: String?,
         kind: IndexerKind,
-        passed: (String, String, String) -> Any?,
+        passed: (String, String, String, String) -> Any?,
         savedKey: suspend () -> SavedUse,
     ): SetupResult {
         val url = savedUrl?.let { SavedSecretRule.indexerAddress(it, sent) } ?: sent.trim()
@@ -268,9 +278,10 @@ class PhoneTester(
                 is SavedUse.No -> return SetupResult(SetupOutcome.NotTested, words(use.why, provider = false))
             }
         }
-        return when (val result = testIndexer(IndexerConfig("phone-test-${UUID.randomUUID()}", name, url, key, kind = kind))) {
+        val agent = userAgent.trim()
+        return when (val result = testIndexer(IndexerConfig("phone-test-${UUID.randomUUID()}", name, url, key, kind = kind, userAgent = agent))) {
             is IndexerTest.Ok -> indexerConnected(result).let { words ->
-                passed(url, key, words)
+                passed(url, key, agent, words)
                 SetupResult(SetupOutcome.Passed, words)
             }
             // Its words can hold the address tested whole (a timeout's do): at a saved address, its hidden parts.
