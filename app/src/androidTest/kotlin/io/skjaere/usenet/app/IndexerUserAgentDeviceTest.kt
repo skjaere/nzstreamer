@@ -74,7 +74,8 @@ class IndexerUserAgentDeviceTest {
     private val indexer = AgentIndexer()
     private lateinit var saved: AppSettings
     private var tmdbKey: String? = null
-    private var searchedBefore = emptySet<String>()
+    private var keyTaken = false
+    private var searchedBefore: Set<String>? = null
     private lateinit var nav: NavHostController
 
     /** [setUp], then [screens], then [restore] whether or not they passed, its failure kept with theirs. */
@@ -98,8 +99,9 @@ class IndexerUserAgentDeviceTest {
     private fun setUp() = runBlocking<Unit> {
         // The debug build's own settings saved first, as the ones put back after are read after them.
         withTimeout(SEEDING_MS) { container.devSettingsSaved.await() }
-        home.show()
+        // Before Home's switch is set, so the settings put back, and checked after, are as the test found them.
         saved = settings.settings.first()
+        home.show()
         tmdbKey = settings.tmdbKey()
         searchedBefore = library.recentSearches.first().map { it.key }.toSet()
         // Hidden, not deleted: deleting would remove their keys from the secret store. With no service account on, no
@@ -107,6 +109,7 @@ class IndexerUserAgentDeviceTest {
         settings.restore(saved.copy(torrentIndexers = saved.torrentIndexers.map { it.copy(deleted = true) }, services = saved.services.map { it.copy(deleted = true) }))
         settings.indexers.first().filter { it.enabled }.forEach { settings.setIndexerEnabled(it.id, false) }
         // Search asks TMDB nothing without a key.
+        keyTaken = true
         settings.setTmdbKey(null)
     }
 
@@ -116,17 +119,13 @@ class IndexerUserAgentDeviceTest {
             // None by now: a screen still open would ask TMDB once the key is back, Search for its words and Home for its
             // titles. Were one open, it is closed first, and the test fails for it.
             { assertEquals("the test's screens still open as the settings went back", emptyList<String>(), closeOpenScreens()) },
+            // Each its own step, so one that fails leaves the rest to run; each skipped if the setup never got to it.
+            { if (::saved.isInitialized) settings.indexers.first().filter { i -> saved.indexers.none { it.id == i.id } }.forEach { settings.deleteIndexer(it.id) } },
+            { if (::saved.isInitialized) settings.restore(saved) },
             { home.restore() },
-            {
-                // Skipped before anything was changed.
-                if (::saved.isInitialized) {
-                    settings.indexers.first().filter { i -> saved.indexers.none { it.id == i.id } }.forEach { settings.deleteIndexer(it.id) }
-                    settings.restore(saved)
-                    settings.setTmdbKey(tmdbKey)
-                    library.recentSearches.first().filter { it.key !in searchedBefore }.forEach { library.removeSearch(it.key) }
-                    assertEquals(saved, settings.settings.first())
-                }
-            },
+            { if (keyTaken) settings.setTmdbKey(tmdbKey) },
+            { searchedBefore?.let { before -> library.recentSearches.first().filter { it.key !in before }.forEach { library.removeSearch(it.key) } } },
+            { if (::saved.isInitialized) assertEquals("the settings as the test found them", saved, settings.settings.first()) },
         )
     }
 
