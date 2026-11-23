@@ -252,6 +252,99 @@ class SettingsRepositoryTest {
         assertFalse(File(dir, "secrets.json").readText().contains("torrentIndexer:$id"))
     }
 
+    /** L549: each indexer's own User-Agent, "" for the app's own, also in a version 3 file saved before it existed. */
+    @Test
+    fun `an indexer's User-Agent is the app's own in settings saved before it existed`() = runBlocking<Unit> {
+        val older = """{"schemaVersion":3,"indexers":[{"id":"a","name":"A","baseUrl":"https://a.example/api","enabled":true,"updatedAt":3,"deleted":false}],""" +
+            """"torrentIndexers":[{"id":"t","name":"Quarry","baseUrl":"http://prowlarr.example:9696/1","useWithService":false,"updatedAt":4}]}"""
+        val read = JsonFileSerializer(AppSettings.serializer(), AppSettings()).readFrom(older.byteInputStream())
+        assertEquals("", read.indexers.single().userAgent)
+        assertEquals("", read.torrentIndexers.single().userAgent)
+        File(dir, "settings.json").writeText(older)
+        assertEquals("", repository.indexer("a")!!.record.userAgent)
+        assertEquals("", repository.torrentIndexer("t")!!.record.userAgent)
+        assertFalse(repository.torrentIndexer("t")!!.record.useWithService, "the rest as it was")
+    }
+
+    /**
+     * L550: a save given no User-Agent (null) keeps the saved one, so a caller that doesn't show it (a dev seed, a form of
+     * an older version) never wipes it. "" clears it, and a value is kept trimmed.
+     */
+    @Test
+    fun `saving an indexer keeps its User-Agent unless given one, and keeps one given trimmed`() = runBlocking<Unit> {
+        suspend fun agentOf(id: String) = repository.indexer(id)!!.record.userAgent
+        val a = repository.saveIndexer(null, "A", "https://a.example/api", "K1")
+        assertEquals("", agentOf(a))
+        repository.saveIndexer(a, "A", "https://a.example/api", apiKey = null, userAgent = "  ExampleReader/2.1 (compatible)\t")
+        assertEquals("ExampleReader/2.1 (compatible)", agentOf(a))
+        repository.saveIndexer(a, "A renamed", "https://a2.example/api", "K2", enabled = false)
+        assertEquals("ExampleReader/2.1 (compatible)", agentOf(a))
+        assertEquals(
+            IndexerRecord(a, "A renamed", "https://a2.example/api", enabled = false, updatedAt = 1_002, userAgent = "ExampleReader/2.1 (compatible)"),
+            repository.indexer(a)!!.record,
+        )
+        assertEquals("K2", repository.indexer(a)!!.apiKey)
+        repository.saveIndexer(a, "A renamed", "https://a2.example/api", apiKey = null, userAgent = "")
+        assertEquals("", agentOf(a))
+        assertEquals("K2", repository.indexer(a)!!.apiKey)
+        val b = repository.saveIndexer(null, "B", "https://b.example/api", "K3", userAgent = " QuarryFetch/1.0 ")
+        assertEquals("QuarryFetch/1.0", agentOf(b))
+        assertEquals(listOf(a, b), repository.indexers.first().map { it.id })
+    }
+
+    @Test
+    fun `saving a torrent indexer keeps its User-Agent unless given one, and keeps one given trimmed`() = runBlocking<Unit> {
+        suspend fun agentOf(id: String) = repository.torrentIndexer(id)!!.record.userAgent
+        val t = repository.saveTorrentIndexer(null, "Quarry", "http://prowlarr.example:9696/2", "K1", userAgent = "\u00A0QuarryFetch/1.0 ")
+        assertEquals("QuarryFetch/1.0", agentOf(t))
+        repository.saveTorrentIndexer(t, "Quarry", "http://prowlarr.example:9696/2", apiKey = null, enabled = false, useWithService = false)
+        val kept = repository.torrentIndexer(t)!!
+        assertEquals("QuarryFetch/1.0", kept.record.userAgent)
+        assertFalse(kept.record.enabled)
+        assertFalse(kept.record.useWithService)
+        assertEquals("K1", kept.apiKey)
+        repository.saveTorrentIndexer(t, "Quarry", "http://prowlarr.example:9696/2", apiKey = null, userAgent = "ExampleReader/2.1")
+        assertEquals("ExampleReader/2.1", agentOf(t))
+        repository.saveTorrentIndexer(t, "Quarry", "http://prowlarr.example:9696/2", apiKey = null, userAgent = " ")
+        assertEquals("", agentOf(t))
+        val u = repository.saveTorrentIndexer(null, "Home Prowlarr", "http://prowlarr.example:9696/1", "K2")
+        assertEquals("", agentOf(u))
+    }
+
+    /** The switches and a delete change their own fields alone: none of them takes the User-Agent away. */
+    @Test
+    fun `switching an indexer on or off, its use with a service and deleting it keep its User-Agent`() = runBlocking<Unit> {
+        val a = repository.saveIndexer(null, "A", "https://a.example/api", "K1", userAgent = "ExampleReader/2.1")
+        val t = repository.saveTorrentIndexer(null, "Quarry", "http://prowlarr.example:9696/2", "K2", userAgent = "QuarryFetch/1.0")
+        repository.setIndexerEnabled(a, false)
+        assertEquals("ExampleReader/2.1", repository.indexer(a)!!.record.userAgent)
+        repository.setIndexerEnabled(a, true)
+        assertEquals("ExampleReader/2.1", repository.indexer(a)!!.record.userAgent)
+        repository.setTorrentIndexerEnabled(t, false)
+        repository.setUseWithService(t, false)
+        assertEquals("QuarryFetch/1.0", repository.torrentIndexer(t)!!.record.userAgent)
+        repository.setTorrentIndexerEnabled(t, true)
+        repository.setUseWithService(t, true)
+        assertEquals("QuarryFetch/1.0", repository.torrentIndexer(t)!!.record.userAgent)
+        repository.deleteIndexer(a)
+        repository.deleteTorrentIndexer(t)
+        val settings = repository.settings.first()
+        assertEquals("ExampleReader/2.1", settings.indexers.single().userAgent)
+        assertEquals("QuarryFetch/1.0", settings.torrentIndexers.single().userAgent)
+    }
+
+    /** L549: a field with a default, as Remove after playing's: no new version, no migration. */
+    @Test
+    fun `the User-Agent is written in the settings file, which stays version 3`() = runBlocking<Unit> {
+        repository.saveIndexer(null, "A", "https://a.example/api", "K1", userAgent = "ExampleReader/2.1")
+        repository.saveTorrentIndexer(null, "Quarry", "http://prowlarr.example:9696/2", "K2")
+        val written = File(dir, "settings.json").readText()
+        assertTrue(""""userAgent":"ExampleReader/2.1"""" in written, written)
+        assertTrue(""""userAgent":""""" in written, written)
+        assertTrue("\"schemaVersion\":3" in written, written)
+        assertEquals(3, repository.settings.first().schemaVersion)
+    }
+
     /** The user's own debrid accounts (L196): what the service said whose account a key opens, for the cases below. */
     private val torBoxAccount = ServiceSignIn("quay.viewer@example.org", plan = "Standard", planUntil = 1_799_712_000_000)
 

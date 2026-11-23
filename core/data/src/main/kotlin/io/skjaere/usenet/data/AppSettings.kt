@@ -40,7 +40,10 @@ data class AppSettings(
     val activeProviders: List<ProviderRecord> get() = providers.filterNot { it.deleted }
 }
 
-/** An indexer without its API key, which is in [SecretStore] under [apiKeySecret]. */
+/**
+ * An indexer without its API key, which is in [SecretStore] under [apiKeySecret]. [userAgent]: the User-Agent its requests
+ * send, trimmed, "" for the app's own (L549); not a secret, so kept here, and "" in a file saved before it existed.
+ */
 @Serializable
 data class IndexerRecord(
     val id: String,
@@ -49,6 +52,7 @@ data class IndexerRecord(
     val enabled: Boolean = true,
     val updatedAt: Long = 0,
     val deleted: Boolean = false,
+    val userAgent: String = "",
 ) {
     val apiKeySecret: String get() = "indexer:$id:apikey"
 }
@@ -56,7 +60,7 @@ data class IndexerRecord(
 /**
  * A torrent indexer without its API key, which is in [SecretStore] under [apiKeySecret]. [useWithService] off ("Use with
  * your debrid service", for private trackers whose rules forbid debrid services): still searched, but nothing of its
- * results goes to any service.
+ * results goes to any service. [userAgent]: as an [IndexerRecord]'s.
  */
 @Serializable
 data class TorrentIndexerRecord(
@@ -67,6 +71,7 @@ data class TorrentIndexerRecord(
     val useWithService: Boolean = true,
     val updatedAt: Long = 0,
     val deleted: Boolean = false,
+    val userAgent: String = "",
 ) {
     val apiKeySecret: String get() = "torrentIndexer:$id:apikey"
 }

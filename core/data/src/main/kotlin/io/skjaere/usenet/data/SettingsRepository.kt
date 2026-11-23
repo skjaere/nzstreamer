@@ -168,15 +168,19 @@ class SettingsRepository(
     suspend fun indexerKeyStored(id: String): Boolean = secrets.sealed(IndexerRecord(id, "", "").apiKeySecret) != null
 
     /**
-     * Creates ([id] null) or updates an indexer. A null [apiKey] keeps the stored key. A new indexer goes last; one
-     * saved again keeps its place, the order Search lists them in. Returns the id.
+     * Creates ([id] null) or updates an indexer. A null [apiKey] keeps the stored key, and a null [userAgent] the saved one
+     * ("" for a new indexer), so a caller that doesn't show it (a dev seed) never wipes it (L550); one given is kept trimmed.
+     * A new indexer goes last; one saved again keeps its place, the order Search lists them in. Returns the id.
      */
-    suspend fun saveIndexer(id: String?, name: String, baseUrl: String, apiKey: String?, enabled: Boolean = true): String {
+    suspend fun saveIndexer(id: String?, name: String, baseUrl: String, apiKey: String?, enabled: Boolean = true, userAgent: String? = null): String {
         val indexerId = id ?: newId()
-        val record = IndexerRecord(indexerId, name.trim(), baseUrl.trim(), enabled, updatedAt = clock.now())
-        apiKey?.let { secrets.put(record.apiKeySecret, it.trim()) }
+        val updatedAt = clock.now()
+        apiKey?.let { secrets.put(IndexerRecord(indexerId, "", "").apiKeySecret, it.trim()) }
         store.updateData { current ->
             val existing = current.indexers.indexOfFirst { it.id == indexerId }
+            // Built from the saved record, read in the same write, so a null User-Agent keeps what is there now.
+            val agent = userAgent?.trim() ?: current.indexers.getOrNull(existing)?.userAgent.orEmpty()
+            val record = IndexerRecord(indexerId, name.trim(), baseUrl.trim(), enabled, updatedAt, userAgent = agent)
             current.copy(indexers = if (existing >= 0) current.indexers.toMutableList().also { it[existing] = record } else current.indexers + record)
         }
         return indexerId
@@ -209,7 +213,8 @@ class SettingsRepository(
 
     /**
      * Creates ([id] null) or updates a torrent indexer, as [saveIndexer] does an indexer: a null [apiKey] keeps the
-     * stored key, a new one goes last and one saved again keeps its place. Returns the id.
+     * stored key and a null [userAgent] the saved one, a new one goes last and one saved again keeps its place. Returns
+     * the id.
      */
     suspend fun saveTorrentIndexer(
         id: String?,
@@ -218,12 +223,15 @@ class SettingsRepository(
         apiKey: String?,
         enabled: Boolean = true,
         useWithService: Boolean = true,
+        userAgent: String? = null,
     ): String {
         val indexerId = id ?: newId()
-        val record = TorrentIndexerRecord(indexerId, name.trim(), baseUrl.trim(), enabled, useWithService, updatedAt = clock.now())
-        apiKey?.let { secrets.put(record.apiKeySecret, it.trim()) }
+        val updatedAt = clock.now()
+        apiKey?.let { secrets.put(TorrentIndexerRecord(indexerId, "", "").apiKeySecret, it.trim()) }
         store.updateData { current ->
             val existing = current.torrentIndexers.indexOfFirst { it.id == indexerId }
+            val agent = userAgent?.trim() ?: current.torrentIndexers.getOrNull(existing)?.userAgent.orEmpty()
+            val record = TorrentIndexerRecord(indexerId, name.trim(), baseUrl.trim(), enabled, useWithService, updatedAt, userAgent = agent)
             current.copy(
                 torrentIndexers = if (existing >= 0) current.torrentIndexers.toMutableList().also { it[existing] = record } else current.torrentIndexers + record,
             )
