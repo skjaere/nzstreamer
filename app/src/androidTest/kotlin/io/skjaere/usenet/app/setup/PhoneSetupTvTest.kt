@@ -139,7 +139,7 @@ class PhoneSetupTvTest {
             press("next", provider)
             assertTrue(page.contains("Step 2 of 4"))
             // An indexer step with nothing saved starts with a blank card, which goes as it is.
-            press("next", if (page.contains("name=\"i.url\"")) listOf("i.name" to "", "i.url" to "", "i.key" to "") else emptyList())
+            press("next", if (page.contains("name=\"i.url\"")) listOf("i.name" to "", "i.url" to "", "i.key" to "", "i.ua" to "") else emptyList())
             assertTrue(page.contains("Step 3 of 4"))
             press("next", listOf("t.key" to ""))
             assertTrue(page.contains("Step 4 of 4"))
@@ -219,7 +219,7 @@ class PhoneSetupTvTest {
                 if (wizard) {
                     press("next", sent)
                     // An indexer step with nothing saved starts with a blank card, which goes as it is.
-                    press("next", if (page.contains("name=\"i.url\"")) listOf("i.name" to "", "i.url" to "", "i.key" to "") else emptyList())
+                    press("next", if (page.contains("name=\"i.url\"")) listOf("i.name" to "", "i.url" to "", "i.key" to "", "i.ua" to "") else emptyList())
                     press("next", listOf("t.key" to ""))
                     assertTrue(page.contains("Step 4 of 4"))
                 }

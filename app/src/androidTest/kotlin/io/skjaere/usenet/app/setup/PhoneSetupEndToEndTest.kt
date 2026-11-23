@@ -56,13 +56,14 @@ import java.net.URLEncoder
  * "Set up with your phone" end to end, over the app's real settings (taken away and put back afterwards, secrets
  * included), this device standing in for the phone at its own private address. The wizard: two providers on step 1 (the
  * mock NNTP server, TLS off, which works; one on a port nothing listens on, which fails and isn't added), the fake
- * indexer on step 2, the TMDB key skipped, Send; the TV's review, nothing saved until Save, which tests nothing the
- * phone tested and saves both; Done goes home and the port is closed. The edit page: a saved provider changed, another
- * removed, the saved indexer tested with its saved key, a TMDB key FakeTmdb takes, Send and Save. The debrid cards
- * (L209): a TorBox account and a torrent indexer added in the wizard (the debrid and Torznab fakes), tested on the TV
- * from the page, sent, and saved. Also: Discard saves nothing, five wrong codes close the page, Done from a form closes
- * the form too. Debrid accounts and torrent indexers are taken away and put back as the providers are. No assertion
- * message holds a saved value: debug builds hold real ones.
+ * indexer on step 2 with a User-Agent of its own, the TMDB key skipped, Send; the TV's review, nothing saved until
+ * Save, which tests nothing the phone tested and saves both; Done goes home and the port is closed. The edit page: a
+ * saved provider changed, another removed, the saved indexer (a User-Agent saved with it) tested with its saved key and
+ * left as it was, a TMDB key FakeTmdb takes, Send and Save. The debrid cards (L209): a TorBox account and a torrent
+ * indexer with a User-Agent added in the wizard (the debrid and Torznab fakes), tested on the TV from the page, sent,
+ * and saved. Also: Discard saves nothing, five wrong codes close the page, Done from a form closes the form too. Debrid
+ * accounts and torrent indexers are taken away and put back as the providers are. No assertion message holds a saved
+ * value: debug builds hold real ones.
  */
 @RunWith(AndroidJUnit4::class)
 class PhoneSetupEndToEndTest {
@@ -220,7 +221,7 @@ class PhoneSetupEndToEndTest {
     )
     /** A provider on a port nothing listens on: its test fails. */
     private val failing = provider.map { (name, value) -> name to if (name == "p.port") "9" else if (name == "p.name") "Nowhere (phone setup test)" else value }
-    private val indexer = listOf("i.name" to "Fake (phone setup test)", "i.url" to "http://10.0.2.2:8089", "i.key" to "fake-indexer-key")
+    private val indexer = listOf("i.name" to "Fake (phone setup test)", "i.url" to "http://10.0.2.2:8089", "i.key" to "fake-indexer-key", "i.ua" to AGENT)
     private val blankTmdb = listOf("t.key" to "")
 
     /** The page's render counter, as its form posts it. */
@@ -286,6 +287,8 @@ class PhoneSetupEndToEndTest {
         compose.waitUntil(10_000) { exists(hasText(PHONE_SETUP_REVIEW)) }
         assertTrue(exists(hasText("2 new")))
         assertTrue(exists(hasText("Usenet provider · New")) && exists(hasText("Indexer · New")))
+        assertTrue("the indexer's User-Agent on its item", exists(hasText("User-Agent: $AGENT")))
+        // The phone's test of the indexer sent its User-Agent too, so it stands for the card sent (L557).
         assertEquals("both tested from the phone", 2, compose.onAllNodes(hasText("✓ $PHONE_TESTED")).fetchSemanticsNodes().size)
         assertEquals("nothing saved before Save", 0, runBlocking { settings.providers.first().size + settings.indexers.first().size })
         compose.waitUntil(5_000) { closed(address) }
@@ -300,6 +303,7 @@ class PhoneSetupEndToEndTest {
         val savedIndexer = runBlocking { settings.indexers.first().single() }
         assertEquals("http://10.0.2.2:8089", savedIndexer.baseUrl)
         assertEquals("the key typed", true, runBlocking { settings.indexer(savedIndexer.id)?.apiKey } == "fake-indexer-key")
+        assertEquals("the User-Agent sent", AGENT, savedIndexer.userAgent)
         assertEquals("the TMDB key skipped", null, runBlocking { settings.tmdbKey() })
         // The providers list shows the phone's test for the provider as saved.
         val login = runBlocking { settings.provider(savedProvider.id)?.login }
@@ -315,7 +319,8 @@ class PhoneSetupEndToEndTest {
     /**
      * The edit page, once a provider and an indexer are saved: it shows them by name, never a password or key; one
      * provider changed and tested, another removed, the saved indexer tested with its saved key (the same server), a
-     * TMDB key FakeTmdb takes. The review says what changes; Save saves it all, testing nothing the phone tested.
+     * TMDB key FakeTmdb takes. The review says what changes; Save saves it all, testing nothing the phone tested. The
+     * indexer's saved User-Agent goes to the page and back with its card, which the review then finds as it was.
      */
     @Test
     fun theEditPageChangesOneProviderAndRemovesAnother() {
@@ -323,7 +328,7 @@ class PhoneSetupEndToEndTest {
             settings.saveProvider(ProviderRecord("", "Mock (phone setup test)", "10.0.2.2", 1119, "", useTls = false, connections = 2), "") to
                 settings.saveProvider(ProviderRecord("", "Old (phone setup test)", "old.example.invalid", 563, "someone"), INVENTED_PASSWORD)
         }
-        val fake = runBlocking { settings.saveIndexer(null, "Fake (phone setup test)", "http://10.0.2.2:8089", "fake-indexer-key") }
+        val fake = runBlocking { settings.saveIndexer(null, "Fake (phone setup test)", "http://10.0.2.2:8089", "fake-indexer-key", userAgent = AGENT) }
         FakeTmdb(keys = { if (it == INVENTED_TMDB_KEY) KeyCheck.Valid else null }).use {
             showTheApp()
             compose.runOnIdle { nav.navigate(PhoneSetupRoute) }
@@ -356,12 +361,12 @@ class PhoneSetupEndToEndTest {
             assertEquals(200, press(address, page, "send", blankTmdb).status)
 
             compose.waitUntil(10_000) { exists(hasText(PHONE_SETUP_REVIEW)) }
-            assertTrue(exists(hasText("1 new · 1 changed · 1 to remove")))
+            assertTrue("what changes, the saved indexer not among them", exists(hasText("1 new · 1 changed · 1 to remove")))
             assertTrue(exists(hasText("Usenet provider · Changes “Mock (phone setup test)”")))
             assertTrue(exists(hasText("Connections: 2 → 3")))
             assertTrue(exists(hasText("Usenet provider · Removes “Old (phone setup test)”")))
             assertTrue(exists(hasText("old.example.invalid:563 · its saved password is deleted too")))
-            assertTrue(exists(hasText("Unchanged: Fake (phone setup test).")))
+            assertTrue("the saved indexer as it was, its User-Agent sent back with its card", exists(hasText("Unchanged: Fake (phone setup test).")))
             assertEquals("tested from the phone", 2, compose.onAllNodes(hasText("✓ $PHONE_TESTED")).fetchSemanticsNodes().size)
             assertEquals("nothing saved before Save", listOf(mock, old), runBlocking { settings.providers.first().map { it.id } })
             remote.waitForFocus(PHONE_SETUP_SAVE)
@@ -373,6 +378,7 @@ class PhoneSetupEndToEndTest {
             assertEquals(listOf("Mock renamed (phone setup test)", 3, false), providers.single().let { listOf(it.name, it.connections, it.useTls) })
             assertEquals(listOf(fake), runBlocking { settings.indexers.first().map { it.id } })
             assertEquals("the saved key kept", true, runBlocking { settings.indexer(fake)?.apiKey } == "fake-indexer-key")
+            assertEquals("its User-Agent kept", AGENT, runBlocking { settings.indexers.first().single().userAgent })
             assertEquals(true, runBlocking { settings.tmdbKey() } == INVENTED_TMDB_KEY)
             assertEquals(true, container.providerTests.results.value[mock]?.ok)
             remote.waitForFocus(PHONE_SETUP_DONE)
@@ -447,7 +453,10 @@ class PhoneSetupEndToEndTest {
             page = press(address, page, "next", torbox.map { if (it.first == "s.key") it.first to "" else it }).kept()
             assertTrue(page.body.contains("Step 2 of 4"))
             page = press(address, page, "add:torrent-indexer").kept()
-            val torrent = listOf("r.name" to "Home Prowlarr (phone setup test)", "r.url" to DebridFakes.PROWLARR_URL, "r.key" to DebridFakes.TORZNAB_KEY, "r.debrid" to "on")
+            val torrent = listOf(
+                "r.name" to "Home Prowlarr (phone setup test)", "r.url" to DebridFakes.PROWLARR_URL, "r.key" to DebridFakes.TORZNAB_KEY, "r.ua" to TORRENT_AGENT,
+                "r.debrid" to "on",
+            )
             page = press(address, page, "test", torrent).kept()
             assertTrue(page.body.contains("<p class=\"result ok\">✓ Connected"))
             page = press(address, page, "next", torrent.map { if (it.first == "r.key") it.first to "" else it }).kept()
@@ -460,6 +469,7 @@ class PhoneSetupEndToEndTest {
             assertTrue(exists(hasText("2 new")))
             assertTrue(exists(hasText("Debrid service · New")) && exists(hasText("Torrent indexer · New")))
             assertTrue(exists(hasText("TorBox · API key ${maskKey(DebridFakes.TORBOX_KEY)}")))
+            assertTrue("the torrent indexer's User-Agent on its item", exists(hasText("User-Agent: $TORRENT_AGENT")))
             assertEquals("both tested from the phone", 2, compose.onAllNodes(hasText("✓ $PHONE_TESTED")).fetchSemanticsNodes().size)
             assertEquals("nothing saved before Save", 0, runBlocking { settings.services.first().size + settings.torrentIndexers.first().size })
             compose.waitUntil(5_000) { closed(address) }
@@ -475,6 +485,7 @@ class PhoneSetupEndToEndTest {
             val indexer = runBlocking { settings.torrentIndexers.first().single() }
             assertEquals(listOf("Home Prowlarr (phone setup test)", DebridFakes.PROWLARR_URL, true, true), listOf(indexer.name, indexer.baseUrl, indexer.useWithService, indexer.enabled))
             assertEquals("its key typed", true, runBlocking { settings.torrentIndexer(indexer.id)?.apiKey } == DebridFakes.TORZNAB_KEY)
+            assertEquals("its User-Agent sent", TORRENT_AGENT, indexer.userAgent)
             assertEquals("no provider or indexer", 0, runBlocking { settings.providers.first().size + settings.indexers.first().size })
 
             remote.waitForFocus(PHONE_SETUP_DONE)
@@ -514,6 +525,9 @@ class PhoneSetupEndToEndTest {
     }
 
     private companion object {
+        /** Invented product tokens, no real app's. */
+        const val AGENT = "ExampleReader/2.1"
+        const val TORRENT_AGENT = "QuarryFetch/1.0"
         const val INVENTED_TMDB_KEY = "0000invented0000tmdb0000key00000"
         const val INVENTED_PASSWORD = "invented-old-password-0000"
     }

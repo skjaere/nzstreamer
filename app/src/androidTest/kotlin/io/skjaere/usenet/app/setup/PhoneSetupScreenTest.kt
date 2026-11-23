@@ -37,6 +37,7 @@ import io.skjaere.usenet.app.tv.words
 import io.skjaere.usenet.app.ui.FormFactor
 import io.skjaere.usenet.handoff.SETUP_NOT_ENCRYPTED
 import io.skjaere.usenet.data.ProviderRecord
+import io.skjaere.usenet.handoff.IndexerDraft
 import io.skjaere.usenet.handoff.ProviderDraft
 import io.skjaere.usenet.handoff.SetupChange
 import io.skjaere.usenet.handoff.SetupChanges
@@ -322,7 +323,8 @@ class PhoneSetupScreenTest {
     /**
      * As the TV's review mockup has it: where it came from, a summary, each change with whether the phone tested it, and
      * what stays as it is; whoever sent it, the review says from where ("Page opened on …" shows only while waiting,
-     * which a quick sender skips).
+     * which a quick sender skips). A saved indexer sent with a User-Agent of its own, and nothing else changed, is a
+     * change, its line from the client's own to the one sent (L558).
      */
     @Test
     fun theReviewSaysWhatChangesAndWhereItWasSentFrom() {
@@ -331,7 +333,7 @@ class PhoneSetupScreenTest {
             fakes.settings.saveProvider(ProviderRecord("", "Invented main", "news.example.net", 563, "someone"), SetupFakes.PASSWORD)
         }
         val block = runBlocking { fakes.settings.saveProvider(ProviderRecord("", "Invented block", "block.example.net", 563, ""), "") }
-        runBlocking { fakes.settings.saveIndexer(null, "Invented indexer", "https://indexer.example.org/api", SetupFakes.INDEXER_KEY) }
+        val indexer = runBlocking { fakes.settings.saveIndexer(null, "Invented indexer", "https://indexer.example.org/api", SetupFakes.INDEXER_KEY) }
         reviewing(
             fakes,
             SetupChanges(
@@ -340,16 +342,18 @@ class PhoneSetupScreenTest {
                     SetupChange(block, ProviderDraft("Invented block", "block.example.net", 563, true, "", "", 8), removed = true),
                     SetupChange(null, ProviderDraft("", "fill.example.net", null, true, "me2", SetupFakes.PASSWORD, null), removed = false),
                 ),
-                emptyList(),
+                listOf(SetupChange(indexer, IndexerDraft("Invented indexer", "https://indexer.example.org/api", "", userAgent = "ExampleReader/2.1"), removed = false)),
                 null,
             ),
         )
         assertTrue(exists(hasText("Sent from 192.168.1.40")))
-        assertTrue(exists(hasText("1 new · 1 to remove")))
+        assertTrue("the indexer's User-Agent changed alone, a change", exists(hasText("1 new · 1 changed · 1 to remove")))
         assertTrue(exists(hasText("fill.example.net:563 · TLS · me2 · password typed")))
         assertTrue(exists(hasText(TESTED_AT_SAVE)))
         assertTrue(exists(hasText("block.example.net:563")))
-        assertTrue(exists(hasText("Unchanged: Invented main, Invented indexer.")))
+        assertTrue(exists(hasText("Indexer · Changes “Invented indexer”")))
+        assertTrue(exists(hasText("User-Agent: $OWN_USER_AGENT → ExampleReader/2.1")))
+        assertTrue(exists(hasText("Unchanged: Invented main.")))
         assertTrue(exists(hasText(PHONE_SETUP_REVIEW_NOTE)))
         assertEquals(emptyList<String>(), compose.outsideTheSafeArea())
     }

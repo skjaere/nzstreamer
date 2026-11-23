@@ -26,6 +26,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.text.TextLayoutResult
@@ -74,6 +75,7 @@ import io.skjaere.usenet.app.link.TvListener
 import io.skjaere.usenet.app.search.ReleaseList
 import io.skjaere.usenet.app.settings.IndexerTest
 import io.skjaere.usenet.app.settings.MaxBitrateSetting
+import io.skjaere.usenet.app.settings.USER_AGENT_HELP
 import io.skjaere.usenet.app.setup.ADDRESS
 import io.skjaere.usenet.app.setup.PHONE_SETUP_DONE
 import io.skjaere.usenet.app.setup.PHONE_SETUP_LEAVE_OUT
@@ -378,10 +380,18 @@ class TvSharedScreensWalkTest {
         check("Indexers") { open(IndexersRoute) }
     }
 
+    /**
+     * Its User-Agent's gate, under API key (L546, L559), reached; and the help line under it, three sentences (W143),
+     * whole at 2x, where it wraps the most.
+     */
     @Test
     fun indexerForm() {
         showTheApp()
-        check("Add indexer") { open(IndexerRoute()) }
+        check("Add indexer", mustReach = listOf("User-Agent")) { open(IndexerRoute()) }
+        // The walk ends at 2x: the help line brought into view, wherever the walk left the form.
+        compose.onNode(hasText(USER_AGENT_HELP)).performScrollTo()
+        compose.waitForIdle()
+        assertEquals("the User-Agent's help at ${scale}x", emptyList<String>(), compose.textsCut().filter { USER_AGENT_HELP in it })
     }
 
     @Test
