@@ -24,15 +24,16 @@ object IndexerConfigs {
     /**
      * The Usenet indexers ([newznab]), then the torrent indexers ([torznab]) while a service account is on ([serviceOn])
      * and debrid shows ([shown]): without a service their results could play from nowhere (L166), and a build with
-     * debrid hidden searches none of what a shown one saved (L192). Each is read as its kind, and a torrent indexer
-     * carries its "Use with your debrid service". A key that can't be read goes empty, as the search then reports.
+     * debrid hidden searches none of what a shown one saved (L192). Each is read as its kind with its own User-Agent
+     * (L552), and a torrent indexer carries its "Use with your debrid service". A key that can't be read goes empty, as
+     * the search then reports.
      */
     fun searchable(newznab: List<IndexerWithKey>, torznab: List<TorrentIndexerWithKey>, serviceOn: Boolean, shown: Boolean): List<IndexerConfig> =
-        newznab.map { IndexerConfig(it.record.id, it.record.name, it.record.baseUrl, it.apiKey.orEmpty(), it.record.enabled) } +
+        newznab.map { IndexerConfig(it.record.id, it.record.name, it.record.baseUrl, it.apiKey.orEmpty(), it.record.enabled, userAgent = it.record.userAgent) } +
             torznab.takeIf { serviceOn && shown }.orEmpty().map {
                 IndexerConfig(
                     it.record.id, it.record.name, it.record.baseUrl, it.apiKey.orEmpty(), it.record.enabled,
-                    kind = IndexerKind.Torznab, useWithService = it.record.useWithService,
+                    kind = IndexerKind.Torznab, useWithService = it.record.useWithService, userAgent = it.record.userAgent,
                 )
             }
 

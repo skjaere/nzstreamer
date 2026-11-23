@@ -51,6 +51,16 @@ class IndexerConfigsTest {
         assertEquals(listOf(IndexerKind.Newznab, IndexerKind.Newznab, IndexerKind.Torznab, IndexerKind.Torznab), configs.map { it.kind })
     }
 
+    /** L552: every search, play, download and replay reads its indexers here, so each sends its own User-Agent, of either kind. */
+    @Test
+    fun `each indexer's own User-Agent is carried, for both kinds`() {
+        val usenet = listOf(newznab[0].let { it.copy(record = it.record.copy(userAgent = "ExampleReader/2.1")) }, newznab[1])
+        val torrents = listOf(torznab[0], torznab[1].let { it.copy(record = it.record.copy(userAgent = "QuarryFetch/1.0")) })
+        val configs = IndexerConfigs.searchable(usenet, torrents, serviceOn = true, shown = true)
+        assertEquals(listOf("ExampleReader/2.1", "", "", "QuarryFetch/1.0"), configs.map { it.userAgent })
+        assertEquals(listOf(IndexerKind.Newznab, IndexerKind.Newznab, IndexerKind.Torznab, IndexerKind.Torznab), configs.map { it.kind })
+    }
+
     @Test
     fun `a key that couldn't be read is sent empty, as a usenet indexer's is`() {
         val unreadable = listOf(TorrentIndexerWithKey(TorrentIndexerRecord("t1", "Home Prowlarr", "http://192.168.1.20:9696/1"), null))
