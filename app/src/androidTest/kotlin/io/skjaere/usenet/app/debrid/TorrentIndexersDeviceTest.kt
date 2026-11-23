@@ -85,8 +85,8 @@ class TorrentIndexersDeviceTest {
 
     private fun click(matcher: SemanticsMatcher) = compose.onNode(matcher).performScrollTo().performClick()
 
-    /** The form's fields, in order: Name, API URL, API key. */
-    private fun field(label: String) = compose.onAllNodes(hasSetTextAction())[listOf("Name", "API URL", "API key").indexOf(label)]
+    /** The form's fields, in order: Name, API URL, API key, User-Agent. */
+    private fun field(label: String) = compose.onAllNodes(hasSetTextAction())[listOf("Name", "API URL", "API key", "User-Agent").indexOf(label)]
 
     @Test
     fun aTorrentIndexerIsAddedTestedSavedAndKeptFromTheService() {

@@ -50,6 +50,7 @@ import io.skjaere.usenet.app.ui.colors
 import io.skjaere.usenet.app.ui.rememberFieldChain
 import io.skjaere.usenet.data.SettingsRepository
 import io.skjaere.usenet.data.TorrentIndexerRecord
+import io.skjaere.usenet.data.TorrentIndexerWithKey
 import io.skjaere.usenet.newznab.IndexerCaps
 import io.skjaere.usenet.newznab.IndexerConfig
 import io.skjaere.usenet.newznab.IndexerKind
@@ -148,14 +149,24 @@ data class TorrentIndexerForm(val fields: IndexerForm, val useWithService: Boole
 /** A new torrent indexer's form: both switches on (W75). Its id is fixed now, as [newIndexerForm]'s. */
 internal fun newTorrentIndexerForm() = TorrentIndexerForm(newIndexerForm())
 
-/** The indexer the form's Test asks: a Torznab one, its key the field's, else the saved one ([savedKey]). */
-internal fun torrentIndexerConfig(f: IndexerForm, savedKey: String?): IndexerConfig =
-    IndexerConfig(f.id, f.name, f.url.trim(), f.apiKey.trim().ifEmpty { savedKey.orEmpty() }, kind = IndexerKind.Torznab)
+/** The form for editing a saved torrent indexer, as [io.skjaere.usenet.app.settings.indexerForm] an indexer's, with its switch. */
+internal fun torrentIndexerForm(saved: TorrentIndexerWithKey) = saved.record.let { r ->
+    TorrentIndexerForm(IndexerForm(r.id, r.name, r.baseUrl, "", saved.apiKey != null, r.enabled, r.userAgent), r.useWithService)
+}
 
-/** Saves [f], named after its host when no name was given; an empty key field keeps the saved key. Returns the id. */
+/** The indexer the form's Test asks: a Torznab one, its key the field's, else the saved one ([savedKey]), its User-Agent as typed (L552). */
+internal fun torrentIndexerConfig(f: IndexerForm, savedKey: String?): IndexerConfig =
+    IndexerConfig(f.id, f.name, f.url.trim(), f.apiKey.trim().ifEmpty { savedKey.orEmpty() }, kind = IndexerKind.Torznab, userAgent = f.userAgent.trim())
+
+/**
+ * Saves [f], named after its host when no name was given; an empty key field keeps the saved key, and the User-Agent
+ * is saved as the field holds it, trimmed, as the indexer form's. Returns the id.
+ */
 internal suspend fun SettingsRepository.save(f: TorrentIndexerForm): String {
     val name = f.fields.name.trim().ifEmpty { runCatching { java.net.URI(f.fields.url.trim()).host }.getOrNull() ?: "Torrent indexer" }
-    return saveTorrentIndexer(f.fields.id, name, f.fields.url, f.fields.apiKey.trim().takeIf { it.isNotEmpty() }, f.fields.enabled, f.useWithService)
+    return saveTorrentIndexer(
+        f.fields.id, name, f.fields.url, f.fields.apiKey.trim().takeIf { it.isNotEmpty() }, f.fields.enabled, f.useWithService, f.fields.userAgent,
+    )
 }
 
 class TorrentIndexersViewModel(container: AppContainer) : ViewModel() {
@@ -199,8 +210,7 @@ class TorrentIndexerEditViewModel(private val container: AppContainer, private v
         id?.let {
             viewModelScope.launch {
                 container.settings.torrentIndexer(it)?.let { saved ->
-                    val r = saved.record
-                    form.value = TorrentIndexerForm(IndexerForm(it, r.name, r.baseUrl, "", saved.apiKey != null, r.enabled), r.useWithService)
+                    form.value = torrentIndexerForm(saved)
                     tests.formChanged(form.value.fields)
                 }
             }
@@ -264,6 +274,11 @@ fun TorrentIndexerEditScreen(id: String?, onBack: () -> Unit, onPhoneSetup: (() 
             FormField(
                 "API key", fields.apiKey, { v -> vm.update { it.copy(fields = it.fields.copy(apiKey = v)) } }, kind = FieldKind.Key, mono = true,
                 placeholder = if (fields.hasSavedKey) "Saved" else null, help = "Stored encrypted on this device.", chain = chain,
+            )
+            // As the indexer form's, above the Test that sends it (L546).
+            FormField(
+                "User-Agent", fields.userAgent, { v -> vm.update { it.copy(fields = it.fields.copy(userAgent = v)) } }, kind = FieldKind.Agent, mono = true,
+                placeholder = container.newznab.ownUserAgent, help = fields.agentHelp, helpWarn = fields.agentProblem != null, chain = chain,
             )
             // Not disabled while it runs: a remote's focus would leave the button it pressed for a field above it (DbTvSources
             // 6). Another press starts it again for the form as it is.

@@ -7,6 +7,7 @@ import io.ktor.client.plugins.HttpTimeout
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import io.skjaere.usenet.app.settings.IndexerForm
 import io.skjaere.usenet.app.settings.IndexerTest
 import io.skjaere.usenet.app.settings.indexerConnected
 import io.skjaere.usenet.app.settings.memorySettings
@@ -35,10 +36,13 @@ class TorrentIndexerFormTest {
 
     /** Each search's words (`q`), as the indexer was asked. */
     private val asked = mutableListOf<String?>()
+    /** Each request's User-Agent, as sent, the caps' included. */
+    private val agents = mutableListOf<String?>()
 
     private val client = NewznabClient(
         HttpClient(
             MockEngine { request ->
+                agents += request.headers[HttpHeaders.UserAgent]
                 val caps = request.url.parameters["t"] == "caps"
                 if (!caps) asked += request.url.parameters["q"]
                 val body = if (caps) PROWLARR_CAPS else searchBody
@@ -143,11 +147,23 @@ class TorrentIndexerFormTest {
         assertEquals("This indexer’s results are NZBs. Add it under Indexers instead.", failed.message)
     }
 
-    /** As the indexer form: an empty key field tests with the saved key, and a typed one wins. */
+    /**
+     * As the indexer form: an empty key field tests with the saved key, and a typed one wins. The Test sends the User-Agent
+     * typed (L552), trimmed, on its caps and its search, and the app's own while the field is blank.
+     */
     @Test
-    fun `the test uses the typed key, else the saved one`() {
+    fun `the test uses the typed key, else the saved one, and the typed User-Agent`() = runBlocking<Unit> {
         assertEquals("SAVED", torrentIndexerConfig(form.fields.copy(apiKey = " "), savedKey = "SAVED").apiKey)
         assertEquals("a3f9c2e81b7d4c60", torrentIndexerConfig(form.fields, savedKey = "SAVED").apiKey)
+        val typed = form.fields.copy(userAgent = " QuarryFetch/1.0 ")
+        assertEquals("QuarryFetch/1.0", torrentIndexerConfig(typed, savedKey = "SAVED").userAgent)
+        assertEquals("", torrentIndexerConfig(form.fields, savedKey = "SAVED").userAgent)
+
+        assertIs<IndexerTest.Ok>(testIndexer(client, caps, torrentIndexerConfig(typed, null), shown = true))
+        assertEquals(listOf<String?>("QuarryFetch/1.0", "QuarryFetch/1.0"), agents)
+        agents.clear()
+        assertIs<IndexerTest.Ok>(testIndexer(client, caps, torrentIndexerConfig(form.fields, null), shown = true))
+        assertEquals(listOf<String?>(NewznabClient.DEFAULT_USER_AGENT, NewznabClient.DEFAULT_USER_AGENT), agents)
     }
 
     /** W75: both switches on for a new one; the second says what it is for. */
@@ -160,13 +176,17 @@ class TorrentIndexerFormTest {
         assertEquals("Some private trackers don’t allow debrid services. Turn this off for those.", USE_WITH_SERVICE_HELP)
     }
 
+    /** The User-Agent as the indexer form's (L550): saved trimmed, loaded as saved, so kept by an edit that leaves it. */
     @Test
-    fun `save keeps both switches, the key trimmed, and names it after its host when unnamed`() = runBlocking<Unit> {
+    fun `save keeps both switches, the key and the User-Agent trimmed, and names it after its host when unnamed`() = runBlocking<Unit> {
         val settings = memorySettings()
-        val unnamed = form.copy(fields = form.fields.copy(name = " ", apiKey = " a3f9c2e81b7d4c60 "), useWithService = false)
+        val unnamed = form.copy(fields = form.fields.copy(name = " ", apiKey = " a3f9c2e81b7d4c60 ", userAgent = " QuarryFetch/1.0 "), useWithService = false)
         val id = settings.save(unnamed)
         val saved = settings.torrentIndexer(id)!!
-        assertEquals(TorrentIndexerRecord(id, "192.168.1.20", "http://192.168.1.20:9696/3", enabled = true, useWithService = false), saved.record.copy(updatedAt = 0))
+        assertEquals(
+            TorrentIndexerRecord(id, "192.168.1.20", "http://192.168.1.20:9696/3", enabled = true, useWithService = false, userAgent = "QuarryFetch/1.0"),
+            saved.record.copy(updatedAt = 0),
+        )
         assertEquals("a3f9c2e81b7d4c60", saved.apiKey)
         // Saved again with the key field empty and the switch on: the key stays.
         settings.save(unnamed.copy(fields = unnamed.fields.copy(name = "Quarry", apiKey = "", enabled = false), useWithService = true))
@@ -175,6 +195,15 @@ class TorrentIndexerFormTest {
         assertEquals(false, again.record.enabled)
         assertEquals(true, again.record.useWithService)
         assertEquals("a3f9c2e81b7d4c60", again.apiKey)
+        // Opened again, the form holds what was saved, its key field empty; emptied, the User-Agent is the app's own.
+        val loaded = torrentIndexerForm(again)
+        assertEquals(
+            TorrentIndexerForm(IndexerForm(id, "Quarry", "http://192.168.1.20:9696/3", "", hasSavedKey = true, enabled = false, userAgent = "QuarryFetch/1.0"), useWithService = true),
+            loaded,
+        )
+        settings.save(loaded.copy(fields = loaded.fields.copy(userAgent = "")))
+        assertEquals("", settings.torrentIndexer(id)?.record?.userAgent)
+        assertEquals("a3f9c2e81b7d4c60", settings.torrentIndexer(id)?.apiKey)
     }
 
     /** DbPhoneTorrentIndexer 1: each row's line says where it is, and when it's off or not used with the service. */
