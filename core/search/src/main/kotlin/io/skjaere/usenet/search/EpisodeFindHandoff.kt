@@ -17,9 +17,10 @@ data class EpisodeSearch(
  * Hands a background search for an episode (auto-advance starts one before the current episode
  * ends) to the play that follows it. The next [take] empties it, and returns the result only for
  * the same search made within [maxAgeMs]: the episode, the indexers (ids, URLs, enabled, API
- * keys), the ranking and the remembered release. A result with nothing playable or an indexer
- * error is never held, so a retry after a network failure, or for an episode whose releases
- * haven't appeared yet, searches again.
+ * keys, User-Agents), the ranking and the remembered release. An indexer can answer by its
+ * User-Agent, so a result asked with another one is not this search's (L553). A result with
+ * nothing playable or an indexer error is never held, so a retry after a network failure, or for
+ * an episode whose releases haven't appeared yet, searches again.
  */
 class EpisodeFindHandoff(
     private val maxAgeMs: Long = 10 * 60_000L,
@@ -33,7 +34,8 @@ class EpisodeFindHandoff(
         val remembered: RememberedPick?,
     )
 
-    private data class IndexerPrint(val id: String, val baseUrl: String, val enabled: Boolean, val keyHash: String)
+    /** [userAgent] trimmed, as the client sends it. */
+    private data class IndexerPrint(val id: String, val baseUrl: String, val enabled: Boolean, val keyHash: String, val userAgent: String)
 
     private class Held(val fingerprint: Fingerprint, val result: FindResult, val atMs: Long)
 
@@ -69,7 +71,7 @@ class EpisodeFindHandoff(
 
     private fun fingerprint(search: EpisodeSearch) = Fingerprint(
         search.request,
-        search.indexers.map { IndexerPrint(it.id, it.baseUrl, it.enabled, sha256(it.apiKey)) },
+        search.indexers.map { IndexerPrint(it.id, it.baseUrl, it.enabled, sha256(it.apiKey), it.userAgent.trim()) },
         search.context,
         search.remembered,
     )

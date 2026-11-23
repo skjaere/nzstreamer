@@ -97,6 +97,26 @@ class EpisodeFindHandoffTest {
     }
 
     @Test
+    fun `a result found with another User-Agent is not used, and one with the same value padded is`() {
+        val agents = listOf(indexers[0].copy(userAgent = "ExampleReader/2.1"), indexers[1])
+        val asked = search.copy(indexers = agents)
+        val changed = listOf(
+            search.copy(indexers = listOf(agents[0].copy(userAgent = "QuarryFetch/1.0"), agents[1])),
+            search,
+            search.copy(indexers = listOf(agents[0], agents[1].copy(userAgent = "ExampleReader/2.1"))),
+        )
+        changed.forEach { other ->
+            val handoff = EpisodeFindHandoff()
+            handoff.offer(asked, good)
+            assertNull(handoff.take(other), other.indexers.joinToString { "${it.id}=${it.userAgent}" })
+        }
+
+        val handoff = EpisodeFindHandoff()
+        handoff.offer(asked, good)
+        assertSame(good, handoff.take(search.copy(indexers = listOf(agents[0].copy(userAgent = " ExampleReader/2.1\t"), agents[1]))))
+    }
+
+    @Test
     fun `a play of another episode drops the prefetched result`() {
         val handoff = EpisodeFindHandoff()
         handoff.offer(search, good)
