@@ -51,6 +51,9 @@ class NewznabClient(
     /** A torrent indexer's caps and searches: as long as the search gives it, else they would cut it short. */
     private val torznabTimeoutMs: Long = IndexerKind.Torznab.timeoutMs,
 ) {
+    /** What a request sends for an indexer without a User-Agent of its own: what the forms show while their field is empty. */
+    val ownUserAgent: String get() = userAgent
+
     suspend fun caps(indexer: IndexerConfig): IndexerCaps =
         getParsed(indexer, mapOf("t" to "caps"), NewznabXml::parseCaps)
 
@@ -125,10 +128,15 @@ class NewznabClient(
      * (null keeps the engine's own read timeout, OkHttp's 10 s).
      */
     private suspend fun <T> request(indexer: IndexerConfig, url: String, timeoutMs: Long, silentMs: Long? = null, read: suspend (HttpResponse) -> T): T {
+        // An indexer's own User-Agent the rule refuses (edited by hand, or saved by a later version) never reaches the
+        // engines, whose errors would repeat it (L551).
+        val own = indexer.userAgent.trim()
+        if (UserAgentRule.problem(own) != null) throw NewznabException(NewznabError.BadResponse("Invalid User-Agent"))
         if (log.isDebugEnabled) log.debug(requestLine(indexer, url))
         return try {
             http.prepareGet(url) {
-                header(HttpHeaders.UserAgent, userAgent)
+                // Never an empty header: OkHttp fills in its own only where there is none.
+                header(HttpHeaders.UserAgent, own.ifEmpty { userAgent })
                 timeout {
                     requestTimeoutMillis = timeoutMs
                     // Jackett and Prowlarr send nothing until their trackers have answered: the engine's own read
@@ -188,7 +196,11 @@ class NewznabClient(
         const val DEFAULT_USER_AGENT = "NZStreamer/0.1"
         private val log = LoggerFactory.getLogger(NewznabClient::class.java)
 
-        /** An OkHttp-backed client; OkHttp verifies TLS hostnames and follows redirects. */
+        /**
+         * An OkHttp-backed client. OkHttp verifies TLS hostnames; Ktor's HttpRedirect follows redirects (its OkHttp engine
+         * turns OkHttp's own off), each hop with the request's headers but Authorization on another host: an indexer's
+         * User-Agent goes on to wherever it redirects (L552).
+         */
         fun defaultHttpClient(): HttpClient = HttpClient(OkHttp) {
             install(HttpTimeout)
             expectSuccess = false

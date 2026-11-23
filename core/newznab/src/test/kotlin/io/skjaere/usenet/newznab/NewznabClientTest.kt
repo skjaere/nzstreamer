@@ -55,12 +55,64 @@ class NewznabClientTest {
         assertEquals(listOf(2040, 2045), caps.categories.first().subcategories.map { it.id })
     }
 
-    /** Self-hosted indexers (NZBHydra, Prowlarr) list each client by its user agent, so the user sees the app's name there. */
+    /**
+     * Self-hosted indexers (NZBHydra, Prowlarr) list each client by its user agent, so the user sees the app's name there.
+     * An indexer's own User-Agent (L551) goes in its place, trimmed, on every request to it: caps, searches and both
+     * kinds of grab. Blank is the client's own, never an empty header.
+     */
     @Test
-    fun `requests carry the app's name as their user agent`() = runBlocking<Unit> {
+    fun `requests carry the app's name as their user agent, or the indexer's own`() = runBlocking<Unit> {
+        val fake = FakeIndexers { request ->
+            when (request.url.parameters["t"]) {
+                "caps" -> xml(fixture("newznab-caps.xml"))
+                "search" -> xml(fixture("newznab-search.xml"))
+                else -> xml(fixture("sample.nzb"))
+            }
+        }
+        suspend fun sent(client: NewznabClient, indexer: IndexerConfig): List<String?> {
+            fake.requests.clear()
+            client.caps(indexer)
+            client.search(indexer, SearchQuery.Text("harbor lights"))
+            client.nzb(indexer, "a1b2c3d4", downloadTemplate = null)
+            client.nzb(indexer, "a1b2c3d4", "https://indexer.example.org/getnzb/a1b2c3d4.nzb&i=42&r=${NewznabItem.API_KEY_PLACEHOLDER}")
+            assertEquals(listOf("caps", "search", "get", null), fake.requests.map { it.url.parameters["t"] }, "a template grab last")
+            return fake.requests.map { it.headers[HttpHeaders.UserAgent] }
+        }
+        assertEquals("NZStreamer/0.1", fake.client.ownUserAgent)
+        assertEquals(List(4) { "NZStreamer/0.1" }, sent(fake.client, indexer()))
+        assertEquals(List(4) { "ExampleReader/2.1 (compatible)" }, sent(fake.client, indexer().copy(userAgent = "  ExampleReader/2.1 (compatible)\t")))
+        assertEquals(List(4) { "NZStreamer/0.1" }, sent(fake.client, indexer().copy(userAgent = " \t ")))
+        // The client's own is whatever it was made with.
+        val other = NewznabClient(fake.http, userAgent = "QuarryFetch/1.0")
+        assertEquals("QuarryFetch/1.0", other.ownUserAgent)
+        assertEquals(List(4) { "QuarryFetch/1.0" }, sent(other, indexer()))
+        assertEquals(List(4) { "ExampleReader/2.1" }, sent(other, indexer().copy(userAgent = "ExampleReader/2.1")))
+    }
+
+    /**
+     * L551: an indexer's User-Agent the rule refuses (edited by hand, or from a later version) is never sent. The request
+     * fails before it leaves, and its error doesn't repeat the value, as the engines' own refusals would.
+     */
+    @Test
+    fun `an indexer's User-Agent the rule refuses fails each request before it is sent, without the value in the error`() = runBlocking<Unit> {
         val fake = answering(fixture("newznab-caps.xml"))
-        fake.client.caps(indexer())
-        assertEquals("NZStreamer/0.1", fake.requests.single().headers[HttpHeaders.UserAgent])
+        val refusedValues = listOf("ExampleReader/2.1\r\nX-Extra: 1", "QuarryFetch/1.0 é", "ExampleReader\t2.1", "QuarryFetch/" + "1".repeat(256))
+        refusedValues.forEach { value ->
+            val refused = indexer().copy(userAgent = value)
+            listOf<suspend () -> Unit>(
+                { fake.client.caps(refused) },
+                { fake.client.search(refused, SearchQuery.Text("x")) },
+                { fake.client.nzb(refused, "g", downloadTemplate = null) },
+                { fake.client.nzb(refused, "g", "https://indexer.example.org/getnzb/g.nzb&r=${NewznabItem.API_KEY_PLACEHOLDER}") },
+            ).forEach { call ->
+                val e = assertFailsWith<NewznabException> { call() }
+                assertIs<NewznabError.BadResponse>(e.error)
+                assertEquals("Invalid User-Agent", e.error.message)
+                assertFalse(value.trim() in e.message.orEmpty())
+                assertFalse(KEY in e.message.orEmpty())
+            }
+        }
+        assertTrue(fake.requests.isEmpty())
     }
 
     @Test

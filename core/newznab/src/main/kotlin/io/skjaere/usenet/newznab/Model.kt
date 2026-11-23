@@ -27,6 +27,11 @@ data class IndexerConfig(
      * goes to any service. Always on for a Newznab indexer.
      */
     val useWithService: Boolean = true,
+    /**
+     * The User-Agent its requests send ([UserAgentRule]), as saved: trimmed, "" for the client's own
+     * ([NewznabClient.ownUserAgent]). Not a secret, but never in a log line (L554): a browser's string can tell who sent it.
+     */
+    val userAgent: String = "",
 ) {
     override fun toString() = "IndexerConfig(id=$id, name=$name, baseUrl=$baseUrl, enabled=$enabled, kind=$kind, useWithService=$useWithService)"
 }
