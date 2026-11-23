@@ -1,5 +1,7 @@
 package io.skjaere.usenet.app
 
+import android.app.Activity
+import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -16,6 +18,8 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import io.skjaere.usenet.app.settings.USER_AGENT_CHARACTERS
 import io.skjaere.usenet.app.settings.USER_AGENT_HELP
 import io.skjaere.usenet.app.settings.USER_AGENT_TOO_LONG
@@ -24,14 +28,15 @@ import io.skjaere.usenet.data.AppSettings
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
+import org.junit.rules.TestRule
 import org.junit.runner.RunWith
+import org.junit.runners.model.Statement
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -47,13 +52,20 @@ import kotlin.concurrent.thread
  * the same words asks again at once (no cache answers it) with NZStreamer/0.1, the client's own, which the field's
  * placeholder shows. A value with é, or of 257 characters, keeps Save and Test connection disabled, its words in the
  * help's place. The other indexers are switched off, the torrent indexers and service accounts hidden (tombstoned,
- * their keys untouched) and the TMDB key taken away, so a Search asks no one else; all put back after, the test's
- * indexer deleted with its key and its searches forgotten.
+ * their keys untouched) and the TMDB key taken away, so a Search asks no one else; all put back once the app's screens
+ * are closed, the test's indexer deleted with its key and its searches forgotten.
  */
 @RunWith(AndroidJUnit4::class)
 class IndexerUserAgentDeviceTest {
-    @get:Rule
     val compose = createComposeRule()
+
+    /**
+     * Around [compose]: the settings are taken before its activity opens and put back once it has closed it, the app's
+     * view models cleared with it. Inside it, as @After is, the TMDB key would be back while the Search screen still
+     * showed its words, which it asks TMDB about as soon as there is a key, and Home its titles.
+     */
+    @get:Rule
+    val rules: RuleChain = RuleChain.outerRule(TestRule { base, _ -> aroundTheScreens(base) }).around(compose)
 
     private val container = InstrumentationRegistry.getInstrumentation().targetContext.container
     private val settings = container.settings
@@ -65,8 +77,25 @@ class IndexerUserAgentDeviceTest {
     private var searchedBefore = emptySet<String>()
     private lateinit var nav: NavHostController
 
-    @Before
-    fun setUp() = runBlocking<Unit> {
+    /** [setUp], then [screens], then [restore] whether or not they passed, its failure kept with theirs. */
+    private fun aroundTheScreens(screens: Statement) = object : Statement() {
+        override fun evaluate() {
+            try {
+                setUp()
+                screens.evaluate()
+            } catch (e: Throwable) {
+                try {
+                    restore()
+                } catch (after: Throwable) {
+                    e.addSuppressed(after)
+                }
+                throw e
+            }
+            restore()
+        }
+    }
+
+    private fun setUp() = runBlocking<Unit> {
         // The debug build's own settings saved first, as the ones put back after are read after them.
         withTimeout(SEEDING_MS) { container.devSettingsSaved.await() }
         home.show()
@@ -81,10 +110,12 @@ class IndexerUserAgentDeviceTest {
         settings.setTmdbKey(null)
     }
 
-    @After
-    fun restore() = runBlocking<Unit> {
+    private fun restore() = runBlocking<Unit> {
         everyStep(
             { indexer.close() },
+            // None by now: a screen still open would ask TMDB once the key is back, Search for its words and Home for its
+            // titles. Were one open, it is closed first, and the test fails for it.
+            { assertEquals("the test's screens still open as the settings went back", emptyList<String>(), closeOpenScreens()) },
             { home.restore() },
             {
                 // Skipped before anything was changed.
@@ -97,6 +128,19 @@ class IndexerUserAgentDeviceTest {
                 }
             },
         )
+    }
+
+    /** Compose's activity, which holds the app's screens and their view models, while it is open. */
+    private fun openScreens(): List<Activity> = onMainThread {
+        OPEN.flatMap { ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(it) }.filter { it.javaClass == ComponentActivity::class.java }.distinct()
+    }
+
+    /** Finishes the test's screens still open, if any, and waits for them to close: says which were. */
+    private suspend fun closeOpenScreens(): List<String> {
+        val open = openScreens()
+        open.forEach { activity -> onMainThread { activity.finish() } }
+        waitFor("the test's screens closed", SCREENS_MS) { Unit.takeIf { openScreens().isEmpty() } }
+        return open.map { it.javaClass.simpleName }
     }
 
     private fun exists(matcher: SemanticsMatcher) = compose.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty()
@@ -184,7 +228,8 @@ class IndexerUserAgentDeviceTest {
         assertEquals("the Test's User-Agents", listOf(AGENT, AGENT), tested.map { it.userAgent })
 
         click(save)
-        waitFor(hasText(NAME) and hasClickAction())
+        // Its row on the list, which shows once the save is done; not the form's Name field, which holds the same words.
+        waitFor(hasText(NAME) and hasClickAction() and !hasSetTextAction())
         val id = runBlocking { settings.indexers.first().single { it.name == NAME }.id }
         assertEquals("saved trimmed", AGENT, runBlocking { settings.indexer(id) }?.record?.userAgent)
 
@@ -306,5 +351,9 @@ class IndexerUserAgentDeviceTest {
         const val SEEDING_MS = 30_000L
         /** A search's wait: seconds, where the search's cache would keep an answer for 15 minutes. */
         const val SEARCH_MS = 20_000L
+        /** How long the test's screens may take to close. */
+        const val SCREENS_MS = 30_000L
+        /** An activity's stages before it is destroyed. */
+        val OPEN = arrayOf(Stage.PRE_ON_CREATE, Stage.CREATED, Stage.STARTED, Stage.RESUMED, Stage.PAUSED, Stage.STOPPED, Stage.RESTARTED)
     }
 }
