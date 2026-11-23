@@ -11,6 +11,7 @@ import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
@@ -51,9 +52,10 @@ import kotlin.concurrent.thread
  * ExampleReader/2.1, it goes on the form's Test connection and, once saved, on a Search; emptied, the next Search of
  * the same words asks again at once (no cache answers it) with NZStreamer/0.1, the client's own, which the field's
  * placeholder shows. A value with é, or of 257 characters, keeps Save and Test connection disabled, its words in the
- * help's place. The other indexers are switched off, the torrent indexers and service accounts hidden (tombstoned,
- * their keys untouched) and the TMDB key taken away, so a Search asks no one else; all put back once the app's screens
- * are closed, the test's indexer deleted with its key and its searches forgotten.
+ * help's place, and pressed then, neither they nor the field's Done save, send or test it. The other indexers are
+ * switched off, the torrent indexers and service accounts hidden (tombstoned, their keys untouched) and the TMDB key
+ * taken away, so a Search asks no one else; all put back once the app's screens are closed, the test's indexer deleted
+ * with its key and its searches forgotten.
  */
 @RunWith(AndroidJUnit4::class)
 class IndexerUserAgentDeviceTest {
@@ -270,19 +272,40 @@ class IndexerUserAgentDeviceTest {
         assertFalse("the help still shown beside the problem's words", exists(hasText(USER_AGENT_HELP)))
         compose.onNode(save).assertIsNotEnabled()
         compose.onNode(testConnection).performScrollTo().assertIsNotEnabled()
+        pressingDoesNothing("with é")
 
         field("User-Agent").performTextReplacement("a".repeat(257))
         waitFor(hasText(USER_AGENT_TOO_LONG))
         compose.onNode(save).assertIsNotEnabled()
         compose.onNode(testConnection).performScrollTo().assertIsNotEnabled()
+        pressingDoesNothing("of 257 characters")
 
         // Put right, both go back on, and the help with them.
         field("User-Agent").performTextReplacement(AGENT)
         waitFor(hasText(USER_AGENT_HELP))
         compose.onNode(save).assertIsEnabled()
         compose.onNode(testConnection).performScrollTo().assertIsEnabled()
-        assertEquals("nothing was sent", emptyList<AgentIndexer.Request>(), indexer.requests.toList())
-        assertTrue("nothing was saved", runBlocking { settings.indexers.first() }.none { it.name == NAME })
+    }
+
+    /**
+     * Save, Test connection and the User-Agent field's Done, pressed while the value [problem] is refused, do nothing: in
+     * [QUIET_MS], far longer than a save or a test of this indexer takes, it isn't saved, it is sent nothing, and no
+     * test's result shows (a test of the value would fail in the client before sending, with [REFUSED] on the form).
+     */
+    private fun pressingDoesNothing(problem: String) {
+        compose.onNode(save).performClick()
+        compose.onNode(testConnection).performScrollTo().performClick()
+        field("User-Agent").performImeAction()
+        val saved = { runBlocking { settings.indexers.first() }.any { it.name == NAME } }
+        val tested = { exists(hasText(REFUSED)) }
+        try {
+            compose.waitUntil(QUIET_MS) { saved() || indexer.requests.isNotEmpty() || tested() }
+        } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
+            // None came, as none should.
+        }
+        assertFalse("a value $problem: saved", saved())
+        assertEquals("a value $problem: sent", emptyList<AgentIndexer.Request>(), indexer.requests.toList())
+        assertFalse("a value $problem: tested", tested())
     }
 
     /**
@@ -350,6 +373,10 @@ class IndexerUserAgentDeviceTest {
         const val SEEDING_MS = 30_000L
         /** A search's wait: seconds, where the search's cache would keep an answer for 15 minutes. */
         const val SEARCH_MS = 20_000L
+        /** The client's words for a User-Agent it refuses, a Test's result on the form. */
+        const val REFUSED = "Invalid User-Agent"
+        /** How long a press that does nothing is watched: a save, or a Test of the indexer on this device, takes far less. */
+        const val QUIET_MS = 2_000L
         /** How long the test's screens may take to close. */
         const val SCREENS_MS = 30_000L
         /** An activity's stages before it is destroyed. */
