@@ -118,6 +118,14 @@ class SecretStore(
         }
     }
 
+    /**
+     * Removes every secret whose name starts with [prefix], but the names [keep] keeps: a plugin's secrets as it is removed
+     * ("plugin:<id>:"), or at the app's start those of every plugin no longer installed.
+     */
+    suspend fun removeAll(prefix: String, keep: (String) -> Boolean = { false }) {
+        file.updateData { current -> current.copy(entries = current.entries.filterKeys { !it.startsWith(prefix) || keep(it) }) }
+    }
+
     /** Whether [get] would return the secret: one that can't be decrypted is absent here too. */
     fun has(name: String): Flow<Boolean> =
         file.data.map { it.entries[name] }.distinctUntilChanged().map { sealed -> sealed?.let { open(it) } != null }

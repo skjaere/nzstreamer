@@ -91,4 +91,26 @@ class SecretStoreTest {
         }
         assertEquals(listOf("seal@fake-io", "open@fake-io"), cipher.threads)
     }
+
+    /** L617: a plugin's secrets go with it, by their prefix, and nothing else does. */
+    @Test
+    fun `removeAll takes the secrets under a prefix and leaves every other name`() = runBlocking<Unit> {
+        val secrets = store()
+        listOf("plugin:skeleton:key", "plugin:skeleton:token", "plugin:skeletons:key", "plugin:kestrel:key", "tmdb:key", "indexer:a")
+            .forEach { secrets.put(it, "v") }
+        secrets.removeAll("plugin:skeleton:")
+        listOf("plugin:skeleton:key", "plugin:skeleton:token").forEach { assertEquals(null, secrets.get(it), it) }
+        listOf("plugin:skeletons:key", "plugin:kestrel:key", "tmdb:key", "indexer:a").forEach { assertEquals("v", secrets.get(it), it) }
+    }
+
+    /** At each start the plugins' sweep takes the secrets of every plugin the registry doesn't name, and keeps the rest. */
+    @Test
+    fun `removeAll keeps the names it is told to`() = runBlocking<Unit> {
+        val secrets = store()
+        listOf("plugin:skeleton:key", "plugin:kestrel:key", "tmdb:key").forEach { secrets.put(it, "v") }
+        secrets.removeAll("plugin:") { it.startsWith("plugin:skeleton:") }
+        assertEquals("v", secrets.get("plugin:skeleton:key"))
+        assertEquals(null, secrets.get("plugin:kestrel:key"))
+        assertEquals("v", secrets.get("tmdb:key"))
+    }
 }

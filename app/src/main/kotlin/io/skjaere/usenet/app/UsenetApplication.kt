@@ -90,6 +90,8 @@ import io.skjaere.usenet.app.play.PlayerInFront
 import io.skjaere.usenet.app.play.UsableRoutes
 import io.skjaere.usenet.app.play.noUsableSource
 import io.skjaere.usenet.app.play.servicesSaved
+import io.skjaere.usenet.app.plugins.PluginRegistry
+import io.skjaere.usenet.app.plugins.named
 import io.skjaere.usenet.app.refresh.LibrarySummaryStore
 import io.skjaere.usenet.app.refresh.RateGate
 import io.skjaere.usenet.app.refresh.SummaryRefresher
@@ -474,6 +476,12 @@ class AppContainer(private val context: Context) {
 
     /** Settings › Logs' log of the last crash, among the app's files: the system may clear the cache before it is read. */
     val crashLog = CrashLog(File(context.filesDir, "$LOGS_DIR/last-crash.txt")) { logHeader }
+
+    /**
+     * The installed plugins (L616, L619): their files read as the process starts ([UsenetApplication.onCreate]), their code
+     * loaded only once MainActivity is first created, never in a process started for a service or a receiver alone.
+     */
+    val plugins: PluginRegistry = PluginRegistry.of(context, data.secrets.named(), PluginRegistry.NO_GUARD, appScope)
 
     /** Whether MainActivity is started: the lists' refresher asks TMDB only then (not while the player streams). */
     val foreground = MutableStateFlow(false)
@@ -992,6 +1000,8 @@ class UsenetApplication : Application(), SingletonImageLoader.Factory {
         AndroidLogConfig.detailed = BuildConfig.DEBUG
         container = AppContainer(this)
         container.crashLog.install()
+        // The plugins' files, read off the main thread; their code waits for the first screen (MainActivity).
+        container.plugins.start()
         // Before any activity starts: the first one counts.
         registerActivityLifecycleCallbacks(container.inFront)
         // Before a host goes on with them: the downloads' folders and rows in step, and those the user stopped from

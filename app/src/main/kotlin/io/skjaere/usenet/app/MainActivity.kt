@@ -128,6 +128,9 @@ class MainActivity : ComponentActivity() {
             showAddTv(intent)
             showDownloads(intent)
         }
+        // The plugins' code loads now, once per process, off the main thread (L619): never in a process started for a
+        // service or a receiver alone.
+        container.plugins.firstActivity()
         // Play on (W18): a new launch starts on This phone, a recreation keeps the TV it had.
         if (!container.television) container.playOn.restore(savedInstanceState?.getString(PLAY_ON))
         // The lists' refresher asks TMDB only while this is in front.
