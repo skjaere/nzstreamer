@@ -21,11 +21,16 @@ import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.pluginTabsFollow
 import io.skjaere.usenet.app.play.OkGuard
 import io.skjaere.usenet.app.plugins.InstallState
+import io.skjaere.usenet.app.plugins.PLUGIN_WAIT_MS
+import io.skjaere.usenet.app.plugins.PluginListServer
+import io.skjaere.usenet.app.plugins.PluginListServer.Listed
+import io.skjaere.usenet.app.plugins.PluginSource
 import io.skjaere.usenet.app.plugins.PluginIndex
 import io.skjaere.usenet.app.plugins.PluginListState
 import io.skjaere.usenet.app.plugins.PluginStateRule
 import io.skjaere.usenet.app.plugins.PluginStatus
 import io.skjaere.usenet.app.plugins.Refusal
+import io.skjaere.usenet.app.plugins.SkeletonBuild
 import io.skjaere.usenet.app.plugins.PluginsPageFakes
 import io.skjaere.usenet.app.plugins.PluginsPageFakes.Companion.installed
 import io.skjaere.usenet.app.plugins.PluginsPageFakes.Companion.listed
@@ -51,7 +56,8 @@ import org.junit.runner.RunWith
  * to Cancel while it downloads and is checked, to Open <label> once installed; a failure's Try again; Install again for a
  * plugin refused at start; Remove alone for a withdrawn one; Check again where no card has a button; Turn on again above
  * the cards while plugins are off; two installed, a third's greyed Install passed over; Checking… keeping the focus while
- * the list is read; no list; offline; and Remove's question, Cancel focused, then the card's Install once removed.
+ * the list is read; no list; offline; and Remove's question, Cancel focused, then the card's Install once removed. And
+ * Back on the hub row after an install from a list of the test's own, the row saying the new state.
  */
 @TvDevice
 @RunWith(AndroidJUnit4::class)
@@ -163,6 +169,50 @@ class PluginsTvTest {
             remote.waitForFocus("Plugins | None yet")
         } finally {
             home.restore()
+        }
+    }
+
+    /**
+     * Back from the page on its hub row, focused, the row's line the state the page left: the skeleton installed by
+     * remote from the test's own list, on this device's loopback address (L622). Settings' hub never reads the list
+     * itself (L620): nothing is asked of it before the page opens.
+     */
+    @Test
+    fun backFromThePageFocusesTheHubRowWithTheLineThePageLeft() {
+        val server = PluginListServer()
+        PluginSource.override = server.source
+        // As MainActivity's first creation does: the plugins' code loads from now on, as an install's does.
+        instrumentation.targetContext.container.plugins.firstActivity()
+        home.show()
+        try {
+            server.list(Listed(SkeletonBuild.V1, "1.0.0"))
+            compose.setTvContent {
+                nav = rememberNavController()
+                AppNav(nav = nav)
+            }
+            remote.waitForHomeFocus()
+            val rail = tabsFor(FormFactor.Tv).map { it.label }
+            remote.press(KeyEvent.KEYCODE_DPAD_LEFT)
+            repeat(rail.indexOf("Settings") - rail.indexOf("Home")) { remote.press(KeyEvent.KEYCODE_DPAD_DOWN) }
+            remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+            remote.waitForFocus("Usenet providers")
+            assertEquals("Plugins | None yet", remote.pressUntil(KeyEvent.KEYCODE_DPAD_DOWN, "Plugins"))
+            assertEquals("the hub read no list", emptyList<String>(), server.requests.toList())
+
+            remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+            remote.waitForFocus("Install", PAGE_MS)
+            remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+            compose.waitUntil(PLUGIN_WAIT_MS) { exists(hasText("Installed. Skeleton is now a tab after ${pluginTabsFollow(FormFactor.Tv)}.")) }
+            remote.waitForFocus("Remove")
+
+            remote.press(KeyEvent.KEYCODE_BACK)
+            remote.waitForFocus("Plugins | Skeleton")
+            assertEquals("Plugins | Skeleton", remote.focused())
+        } finally {
+            home.restore()
+            // The runner's source for the whole run: an address that answers nothing (L622).
+            PluginSource.override = PluginSource.CLOSED
+            server.close()
         }
     }
 
