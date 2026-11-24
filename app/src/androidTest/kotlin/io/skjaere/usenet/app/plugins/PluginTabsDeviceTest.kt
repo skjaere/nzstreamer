@@ -1,6 +1,7 @@
 package io.skjaere.usenet.app.plugins
 
 import androidx.activity.ComponentActivity
+import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -25,6 +26,8 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.navigation.NavHostController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.skjaere.usenet.app.AppNav
@@ -410,6 +413,39 @@ class PluginTabsDeviceTest {
         waitFor(homeShown)
     }
 
+    /**
+     * L581: clearing a slot's saved stack restores its pages and pops them again, and the navigation library still lists
+     * them as drawn until the next screen change settles, though they never showed. They don't count as the slot on the
+     * screen, so a version that changes meanwhile has its slot's stack cleared at once, not the history built next.
+     */
+    @Test
+    fun aClearedSlotsPagesThatNeverShowedDontCountAsShown() {
+        compose.setContent {
+            AppTheme {
+                nav = rememberNavController()
+                NavHost(nav, startDestination = HomeRoute) {
+                    composable<HomeRoute> { Text(HOME_STAND_IN) }
+                    pluginScreens(nav, plugins.app)
+                }
+            }
+        }
+        waitFor(hasText(HOME_STAND_IN))
+        compose.runOnIdle { nav.switchTab(PluginTab1) }
+        waitFor(ownPage("Fake"))
+        press(SECOND_PAGE)
+        waitFor(secondPage("Fake"))
+        backTo(HomeRoute, hasText(HOME_STAND_IN))
+        val moves = NavSlotMoves(nav)
+        compose.waitUntil(PLUGIN_WAIT_MS) { compose.runOnIdle { moves.shown() }.isEmpty() }
+
+        compose.runOnIdle { moves.clear(1) }
+        compose.waitForIdle()
+        assertEquals("the slot's pages, cleared, shown", emptyList<Any>(), compose.runOnIdle { moves.shown() })
+        compose.runOnIdle { nav.switchTab(PluginTab1) }
+        waitFor(ownPage("Fake"))
+        assertTrue("its second page came back after the clear", !exists(secondPage("Fake")))
+    }
+
     private companion object {
         /** Harbor Lights' id in the fake catalogue's TMDB numbering; nothing real has it. */
         const val SHOW = 900002
@@ -419,5 +455,8 @@ class PluginTabsDeviceTest {
 
         /** A second plugin's label as long as a tab's label may be: 16 characters (L613). */
         const val LONG = "Kestrel Cup Live"
+
+        /** What stands for Home where the test's own graph has the slots alone. */
+        const val HOME_STAND_IN = "Home, as a stand-in"
     }
 }

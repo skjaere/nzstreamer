@@ -218,6 +218,34 @@ class PluginSlotsTest {
     }
 
     /**
+     * A slot no plugin holds, its saved stack cleared, then bound again (Remove, then an install that takes the slot): its
+     * stack is empty already, so what the user builds in the new plugin's tab stays, whatever is still listed of the old
+     * pages as they go (clearing a stack restores them and pops them again).
+     */
+    @Test
+    fun `a slot bound again after its stack was cleared keeps what the user builds there`() = runTest {
+        val nav = FakeNav()
+        val watch = watch(nav, Swaps())
+        nav.navigate(SettingsRoute)
+        nav.navigate(PluginsRoute())
+        watch.check(listOf(installed("skeleton")))
+        watch.check(emptyList())
+        assertEquals(1, nav.moves.count { it == "clear 1" }, "removed: its slot's stack cleared")
+
+        nav.leaving += PluginTab1
+        val kestrel = listOf(installed("kestrel", status = running("kestrel", key = 5)))
+        watch.check(kestrel)
+        nav.leaving.clear()
+        nav.switchTab(PluginTab1)
+        watch.check(kestrel)
+        nav.navigate(PluginPage1("second", null))
+        nav.switchTab(HomeRoute)
+        watch.check(kestrel)
+        assertEquals(listOf(PluginTab1, PluginPage1("second", null)), nav.saved[PluginTab1::class], "its history kept")
+        assertEquals(1, nav.moves.count { it == "clear 1" })
+    }
+
+    /**
      * An error lets its version go at once, and Install again's newer version takes over through the registry itself: the
      * slot's saved stack is cleared once the slot is off the screen, so no page of the old version comes back.
      */

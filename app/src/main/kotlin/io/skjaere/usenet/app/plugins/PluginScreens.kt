@@ -33,6 +33,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavController
 import androidx.navigation.NavDestination.Companion.hasRoute
@@ -245,7 +246,10 @@ private fun PlaceholderPage(placeholder: PluginPlaceholder, tv: Boolean, onOpenP
 /** The slots' moves on the app's [nav] ([SlotMoves]). */
 class NavSlotMoves(private val nav: NavController) : SlotMoves {
     override fun shown(): List<KClass<*>> {
-        val drawn = nav.visibleEntries.value.mapNotNull { entry -> PluginSlots.routeTypes.firstOrNull { entry.destination.hasRoute(it) } }
+        // A page that clearing a saved stack restored and popped again stays listed until the next screen change settles,
+        // though it never showed: its lifecycle never left INITIALIZED, where a page leaving the screen is CREATED.
+        val drawn = nav.visibleEntries.value.filter { it.lifecycle.currentState.isAtLeast(Lifecycle.State.CREATED) }
+            .mapNotNull { entry -> PluginSlots.routeTypes.firstOrNull { entry.destination.hasRoute(it) } }
         return drawn + stacked()
     }
 

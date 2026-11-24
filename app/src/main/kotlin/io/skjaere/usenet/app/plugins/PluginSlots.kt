@@ -133,13 +133,18 @@ class PluginSlotWatch(
         }
     }
 
-    /** Keeps what slot [n] holds now ([plugin]); a change of the version that runs there marks it dirty, unless [quiet]. */
+    /**
+     * Keeps what slot [n] holds now ([plugin]); a change of the version that runs there marks it dirty, unless [quiet]. A
+     * free slot whose stack was cleared, bound again, has nothing of another version to clear: what the user builds in
+     * it from then on stays.
+     */
     private fun note(n: Int, plugin: InstalledPlugin?, quiet: Boolean = false) {
         val before = seen[n]
         val now = Held.of(plugin, before)
         seen[n] = now
+        val cleared = clearedEmpty[n]
         if (plugin != null) clearedEmpty[n] = false
-        if (!quiet && before != null && now.changedFrom(before)) dirty[n] = true
+        if (!quiet && before != null && now.changedFrom(before) && !(before.id == null && cleared)) dirty[n] = true
     }
 
     /**
