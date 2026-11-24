@@ -1,4 +1,4 @@
-NZStreamer has no analytics, no ads and no server of its own. What leaves this phone goes to your own Usenet providers and indexers, [debrid]to your own torrent indexers and debrid services, [/debrid]to TMDB with your own key, to TheIntroDB while its switch is on, and to Google while its Cast software runs.
+NZStreamer has no analytics, no ads and no server of its own. What leaves this phone goes to your own Usenet providers and indexers, [debrid]to your own torrent indexers and debrid services, [/debrid]to TMDB with your own key, to TheIntroDB while its switch is on, to Google while its Cast software runs, and to GitHub when you use plugins, and to the services a plugin you install is set up with.
 
 ## Your providers and indexers
 
@@ -34,9 +34,15 @@ NZStreamer is Google Cast-enabled. To find and control Chromecasts and TVs with 
 
 While you cast, your phone sends the video to the Cast device over your home network, unencrypted, at a one-time address. Other devices on your network can see that address and the title. Once the Cast device asks for the video, the phone sends it to no other device. The title and poster go to the Cast device, which fetches the poster from TMDB. To choose releases the device can play, the app reads the device’s model from your network and keeps what it learns on your phone. Google’s software on the Cast device may report its own use to Google. Other phones on your network may show what is playing and offer controls.
 
+## Plugins
+
+The app reads the list of plugins from GitHub when you open Settings › Plugins, and once a day while a plugin is installed. Installing or updating a plugin downloads it from GitHub. GitHub sees your internet address, the time and what is downloaded; the app sends it nothing else, and names no device or version. With no plugin installed and Plugins never opened, the app never contacts GitHub. GitHub’s privacy statement applies.
+
+A plugin runs inside the app, with the same access as the app, so the app runs only plugins signed with its own key. A plugin you install talks to the services you set it up with, such as your own server. A plugin’s own settings and keys stay on this device.
+
 ## On this device
 
-Your settings, your library and what the app learns about your Cast devices stay on this device. Android’s transfer to a new phone may copy them, but never your passwords, keys or TV pairings. Downloads stay on this phone or tablet, in NZStreamer’s own storage: they aren’t backed up or copied to a new phone, and uninstalling the app deletes them. Passwords and keys are stored encrypted, the app makes no cloud backups, and logs leave the device only when you share them from Settings › Logs.
+Your settings, your library and what the app learns about your Cast devices stay on this device. Android’s transfer to a new phone may copy them, but never your passwords, keys or TV pairings, or plugins. Downloads stay on this phone or tablet, in NZStreamer’s own storage: they aren’t backed up or copied to a new phone, and uninstalling the app deletes them. Passwords and keys are stored encrypted, the app makes no cloud backups, and logs leave the device only when you share them from Settings › Logs.
 
 ## This website
 

@@ -71,8 +71,9 @@ offline. It comes with no providers, indexers or content of its own.
 - No account, analytics, ads or server of its own. Passwords and keys are stored encrypted with the Android Keystore.
   Logs leave the device only when you share them.
 - What leaves the device goes to your own providers, indexers and services, to TMDB with your own key, to TheIntroDB
-  while its switch is on, and to Google while its Cast software runs. Settings › Privacy in the app says what each one
-  gets.
+  while its switch is on, to Google while its Cast software runs, and to GitHub when you use plugins: the plugin list,
+  read as Settings › Plugins opens and once a day while a plugin is installed, and the plugins you install. Settings ›
+  Privacy in the app says what each one gets.
 - TheIntroDB is off by default, because turning it on tells a third party what you watch. With its switch on, each
   episode you start sends TheIntroDB the show's TMDB id, the season and episode, and the file's length, from your
   internet address. Its terms say it keeps internet addresses for up to 30 days, so together that is a record of the
@@ -85,6 +86,21 @@ offline. It comes with no providers, indexers or content of its own.
 - Debrid services: the code for playing through a debrid service (TorBox or Premiumize, with your own Torznab indexers
   in Prowlarr or Jackett) is in this repository. Beta builds hide it unless built with `-PwithDebrid=true`; other
   builds show it unless built with `-PhideDebrid=true`. Where it shows, its releases can be downloaded too.
+
+### Plugins
+- A plugin adds a tab to NZStreamer, after Discover where the build has it, else after Home. Settings › Plugins, in
+  every build, installs, updates and removes plugins inside the app's own storage: Android doesn't list them as apps,
+  and no install dialog shows. No plugin is released yet.
+- The list of plugins is `index.json` on this repository's `plugin-index` branch, which only CI writes, after a plugin
+  release:
+  `https://raw.githubusercontent.com/skjaere/nzstreamer/refs/heads/plugin-index/index.json`
+- Each plugin version is a prerelease of this repository, tagged `plugin-<id>-v<version>` and never marked Latest, its
+  APK signed with the same key as the app's releases (`tools/beta-cert.sha256`). The app checks a download against the
+  list's SHA-256 and that key before it installs it, and checks the key again each time it loads it.
+- Updates are automatic: the app downloads and checks a new version while it is open, and the new version takes over
+  once its tab isn't on screen.
+- A plugin runs inside the app, with the same access as the app: that is why the app runs only plugins signed with its
+  own key. Plugins are built from this repository, under `plugins/`.
 
 ### Requirements
 Android 8.0 (API 26) or later: phones, tablets, Android TV / Google TV, and Fire TV with Fire OS 7 or later (not Vega
@@ -180,6 +196,10 @@ too, as long as it installed the version you have and its background updates are
 about a new release, and you confirm the install. Fire OS 7 and 8 are Android 9 to 11, so on them you always confirm.
 On a TV the notice may not pop up: open Obtainium to see new releases, or on Fire TV look under Settings,
 Notifications.
+
+Plugins are released as prereleases among the app's releases (see Plugins). Leave Obtainium's Include prereleases
+switch off, as it starts, or set Filter release titles by regex to `^v`: app releases are titled `v0.2.0`, plugin
+releases `plugin-<id>: v1.0.0`.
 
 ### Checking the APK
 Every release is signed with one key, whose certificate's SHA-256 digest is in

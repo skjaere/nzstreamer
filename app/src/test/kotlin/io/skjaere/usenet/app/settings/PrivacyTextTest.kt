@@ -34,6 +34,12 @@ internal const val DEBRID_HEADING = "Your torrent indexers and debrid services"
  * account (L255), the one service it names, in that sentence alone. The page shows them while debrid shows and leaves them
  * out while it is hidden; the site's page holds the hidden form, as debrid is hidden in betas by default, so neither the
  * part nor the opening's words.
+ *
+ * L574, L632 (plugins): the opening names GitHub, when plugins are used, and the services a plugin is
+ * set up with; a part of its own, Plugins, just before "On this device", says when the app reads the plugin list and
+ * downloads from GitHub, what GitHub sees, that a plugin runs with the app's access, and that its settings and keys stay
+ * on the device; "On this device" says plugins aren't copied to a new phone. In both forms, every apostrophe the file's
+ * own (’), and GitHub and plugins named nowhere else.
  */
 class PrivacyTextTest {
     private val file = File("src/main/assets/privacy.txt")
@@ -53,7 +59,7 @@ class PrivacyTextTest {
         assertTrue(file.isFile, "${file.absolutePath} is missing")
         val headings = listOf(
             null, "Your providers and indexers", "TMDB", "TheIntroDB", "Voice search", "Set up with your phone (on a TV)", "Play on TV",
-            "Casting to Google Cast devices", "On this device", "This website",
+            "Casting to Google Cast devices", "Plugins", "On this device", "This website",
         )
         assertEquals(headings.take(2) + DEBRID_HEADING + headings.drop(2), sections.map { it.heading })
         assertEquals(headings, hidden.map { it.heading })
@@ -66,10 +72,10 @@ class PrivacyTextTest {
     @Test
     fun `the opening is the approved one and names every recipient`() {
         assertEquals(listOf(OPENING), hidden.first().paragraphs)
-        listOf("Usenet providers", "indexers", "TMDB", "TheIntroDB", "Google").forEach { assertTrue(it in OPENING, it) }
+        listOf("Usenet providers", "indexers", "TMDB", "TheIntroDB", "Google", "GitHub", "the services a plugin").forEach { assertTrue(it in OPENING, it) }
         // L211, L139: shown, it names the debrid recipients too.
         assertEquals(listOf(OPENING_SHOWN), sections.first().paragraphs)
-        listOf("Usenet providers", "torrent indexers", "debrid services", "TMDB", "TheIntroDB", "Google").forEach { assertTrue(it in OPENING_SHOWN, it) }
+        listOf("Usenet providers", "torrent indexers", "debrid services", "TMDB", "TheIntroDB", "Google", "GitHub").forEach { assertTrue(it in OPENING_SHOWN, it) }
     }
 
     /** L211: the opening's words naming the debrid recipients are marked, and so is the part about them; nothing else is. */
@@ -140,11 +146,48 @@ class PrivacyTextTest {
         assertTrue("Settings › Playback › ${GoogleCastPage.TITLE}" in cast, "the setting's page")
     }
 
+    /** L632: the first sentence ends with GitHub and a plugin's services, the "and" before Google moved to GitHub. */
+    @Test
+    fun `the first sentence ends with GitHub and the services a plugin is set up with, in both forms`() {
+        listOf(sections, hidden).forEach { form ->
+            val opening = form.first().paragraphs.single()
+            assertTrue(opening.endsWith(OPENING_END), opening)
+            assertFalse("and to Google" in opening, "the and before Google moves to GitHub")
+        }
+    }
+
+    /** L632: Plugins, just before On this device, holds the two paragraphs word for word, in both forms, with ’. */
+    @Test
+    fun `the Plugins part holds both paragraphs word for word, just before On this device, in both forms`() {
+        listOf(sections, hidden).forEach { form ->
+            val headings = form.map { it.heading }
+            assertEquals(headings.indexOf("On this device") - 1, headings.indexOf("Plugins"), headings.toString())
+            assertEquals(headings.indexOf("Casting to Google Cast devices") + 1, headings.indexOf("Plugins"), headings.toString())
+            assertEquals(PLUGINS_PART, form.single { it.heading == "Plugins" }.paragraphs)
+        }
+        assertTrue("GitHub’s privacy statement applies." in PLUGINS_PART[0])
+        assertTrue("A plugin’s own settings and keys stay on this device." in PLUGINS_PART[1])
+        assertFalse(PLUGINS_PART.any { '\'' in it }, "the file's apostrophes are ’")
+    }
+
+    /** L632: GitHub and plugins are named in the opening, the Plugins part and On this device alone; nothing else moved. */
+    @Test
+    fun `GitHub and plugins are named in the opening, the Plugins part and On this device alone`() {
+        listOf(sections, hidden).forEach { form ->
+            form.forEach { section ->
+                val named = section.paragraphs.any { "GitHub" in it || Regex("(?i)plugin").containsMatchIn(it) }
+                assertEquals(section.heading in setOf(null, "Plugins", "On this device"), named, "${section.heading}")
+            }
+        }
+    }
+
     @Test
     fun `On this device names the transfer to a new phone`() {
         val device = section("On this device")
         assertTrue("transfer to a new phone" in device, device)
         assertTrue("never your passwords, keys or TV pairings" in device, device)
+        // L632: plugins aren't copied to a new phone either.
+        assertTrue("never your passwords, keys or TV pairings, or plugins." in device, device)
     }
 
     /** L374: a download's parts come from the same providers as a play's, so their part says both, and names no one new. */
@@ -182,8 +225,24 @@ class PrivacyTextTest {
         /** CsPhoneSettingsCast's opening, as approved: a build with debrid hidden shows it, and the site's page holds it. */
         const val OPENING =
             "NZStreamer has no analytics, no ads and no server of its own. What leaves this phone goes to your own Usenet " +
-                "providers and indexers, to TMDB with your own key, to TheIntroDB while its switch is on, and to Google while " +
-                "its Cast software runs."
+                "providers and indexers, to TMDB with your own key, to TheIntroDB while its switch is on, to Google while its " +
+                "Cast software runs, and to GitHub when you use plugins, and to the services a plugin you install is set up with."
+
+        /** L632's end of the first sentence: the "and" before Google moves to GitHub. */
+        const val OPENING_END =
+            "to TheIntroDB while its switch is on, to Google while its Cast software runs, and to GitHub when you use plugins, " +
+                "and to the services a plugin you install is set up with."
+
+        /** L632's Plugins part, word for word, with the file's ’. A plugin's own sentences come with that plugin. */
+        val PLUGINS_PART = listOf(
+            "The app reads the list of plugins from GitHub when you open Settings › Plugins, and once a day while a plugin is " +
+                "installed. Installing or updating a plugin downloads it from GitHub. GitHub sees your internet address, the time " +
+                "and what is downloaded; the app sends it nothing else, and names no device or version. With no plugin installed " +
+                "and Plugins never opened, the app never contacts GitHub. GitHub’s privacy statement applies.",
+            "A plugin runs inside the app, with the same access as the app, so the app runs only plugins signed with its own " +
+                "key. A plugin you install talks to the services you set it up with, such as your own server. A plugin’s own " +
+                "settings and keys stay on this device.",
+        )
 
         /** L374's sentence in "On this device". */
         const val DOWNLOADS_STAY =
@@ -197,7 +256,8 @@ class PrivacyTextTest {
         const val OPENING_SHOWN =
             "NZStreamer has no analytics, no ads and no server of its own. What leaves this phone goes to your own Usenet " +
                 "providers and indexers, to your own torrent indexers and debrid services, to TMDB with your own key, to " +
-                "TheIntroDB while its switch is on, and to Google while its Cast software runs."
+                "TheIntroDB while its switch is on, to Google while its Cast software runs, and to GitHub when you use plugins, " +
+                "and to the services a plugin you install is set up with."
 
         /**
          * L255's two sentences (choice 4): what a service keeps, and what the app removes from TorBox; with L421's words for a

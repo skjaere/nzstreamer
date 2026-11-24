@@ -438,5 +438,37 @@ class CiPublishedPluginsTest(unittest.TestCase):
                 self.assertNotIn("raw.githubusercontent.com", workflow(name))
 
 
+
+class ReadmePluginsTest(unittest.TestCase):
+    """README's words on plugins (L632): what a plugin is and where its list is, the app's own address, the key that
+    signs them as it signs the app, and Obtainium kept off plugin prereleases."""
+
+    def setUp(self):
+        self.readme = read(os.path.join(ROOT, "README.md"))
+
+    def section(self, heading):
+        match = re.search(r"^### " + re.escape(heading) + r"\n(.*?)(?=^#)", self.readme, re.M | re.S)
+        self.assertIsNotNone(match, f"README has no ### {heading}")
+        return match.group(1)
+
+    def test_its_plugins_section_follows_not_in_every_build_and_names_the_apps_list(self):
+        headings = re.findall(r"^### (.+)$", self.readme, re.M)
+        self.assertEqual(headings.index("Not in every build") + 1, headings.index("Plugins"))
+        plugins = self.section("Plugins")
+        address = re.search(r'const val LIST = "([^"]+)"', read(PLUGIN_SOURCE)).group(1)
+        for words in (address, "tools/beta-cert.sha256", "prerelease", "inside the app", "Settings › Plugins",
+                      "plugin-<id>-v"):
+            self.assertIn(words, plugins)
+        self.assertRegex(plugins, r"[Uu]pdates? (are )?automatic|updates (itself|by itself)")
+
+    def test_privacy_names_github_for_plugins(self):
+        self.assertIn("to GitHub when you use plugins", self.section("Privacy"))
+
+    def test_staying_up_to_date_keeps_obtainium_off_plugin_prereleases(self):
+        update = self.section("Staying up to date")
+        self.assertIn("Include prereleases", update)
+        self.assertIn("`^v`", update)
+
+
 if __name__ == "__main__":
     unittest.main()
