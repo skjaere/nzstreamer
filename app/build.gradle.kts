@@ -386,6 +386,9 @@ android {
         // and every resource's XML (L108): a comment, a device test or a layout changed alone runs it again too.
         it.inputs.files(fileTree("src") { include("main/kotlin/**", "discover/kotlin/**", "androidTest/kotlin/**", "release/kotlin/**", "main/res/**/*.xml") })
             .withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("castStartSources")
+        // Which build type's tests these are (testDebugUnitTest: debug), named by the task rather than read from BuildConfig:
+        // the plugins' debug-only gates (L622) are checked against it, so each of the debug and release runs answers its way.
+        it.systemProperty("unitTestBuildType", it.name.removePrefix("test").removeSuffix("UnitTest").lowercase())
         // HiddenBuildTest's expectation (L192); with it the tests run every time, so its check is never an earlier run's.
         expectHideDebrid?.let { expected ->
             it.systemProperty("expectHideDebrid", expected)

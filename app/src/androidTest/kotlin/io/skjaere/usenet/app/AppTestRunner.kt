@@ -1,6 +1,8 @@
 package io.skjaere.usenet.app
 
 import android.app.UiAutomation
+import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -11,6 +13,8 @@ import io.skjaere.usenet.app.debrid.DevServices
 import io.skjaere.usenet.app.debrid.ServiceEndpoints
 import io.skjaere.usenet.app.discover.DiscoverLookup
 import io.skjaere.usenet.app.discover.FakeDiscover
+import io.skjaere.usenet.app.plugins.PluginTrust
+import io.skjaere.usenet.app.plugins.SignerDigest
 
 /**
  * The app's device tests' runner: before any test, Discover's lists come from invented titles ([FakeDiscover.DEFAULT]),
@@ -39,6 +43,10 @@ import io.skjaere.usenet.app.discover.FakeDiscover
  * answers nothing ([ServiceEndpoints.CLOSED]), so the debug build installed for the run saves no account or torrent
  * indexer from local.properties and sends no key anywhere. The instrumentation argument `debridLive=true` (the lead's
  * live classes alone) leaves both as the app has them. A class that needs the debrid fake points the clients there itself.
+ *
+ * And the plugins the device tests install, the skeleton's debug builds, are signed as the app under test is, not with the
+ * beta key: the app trusts that signer too for the run ([PluginTrust.testSigner], honoured by a debug build alone, L622).
+ * Nothing else ever sets it, so a debug build with no test running trusts the beta key alone.
  */
 class AppTestRunner : AndroidJUnitRunner() {
     /** The app's picture-in-picture mode as the run found it, put back as it ends; null once put back, or never read. */
@@ -51,6 +59,7 @@ class AppTestRunner : AndroidJUnitRunner() {
             ServiceEndpoints.override = { ServiceEndpoints.CLOSED }
         }
         CastFakes.beforeTheApp()
+        PluginTrust.testSigner = ownSigner(targetContext)
         super.onCreate(arguments)
     }
 
@@ -99,6 +108,18 @@ class AppTestRunner : AndroidJUnitRunner() {
      */
     private fun shellOnly(): UiAutomation =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) getUiAutomation(UiAutomation.FLAG_DONT_USE_ACCESSIBILITY) else uiAutomation
+
+    /** The app under test's signer, as the plugins' verifier reads an archive's: its current certificate's SHA-256. */
+    private fun ownSigner(context: Context): String? {
+        val pm = context.packageManager
+        val certificate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            pm.getPackageInfo(context.packageName, PackageManager.GET_SIGNING_CERTIFICATES).signingInfo?.signingCertificateHistory?.lastOrNull()
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getPackageInfo(context.packageName, PackageManager.GET_SIGNATURES).signatures?.singleOrNull()
+        }
+        return certificate?.let { SignerDigest.of(it.toByteArray()) }
+    }
 
     private companion object {
         const val TAG = "AppTestRunner"
