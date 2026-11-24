@@ -211,7 +211,9 @@ class PluginRegistry(
                     records.removeAll { it.id == id }
                     statuses.remove(id)
                     withContext(io) { store.delete(id) }
-                } else if (request.versionCode != existing.versionCode) {
+                } else if (request.versionCode != existing.versionCode && request.versionCode != existing.pending?.versionCode) {
+                    // Only a folder this install made: the running version's and the waiting one's still hold the file stored
+                    // before, which the failed write left as it was.
                     withContext(io) { store.deleteVersion(id, request.versionCode) }
                 }
                 InstallResult.Failed

@@ -209,6 +209,25 @@ class PluginRegistryTest {
     }
 
     @Test
+    fun `an update installed again while the store can't write keeps the copy stored before, which still takes over`() = runTest {
+        val h = harness()
+        val registry = h.registry().apply { start(); firstActivity() }
+        h.install(registry, "skeleton", 1)
+        assertIs<InstallResult.UpdateWaiting>(h.install(registry, "skeleton", 2))
+        // The next copy can't be written, as on a full disk: its .tmp is a folder with something in it.
+        val inTheWay = File(h.store.apk("skeleton", 2).parentFile, "plugin.apk.tmp")
+        File(inTheWay, "in-the-way").apply { parentFile!!.mkdirs(); writeText("x") }
+        assertIs<InstallResult.Failed>(h.install(registry, "skeleton", 2))
+        assertTrue(h.store.apk("skeleton", 2).isFile, "the update stored before is kept")
+        assertTrue(registry.installed("skeleton").updateWaiting)
+
+        inTheWay.deleteRecursively()
+        assertTrue(registry.atSwapPoint("skeleton"))
+        assertEquals(2L, registry.running("skeleton")?.versionCode, "it takes over")
+        assertNull(registry.installed("skeleton").failedUpdate)
+    }
+
+    @Test
     fun `a version never goes down`() = runTest {
         val h = harness()
         val registry = h.registry().apply { start(); firstActivity() }
