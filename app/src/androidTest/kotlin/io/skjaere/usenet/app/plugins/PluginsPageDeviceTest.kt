@@ -138,13 +138,18 @@ class PluginsPageDeviceTest {
             waitFor(row and hasText("None yet"))
             fun top(matcher: SemanticsMatcher) = compose.onNode(matcher).fetchSemanticsNode().positionInRoot.y
             assertTrue("first in App, above Logs", top(row) < top(hasText("Logs") and hasClickAction()) && top(hasText("APP")) < top(row))
+            // The hub never reads the list (L620): only the page, as it opens.
+            assertEquals("the hub read no list", emptyList<String>(), server.requests.toList())
 
             compose.onNode(row).performClick()
             waitFor(hasText(PluginsPage.INTRO))
             press("Install")
             waitFor(hasText(installedLine))
+            val asked = server.requests.toList()
             compose.onNode(hasContentDescription("Back")).performClick()
             waitFor(row and hasText("Skeleton"))
+            compose.waitForIdle()
+            assertEquals("back on the hub, nothing more asked", asked, server.requests.toList())
 
             // The list withdraws the version: the row says so, with its dot.
             server.list(Listed(SkeletonBuild.V1, "1.0.0"), withdrawn = setOf(1))
