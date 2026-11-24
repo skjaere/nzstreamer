@@ -6,25 +6,17 @@ import java.io.File
 import java.util.zip.ZipFile
 
 /**
- * What a plugin may take from NZStreamer at run time (L615): the plugin API's and the UI kit's classes, by name from their
- * class jars, and the shared libraries, by package. The kit by name, not by package: its packages are the app's too, and
- * a package would let a plugin name any class of the app's in them.
+ * What a plugin may take from NZStreamer at run time (L615), each class by name from the class jars NZStreamer's build
+ * has: the plugin API's, the UI kit's, and the shared libraries' (Kotlin's standard library, kotlinx-coroutines,
+ * kotlinx-serialization-json, Compose from the BOM, lifecycle-viewmodel-compose, activity-compose and slf4j-api, with
+ * what they bring). Never by package: the kit's packages are the app's too, and a library's package holds others the app
+ * doesn't have (Compose's extended icons, Kotlin's reflection), which a plugin would find missing on every device.
  */
 class SharedClasses(private val classes: Set<String>) {
-    operator fun contains(name: String): Boolean = name in classes || LIBRARY_PACKAGES.any(name::startsWith)
+    operator fun contains(name: String): Boolean = name in classes
 
     companion object {
-        /**
-         * L615's libraries: Kotlin's standard library, kotlinx-coroutines, kotlinx-serialization-json, Compose from the BOM
-         * (runtime, ui, foundation, material3 and material-icons-core, with the animation and ripple the BOM brings them),
-         * lifecycle-viewmodel-compose, activity-compose and slf4j-api. Never ktor (L631).
-         */
-        val LIBRARY_PACKAGES = listOf(
-            "kotlin/", "kotlinx/coroutines/", "kotlinx/serialization/", "androidx/compose/", "androidx/lifecycle/", "androidx/activity/",
-            "org/slf4j/",
-        )
-
-        /** The classes in [jars] (the API's and the kit's class jars), by internal name. */
+        /** The classes in [jars], by internal name. */
         fun fromJars(jars: List<File>): SharedClasses = SharedClasses(
             jars.flatMap { jar ->
                 ZipFile(jar).use { zip ->

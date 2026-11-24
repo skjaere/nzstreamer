@@ -276,10 +276,29 @@ subprojects {
             val apiMajor = variant.manifestPlaceholders.getting("nzsApiMajor")
             val apiMinor = variant.manifestPlaceholders.getting("nzsApiMinor")
             // The plugin API's and the UI kit's class jars, as this build compiles against them: the classes a plugin may name.
-            val sharedJars = configurations.getByName("${variant.name}CompileClasspath").incoming.artifactView {
-                attributes { attribute(Attribute.of("artifactType", String::class.java), "android-classes-jar") }
+            val compileClasspath = configurations.getByName("${variant.name}CompileClasspath")
+            val classesJar = Attribute.of("artifactType", String::class.java)
+            val sharedJars = compileClasspath.incoming.artifactView {
+                attributes { attribute(classesJar, "android-classes-jar") }
                 componentFilter { it is ProjectComponentIdentifier && it.projectPath in setOf(":core:plugin", ":core:ui") }
             }.files
+            // L615's libraries, and what they bring, resolved as this build compiles but in a configuration of the
+            // convention's alone: by class, what NZStreamer has of them. A library the plugin's own build file adds, even
+            // under their packages (Compose's extended icons), is never among them.
+            val hostLibraries = configurations.create("${variant.name}PluginHostLibraries") {
+                isCanBeConsumed = false
+                compileClasspath.attributes.keySet().forEach { key ->
+                    @Suppress("UNCHECKED_CAST")
+                    attributes.attribute(key as Attribute<Any>, compileClasspath.attributes.getAttribute(key)!!)
+                }
+            }
+            listOf(
+                dependencies.platform(libs.compose.bom), libs.compose.ui, libs.compose.material3, libs.compose.material.icons.core,
+                libs.kotlinx.coroutines.core, libs.kotlinx.serialization.json, libs.lifecycle.viewmodel.compose, libs.activity.compose,
+                libs.slf4j.api,
+            ).forEach { dependencies.add(hostLibraries.name, it) }
+            dependencies.add(hostLibraries.name, "org.jetbrains.kotlin:kotlin-stdlib:${libs.versions.kotlin.asProvider().get()}")
+            val libraryJars = hostLibraries.incoming.artifactView { attributes { attribute(classesJar, "android-classes-jar") } }.files
             val sdkDir = androidComponents.sdkComponents.sdkDirectory
             val buildTools = sdkDir.map { it.dir("build-tools/${android.buildToolsVersion}") }
             val platform = sdkDir.map { it.dir("platforms/android-${android.compileSdk}") }
@@ -289,6 +308,7 @@ subprojects {
                 description = "Fails when the ${variant.name} APK breaks the rules every plugin keeps (plugin-check, L625)."
                 inputs.dir(apkDir).withPropertyName("apk")
                 inputs.files(sharedJars).withPropertyName("sharedJars")
+                inputs.files(libraryJars).withPropertyName("libraryJars")
                 inputs.file(platform.map { it.file("android.jar") }).withPropertyName("androidJar")
                 inputs.file(platform.map { it.file("data/api-versions.xml") }).withPropertyName("apiVersions")
                 inputs.property("id", pluginId)
@@ -310,7 +330,7 @@ subprojects {
                             "--android-jar", platform.get().file("android.jar").asFile.path,
                             "--api-versions", platform.get().file("data/api-versions.xml").asFile.path,
                             "--report", report.get().asFile.path,
-                        ) + sharedJars.flatMap { listOf("--shared-jar", it.path) }
+                        ) + (sharedJars + libraryJars).flatMap { listOf("--shared-jar", it.path) }
                     }
                 }
             }

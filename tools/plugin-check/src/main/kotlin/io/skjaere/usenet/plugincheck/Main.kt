@@ -14,7 +14,8 @@ import kotlin.system.exitProcess
  *   rules --id <id> --apk <plugin.apk> --version-code <n> --api-major <n> --api-minor <n> --shared-jar <jar>…
  *         --aapt2 <build-tools/…/aapt2> --dexdump <build-tools/…/dexdump> --android-jar <jar> --api-versions <xml> [--report <file>]
  *     A plugin APK's dex, entries, manifest and resources against every plugin's rules ([PluginDexRules],
- *     [PluginManifestRules]), and its JDK calls against minSdk 26 as :app:checkMinApi checks the app's.
+ *     [PluginManifestRules]), and its JDK calls against minSdk 26 as :app:checkMinApi checks the app's. The shared jars
+ *     are the plugin API's, the UI kit's and the shared libraries' class jars ([SharedClasses]).
  *   link --id <id> --apk <plugin.apk> --host <dex, apk or folder>… --dexdump <path> --android-jar <jar> --api-versions <xml> [--report <file>]
  *     Whether everything the plugin names outside its package is in NZStreamer's build ([LinkCheck]).
  *   dump --classes <jar or folder>… --version-file <plugin-api.txt> --out <file>
@@ -79,7 +80,7 @@ private fun rules(
     aapt2: String, dexdump: String, androidJar: File, apiVersions: File, report: File?,
 ) {
     if (!apk.isFile) fail("no APK at ${apk.name}")
-    if (sharedJars.isEmpty()) fail("no --shared-jar: the plugin API's and the UI kit's class jars are needed")
+    if (sharedJars.isEmpty()) fail("no --shared-jar: the plugin API's, the UI kit's and the shared libraries' class jars are needed")
     val classes = dexdump(dexdump, listOf(apk)) { true }
     val entries = ZipFile(apk).use { zip -> zip.entries().asSequence().map { it.name }.toList() }
     val dex = PluginDexRules(id, SharedClasses.fromJars(sharedJars)).check(classes, entries)

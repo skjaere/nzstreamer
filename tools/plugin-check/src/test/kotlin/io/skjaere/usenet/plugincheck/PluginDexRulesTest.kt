@@ -1,15 +1,23 @@
 package io.skjaere.usenet.plugincheck
 
+import io.skjaere.usenet.apicheck.DexClass
 import io.skjaere.usenet.apicheck.DexDumpParser
+import io.skjaere.usenet.apicheck.Reference
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class PluginDexRulesTest {
 
-    // The plugin API's and the UI kit's classes, as their class jars list them.
+    // The plugin API's and the UI kit's classes, and the shared libraries' that the fixture names, as their jars list them.
     private val shared = SharedClasses(
-        setOf("io/skjaere/usenet/plugin/NzPlugin", "io/skjaere/usenet/plugin/PluginTab", "io/skjaere/usenet/app/ui/ComponentsKt"),
+        setOf(
+            "io/skjaere/usenet/plugin/NzPlugin", "io/skjaere/usenet/plugin/PluginTab", "io/skjaere/usenet/app/ui/ComponentsKt",
+            "androidx/compose/material/icons/Icons\$Filled", "androidx/compose/material/icons/filled/StarKt",
+            "androidx/compose/runtime/Composer", "androidx/compose/runtime/ComposerKt", "androidx/compose/ui/graphics/vector/ImageVector",
+            "kotlin/coroutines/jvm/internal/SuspendLambda", "kotlin/jvm/functions/Function0", "kotlin/jvm/functions/Function2",
+            "kotlin/jvm/functions/Function3", "kotlin/jvm/internal/Intrinsics",
+        ),
     )
     private val rules = PluginDexRules("kestrel", shared)
     private val classes = DexDumpParser.parse(DEXDUMP.lineSequence()) { true }
@@ -29,6 +37,29 @@ class PluginDexRulesTest {
         assertTrue(
             violations() has "carries androidx.compose.runtime.ComposerKt, which NZStreamer gives every plugin: take its library " +
                 "compileOnly",
+        )
+    }
+
+    /**
+     * The shared libraries are checked by class, as NZStreamer's build has them: a library under their packages that it
+     * doesn't have (Compose's extended icons, Kotlin's reflection) is another library, which a plugin can't take
+     * compileOnly, so carrying it is never "take it compileOnly".
+     */
+    @Test
+    fun `a class in a shared library's package that NZStreamer doesn't have is no shared class`() {
+        val soccer = "androidx/compose/material/icons/filled/SportsSoccerKt"
+        val tab = DexClass(
+            "app/nzstreamer/plugin/kestrel/Tab", "java/lang/Object", emptyList(), setOf("icon()V"), emptySet(),
+            listOf(Reference.Method("icon", soccer, "getSportsSoccer", "(Landroidx/compose/material/icons/Icons\$Filled;)Landroidx/compose/ui/graphics/vector/ImageVector;")),
+        )
+        val carried = DexClass(soccer, "java/lang/Object", emptyList(), emptySet(), emptySet(), emptyList())
+        assertEquals(
+            listOf(
+                "app.nzstreamer.plugin.kestrel.Tab.icon: androidx.compose.material.icons.filled.SportsSoccerKt, which NZStreamer doesn't " +
+                    "share with plugins",
+                "carries androidx.compose.material.icons.filled.SportsSoccerKt, outside app.nzstreamer.plugin.kestrel",
+            ),
+            rules.check(listOf(tab, carried), CLEAN_ENTRIES),
         )
     }
 
