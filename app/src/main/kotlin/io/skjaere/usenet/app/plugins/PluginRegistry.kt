@@ -3,6 +3,7 @@ package io.skjaere.usenet.app.plugins
 import android.content.Context
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.annotation.VisibleForTesting
+import io.ktor.client.HttpClient
 import io.skjaere.usenet.app.BuildConfig
 import io.skjaere.usenet.plugin.NzPlugin
 import io.skjaere.usenet.plugin.PluginTab
@@ -633,12 +634,19 @@ class PluginRegistry(
 
         /**
          * The app's registry: the plugins' files under its own storage, Android's reading of their archives, its secrets,
-         * the crash guard's files beside the plugins', and the app's indexers searched for each plugin through [search].
+         * the crash guard's files beside the plugins', the app's indexers searched for each plugin through [search], and
+         * each plugin's GETs through [http], the app's service client.
          */
-        fun of(context: Context, secrets: NamedSecrets, scope: CoroutineScope, search: PluginSearchService? = null): PluginRegistry {
+        fun of(
+            context: Context,
+            secrets: NamedSecrets,
+            scope: CoroutineScope,
+            search: PluginSearchService? = null,
+            http: (() -> HttpClient)? = null,
+        ): PluginRegistry {
             val store = PluginStore(context.filesDir, context.cacheDir, secrets)
             val loader = PluginLoader(PluginVerifier(AndroidArchiveReader(context.packageManager)))
-            return PluginRegistry(store, loader, PluginHosts(store, secrets, search = search), PluginCrashGuard(store.root), scope)
+            return PluginRegistry(store, loader, PluginHosts(store, secrets, search = search, http = http), PluginCrashGuard(store.root), scope)
         }
     }
 }

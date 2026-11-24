@@ -66,6 +66,36 @@ class RedactionTest {
         assertEquals("""{"password" : "<redacted>"}""", redactSecrets("""{"password" : "p\"w"}"""))
     }
 
+    /**
+     * A service's API key in a header (L593, L631): Sportarr's X-Api-Key, others' api-key, and X-…-Token headers, with or
+     * without a space after the colon, in any case; to the end of the line, a quote, comma or semicolon.
+     */
+    @Test
+    fun `an API key or token in a header is hidden`() {
+        assertEquals("X-Api-Key: <redacted>", redactSecrets("X-Api-Key: 0f1e2d3c4b5a69788796a5b4c3d2e1f0"))
+        assertEquals("x-api-key:<redacted>", redactSecrets("x-api-key:0f1e2d3c4b5a6978"))
+        assertEquals("X-Auth-Token: <redacted>", redactSecrets("X-Auth-Token: abc def"))
+        assertEquals("api-key: <redacted>", redactSecrets("api-key: 0f1e2d3c"))
+        assertEquals("X-Kestrel-Token: <redacted>\nAccept: application/json", redactSecrets("X-Kestrel-Token: s3cr3t\nAccept: application/json"))
+        assertEquals(
+            "headers {X-Api-Key: <redacted>, User-Agent: NZStreamer/0.1}",
+            redactSecrets("headers {X-Api-Key: 0f1e2d3c, User-Agent: NZStreamer/0.1}"),
+        )
+        assertEquals("""{"X-Api-Key": "<redacted>"}""", redactSecrets("""{"X-Api-Key": "0f1e2d3c"}"""))
+    }
+
+    @Test
+    fun `a header with no secret is kept`() {
+        listOf(
+            "Content-Type: application/json",
+            "X-Request-Id: 4d2f9a",
+            "X-RateLimit-Remaining: 12",
+            "User-Agent: NZStreamer/0.1",
+            "Accept: application/json, text/plain",
+            "the token expired; ask for a new key: Settings",
+        ).forEach { line -> assertEquals(line, redactSecrets(line)) }
+    }
+
     @Test
     fun `NNTP login arguments are hidden, a refused login's answer kept`() {
         assertEquals("> AUTHINFO USER <redacted>", redactSecrets("> AUTHINFO USER alice"))
@@ -195,6 +225,7 @@ class RedactionTest {
             "GET https://alice:pw@indexer.example.org/api?apikey=abc&i=1 Authorization: Bearer x AUTHINFO PASS y",
             "Config(user=alice smith, password=a, b) next=%3Fapikey%3Dk&amp;r=t password=\"q w\" pwd='x y'",
             "pool[alice:p@ss@news.example.com:563] host=alice:pw@news.example.com nntps://alice:p@ss@news.example.com",
+            "X-Api-Key: 0f1e2d3c x-auth-token:abc",
         ).forEach { line ->
             val once = redactSecrets(line)
             assertEquals(once, redactSecrets(once))

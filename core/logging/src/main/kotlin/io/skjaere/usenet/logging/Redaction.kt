@@ -40,6 +40,9 @@ private val rules: List<Pair<Regex, String>> = listOf(
     // in them doesn't take each one to its end.
     Regex("""(?m)(?:^|(?<=[\s(\[="',]))[^\s/:@<>"'(\[=,]{1,128}:[^\s/<>"']{0,256}@(?=[A-Za-z0-9])""") to "$HIDDEN@",
     Regex("""(?i)"($NAMES)"([ \t]*:[ \t]*)"(?:[^"\\]|\\.)*"""") to "\"$1\"$2\"$HIDDEN\"",
+    // A service's key in a header (X-Api-Key, api-key, X-Auth-Token and other X-…-Token headers), to the end of the line
+    // or a quote, comma or semicolon, as Authorization's; after JSON's own rule, which keeps a quoted value whole.
+    Regex("""(?i)\b((?:x-)?api[_-]?key|x-[a-z-]*token)(["']?[ \t]*:[ \t]*["']?)[^\r\n"',;]+""") to "$1$2$HIDDEN",
     // A toString's field (after "(", "{" or ", "), to the next field or the closing bracket: spaces,
     // commas and brackets in it are its own. Bounded like the host's login.
     Regex("""(?im)(?<=[({]|, )($NAMES)=(?!["'])[^\r\n]{0,512}?(?=$FIELD_END)""") to "$1=$HIDDEN",
@@ -57,8 +60,9 @@ private val rules: List<Pair<Regex, String>> = listOf(
 /**
  * [text] with what must never reach a log written over: NNTP login arguments, API keys, tokens,
  * passwords and usernames, trackers' passkeys and device codes (in a query, a link nested in one, a
- * toString's `name=value`, quoted or not, or JSON), Authorization values, bearer tokens and JWTs, the
- * login part of an address (`user:password@host`, with a scheme or without), and magnets whole.
+ * toString's `name=value`, quoted or not, or JSON), Authorization values, API keys and tokens in
+ * headers (`X-Api-Key: …`), bearer tokens and JWTs, the login part of an address
+ * (`user:password@host`, with a scheme or without), and magnets whole.
  * A value in other text, without quotes, runs to the next space or separator. The logger runs every
  * line and stack trace through it before logcat or [LogBuffer] sees them; [CrashLog] runs a crash's.
  */

@@ -1,5 +1,7 @@
 package io.skjaere.usenet.app.plugins
 
+import io.ktor.client.HttpClient
+import io.skjaere.usenet.newznab.UrlSecurity
 import io.skjaere.usenet.plugin.AddressSafety
 import io.skjaere.usenet.plugin.Found
 import io.skjaere.usenet.plugin.HttpAnswer
@@ -27,15 +29,17 @@ import java.io.File
 
 /**
  * Makes the [PluginHost] each loaded instance of a plugin gets (L613, L635): its id, its own folders and secrets, a scope
- * of its own on the main thread, and the user's indexers searched through [search] under the plugin's name (L630). What
- * the host offers beyond them, its play, watch and HTTP, answers nothing until those services are wired for plugins
- * (L627, L594, L631); address safety likewise. Without [search] (a test's registry) its search answers nothing too.
+ * of its own on the main thread, the user's indexers searched through [search] under the plugin's name (L630), GETs
+ * through the app's service client ([http], L631), and an address judged as an indexer's (L593). Its play and watch answer
+ * nothing until those services are wired for plugins (L627, L594). Without [search] or [http] (a test's registry) that
+ * service answers nothing too.
  */
 class PluginHosts(
     private val store: PluginStore,
     private val secrets: NamedSecrets,
     private val main: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val search: PluginSearchService? = null,
+    private val http: (() -> HttpClient)? = null,
 ) {
     /**
      * The host of [version]'s instance, [name] the plugin's as the list gives it: [failed] gets an exception that escapes
@@ -48,6 +52,7 @@ class PluginHosts(
         secrets = Secrets(version.id, secrets),
         scope = CoroutineScope(SupervisorJob() + main + CoroutineExceptionHandler { _, e -> failed(e) }),
         search = search?.of(version.id, name) ?: NoSearch,
+        http = http?.let { PluginHttpImpl(version, it) } ?: NoHttp,
     )
 }
 
@@ -62,12 +67,18 @@ class HostedPlugin internal constructor(
     override val secrets: PluginSecrets,
     override val scope: CoroutineScope,
     override val search: PluginSearch = NoSearch,
+    override val http: PluginHttp = NoHttp,
 ) : PluginHost {
     override val play: PluginPlay = NoPlay
     override val watch: PluginWatch = NoWatch
-    override val http: PluginHttp = NoHttp
 
-    override fun addressSafety(url: String): AddressSafety = AddressSafety.Invalid
+    /** As the app judges an indexer's address, from the address alone ([UrlSecurity]). */
+    override fun addressSafety(url: String): AddressSafety = when (UrlSecurity.of(url)) {
+        UrlSecurity.Encrypted -> AddressSafety.Encrypted
+        UrlSecurity.LocalHttp -> AddressSafety.LocalHttp
+        UrlSecurity.PublicHttp -> AddressSafety.PublicHttp
+        UrlSecurity.Invalid -> AddressSafety.Invalid
+    }
 
     fun cancel() {
         scope.cancel()

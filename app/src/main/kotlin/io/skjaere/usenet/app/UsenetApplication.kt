@@ -490,9 +490,10 @@ class AppContainer(private val context: Context) {
 
     /**
      * The installed plugins (L616, L619): their files read as the process starts ([UsenetApplication.onCreate]), their code
-     * loaded only once MainActivity is first created, never in a process started for a service or a receiver alone.
+     * loaded only once MainActivity is first created, never in a process started for a service or a receiver alone. Their
+     * hosts search through [pluginSearch] and get through the services' client (L631), made only when first asked.
      */
-    val plugins: PluginRegistry = PluginRegistry.of(context, data.secrets.named(), appScope, pluginSearch)
+    val plugins: PluginRegistry = PluginRegistry.of(context, data.secrets.named(), appScope, pluginSearch) { serviceHttp.value }
 
     /**
      * The plugin list on GitHub (L620): read as Settings › Plugins opens and once a day while a plugin is installed, never
