@@ -342,7 +342,8 @@ private class Cards(
  * Settings' Plugins row (W157, L638): "None yet"; the installed plugins' names in their tabs' order, joined as Debrid
  * services' row joins its services; with one in a state, " · " and that state, the first in tab order whose state has
  * the warn dot, else the first in tab order: an update this week, an update this NZStreamer can't run, and with the warn
- * dot, off after a crash or an error, withdrawn, or couldn't start (refused, or its code didn't load). After two early
+ * dot, off after a crash or an error, withdrawn, or couldn't start (refused, or its code didn't load). One whose update
+ * couldn't start, the version before running on, is named alone. After two early
  * crashes, that plugins are off, with the dot. [index]: the list as last read, for an update too new; [now] for the week.
  */
 fun pluginsHubLine(installed: List<InstalledPlugin>, pluginsOff: Boolean, index: PluginIndex?, now: Long, sdk: Int, compat: PluginCompat): HubLine {
@@ -367,6 +368,8 @@ private fun hubState(plugin: InstalledPlugin, index: PluginIndex?, now: Long, sd
         status == PluginStatus.OffAfterError -> HubState("turned off after an error", warn = true)
         plugin.withdrawn || status == PluginStatus.Withdrawn -> HubState("withdrawn, off", warn = true)
         status is PluginStatus.Refused || status is PluginStatus.CouldntStart -> HubState("couldn't start", warn = true)
+        // An update that couldn't start, the version before running on: the name alone, as the card's line comes first.
+        plugin.failedUpdate != null -> null
         else -> plugin.lastUpdate?.takeIf { now - it.at < PluginInstaller.UPDATE_NEWS_MS }?.let { HubState("updated to ${it.versionName}") }
             ?: index?.offer(plugin.id, plugin.versionCode, sdk, compat)?.needsNewer?.let {
                 HubState("update needs a newer NZStreamer", ofOne = "'s update needs a newer NZStreamer")

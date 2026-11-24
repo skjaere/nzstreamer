@@ -369,6 +369,10 @@ class PluginsPageModelTest {
         assertEquals(HubLine("Kestrel"), line(installed(lastUpdate = LastUpdate("1.2", now - 7 * 86_400_000L))), "seven days on")
         val newer = list(listed("kestrel", "Kestrel", version(12, "1.2"), version(13, "1.3", minor = 1))).index
         assertEquals(HubLine("Kestrel · update needs a newer NZStreamer"), line(installed(), index = newer))
+        // An update that couldn't start, the old version running on: the name alone, as its card says why, whatever else.
+        val failed = FailedVersion(13, "1.3", LoadFailure.Other.reason)
+        assertEquals(HubLine("Kestrel"), line(installed(failedUpdate = failed, lastUpdate = LastUpdate("1.2", now - 86_400_000L))), "updated this week before")
+        assertEquals(HubLine("Kestrel"), line(installed(failedUpdate = failed), index = newer), "a newer version listed too")
         assertEquals(HubLine("Kestrel · turned off after a crash", warn = true), line(installed(status = PluginStatus.OffAfterCrash)))
         assertEquals(HubLine("Kestrel · turned off after an error", warn = true), line(installed(status = PluginStatus.OffAfterError)))
         assertEquals(HubLine("Kestrel · withdrawn, off", warn = true), line(installed(status = PluginStatus.Withdrawn, withdrawn = true)))
@@ -394,6 +398,11 @@ class PluginsPageModelTest {
         assertEquals(HubLine("Kestrel, Harbor Lights · Harbor Lights couldn't start", warn = true), line(kestrel, harbor(PluginStatus.Refused(Refusal.Signer))))
         val behind = installed("harbor", "Harbor Lights", slot = 2, label = "Stage", status = running("harbor", "Stage"), versionCode = 12)
         assertEquals(HubLine("Kestrel, Harbor Lights · Harbor Lights's update needs a newer NZStreamer"), line(kestrel, behind))
+        val failedSwap = installed(
+            "harbor", "Harbor Lights", slot = 2, label = "Stage", status = running("harbor", "Stage"), versionCode = 12,
+            failedUpdate = FailedVersion(13, "1.3", LoadFailure.Other.reason), lastUpdate = LastUpdate("1.2", now),
+        )
+        assertEquals(HubLine("Kestrel, Harbor Lights"), line(kestrel, failedSwap), "an update that couldn't start: the names alone")
         // Both in a state: the first in tab order with the dot, else the first in tab order.
         val updated = installed(lastUpdate = LastUpdate("1.2", now))
         assertEquals(HubLine("Kestrel, Harbor Lights · Harbor Lights turned off after a crash", warn = true), line(updated, harbor(PluginStatus.OffAfterCrash)))
