@@ -60,6 +60,9 @@ enum class SkeletonBuild(private val asset: String, val versionCode: Long) {
         return file
     }
 
+    /** The build's file as the test APK's assets hold it. */
+    fun bytes(): ByteArray = InstrumentationRegistry.getInstrumentation().context.assets.open(asset).use { it.readBytes() }
+
     /** What the plugin list would say of this build: the skeleton's name, this version and its file's [sha256]. */
     fun request(sha256: String) = InstallRequest(SKELETON, "Skeleton", versionCode, sha256)
 

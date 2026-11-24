@@ -126,21 +126,33 @@ internal val HOST_LIBS = "kotlin-stdlib=2.3.21,kotlinx-coroutines=1.11.0,kotlinx
 
 /** A test's plugin file: "<id> <versionCode>", which [TextReader] reads as a plugin's archive of that id and version. */
 internal fun pluginFile(dir: File, id: String, versionCode: Long): File =
-    File(dir, "download-$id-$versionCode.apk").apply { writeText("$id $versionCode") }
+    File(dir, "download-$id-$versionCode.apk").apply { writeText(pluginText(id, versionCode)) }
 
-/** Reads a test's plugin file ([pluginFile]) as a well-formed archive of its id and version, signed by [TEST_PIN]. */
+/**
+ * A test plugin file's words: "<id> <versionCode>", and [kind] after them where it isn't an honest build of the plugin:
+ * "foreign" signed by another key than [TEST_PIN], "newer" stamped with the next plugin API minor ([TextReader]).
+ */
+internal fun pluginText(id: String, versionCode: Long, kind: String? = null): String = listOfNotNull(id, "$versionCode", kind).joinToString(" ")
+
+/**
+ * Reads a test's plugin file ([pluginFile], [pluginText]) as a well-formed archive of its id and version, signed by
+ * [TEST_PIN]; a "foreign" one by another key, a "newer" one stamped with API 1.1.
+ */
 internal object TextReader : ArchiveReader {
     override fun read(apk: File): ArchiveFacts {
-        val (id, version) = apk.readText().split(' ')
+        val words = apk.readText().split(' ')
+        val (id, version) = words
+        val kind = words.getOrNull(2)
         val meta = mapOf<String, Any?>(
             PluginApi.META_ID to id,
             PluginApi.META_ENTRY to "app.nzstreamer.plugin.$id.Entry",
             PluginApi.META_API_MAJOR to 1,
-            PluginApi.META_API_MINOR to 0,
+            PluginApi.META_API_MINOR to if (kind == "newer") 1 else 0,
             PluginApi.META_LIBS to HOST_LIBS,
         )
+        val signer = if (kind == "foreign") "cd".repeat(32) else TEST_PIN
         return ArchiveFacts(
-            "app.nzstreamer.plugin.$id", version.toLong(), version, ArchiveSigners(SigningFacts(false, listOf(TEST_PIN)), emptyList()),
+            "app.nzstreamer.plugin.$id", version.toLong(), version, ArchiveSigners(SigningFacts(false, listOf(signer)), emptyList()),
             object : ArchiveMeta {
                 override fun int(name: String): Int? = meta[name] as? Int
                 override fun string(name: String): String? = meta[name] as? String
@@ -169,7 +181,15 @@ internal class FakeLoading : PluginLoading {
     val loads = mutableListOf<Pair<String, Long>>()
     val made = mutableListOf<NzPlugin>()
 
-    override fun verify(apk: File, expected: Expectation): Verdict = verifier.verify(apk, expected)
+    /** Each install's checks asked, by id and version; [whileVerifying] runs as each is asked, before the checks. */
+    val verified = mutableListOf<Pair<String, Long>>()
+    var whileVerifying: (apk: File, expected: Expectation) -> Unit = { _, _ -> }
+
+    override fun verify(apk: File, expected: Expectation): Verdict {
+        verified += expected.id to expected.versionCode
+        whileVerifying(apk, expected)
+        return verifier.verify(apk, expected)
+    }
 
     override fun load(apk: File, expected: Expectation): LoadResult {
         loads += expected.id to expected.versionCode

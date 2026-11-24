@@ -3,18 +3,22 @@ package io.skjaere.usenet.app.plugins
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.hostWithPortIfSpecified
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -78,6 +82,51 @@ class PluginSourceWiringTest {
     }
 
     /**
+     * The app's own installer, as the container makes it, downloads from the list's source as it stands at the download: a
+     * test's in a debug build, GitHub's releases in any other. ktor's mock answers each, keeps the address asked and sends
+     * nothing anywhere; the file it gives isn't the list's, so nothing is installed.
+     */
+    @Test
+    fun `the app's installer downloads from the test source in a debug build alone`(@TempDir dir: File) = runBlocking<Unit> {
+        val asked = mutableListOf<String>()
+        val http = HttpClient(MockEngine) {
+            install(HttpTimeout)
+            engine {
+                addHandler { request ->
+                    val url = request.url.toString()
+                    asked += url
+                    // The list names its releases where the source it came from keeps them: GitHub's on github.com.
+                    val releases = if (request.url.host == "raw.githubusercontent.com") "https://github.com" else "http://${request.url.hostWithPortIfSpecified}"
+                    if (url.endsWith("/index.json")) respond(listFor(releases)) else respond("not the file")
+                }
+            }
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val secrets = FakeSecrets()
+            val store = PluginStore(File(dir, "files"), File(dir, "cache"), secrets)
+            val registry = PluginRegistry(store, FakeLoading(), PluginHosts(store, secrets, main = Dispatchers.Unconfined), FakeGuard(), scope, io = Dispatchers.IO)
+            registry.start()
+            val list = PluginList.of(File(dir, "files"), installed = { false }, http = { http }, scope = scope)
+            // This JVM's Android stubs say SDK 0: the device's, as a phone of 14 gives it.
+            val installer = PluginInstaller.of(File(dir, "files"), File(dir, "cache"), registry, list, http = { http }, scope = scope, sdk = 34) { false }
+            PluginSource.override = PluginSource.loopback(port = 8123)
+            list.checkAgain().join()
+            withTimeout(10_000) { assertNotNull(installer.install("harbor"), "an install started").join() }
+            val expected = if (UnitTestBuild.debug) {
+                listOf("http://127.0.0.1:8123/index.json", "http://127.0.0.1:8123$HARBOR_APK")
+            } else {
+                listOf(PluginSource.LIST, "https://github.com$HARBOR_APK")
+            }
+            assertEquals(expected, asked, "a ${UnitTestBuild.type} build")
+            assertTrue(registry.plugins.value.orEmpty().isEmpty(), "nothing installed")
+        } finally {
+            scope.cancel()
+            http.close()
+        }
+    }
+
+    /**
      * The app's own list, as the container makes it, asks the current source at each read: a test's in a debug build, and
      * GitHub's in any other. Its client here is ktor's mock, which keeps the address asked and sends nothing anywhere.
      */
@@ -100,5 +149,16 @@ class PluginSourceWiringTest {
             scope.cancel()
             http.close()
         }
+    }
+
+    private companion object {
+        const val HARBOR_APK = "/skjaere/nzstreamer/releases/download/plugin-harbor-v1.0.0/harbor.apk"
+
+        /** A list naming Harbor's version 1 among the releases at [origin], as that source's address rule wants it. */
+        fun listFor(origin: String) = """
+            {"format":1,"generated":"2026-12-01T10:00:00Z","plugins":[{"id":"harbor","package":"app.nzstreamer.plugin.harbor",
+            "name":"Harbor Lights","summary":"","withdrawn":[],"versions":[{"url":"$origin$HARBOR_APK",
+            "sha256":"${"ab".repeat(32)}","versionName":"1","versionCode":1,"api":"1.0","libs":{},"minSdk":26,"size":100}]}]}
+        """.trimIndent()
     }
 }

@@ -10,7 +10,10 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -190,9 +193,9 @@ class PluginRegistry(
     /**
      * Installs [download], a file whose SHA-256 the list's matched, as [request] names it: checked again (L583, L584),
      * stored read-only, bound to the lowest free slot and, once the first screen's start check ran, loaded (before it, the
-     * start's own load takes it). A higher version of one
-     * installed is stored beside it, and waits for the swap ([atSwapPoint]); the same version again replaces its file and,
-     * if it isn't running, loads it. Nothing of a refused or failed install is kept.
+     * start's own load takes it). A higher version of one installed is stored beside it, and waits for the swap
+     * ([atSwapPoint]); the same version again replaces its file and, if it isn't running, loads it. Nothing of a refused or
+     * failed install is kept, nor of one cancelled before its checks passed; once they passed, it goes to its end.
      */
     suspend fun install(download: File, request: InstallRequest): InstallResult {
         filesRead.await()
@@ -212,52 +215,62 @@ class PluginRegistry(
                 }
                 is Verdict.Accepted -> verdict.facts
             }
-            val result = try {
-                withContext(io) { store.writeVersion(id, request.versionCode, download, request.sha256) }
-                when {
-                    existing == null -> {
-                        withContext(io) { store.emptyFolders(id) }
-                        val slot = PluginStore.SLOTS.first { slot -> records.none { it.slot == slot } }
-                        records += PluginRecord(id, request.name, request.versionCode, facts.versionName, request.sha256, slot, installedAt = now())
-                        persist()
-                        statuses[id] = if (startChecked) begin(record(id)!!) else PluginStatus.Waiting
-                        InstallResult.Installed(slot)
-                    }
-                    request.versionCode == existing.versionCode -> {
-                        update(id) { it.copy(name = request.name, sha256 = request.sha256, state = if (it.state == StoredState.Refused) StoredState.On else it.state) }
-                        persist()
-                        if (startChecked && runningInstance(id) == null) statuses[id] = begin(record(id)!!)
-                        InstallResult.Installed(existing.slot)
-                    }
-                    else -> {
-                        existing.pending?.takeIf { it.versionCode != request.versionCode }?.let { withContext(io) { store.deleteVersion(id, it.versionCode) } }
-                        update(id) { it.copy(name = request.name, pending = PendingVersion(request.versionCode, facts.versionName, request.sha256)) }
-                        persist()
-                        InstallResult.UpdateWaiting
-                    }
-                }
-            } catch (e: IOException) {
-                log.warn("Plugin {} {} couldn't be stored: {}", id, request.versionCode, e.javaClass.simpleName)
-                if (existing == null) {
-                    records.removeAll { it.id == id }
-                    statuses.remove(id)
-                    withContext(io) { store.delete(id) }
-                } else if (request.versionCode != existing.versionCode && request.versionCode != existing.pending?.versionCode) {
-                    // Only a folder this install made: the running version's and the waiting one's still hold the file stored
-                    // before, which the failed write left as it was.
-                    withContext(io) { store.deleteVersion(id, request.versionCode) }
-                }
-                InstallResult.Failed
-            }
-            publish()
-            result
+            // A Cancel while the checks ran keeps nothing. Once they passed, the install goes to its end whatever its
+            // caller does, so the files and the registry's file always agree.
+            currentCoroutineContext().ensureActive()
+            withContext(NonCancellable) { commit(download, request, existing, facts) }
         }
+    }
+
+    /** [request]'s [download], checked ([facts]): stored, recorded and, where it may, loaded. Under [lock]. */
+    private suspend fun commit(download: File, request: InstallRequest, existing: PluginRecord?, facts: PluginFacts): InstallResult {
+        val id = request.id
+        val result = try {
+            withContext(io) { store.writeVersion(id, request.versionCode, download, request.sha256) }
+            when {
+                existing == null -> {
+                    withContext(io) { store.emptyFolders(id) }
+                    val slot = PluginStore.SLOTS.first { slot -> records.none { it.slot == slot } }
+                    records += PluginRecord(id, request.name, request.versionCode, facts.versionName, request.sha256, slot, installedAt = now())
+                    persist()
+                    statuses[id] = if (startChecked) begin(record(id)!!) else PluginStatus.Waiting
+                    InstallResult.Installed(slot)
+                }
+                request.versionCode == existing.versionCode -> {
+                    update(id) { it.copy(name = request.name, sha256 = request.sha256, state = if (it.state == StoredState.Refused) StoredState.On else it.state) }
+                    persist()
+                    if (startChecked && runningInstance(id) == null) statuses[id] = begin(record(id)!!)
+                    InstallResult.Installed(existing.slot)
+                }
+                else -> {
+                    existing.pending?.takeIf { it.versionCode != request.versionCode }?.let { withContext(io) { store.deleteVersion(id, it.versionCode) } }
+                    update(id) { it.copy(name = request.name, pending = PendingVersion(request.versionCode, facts.versionName, request.sha256)) }
+                    persist()
+                    InstallResult.UpdateWaiting
+                }
+            }
+        } catch (e: IOException) {
+            log.warn("Plugin {} {} couldn't be stored: {}", id, request.versionCode, e.javaClass.simpleName)
+            if (existing == null) {
+                records.removeAll { it.id == id }
+                statuses.remove(id)
+                withContext(io) { store.delete(id) }
+            } else if (request.versionCode != existing.versionCode && request.versionCode != existing.pending?.versionCode) {
+                // Only a folder this install made: the running version's and the waiting one's still hold the file stored
+                // before, which the failed write left as it was.
+                withContext(io) { store.deleteVersion(id, request.versionCode) }
+            }
+            InstallResult.Failed
+        }
+        publish()
+        return result
     }
 
     /**
      * The swap point (L581): no entry of [id]'s slot is on the current back stack. An update waiting takes over: the old
      * instance's scope is cancelled and its close() called, the new version loads under a new instance key, and the old
-     * version's folder goes once it did. One that can't start goes back to the version before and isn't tried again.
+     * version's folder goes once it did. One that can't start goes back to the version before and isn't tried again. A
+     * version the list withdrew that still runs is let go here, and stays off (L621).
      * True where something changed, so the slot's saved stack is to be cleared. No plugin code loads before the first
      * screen asked, nor before its start check ran, nor while plugins are off (L619): then the update waits for a later
      * swap point, and nothing changed.
@@ -268,7 +281,7 @@ class PluginRegistry(
         return lock.withLock {
             if (!startChecked || off.value) return@withLock false
             val record = record(id) ?: return@withLock false
-            val pending = record.pending ?: return@withLock false
+            val pending = record.pending ?: return@withLock withdrawnGoes(record)
             runningInstance(id)?.let(::letGo)
             when (val outcome = load(id, pending.versionCode, pending.sha256, record.highestLoaded)) {
                 is Outcome.Running -> {
@@ -296,6 +309,17 @@ class PluginRegistry(
         }
     }
 
+    /** At the swap point, a withdrawn version that still runs is let go, and stays off (L621). True where it went. Under [lock]. */
+    private fun withdrawnGoes(record: PluginRecord): Boolean {
+        if (record.state != StoredState.Withdrawn) return false
+        val instance = runningInstance(record.id) ?: return false
+        letGo(instance)
+        statuses[record.id] = PluginStatus.Withdrawn
+        log.info("Plugin {} {} is off: withdrawn", record.id, record.versionCode)
+        publish()
+        return true
+    }
+
     /** Turn on again (L619): a version turned off after a crash or an error loads at once, with no restart. */
     suspend fun turnOnAgain(id: String) {
         filesRead.await()
@@ -305,6 +329,35 @@ class PluginRegistry(
             update(id) { it.copy(state = StoredState.On) }
             persist()
             statuses[id] = if (startChecked) begin(record(id)!!) else PluginStatus.Waiting
+            publish()
+        }
+    }
+
+    /**
+     * The list withdrew [id]'s version [versionCode] (L621). The installed version is off from now on, kept so in the
+     * registry's file, so no later start loads it; one that runs goes at the swap point ([atSwapPoint]), as an update
+     * would take over. An update waiting with that version is dropped, its file deleted. Off until a newer version comes
+     * as an update; Remove takes it away.
+     */
+    suspend fun withdraw(id: String, versionCode: Long) {
+        filesRead.await()
+        lock.withLock {
+            val record = record(id) ?: return@withLock
+            if (record.pending?.versionCode == versionCode) {
+                log.info("Plugin {} {} withdrawn while it waited to take over", id, versionCode)
+                update(id) { it.copy(pending = null) }
+                if (persist()) withContext(io) { store.deleteVersion(id, versionCode) }
+            }
+            if (record.versionCode == versionCode && record.state != StoredState.Withdrawn) {
+                log.info("Plugin {} {} withdrawn", id, versionCode)
+                update(id) { it.copy(state = StoredState.Withdrawn) }
+                persist()
+                // What runs goes at the swap point; what waits for its load, or for plugins to be on, finds it off then.
+                when (statuses[id]) {
+                    is PluginStatus.Running, PluginStatus.Waiting, PluginStatus.PluginsOff, null -> Unit
+                    else -> statuses[id] = PluginStatus.Withdrawn
+                }
+            }
             publish()
         }
     }
@@ -508,7 +561,8 @@ class PluginRegistry(
         shown.value = records.sortedBy { it.slot }.map { record ->
             InstalledPlugin(
                 record.id, record.name, record.slot, record.versionCode, record.versionName, record.label,
-                statuses[record.id] ?: PluginStatus.Waiting, record.pending != null, record.failedVersion, record.lastUpdate,
+                statuses[record.id] ?: PluginStatus.Waiting, record.pending?.versionCode, record.failedVersion, record.lastUpdate,
+                withdrawn = record.state == StoredState.Withdrawn,
             )
         }
     }
@@ -577,8 +631,9 @@ sealed interface InstallResult {
 
 /**
  * An installed plugin, as the app shows it: the tab's [label] as the plugin last gave it (null until it first loaded),
- * its [status] in this process, an update waiting for the swap ([updateWaiting]), the last update that couldn't start
- * ([failedUpdate]) and the last that did ([lastUpdate]).
+ * its [status] in this process, the version of an update waiting for the swap ([waitingVersion]), the last update that
+ * couldn't start ([failedUpdate]) and the last that did ([lastUpdate]), and whether the list [withdrew][withdrawn] its
+ * version: off at the swap point, if it still runs, until a fixed version is out (L621).
  */
 class InstalledPlugin(
     val id: String,
@@ -588,10 +643,14 @@ class InstalledPlugin(
     val versionName: String,
     val label: String?,
     val status: PluginStatus,
-    val updateWaiting: Boolean,
+    val waitingVersion: Long?,
     val failedUpdate: FailedVersion?,
     val lastUpdate: LastUpdate?,
-)
+    val withdrawn: Boolean = false,
+) {
+    /** An update is stored beside the running version, waiting for the swap. */
+    val updateWaiting: Boolean get() = waitingVersion != null
+}
 
 sealed interface PluginStatus {
     /** Its files read, its code not loaded in this process yet: before the first screen asks, or while it loads. */

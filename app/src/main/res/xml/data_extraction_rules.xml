@@ -14,6 +14,8 @@
      ("external"), each one's bookkeeping in filesDir ("file": its marker, and its NZB and password while it needs them).
      A copy would carry gigabytes of video, and the library's download rows, which do go, arrive without their markers:
      the app reads those as another device's and drops them.
+     The plugins' folder is left out too (L596): a plugin's code reaches a device only through the plugin list and its
+     checks, and its data, the plugins' registry, the list's copy and the crash guard's files are this device's.
      allowBackup="false" already turns cloud backup off but not device-to-device transfer. -->
 <data-extraction-rules>
     <cloud-backup>
@@ -23,6 +25,7 @@
         <exclude domain="file" path="datastore/link.json.tmp" />
         <exclude domain="file" path="logs/" />
         <exclude domain="file" path="debrid/" />
+        <exclude domain="file" path="plugins/" />
         <exclude domain="file" path="downloads/" />
         <exclude domain="external" path="downloads/" />
     </cloud-backup>
@@ -33,6 +36,7 @@
         <exclude domain="file" path="datastore/link.json.tmp" />
         <exclude domain="file" path="logs/" />
         <exclude domain="file" path="debrid/" />
+        <exclude domain="file" path="plugins/" />
         <exclude domain="file" path="downloads/" />
         <exclude domain="external" path="downloads/" />
     </device-transfer>

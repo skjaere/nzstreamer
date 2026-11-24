@@ -6,6 +6,7 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
 
 /**
  * An HTTP/1.1 server on this machine's loopback address, in the test's own process, standing for GitHub: each request it
@@ -16,10 +17,21 @@ internal class LoopbackHttp(private val answer: (Request) -> Response) : AutoClo
     /** A request's [path] and its headers, by lower-case name. */
     class Request(val path: String, val headers: Map<String, String>)
 
-    /** What to send: [status], [headers], and [body], with a Content-Length unless [lengthless] (read to the close). */
-    class Response(val status: Int, val body: ByteArray = ByteArray(0), val headers: Map<String, String> = emptyMap(), val lengthless: Boolean = false)
+    /**
+     * What to send: [status], [headers], and [body], with a Content-Length unless [lengthless] (read to the close). With
+     * [stallAfter], only that many bytes of the body go at once; the rest waits until the server closes, as a line that
+     * stopped half-way.
+     */
+    class Response(
+        val status: Int,
+        val body: ByteArray = ByteArray(0),
+        val headers: Map<String, String> = emptyMap(),
+        val lengthless: Boolean = false,
+        val stallAfter: Int? = null,
+    )
 
     private val server = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
+    private val released = CountDownLatch(1)
     val port: Int = server.localPort
     val requests = CopyOnWriteArrayList<Request>()
 
@@ -54,8 +66,14 @@ internal class LoopbackHttp(private val answer: (Request) -> Response) : AutoClo
             }
             socket.getOutputStream().apply {
                 write(head.toByteArray())
-                write(response.body)
+                val first = response.stallAfter ?: response.body.size
+                write(response.body, 0, first)
                 flush()
+                if (first < response.body.size) {
+                    released.await()
+                    write(response.body, first, response.body.size - first)
+                    flush()
+                }
             }
         } catch (e: IOException) {
             // The client went before the whole answer was sent, as one that refuses a body too long does.
@@ -63,6 +81,7 @@ internal class LoopbackHttp(private val answer: (Request) -> Response) : AutoClo
     }
 
     override fun close() {
+        released.countDown()
         server.close()
         thread.join(5_000)
     }

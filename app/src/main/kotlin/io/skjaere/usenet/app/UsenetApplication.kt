@@ -90,6 +90,7 @@ import io.skjaere.usenet.app.play.PlayerInFront
 import io.skjaere.usenet.app.play.UsableRoutes
 import io.skjaere.usenet.app.play.noUsableSource
 import io.skjaere.usenet.app.play.servicesSaved
+import io.skjaere.usenet.app.plugins.PluginInstaller
 import io.skjaere.usenet.app.plugins.PluginList
 import io.skjaere.usenet.app.plugins.PluginRegistry
 import io.skjaere.usenet.app.plugins.named
@@ -496,6 +497,13 @@ class AppContainer(private val context: Context) {
         http = { serviceHttp.value },
         scope = appScope,
     )
+
+    /**
+     * Installs, updates and removes plugins from the list (L633, L621), with no dialog: Settings › Plugins' installs, and
+     * each read's updates and withdrawals, downloaded from the list's source through the services' client.
+     */
+    val pluginInstaller: PluginInstaller =
+        PluginInstaller.of(context.filesDir, context.cacheDir, plugins, pluginList, http = { serviceHttp.value }, scope = appScope) { television }
 
     /** Whether MainActivity is started: the lists' refresher asks TMDB only then (not while the player streams). */
     val foreground = MutableStateFlow(false)

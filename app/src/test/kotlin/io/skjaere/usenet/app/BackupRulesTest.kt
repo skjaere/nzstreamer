@@ -2,6 +2,7 @@ package io.skjaere.usenet.app
 
 import io.skjaere.usenet.app.download.DownloadNzbs
 import io.skjaere.usenet.app.download.DownloadStorage
+import io.skjaere.usenet.app.plugins.PluginStore
 import io.skjaere.usenet.data.DataContainer
 import org.junit.jupiter.api.Test
 import org.w3c.dom.Element
@@ -15,7 +16,8 @@ import kotlin.test.assertTrue
  * whose pins mean nothing without this device's key (L29). Each with its DataStore temp file. Nor the last crash's log,
  * which leaves the device only when shared from Settings › Logs, as the privacy page says (L139). Nor the debrid folder,
  * whose listings and records of adds are the device's own (L233). Nor the downloads, which stay on this device (L350),
- * nor the season packs' NZBs and passwords kept with them (L394).
+ * nor the season packs' NZBs and passwords kept with them (L394). Nor the plugins' folder, whose code reaches a device only
+ * through the plugin list and its checks (L596).
  */
 class BackupRulesTest {
     private val res = File("src/main/res")
@@ -124,6 +126,24 @@ class BackupRulesTest {
         listOf("file", "external").forEach { domain ->
             assertTrue(rules("fullBackupContent").excludesFolder(DownloadStorage.DIR, domain), "full backups don't exclude ${DownloadStorage.DIR}/ of $domain")
         }
+    }
+
+    /**
+     * L596: a plugin's code reaches a device only through the plugin list and its checks, never in a backup or a transfer;
+     * its data, the registry, the list's copy and the crash guard's files are this device's. The whole folder under
+     * filesDir, as Android reads it (cacheDir is never backed up).
+     */
+    @Test
+    fun `the plugins' folder is left out of cloud backups and device transfers on Android 12+`() {
+        val extraction = rules("dataExtractionRules")
+        listOf("cloud-backup", "device-transfer").forEach { section ->
+            assertTrue(extraction.children(section).single().excludesFolder(PluginStore.DIR), "$section doesn't exclude ${PluginStore.DIR}/")
+        }
+    }
+
+    @Test
+    fun `the plugins' folder is left out of full backups up to Android 11`() {
+        assertTrue(rules("fullBackupContent").excludesFolder(PluginStore.DIR), "full backups don't exclude ${PluginStore.DIR}/")
     }
 
     /**

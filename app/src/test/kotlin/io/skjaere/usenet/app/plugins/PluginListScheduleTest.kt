@@ -3,6 +3,7 @@
 package io.skjaere.usenet.app.plugins
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -232,6 +233,47 @@ class PluginListScheduleTest {
         pass(Duration.ofMinutes(5))
         list.pageOpened().join()
         assertEquals("\"v1\"", reader.etags.last())
+    }
+
+    /**
+     * L621: each read GitHub answered is handed on as the list then stands, so the installer fetches updates and withdraws
+     * versions after it: a list, a 304 and a 404 alike. A read that failed, a list in a later format, and a trigger that read
+     * nothing hand nothing on; the last read handed on is there for whoever asks later.
+     */
+    @Test
+    fun `each read GitHub answered is handed on, and nothing else`() = runTest {
+        val list = list()
+        val handed = mutableListOf<List<String>>()
+        backgroundScope.launch { list.reads.collect { index -> handed += index.plugins.map { it.id } } }
+        reader.answer = ListAnswer.Fresh(list("2026-12-01T10:00:00Z", "harbor"), etag = "\"v1\"")
+        list.pageOpened().join()
+        runCurrent()
+        assertEquals(listOf(listOf("harbor")), handed)
+
+        list.pageOpened().join()
+        runCurrent()
+        assertEquals(1, handed.size, "read 5 minutes ago: nothing read, nothing handed on")
+        reader.answer = ListAnswer.NotChanged
+        list.checkAgain().join()
+        runCurrent()
+        assertEquals(listOf("harbor"), handed.last(), "a 304: the copy, read again")
+        reader.answer = ListAnswer.Failed(ReadFailure.Network)
+        list.checkAgain().join()
+        reader.answer = ListAnswer.Busy(503, retryAfter = null)
+        list.checkAgain().join()
+        reader.answer = ListAnswer.Fresh("""{"format":2,"generated":"2026-12-03T10:00:00Z"}""".toByteArray(), etag = "\"v2\"")
+        list.checkAgain().join()
+        runCurrent()
+        assertEquals(2, handed.size, "a failed read and a later format hand nothing on")
+        reader.answer = ListAnswer.NoList
+        list.checkAgain().join()
+        runCurrent()
+        assertEquals(emptyList(), handed.last(), "a 404: a list with nothing in it")
+
+        val later = mutableListOf<List<String>>()
+        backgroundScope.launch { list.reads.collect { index -> later += index.plugins.map { it.id } } }
+        runCurrent()
+        assertEquals(listOf(emptyList<String>()), later, "the last read, for a collector that came later")
     }
 
     /** A reader that counts its reads, keeps the ETags it was given, and gives [answer]: a list with nothing in it, unless set. */

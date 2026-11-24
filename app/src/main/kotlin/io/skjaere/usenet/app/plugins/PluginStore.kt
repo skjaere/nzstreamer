@@ -151,8 +151,8 @@ class PluginStore(filesDir: File, cacheDir: File, private val secrets: NamedSecr
         private const val TMP = ".tmp"
         private const val REGISTRY = "registry.json"
 
-        /** A download on its way, under cacheDir/plugins: not a plugin's folder. */
-        private const val DOWNLOADS = ".download"
+        /** Downloads on their way, under cacheDir/plugins: not a plugin's folder; the downloader keeps it (PluginDownloader). */
+        const val DOWNLOADS = ".download"
 
         /** Every plugin's secrets' names start with it, then the plugin's id and ":" (L617). */
         const val SECRETS = "plugin:"
