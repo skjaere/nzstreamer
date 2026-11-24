@@ -306,6 +306,39 @@ class PluginRegistryTest {
     }
 
     @Test
+    fun `a start sweeps away what no installed plugin owns, and everything once the registry is lost`() = runTest {
+        val h = harness()
+        h.registry().apply { start(); firstActivity() }.let { h.install(it, "skeleton", 2) }
+        h.secrets.put("plugin:skeleton:key", "kept")
+        // Left behind (a death between the registry's write and the files' deletion): a version the registry doesn't keep,
+        // a .tmp, and another plugin's code, data, cache and secrets.
+        File(h.store.apk("skeleton", 1).parentFile, "plugin.apk").apply { parentFile!!.mkdirs(); writeText("skeleton 1") }
+        val tmp = File(h.store.apk("skeleton", 2).parentFile, "plugin.apk.tmp").apply { writeText("half a copy") }
+        File(h.store.apk("harbor", 1).parentFile, "plugin.apk").apply { parentFile!!.mkdirs(); writeText("harbor 1") }
+        File(h.store.dataDir("harbor").apply { mkdirs() }, "chips.json").writeText("[]")
+        h.store.cacheDir("harbor").mkdirs()
+        h.secrets.put("plugin:harbor:key", "gone")
+
+        h.registry().apply { start() }
+        advanceUntilIdle()
+        assertTrue(h.store.apk("skeleton", 2).isFile, "what the registry names stays")
+        assertTrue(h.store.dataDir("skeleton").isDirectory)
+        assertFalse(tmp.exists())
+        assertFalse(h.store.apk("skeleton", 1).parentFile!!.exists())
+        assertFalse(File(h.files, "plugins/harbor").exists())
+        assertFalse(h.store.cacheDir("harbor").exists())
+        assertEquals(setOf("plugin:skeleton:key"), h.secrets.values.keys)
+
+        assertTrue(File(h.files, "plugins/registry.json").delete())
+        val lost = h.registry().apply { start() }
+        advanceUntilIdle()
+        assertEquals(emptyList(), lost.plugins.value)
+        assertFalse(File(h.files, "plugins/skeleton").exists(), "a registry lost takes every plugin's files")
+        assertFalse(h.store.cacheDir("skeleton").exists())
+        assertEquals(emptyMap(), h.secrets.values)
+    }
+
+    @Test
     fun `remove lets the instance go, frees the slot and deletes the plugin's files and secrets`() = runTest {
         val h = harness()
         val registry = h.registry().apply { start(); firstActivity() }
