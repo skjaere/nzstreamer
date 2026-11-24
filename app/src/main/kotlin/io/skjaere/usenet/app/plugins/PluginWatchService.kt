@@ -6,10 +6,13 @@ import io.skjaere.usenet.data.WatchState
 import io.skjaere.usenet.plugin.PluginKeys
 import io.skjaere.usenet.plugin.PluginWatch
 import io.skjaere.usenet.plugin.WatchInfo
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import org.slf4j.LoggerFactory
 import java.time.Instant
 
 /**
@@ -18,7 +21,9 @@ import java.time.Instant
  * key outside the API's rule ([PluginKeys.validKey]) is refused before anything is read or written, with an
  * IllegalArgumentException naming the rule, never the key. [states] reads the library's live states of the keys it is
  * given, as they change ([io.skjaere.usenet.data.LibraryRepository.observeStates]); [marking] marks items as Mark watched
- * does a film ([io.skjaere.usenet.data.LibraryRepository.markItems]).
+ * does a film ([io.skjaere.usenet.data.LibraryRepository.markItems]). A failure of the library's own (a full disk, a
+ * corrupt database) is the host's, never thrown at the plugin, whose scope would turn it off after an error: a mark
+ * returns and an observation ends, logged by the plugin's id and the failure's kind.
  */
 class PluginWatchService(
     private val states: (keys: List<String>) -> Flow<List<WatchState>>,
@@ -36,11 +41,22 @@ class PluginWatchService(
                 .map { rows -> rows.filter { it.key in plugin } }
                 .distinctUntilChanged()
                 .map { rows -> rows.associate { plugin.getValue(it.key) to info(it) } }
+                .catch { e ->
+                    if (e !is Exception || e is CancellationException) throw e
+                    log.warn("Plugin {}'s watch state couldn't be read: {}", id, e.javaClass.name)
+                }
         }
 
         override suspend fun mark(items: List<Pair<String, String>>, watched: Boolean) {
             val marks = items.map { (key, title) -> ItemMark(stored(key), title) }
-            if (marks.isNotEmpty()) marking(marks, watched)
+            if (marks.isEmpty()) return
+            try {
+                marking(marks, watched)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.warn("Plugin {}'s items couldn't be marked: {}", id, e.javaClass.name)
+            }
         }
 
         private fun stored(key: String): String {
@@ -50,6 +66,8 @@ class PluginWatchService(
     }
 
     private companion object {
+        private val log = LoggerFactory.getLogger(PluginWatchService::class.java)
+
         /** [row] as a plugin reads it: when it last played is unknown for an item only marked. */
         fun info(row: WatchState) = WatchInfo(row.positionMs, row.durationMs, row.watched, row.lastPlayedAt.takeIf { it > 0 }?.let(Instant::ofEpochMilli))
     }

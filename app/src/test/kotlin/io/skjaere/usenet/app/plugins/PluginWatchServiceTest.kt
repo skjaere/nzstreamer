@@ -5,11 +5,13 @@ import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.data.WatchState
+import io.skjaere.usenet.logging.LogBuffer
 import io.skjaere.usenet.plugin.WatchInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -142,5 +144,31 @@ class PluginWatchServiceTest {
         host.watch.mark(listOf("gp-kestrel:race" to "Grand Prix of Kestrel · Race"), watched = true)
         assertEquals(listOf(ItemMark("item:kestrel:gp-kestrel:race", "Grand Prix of Kestrel · Race")) to true, library.marked.single())
         assertNull(host.watch.observe(listOf("gp-kestrel:sprint")).first()["gp-kestrel:sprint"])
+    }
+
+    /**
+     * The host's own database failing (a full disk, a corrupt file) is the host's, never the plugin's: a mark returns, an
+     * observation ends, both logged by the plugin's id and the failure's kind, and nothing reaches the plugin's scope, whose
+     * handler would turn it off after an error. A key outside the rule is still the plugin's own error.
+     */
+    @Test
+    fun `a failure of the host's own database is never thrown at the plugin`(@TempDir dir: File) = runTest {
+        val failing = PluginWatchService(
+            states = { flow { throw java.io.IOException("disk full at /data/canary-db") } },
+            marking = { _, _ -> throw java.io.IOException("disk full at /data/canary-db") },
+        )
+        val from = LogBuffer.snapshot().lastOrNull()?.seq ?: 0L
+        val failures = mutableListOf<String>()
+        val store = PluginStore(File(dir, "files"), File(dir, "cache"), FakeSecrets())
+        val host = PluginHosts(store, FakeSecrets(), main = Dispatchers.Unconfined, watch = failing)
+            .create(PluginVersion("kestrel", 3, key = 11), "Kestrel") { what, e -> failures += "$what ${e.javaClass.simpleName}" }
+        host.scope.launch { host.watch.mark(listOf("gp-kestrel:race" to "Grand Prix of Kestrel · Race"), watched = true) }.join()
+        assertEquals(emptyList(), host.watch.observe(listOf("gp-kestrel:race")).toList(), "the observation ends")
+        assertEquals(emptyList(), failures, "nothing charged to the plugin")
+        val logged = LogBuffer.snapshot().filter { it.seq > from }.map { it.message }.filter { "kestrel" in it }
+        assertEquals(2, logged.size, "$logged")
+        assertFalse(logged.any { "canary" in it }, "$logged")
+        assertFailsWith<IllegalArgumentException> { host.watch.mark(listOf("gp kestrel" to "Grand Prix of Kestrel · Race"), watched = true) }
+        host.cancel()
     }
 }
