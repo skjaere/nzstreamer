@@ -55,7 +55,8 @@ public final class io/skjaere/usenet/plugin/IndexerNote {
 }
 
 public final class io/skjaere/usenet/plugin/ItemReleases {
-	public <init> (Ljava/util/List;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)V
+	public <init> (Ljava/util/List;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)V defaults(2,3,4,5)
+	public synthetic <init> (Ljava/util/List;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun getAccepted ()Ljava/util/List;
 	public final fun getLeftOut ()Ljava/lang/String;
 	public final fun getLines ()Ljava/util/List;
@@ -77,7 +78,8 @@ public final class io/skjaere/usenet/plugin/Offered {
 }
 
 public final class io/skjaere/usenet/plugin/PlayItem {
-	public <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Lio/skjaere/usenet/plugin/SearchOffer;Lio/skjaere/usenet/plugin/PluginFilePicker;)V
+	public <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Lio/skjaere/usenet/plugin/SearchOffer;Lio/skjaere/usenet/plugin/PluginFilePicker;)V defaults(5,6)
+	public synthetic <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Lio/skjaere/usenet/plugin/SearchOffer;Lio/skjaere/usenet/plugin/PluginFilePicker;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun getKey ()Ljava/lang/String;
 	public final fun getPicker ()Lio/skjaere/usenet/plugin/PluginFilePicker;
 	public final fun getRuntimeMinutes ()Ljava/lang/Integer;
@@ -118,7 +120,8 @@ public abstract interface class io/skjaere/usenet/plugin/PluginHost {
 }
 
 public abstract interface class io/skjaere/usenet/plugin/PluginHttp {
-	public abstract fun get (Ljava/lang/String;Ljava/util/Map;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun get (Ljava/lang/String;Ljava/util/Map;ILkotlin/coroutines/Continuation;)Ljava/lang/Object; defaults(2,3)
+	public static synthetic fun get$default (Lio/skjaere/usenet/plugin/PluginHttp;Ljava/lang/String;Ljava/util/Map;ILkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
 public final class io/skjaere/usenet/plugin/PluginHttpException : java/io/IOException {
@@ -160,7 +163,8 @@ public abstract interface class io/skjaere/usenet/plugin/PluginPlay {
 }
 
 public abstract interface class io/skjaere/usenet/plugin/PluginSearch {
-	public abstract fun search (Ljava/lang/String;Ljava/lang/Integer;Z)Lkotlinx/coroutines/flow/Flow;
+	public abstract fun search (Ljava/lang/String;Ljava/lang/Integer;Z)Lkotlinx/coroutines/flow/Flow; defaults(3)
+	public static synthetic fun search$default (Lio/skjaere/usenet/plugin/PluginSearch;Ljava/lang/String;Ljava/lang/Integer;ZILjava/lang/Object;)Lkotlinx/coroutines/flow/Flow;
 }
 
 public abstract interface class io/skjaere/usenet/plugin/PluginSecrets {

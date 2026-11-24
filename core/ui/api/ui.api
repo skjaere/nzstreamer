@@ -6,7 +6,8 @@ public final class io/skjaere/usenet/app/collection/DpadKt {
 public final class io/skjaere/usenet/app/play/OkGuard {
 	public static final field Companion Lio/skjaere/usenet/app/play/OkGuard$Companion;
 	public static final field WINDOW_MS J
-	public <init> (JJ)V
+	public <init> (JJ)V defaults(2)
+	public synthetic <init> (JJILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun blocks (IZIJ)Z
 }
 
@@ -15,8 +16,9 @@ public final class io/skjaere/usenet/app/play/OkGuard$Companion {
 
 public final class io/skjaere/usenet/app/play/OkGuardKt {
 	public static final fun getOkKeys ()Ljava/util/Set;
-	public static final fun okGuard (Landroidx/compose/ui/Modifier;J)Landroidx/compose/ui/Modifier;
+	public static final fun okGuard (Landroidx/compose/ui/Modifier;J)Landroidx/compose/ui/Modifier; defaults(1)
 	public static final fun okGuard (Landroidx/compose/ui/Modifier;Lio/skjaere/usenet/app/play/OkGuard;)Landroidx/compose/ui/Modifier;
+	public static synthetic fun okGuard$default (Landroidx/compose/ui/Modifier;JILjava/lang/Object;)Landroidx/compose/ui/Modifier;
 	public static final fun pageOkGuard (Landroidx/compose/ui/Modifier;Lio/skjaere/usenet/app/play/OkGuard;)Landroidx/compose/ui/Modifier;
 	public static final fun rememberPageOkGuard (Landroidx/compose/runtime/Composer;I)Lio/skjaere/usenet/app/play/OkGuard;
 }
@@ -31,7 +33,7 @@ public final class io/skjaere/usenet/app/tv/SwitchSideKt {
 }
 
 public final class io/skjaere/usenet/app/tv/TvChipKt {
-	public static final fun TvChip-_mRqjOc (Ljava/lang/String;ZLandroidx/compose/ui/Modifier;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/semantics/Role;ZLkotlin/jvm/functions/Function0;Landroidx/compose/runtime/Composer;II)V
+	public static final fun TvChip-_mRqjOc (Ljava/lang/String;ZLandroidx/compose/ui/Modifier;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/semantics/Role;ZLkotlin/jvm/functions/Function0;Landroidx/compose/runtime/Composer;II)V defaults(4,5,6)
 }
 
 public final class io/skjaere/usenet/app/tv/TvColumnWidthKt {
@@ -40,15 +42,17 @@ public final class io/skjaere/usenet/app/tv/TvColumnWidthKt {
 }
 
 public final class io/skjaere/usenet/app/tv/TvMenuKt {
-	public static final fun TvMenu-hGBTI10 (ZLkotlin/jvm/functions/Function0;Landroidx/compose/ui/Modifier;FLkotlin/jvm/functions/Function4;Landroidx/compose/runtime/Composer;II)V
-	public static final fun TvMenuItem (Ljava/lang/String;Landroidx/compose/ui/Modifier;ZZLkotlin/jvm/functions/Function0;Landroidx/compose/runtime/Composer;II)V
+	public static final fun TvMenu-hGBTI10 (ZLkotlin/jvm/functions/Function0;Landroidx/compose/ui/Modifier;FLkotlin/jvm/functions/Function4;Landroidx/compose/runtime/Composer;II)V defaults(3,4)
+	public static final fun TvMenuItem (Ljava/lang/String;Landroidx/compose/ui/Modifier;ZZLkotlin/jvm/functions/Function0;Landroidx/compose/runtime/Composer;II)V defaults(2,3,4)
 }
 
 public final class io/skjaere/usenet/app/tv/TvPillKt {
-	public static final fun TvPill (Ljava/lang/String;Landroidx/compose/ui/Modifier;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/graphics/vector/ImageVector;ZLjava/lang/String;Lkotlin/jvm/functions/Function0;Landroidx/compose/runtime/Composer;II)V
+	public static final fun TvPill (Ljava/lang/String;Landroidx/compose/ui/Modifier;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/graphics/vector/ImageVector;ZLjava/lang/String;Lkotlin/jvm/functions/Function0;Landroidx/compose/runtime/Composer;II)V defaults(3,4,5,6)
 }
 
 public final class io/skjaere/usenet/app/ui/AppColors {
+	public synthetic <init> (JJJJJJJJJJJJJJJJJJJJJJJJJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic <init> (JJJJJJJJJJJJJJJJJJJJJJJJJJLkotlin/jvm/internal/DefaultConstructorMarker;)V defaults(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26)
 	public final fun component1-0d7_KjU ()J
 	public final fun component10-0d7_KjU ()J
 	public final fun component11-0d7_KjU ()J
@@ -75,7 +79,8 @@ public final class io/skjaere/usenet/app/ui/AppColors {
 	public final fun component7-0d7_KjU ()J
 	public final fun component8-0d7_KjU ()J
 	public final fun component9-0d7_KjU ()J
-	public final fun copy-CRp9MJE (JJJJJJJJJJJJJJJJJJJJJJJJJJ)Lio/skjaere/usenet/app/ui/AppColors;
+	public final fun copy-CRp9MJE (JJJJJJJJJJJJJJJJJJJJJJJJJJ)Lio/skjaere/usenet/app/ui/AppColors; defaults(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26)
+	public static synthetic fun copy-CRp9MJE$default (Lio/skjaere/usenet/app/ui/AppColors;JJJJJJJJJJJJJJJJJJJJJJJJJJILjava/lang/Object;)Lio/skjaere/usenet/app/ui/AppColors;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAccent-0d7_KjU ()J
 	public final fun getAccentTint-0d7_KjU ()J
@@ -136,22 +141,23 @@ public final enum class io/skjaere/usenet/app/ui/ChipKind : java/lang/Enum {
 public final class io/skjaere/usenet/app/ui/ComponentsKt {
 	public static final field TV_TYPING_TIP Ljava/lang/String;
 	public static final field TV_TYPING_TIP_PHONE Ljava/lang/String;
-	public static final fun ChipRow (Landroidx/compose/ui/Modifier;Lkotlin/jvm/functions/Function2;Landroidx/compose/runtime/Composer;II)V
-	public static final fun Footnote (Ljava/lang/String;Landroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;II)V
-	public static final fun Footnote (Ljava/util/List;Landroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;II)V
-	public static final fun GroupCard (Landroidx/compose/ui/Modifier;Lkotlin/jvm/functions/Function3;Landroidx/compose/runtime/Composer;II)V
+	public static final fun ChipRow (Landroidx/compose/ui/Modifier;Lkotlin/jvm/functions/Function2;Landroidx/compose/runtime/Composer;II)V defaults(1)
+	public static final fun Footnote (Ljava/lang/String;Landroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;II)V defaults(2)
+	public static final fun Footnote (Ljava/util/List;Landroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;II)V defaults(2)
+	public static final fun GroupCard (Landroidx/compose/ui/Modifier;Lkotlin/jvm/functions/Function3;Landroidx/compose/runtime/Composer;II)V defaults(1)
 	public static final fun HiddenLine (Ljava/lang/String;ZLkotlin/jvm/functions/Function0;Landroidx/compose/runtime/Composer;I)V
-	public static final fun InfoChip (Ljava/lang/String;Lio/skjaere/usenet/app/ui/ChipKind;Ljava/lang/String;Landroidx/compose/runtime/Composer;II)V
+	public static final fun InfoChip (Ljava/lang/String;Lio/skjaere/usenet/app/ui/ChipKind;Ljava/lang/String;Landroidx/compose/runtime/Composer;II)V defaults(2,3)
 	public static final fun InsetDivider (Landroidx/compose/runtime/Composer;I)V
-	public static final fun NavRow (Ljava/lang/String;Ljava/lang/String;ZLandroidx/compose/ui/Modifier;Ljava/lang/String;Lkotlin/jvm/functions/Function0;Landroidx/compose/runtime/Composer;II)V
-	public static final fun PosterBox-cf5BqRc (IIJLandroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;II)V
-	public static final fun PrimaryButton (Ljava/lang/String;Lkotlin/jvm/functions/Function0;Landroidx/compose/ui/Modifier;ZLkotlin/jvm/functions/Function2;Ljava/lang/String;Landroidx/compose/runtime/Composer;II)V
-	public static final fun SecondaryButton (Ljava/lang/String;Lkotlin/jvm/functions/Function0;Landroidx/compose/ui/Modifier;ZLandroidx/compose/runtime/Composer;II)V
-	public static final fun SectionHeader-942rkJo (Ljava/lang/String;Landroidx/compose/ui/Modifier;FLkotlin/jvm/functions/Function3;Landroidx/compose/runtime/Composer;II)V
-	public static final fun StatusPill (Ljava/lang/String;Lio/skjaere/usenet/app/ui/StatusKind;Ljava/lang/String;Ljava/lang/String;Landroidx/compose/runtime/Composer;II)V
-	public static final fun TopBar (Ljava/lang/String;Lkotlin/jvm/functions/Function0;Ljava/lang/String;ZLkotlin/jvm/functions/Function3;Landroidx/compose/runtime/Composer;II)V
-	public static final fun TvTypingTip (Landroidx/compose/ui/Modifier;ZLandroidx/compose/runtime/Composer;II)V
-	public static final fun focusOutline-GUYwDQI (Landroidx/compose/ui/Modifier;Landroidx/compose/ui/graphics/Shape;Landroidx/compose/ui/graphics/Color;Z)Landroidx/compose/ui/Modifier;
+	public static final fun NavRow (Ljava/lang/String;Ljava/lang/String;ZLandroidx/compose/ui/Modifier;Ljava/lang/String;Lkotlin/jvm/functions/Function0;Landroidx/compose/runtime/Composer;II)V defaults(2,3,4,5)
+	public static final fun PosterBox-cf5BqRc (IIJLandroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;II)V defaults(3,4)
+	public static final fun PrimaryButton (Ljava/lang/String;Lkotlin/jvm/functions/Function0;Landroidx/compose/ui/Modifier;ZLkotlin/jvm/functions/Function2;Ljava/lang/String;Landroidx/compose/runtime/Composer;II)V defaults(3,4,5,6)
+	public static final fun SecondaryButton (Ljava/lang/String;Lkotlin/jvm/functions/Function0;Landroidx/compose/ui/Modifier;ZLandroidx/compose/runtime/Composer;II)V defaults(3,4)
+	public static final fun SectionHeader-942rkJo (Ljava/lang/String;Landroidx/compose/ui/Modifier;FLkotlin/jvm/functions/Function3;Landroidx/compose/runtime/Composer;II)V defaults(2,3,4)
+	public static final fun StatusPill (Ljava/lang/String;Lio/skjaere/usenet/app/ui/StatusKind;Ljava/lang/String;Ljava/lang/String;Landroidx/compose/runtime/Composer;II)V defaults(3,4)
+	public static final fun TopBar (Ljava/lang/String;Lkotlin/jvm/functions/Function0;Ljava/lang/String;ZLkotlin/jvm/functions/Function3;Landroidx/compose/runtime/Composer;II)V defaults(3,4,5)
+	public static final fun TvTypingTip (Landroidx/compose/ui/Modifier;ZLandroidx/compose/runtime/Composer;II)V defaults(1,2)
+	public static final fun focusOutline-GUYwDQI (Landroidx/compose/ui/Modifier;Landroidx/compose/ui/graphics/Shape;Landroidx/compose/ui/graphics/Color;Z)Landroidx/compose/ui/Modifier; defaults(1,2,3)
+	public static synthetic fun focusOutline-GUYwDQI$default (Landroidx/compose/ui/Modifier;Landroidx/compose/ui/graphics/Shape;Landroidx/compose/ui/graphics/Color;ZILjava/lang/Object;)Landroidx/compose/ui/Modifier;
 }
 
 public final class io/skjaere/usenet/app/ui/FieldChain {
@@ -186,10 +192,10 @@ public final enum class io/skjaere/usenet/app/ui/FieldKind : java/lang/Enum {
 }
 
 public final class io/skjaere/usenet/app/ui/FieldsKt {
-	public static final fun FormField (Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Landroidx/compose/ui/Modifier;Lio/skjaere/usenet/app/ui/FieldKind;ZLjava/lang/String;Ljava/lang/String;ZLio/skjaere/usenet/app/ui/FieldChain;ZLandroidx/compose/runtime/Composer;III)V
+	public static final fun FormField (Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Landroidx/compose/ui/Modifier;Lio/skjaere/usenet/app/ui/FieldKind;ZLjava/lang/String;Ljava/lang/String;ZLio/skjaere/usenet/app/ui/FieldChain;ZLandroidx/compose/runtime/Composer;III)V defaults(4,5,6,7,8,9,10,11)
 	public static final fun ResultLine (ZLjava/lang/String;Landroidx/compose/runtime/Composer;I)V
-	public static final fun Stepper (Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Ljava/lang/String;Landroidx/compose/ui/Modifier;Ljava/lang/String;Landroidx/compose/runtime/Composer;II)V
-	public static final fun SwitchRow (Ljava/lang/String;ZLkotlin/jvm/functions/Function1;Ljava/lang/String;Landroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;II)V
+	public static final fun Stepper (Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Ljava/lang/String;Ljava/lang/String;Landroidx/compose/ui/Modifier;Ljava/lang/String;Landroidx/compose/runtime/Composer;II)V defaults(6,7)
+	public static final fun SwitchRow (Ljava/lang/String;ZLkotlin/jvm/functions/Function1;Ljava/lang/String;Landroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;II)V defaults(4,5)
 	public static final fun fieldKeyboard-4L7nppU (Lio/skjaere/usenet/app/ui/FieldKind;I)Landroidx/compose/foundation/text/KeyboardOptions;
 	public static final fun secretFieldSpoken (Ljava/lang/String;Z)Ljava/lang/String;
 	public static final fun showSpoken (Ljava/lang/String;Z)Ljava/lang/String;
@@ -197,13 +203,15 @@ public final class io/skjaere/usenet/app/ui/FieldsKt {
 
 public final class io/skjaere/usenet/app/ui/FocusLookKt {
 	public static final fun OwnedRipple (Lkotlin/jvm/functions/Function2;Landroidx/compose/runtime/Composer;I)V
-	public static final fun focusScale (Landroidx/compose/ui/Modifier;Landroidx/compose/foundation/interaction/InteractionSource;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;)Landroidx/compose/ui/Modifier;
+	public static final fun focusScale (Landroidx/compose/ui/Modifier;Landroidx/compose/foundation/interaction/InteractionSource;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;)Landroidx/compose/ui/Modifier; defaults(3)
+	public static synthetic fun focusScale$default (Landroidx/compose/ui/Modifier;Landroidx/compose/foundation/interaction/InteractionSource;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Landroidx/compose/ui/Modifier;
 	public static final fun showsFocus (Landroidx/compose/foundation/interaction/InteractionSource;Landroidx/compose/runtime/Composer;I)Z
 	public static final fun turnsOver (Landroidx/compose/foundation/interaction/InteractionSource;Landroidx/compose/runtime/Composer;I)Z
 }
 
 public final class io/skjaere/usenet/app/ui/FocusStyle {
 	public static final field Companion Lio/skjaere/usenet/app/ui/FocusStyle$Companion;
+	public synthetic <init> (FZFFFFFZLandroidx/compose/material/ripple/RippleAlpha;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1-D9Ej5fM ()F
 	public final fun component2 ()Z
 	public final fun component3 ()F
@@ -213,7 +221,8 @@ public final class io/skjaere/usenet/app/ui/FocusStyle {
 	public final fun component7 ()F
 	public final fun component8 ()Z
 	public final fun component9 ()Landroidx/compose/material/ripple/RippleAlpha;
-	public final fun copy-Q1bl1hc (FZFFFFFZLandroidx/compose/material/ripple/RippleAlpha;)Lio/skjaere/usenet/app/ui/FocusStyle;
+	public final fun copy-Q1bl1hc (FZFFFFFZLandroidx/compose/material/ripple/RippleAlpha;)Lio/skjaere/usenet/app/ui/FocusStyle; defaults(1,2,3,4,5,6,7,8,9)
+	public static synthetic fun copy-Q1bl1hc$default (Lio/skjaere/usenet/app/ui/FocusStyle;FZFFFFFZLandroidx/compose/material/ripple/RippleAlpha;ILjava/lang/Object;)Lio/skjaere/usenet/app/ui/FocusStyle;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getButtonScale ()F
 	public final fun getCardPressedScale ()F
@@ -245,7 +254,8 @@ public final enum class io/skjaere/usenet/app/ui/FormFactor : java/lang/Enum {
 
 public final class io/skjaere/usenet/app/ui/FormFactor$Companion {
 	public final fun getDebugOverride ()Z
-	public final fun of (Landroid/content/Context;Landroid/content/Intent;)Lio/skjaere/usenet/app/ui/FormFactor;
+	public final fun of (Landroid/content/Context;Landroid/content/Intent;)Lio/skjaere/usenet/app/ui/FormFactor; defaults(2)
+	public static synthetic fun of$default (Lio/skjaere/usenet/app/ui/FormFactor$Companion;Landroid/content/Context;Landroid/content/Intent;ILjava/lang/Object;)Lio/skjaere/usenet/app/ui/FormFactor;
 	public final fun setDebugOverride (Z)V
 }
 
@@ -273,7 +283,8 @@ public final class io/skjaere/usenet/app/ui/PivotBringIntoViewSpec : androidx/co
 	public static final field Companion Lio/skjaere/usenet/app/ui/PivotBringIntoViewSpec$Companion;
 	public static final field LINE F
 	public <init> ()V
-	public <init> (FFF)V
+	public <init> (FFF)V defaults(1,2,3)
+	public synthetic <init> (FFFILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun calculateScrollDistance (FFF)F
 	public fun getScrollAnimationSpec ()Landroidx/compose/animation/core/AnimationSpec;
 }
@@ -292,7 +303,8 @@ public final class io/skjaere/usenet/app/ui/ReturnFocus {
 	public final fun getPending ()Ljava/lang/String;
 	public final fun leaving (Ljava/lang/String;)V
 	public final fun requester (Ljava/lang/String;)Landroidx/compose/ui/focus/FocusRequester;
-	public final fun restore (Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun restore (Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object; defaults(1)
+	public static synthetic fun restore$default (Lio/skjaere/usenet/app/ui/ReturnFocus;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
 public final class io/skjaere/usenet/app/ui/ReturnFocusKt {
@@ -312,7 +324,7 @@ public final enum class io/skjaere/usenet/app/ui/StatusKind : java/lang/Enum {
 }
 
 public final class io/skjaere/usenet/app/ui/ThemeKt {
-	public static final fun AppTheme (Lio/skjaere/usenet/app/ui/FormFactor;Lkotlin/jvm/functions/Function2;Landroidx/compose/runtime/Composer;II)V
+	public static final fun AppTheme (Lio/skjaere/usenet/app/ui/FormFactor;Lkotlin/jvm/functions/Function2;Landroidx/compose/runtime/Composer;II)V defaults(1)
 	public static final fun getColors (Landroidx/compose/runtime/Composer;I)Lio/skjaere/usenet/app/ui/AppColors;
 	public static final fun getLocalAppColors ()Landroidx/compose/runtime/ProvidableCompositionLocal;
 	public static final fun getPlexMono ()Landroidx/compose/ui/text/font/FontFamily;
@@ -336,7 +348,7 @@ public final class io/skjaere/usenet/app/ui/TvDimens {
 
 public final class io/skjaere/usenet/app/ui/TvFieldGateKt {
 	public static final fun JoinChain (Lio/skjaere/usenet/app/ui/FieldChain;Lio/skjaere/usenet/app/ui/FieldGate;Landroidx/compose/runtime/Composer;I)V
-	public static final fun TvFieldGate (Lio/skjaere/usenet/app/ui/FieldGate;Ljava/lang/String;Ljava/lang/String;Landroidx/compose/ui/Modifier;Landroidx/compose/ui/graphics/Shape;ZLkotlin/jvm/functions/Function3;Landroidx/compose/runtime/Composer;II)V
+	public static final fun TvFieldGate (Lio/skjaere/usenet/app/ui/FieldGate;Ljava/lang/String;Ljava/lang/String;Landroidx/compose/ui/Modifier;Landroidx/compose/ui/graphics/Shape;ZLkotlin/jvm/functions/Function3;Landroidx/compose/runtime/Composer;II)V defaults(4,5,6)
 	public static final fun getFieldGateLabel ()Landroidx/compose/ui/semantics/SemanticsPropertyKey;
 	public static final fun rememberFieldChain (Landroidx/compose/runtime/Composer;I)Lio/skjaere/usenet/app/ui/FieldChain;
 	public static final fun rememberFieldGate (Landroidx/compose/runtime/Composer;I)Lio/skjaere/usenet/app/ui/FieldGate;
@@ -353,7 +365,7 @@ public final class io/skjaere/usenet/app/ui/TvSafeArea {
 }
 
 public final class io/skjaere/usenet/app/ui/TvTokensKt {
-	public static final fun EdgeScrolling--orJrPs (FLkotlin/jvm/functions/Function2;Landroidx/compose/runtime/Composer;II)V
+	public static final fun EdgeScrolling--orJrPs (FLkotlin/jvm/functions/Function2;Landroidx/compose/runtime/Composer;II)V defaults(1)
 	public static final fun edgeBringIntoViewSpec (F)Landroidx/compose/foundation/gestures/BringIntoViewSpec;
 	public static final fun getEdgeBringIntoViewSpec ()Landroidx/compose/foundation/gestures/BringIntoViewSpec;
 	public static final fun getLocalFocusStyle ()Landroidx/compose/runtime/ProvidableCompositionLocal;
@@ -374,7 +386,8 @@ public final class io/skjaere/usenet/app/ui/TypeScale {
 	public final fun component7 ()Landroidx/compose/ui/text/TextStyle;
 	public final fun component8 ()Landroidx/compose/ui/text/TextStyle;
 	public final fun component9 ()Landroidx/compose/ui/text/TextStyle;
-	public final fun copy (Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;)Lio/skjaere/usenet/app/ui/TypeScale;
+	public final fun copy (Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;)Lio/skjaere/usenet/app/ui/TypeScale; defaults(1,2,3,4,5,6,7,8,9,10,11)
+	public static synthetic fun copy$default (Lio/skjaere/usenet/app/ui/TypeScale;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;ILjava/lang/Object;)Lio/skjaere/usenet/app/ui/TypeScale;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAddress ()Landroidx/compose/ui/text/TextStyle;
 	public final fun getBody ()Landroidx/compose/ui/text/TextStyle;

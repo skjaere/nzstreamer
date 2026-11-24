@@ -17,8 +17,15 @@ open class Harbor internal constructor(val name: String) {
 
     internal fun keeper(): Int = hidden()
 
-    /** A default argument: Kotlin adds a synthetic sail$default beside it. */
+    /** A default argument: Kotlin adds a synthetic sail$default beside it, which a caller that leaves it out calls. */
     fun sail(knots: Int = 3): Int = knots
+
+    /** Two default arguments: losing one keeps both signatures, and only the dump's note of them changes. */
+    fun dock(berth: Int = 1, crew: String = "Kestrel"): String = "$berth $crew"
+
+    /** The overload [dock] replaced, kept for what was built against it: Kotlin compiles it synthetic. */
+    @Deprecated("Give the crew", level = DeprecationLevel.HIDDEN)
+    fun dock(berth: Int): String = dock(berth, "Kestrel")
 
     companion object {
         const val PIER = 4
@@ -31,3 +38,6 @@ internal fun lighthouse(): String = "Harbor Lights"
 fun beacon(): String = lighthouse()
 
 internal class Keeper(val lamp: Int)
+
+/** A constructor with default arguments: Kotlin adds a synthetic one with a DefaultConstructorMarker, and one with none. */
+class Pier(val length: Int = 10, val name: String = "Copper Crown")

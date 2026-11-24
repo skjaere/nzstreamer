@@ -2,7 +2,9 @@ package io.skjaere.usenet.plugincheck
 
 import kotlin.metadata.KmClass
 import kotlin.metadata.KmDeclarationContainer
+import kotlin.metadata.KmValueParameter
 import kotlin.metadata.Visibility
+import kotlin.metadata.declaresDefaultValue
 import kotlin.metadata.jvm.KotlinClassMetadata
 import kotlin.metadata.jvm.Metadata
 import kotlin.metadata.jvm.fieldSignature
@@ -28,10 +30,19 @@ import java.util.zip.ZipFile
  * Visibility is Kotlin's, as the binary-compatibility validator reads it: the class files make public much that Kotlin
  * keeps to its module, so a class or member that a class's @Metadata marks internal or private is left out (an internal
  * constructor, an internal top-level function), unless it is @PublishedApi. Left out too: names with a `$` (internal
- * members' names mangled with the module's, Compose's lambda getters and its `$stable` fields), synthetic members (a
- * default argument's `$default`), Kotlin's synthetic classes (lambdas, `when` mappings), anonymous and local classes, a
- * member class of a class left out, Compose's ComposableSingletons classes, and the module's R classes (resource ids,
- * which no plugin reads, L580). Any of those may change with no plugin noticing.
+ * members' names mangled with the module's, Compose's lambda getters and its `$stable` fields), Kotlin's synthetic
+ * classes (lambdas, `when` mappings), anonymous and local classes, a member class of a class left out, Compose's
+ * ComposableSingletons classes, and the module's R classes (resource ids, which no plugin reads, L580). Any of those may
+ * change with no plugin noticing.
+ *
+ * Default arguments are part of what a built plugin calls, so the dump keeps them (L614):
+ * - each function and constructor says which of its parameters have a default, `defaults(1,3)` by their place: a
+ *   composable's are decided by place in a mask its own descriptor carries, so a default dropped while others stay
+ *   changes no signature, only this note;
+ * - the synthetic members a plugin's calls link to are listed, marked synthetic: the `$default` bridge a function's
+ *   defaults add, the constructor with a DefaultConstructorMarker a constructor's defaults add (or that stands in for one
+ *   taking an inline class), and an overload kept with @Deprecated(level = HIDDEN), which Kotlin compiles synthetic.
+ *   Every other synthetic member (an accessor, a bridge, a lambda) stays out.
  */
 object ApiDump {
     fun dump(version: String, classes: List<ByteArray>): String {
@@ -45,7 +56,8 @@ object ApiDump {
         val order = compareBy<Member>({ it.name }, { it.descriptor })
         val fields = cls.fields.filter { shows(cls, it, field = true, read) }.sortedWith(order).map(::field)
         val (constructors, methods) = cls.methods.filter { shows(cls, it, field = false, read) }.sortedWith(order).partition { it.name == "<init>" }
-        return fields + constructors.map(::method) + methods.map(::method)
+        val declared = declarations(cls)
+        return fields + (constructors + methods).map { method(it, defaults(it, declared)) }
     }
 
     /**
@@ -116,31 +128,86 @@ object ApiDump {
 
     private fun shows(cls: ClassFile, member: Member, field: Boolean, read: Map<String, ClassFile>): Boolean {
         if (member.access and (Opcodes.ACC_PUBLIC or Opcodes.ACC_PROTECTED) == 0) return false
-        if (member.access and Opcodes.ACC_SYNTHETIC != 0 || '$' in member.name) return false
-        if (member.publishedApi) return true
-        val kotlin = if (field) fieldVisibilities(cls, read) else methodVisibilities(cls)
-        return kotlin[member.name + member.descriptor]?.reachable ?: true
+        if (field) {
+            if (member.access and Opcodes.ACC_SYNTHETIC != 0 || '$' in member.name) return false
+            return member.publishedApi || fieldVisibilities(cls, read)[member.name + member.descriptor]?.reachable ?: true
+        }
+        val declared = declarations(cls)
+        if (member.access and Opcodes.ACC_SYNTHETIC != 0) return linked(cls, member, declared)
+        if ('$' in member.name) return false
+        return member.publishedApi || declared[member.name + member.descriptor]?.visibility?.reachable ?: true
     }
 
+    /**
+     * Whether a synthetic [member] is one a plugin's compiled call links to: a declaration's own (an overload hidden by
+     * @Deprecated, a constructor that takes an inline class), or the bridge a declaration's defaults add.
+     */
+    private fun linked(cls: ClassFile, member: Member, declared: Map<String, Declared>): Boolean {
+        declared[member.name + member.descriptor]?.let { return it.visibility.reachable }
+        val params = member.descriptor.substringAfter('(').substringBefore(')')
+        val returns = member.descriptor.substringAfter(')')
+        val reachable = declared.values.filter { it.visibility.reachable }
+        return when {
+            // name$default(<the instance, for a member>, its parameters, one int mask per 32, an unused Object).
+            member.name.endsWith(DEFAULT) -> reachable.any { d ->
+                d.name == member.name.removeSuffix(DEFAULT) && d.defaults.isNotEmpty() && d.returns == returns &&
+                    (masked(params, d.params, OBJECT) || masked(params.removePrefix("L${cls.name};"), d.params, OBJECT))
+            }
+            // <init>(its parameters, the masks, a DefaultConstructorMarker), or a constructor taking an inline class, whose
+            // own is private: <init>(its parameters, a DefaultConstructorMarker).
+            member.name == "<init>" && params.endsWith(MARKER) -> reachable.any { d ->
+                d.name == "<init>" && (params == d.params.removeSuffix(MARKER) + MARKER || d.defaults.isNotEmpty() && masked(params, d.params.removeSuffix(MARKER), MARKER))
+            }
+            else -> false
+        }
+    }
+
+    /** Whether [params] are [base]'s, then one or more int masks, then [end]. */
+    private fun masked(params: String, base: String, end: String): Boolean {
+        if (!params.startsWith(base) || !params.endsWith(end)) return false
+        val masks = params.substring(base.length, params.length - end.length)
+        return masks.isNotEmpty() && masks.all { it == 'I' }
+    }
+
+    /** A function, constructor or property accessor as Kotlin's metadata declares it: its JVM signature, and its defaults. */
+    private class Declared(val name: String, val params: String, val returns: String, val visibility: Visibility, val defaults: List<Int>)
+
     /** What Kotlin's metadata says of [cls]'s methods, by JVM name and descriptor. */
-    private fun methodVisibilities(cls: ClassFile): Map<String, Visibility> {
+    private fun declarations(cls: ClassFile): Map<String, Declared> {
         val container: KmDeclarationContainer = when (val metadata = cls.metadata) {
             is KotlinClassMetadata.Class -> metadata.kmClass
             is KotlinClassMetadata.FileFacade -> metadata.kmPackage
             is KotlinClassMetadata.MultiFileClassPart -> metadata.kmPackage
             else -> return emptyMap()
         }
+        fun declared(name: String, descriptor: String, visibility: Visibility, parameters: List<KmValueParameter> = emptyList()) =
+            name + descriptor to Declared(
+                name, descriptor.substringAfter('(').substringBefore(')'), descriptor.substringAfter(')'), visibility,
+                parameters.withIndex().filter { it.value.declaresDefaultValue }.map { it.index + 1 },
+            )
         val constructors = (container as? KmClass)?.constructors.orEmpty()
-            .mapNotNull { c -> c.signature?.let { it.name + it.descriptor to c.visibility } }
-        val functions = container.functions.mapNotNull { f -> f.signature?.let { it.name + it.descriptor to f.visibility } }
+            .mapNotNull { c -> c.signature?.let { declared(it.name, it.descriptor, c.visibility, c.valueParameters) } }
+        val functions = container.functions.mapNotNull { f -> f.signature?.let { declared(it.name, it.descriptor, f.visibility, f.valueParameters) } }
         val accessors = container.properties.flatMap { p ->
             listOfNotNull(
-                p.getterSignature?.let { it.name + it.descriptor to p.getter.visibility },
-                p.setterSignature?.let { it.name + it.descriptor to (p.setter?.visibility ?: p.visibility) },
+                p.getterSignature?.let { declared(it.name, it.descriptor, p.getter.visibility) },
+                p.setterSignature?.let { declared(it.name, it.descriptor, p.setter?.visibility ?: p.visibility) },
             )
         }
         return (constructors + functions + accessors).toMap()
     }
+
+    /**
+     * Which parameters of [member] have a default, by place: from its own declaration, or, for the constructor that stands in
+     * for one taking an inline class, from that one's.
+     */
+    private fun defaults(member: Member, declared: Map<String, Declared>): List<Int> =
+        declared[member.name + member.descriptor]?.defaults
+            ?: if (member.name == "<init>" && member.descriptor.endsWith("$MARKER)V")) {
+                declared["<init>(" + member.descriptor.substringAfter('(').removeSuffix("$MARKER)V") + ")V"]?.defaults.orEmpty()
+            } else {
+                emptyList()
+            }
 
     /**
      * What Kotlin's metadata says of [cls]'s fields, by name and descriptor: its own properties', and its companion
@@ -178,14 +245,16 @@ object ApiDump {
 
     private fun field(member: Member): String = modifiers(member) + "field ${member.name} ${member.descriptor}"
 
-    private fun method(member: Member): String =
-        modifiers(member) + if (member.name == "<init>") "<init> ${member.descriptor}" else "fun ${member.name} ${member.descriptor}"
+    private fun method(member: Member, defaults: List<Int>): String =
+        modifiers(member) + (if (member.name == "<init>") "<init> ${member.descriptor}" else "fun ${member.name} ${member.descriptor}") +
+            if (defaults.isEmpty()) "" else " defaults(${defaults.joinToString(",")})"
 
     private fun modifiers(member: Member): String = listOfNotNull(
         if (member.access and Opcodes.ACC_PROTECTED != 0) "protected" else "public",
         "static".takeIf { member.access and Opcodes.ACC_STATIC != 0 },
         "abstract".takeIf { member.access and Opcodes.ACC_ABSTRACT != 0 },
         "final".takeIf { member.access and Opcodes.ACC_FINAL != 0 },
+        "synthetic".takeIf { member.access and Opcodes.ACC_SYNTHETIC != 0 },
     ).joinToString(" ", postfix = " ")
 
     private fun read(bytes: ByteArray): ClassFile {
@@ -240,6 +309,10 @@ object ApiDump {
         }
         return cls
     }
+
+    private const val DEFAULT = "\$default"
+    private const val OBJECT = "Ljava/lang/Object;"
+    private const val MARKER = "Lkotlin/jvm/internal/DefaultConstructorMarker;"
 
     /** kotlin.Metadata's arguments as ASM reads them: numbers and int arrays as they are, string arrays as lists. */
     private class MetadataReader(private val into: MutableMap<String, Any>) : AnnotationVisitor(Opcodes.ASM9) {

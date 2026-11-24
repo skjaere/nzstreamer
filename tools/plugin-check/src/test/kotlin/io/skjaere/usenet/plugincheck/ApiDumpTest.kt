@@ -28,10 +28,14 @@ class ApiDumpTest {
             	public static final field Companion Lio/skjaere/usenet/plugincheck/fixture/Harbor${'$'}Companion;
             	public static final field PIER I
             	public <init> ()V
+            	public final synthetic fun dock (I)Ljava/lang/String;
+            	public final fun dock (ILjava/lang/String;)Ljava/lang/String; defaults(1,2)
+            	public static synthetic fun dock${'$'}default (Lio/skjaere/usenet/plugincheck/fixture/Harbor;ILjava/lang/String;ILjava/lang/Object;)Ljava/lang/String;
             	public final fun getName ()Ljava/lang/String;
             	public final fun getTide ()I
             	protected fun moor ()Ljava/lang/String;
-            	public final fun sail (I)I
+            	public final fun sail (I)I defaults(1)
+            	public static synthetic fun sail${'$'}default (Lio/skjaere/usenet/plugincheck/fixture/Harbor;IILjava/lang/Object;)I
             }
 
             public final class io/skjaere/usenet/plugincheck/fixture/Harbor${'$'}Companion {
@@ -39,6 +43,14 @@ class ApiDumpTest {
 
             public final class io/skjaere/usenet/plugincheck/fixture/HarborKt {
             	public static final fun beacon ()Ljava/lang/String;
+            }
+
+            public final class io/skjaere/usenet/plugincheck/fixture/Pier {
+            	public <init> ()V
+            	public <init> (ILjava/lang/String;)V defaults(1,2)
+            	public synthetic <init> (ILjava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+            	public final fun getLength ()I
+            	public final fun getName ()Ljava/lang/String;
             }
 
             """.trimIndent(),
@@ -49,8 +61,28 @@ class ApiDumpTest {
     @Test
     fun `private, synthetic and internal members, an internal top-level function, a mangled accessor and ComposableSingletons are left out`() {
         val dump = dump()
-        listOf("hidden", "keeper", "sail\$default", "setTide", "lighthouse", "Keeper", "ComposableSingletons", "getLambda", "(Ljava/lang/String;)V", "fixture/R")
+        listOf("hidden", "keeper", "setTide", "lighthouse", "Keeper", "ComposableSingletons", "getLambda", "(Ljava/lang/String;)V", "fixture/R")
             .forEach { assertTrue(it !in dump, "$it is in the dump:\n$dump") }
+    }
+
+    @Test
+    fun `a default argument dropped, or a hidden overload, is a difference the check finds`() {
+        // dock loses its crew's default: both of dock's signatures stay, and a plugin built against the dump would pass
+        // the crew's bit in a mask the new body no longer reads.
+        val dropped = dump().replace("dock (ILjava/lang/String;)Ljava/lang/String; defaults(1,2)", "dock (ILjava/lang/String;)Ljava/lang/String; defaults(1)")
+        assertEquals(
+            listOf(
+                "removed: io/skjaere/usenet/plugincheck/fixture/Harbor: public final fun dock (ILjava/lang/String;)Ljava/lang/String; defaults(1,2)",
+                "added: io/skjaere/usenet/plugincheck/fixture/Harbor: public final fun dock (ILjava/lang/String;)Ljava/lang/String; defaults(1)",
+            ),
+            ApiDump.differences(expected = dump(), actual = dropped),
+        )
+        // The overload kept for older plugins, hidden from new sources, is a member the dump keeps: deleting it is a removal.
+        val withoutHidden = dump().replace("\tpublic final synthetic fun dock (I)Ljava/lang/String;\n", "")
+        assertEquals(
+            listOf("removed: io/skjaere/usenet/plugincheck/fixture/Harbor: public final synthetic fun dock (I)Ljava/lang/String;"),
+            ApiDump.differences(expected = dump(), actual = withoutHidden),
+        )
     }
 
     @Test
@@ -67,7 +99,7 @@ class ApiDumpTest {
 
     @Test
     fun `a removed member fails the dump's check, and an unchanged dump passes`() {
-        val checkedIn = dump().replace("\tpublic final fun sail (I)I\n", "\tpublic final fun moorAt (I)V\n\tpublic final fun sail (I)I\n")
+        val checkedIn = dump().replace("\tprotected fun moor ()Ljava/lang/String;\n", "\tprotected fun moor ()Ljava/lang/String;\n\tpublic final fun moorAt (I)V\n")
         assertEquals(
             listOf("removed: io/skjaere/usenet/plugincheck/fixture/Harbor: public final fun moorAt (I)V"),
             ApiDump.differences(expected = checkedIn, actual = dump()),
