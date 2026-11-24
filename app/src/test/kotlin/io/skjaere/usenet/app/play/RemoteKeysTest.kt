@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class RemoteKeysTest {
@@ -39,6 +40,13 @@ class RemoteKeysTest {
         listOf(Focus.Picture, Focus.Nothing).forEach { focus ->
             ok.forEach { key -> assertEquals(Action.TogglePlay, press(key, hidden.copy(focus = focus)), "key $key on $focus") }
         }
+    }
+
+    /** One set of OK's keys for the player and the sheets' OK guard: the UI kit's, which the guard reads. */
+    @Test
+    fun `OK's keys are the kit's, the same four codes`() {
+        assertSame(OkKeys, RemoteKeys.OK)
+        assertEquals(ok.toSet(), OkKeys)
     }
 
     @Test

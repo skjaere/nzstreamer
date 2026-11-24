@@ -180,8 +180,8 @@ object RemoteKeys {
     /** False keeps the rules to TVs (Q4's other answer). */
     private const val EVERY_REMOTE = true
 
-    /** What a remote, a keyboard or a gamepad sends for OK. */
-    internal val OK = setOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_BUTTON_A)
+    /** What a remote, a keyboard or a gamepad sends for OK: the UI kit's, which its OK guard reads too. */
+    internal val OK = OkKeys
 
     private val LEFT_RIGHT = setOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT)
 

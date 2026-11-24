@@ -215,7 +215,7 @@ internal class SideMark(context: Context) : FrameLayout(context) {
     /** One line of the mark's words, in the app's font, as the player's own text. */
     private fun text(sizeSp: Float, weight: Int, color: Color, id: Int) = TextView(context).apply {
         this.id = id
-        typeface = ResourcesCompat.getFont(context, R.font.ibm_plex_sans)
+        typeface = ResourcesCompat.getFont(context, io.skjaere.usenet.ui.R.font.ibm_plex_sans)
         fontVariationSettings = "'wght' $weight"
         // Figures of one width, so the count doesn't shift as it changes.
         fontFeatureSettings = "tnum"

@@ -10,6 +10,9 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import io.skjaere.usenet.app.ui.FormFactor
 import io.skjaere.usenet.app.ui.LocalFormFactor
 
+/** What a remote, a keyboard or a gamepad sends for OK: the player's keys (RemoteKeys.OK) are these too. */
+val OkKeys: Set<Int> = setOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_BUTTON_A)
+
 /**
  * Keeps an OK meant for what opened a sheet away from the sheet: the second press of a double OK
  * on an Up next row, or the repeats of an OK held there, would land on the sheet's focused button
@@ -29,7 +32,7 @@ class OkGuard(private val openedAt: Long, private val windowMs: Long = WINDOW_MS
 
     /** Whether the key event ([eventTime] in uptime) is ignored. */
     fun blocks(keyCode: Int, down: Boolean, repeatCount: Int, eventTime: Long): Boolean {
-        if (keyCode !in RemoteKeys.OK) return false
+        if (keyCode !in OkKeys) return false
         val early = eventTime - openedAt < windowMs
         return when {
             down && repeatCount > 0 -> true.also { if (!letThrough) ignoringPress = true }

@@ -986,6 +986,8 @@ class UsenetApplication : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        // The launch extra for another form factor is a debug build's alone; the UI kit can't read this build's type.
+        FormFactor.debugOverride = BuildConfig.DEBUG
         // Detailed in debug builds until the saved choice is read (AppContainer.start).
         AndroidLogConfig.detailed = BuildConfig.DEBUG
         container = AppContainer(this)

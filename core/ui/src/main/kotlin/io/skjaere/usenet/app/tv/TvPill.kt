@@ -34,7 +34,7 @@ import io.skjaere.usenet.app.ui.turnsOver
  * hears in place of its words, [icon] before them (alone when there are none).
  */
 @Composable
-internal fun TvPill(
+fun TvPill(
     text: String,
     modifier: Modifier,
     style: TextStyle = AppType.body,

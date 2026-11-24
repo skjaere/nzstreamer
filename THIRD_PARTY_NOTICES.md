@@ -4,14 +4,14 @@ This repository's own code and files are under the PolyForm Noncommercial Licens
 
 ## IBM Plex Sans and IBM Plex Mono
 
-- What: the fonts `app/src/main/res/font/ibm_plex_sans.ttf` (IBM Plex Sans 3.201, variable) and `app/src/main/res/font/ibm_plex_mono.ttf` (IBM Plex Mono 2.3, Regular), unmodified.
+- What: the fonts `core/ui/src/main/res/font/ibm_plex_sans.ttf` (IBM Plex Sans 3.201, variable) and `core/ui/src/main/res/font/ibm_plex_mono.ttf` (IBM Plex Mono 2.3, Regular), unmodified.
 - Where from: <https://github.com/IBM/plex>.
 - Copyright © 2017 IBM Corp. with Reserved Font Name "Plex". IBM Plex is a trademark of IBM Corp.
 - Licence: SIL Open Font License 1.1 (SPDX `OFL-1.1`). The full text is in [app/src/main/assets/licenses/ibm-plex-OFL.txt](app/src/main/assets/licenses/ibm-plex-OFL.txt), which the app ships.
 
 ## Sora
 
-- What: the font `app/src/main/res/font/sora.ttf` (Sora 2.000, variable), unmodified. `tools/brand/generate.py` draws the TV banner's wordmark with it, and `tools/screens/art.py` the titles on the README screenshots' posters (`app/src/androidTest/assets/screens/`); those images themselves are this project's.
+- What: the font `core/ui/src/main/res/font/sora.ttf` (Sora 2.000, variable), unmodified. `tools/brand/generate.py` draws the TV banner's wordmark with it, and `tools/screens/art.py` the titles on the README screenshots' posters (`app/src/androidTest/assets/screens/`); those images themselves are this project's.
 - Where from: <https://github.com/sora-xor/sora-font>.
 - Copyright 2019 The Sora Project Authors.
 - Licence: SIL Open Font License 1.1 (SPDX `OFL-1.1`). The full text is in [app/src/main/assets/licenses/sora-OFL.txt](app/src/main/assets/licenses/sora-OFL.txt), which the app ships.

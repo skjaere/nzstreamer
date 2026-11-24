@@ -4,14 +4,35 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRestorer
-import io.skjaere.usenet.app.tv.LocalRailFocus
-import io.skjaere.usenet.app.tv.RailFocus
 import kotlinx.coroutines.flow.first
+
+/**
+ * A TV rail's focus as the kit reads it; the host's shell keeps the rail and provides it ([LocalRail]). Its state is
+ * Compose state, so a screen's first focus can wait on it ([InitialFocus]).
+ */
+@Stable
+interface RailState {
+    /** Whether the rail has the focus. */
+    val hasFocus: Boolean
+
+    /** Whether the user put the focus on the rail or keeps it there, rather than the window's first focus landing there. */
+    val held: Boolean
+
+    /** Whether OK on a rail item is taking the focus into the content. */
+    val entering: Boolean
+
+    /** What the content shows has changed, as the shell can't see (results arriving): the shell checks where the focus is. */
+    fun contentChanged()
+}
+
+/** The TV shell's rail; null on a phone. */
+val LocalRail = staticCompositionLocalOf<RailState?> { null }
 
 /**
  * A screen's first focus for a remote, as it opens. On a TV not while the user holds the rail: Back
@@ -20,7 +41,7 @@ import kotlinx.coroutines.flow.first
  * takes the focus, as before.
  */
 @Stable
-class InitialFocus internal constructor(private val rail: RailFocus?) {
+class InitialFocus internal constructor(private val rail: RailState?) {
     /** Suspends until the screen may take the focus. */
     suspend fun awaitTurn() {
         val rail = rail ?: return
@@ -36,7 +57,7 @@ class InitialFocus internal constructor(private val rail: RailFocus?) {
 
 @Composable
 fun rememberInitialFocus(): InitialFocus {
-    val rail = LocalRailFocus.current
+    val rail = LocalRail.current
     return remember(rail) { InitialFocus(rail) }
 }
 

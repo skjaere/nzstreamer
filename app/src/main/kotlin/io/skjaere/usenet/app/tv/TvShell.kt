@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.union
@@ -21,7 +20,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,7 +28,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.composed
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
@@ -39,7 +36,6 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.isSpecified
 import androidx.lifecycle.Lifecycle
 import androidx.navigation.NavController
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -49,6 +45,7 @@ import io.skjaere.usenet.app.isTab
 import io.skjaere.usenet.app.play.PlayMiniBar
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.switchTab
+import io.skjaere.usenet.app.ui.LocalRail
 import io.skjaere.usenet.app.ui.PivotBringIntoViewSpec
 import io.skjaere.usenet.app.ui.TvSafeArea
 import io.skjaere.usenet.app.ui.colors
@@ -146,7 +143,14 @@ fun TvShell(
 
     // The content colour a phone's Scaffold gives its screens: the text's. The focus and press layers of
     // rows and buttons take theirs from it, and Material's default, black, can't be seen on the dark cards.
-    CompositionLocalProvider(LocalRailFocus provides rail, LocalBringIntoViewSpec provides Pivot, LocalContentColor provides colors.text, LocalTvColumnWidth provides column) {
+    CompositionLocalProvider(
+        LocalRailFocus provides rail,
+        // The same rail as the UI kit's RailState, which a screen's first focus reads.
+        LocalRail provides rail,
+        LocalBringIntoViewSpec provides Pivot,
+        LocalContentColor provides colors.text,
+        LocalTvColumnWidth provides column,
+    ) {
         Box(Modifier.fillMaxSize().background(colors.background)) {
             Column(
                 Modifier.fillMaxSize().windowInsetsPadding(safe)
@@ -172,22 +176,6 @@ fun TvShell(
             }
         }
     }
-}
-
-/**
- * The width of the TV shell's content beside the rail. The phone's screens take a centred column of it
- * ([TvSafeArea.sharedMax]); a screen laid out for a TV's width (Search's two panes) takes it all. Unspecified outside
- * the shell, and until it is laid out.
- */
-val LocalTvColumnWidth = compositionLocalOf { Dp.Unspecified }
-
-/**
- * A screen laid out for a TV's width takes the shell's whole content column ([LocalTvColumnWidth]: 864 dp on a page,
- * 784 dp beside the rail), not the phone screens' centred [TvSafeArea.sharedMax]; until it is laid out, the width it has.
- */
-fun Modifier.tvFullWidth(): Modifier = composed {
-    val column = LocalTvColumnWidth.current
-    if (column.isSpecified) requiredWidth(column) else fillMaxWidth()
 }
 
 private val Pivot = PivotBringIntoViewSpec()

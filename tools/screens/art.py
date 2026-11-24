@@ -5,8 +5,9 @@ Every title in app/src/androidTest/assets/screens/catalog.json gets a poster; th
 get a backdrop, and every named episode a still. Each is a small landscape (a sky, a sun or moon,
 then a harbour, hills, a town and so on) drawn from a seed taken from the title's slug and the
 image's kind, so the same catalogue gives the same pictures. Posters carry the title in Sora Bold,
-one of the app's bundled fonts (res/font, SIL Open Font License). The images are JPEGs, as TMDB's
-are, written beside the catalogue; the device tests answer the app's image requests with them.
+one of the app's bundled fonts (the UI kit's res/font, SIL Open Font License). The images are
+JPEGs, as TMDB's are, written beside the catalogue; the device tests answer the app's image
+requests with them.
 
 Run from anywhere with Python 3 and Pillow (10 or newer): python3 -I tools/screens/art.py
 With --out DIR it writes into DIR instead. Another Pillow or libjpeg may draw a few pixels differently.
@@ -23,7 +24,7 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parents[2]
 ASSETS = ROOT / "app/src/androidTest/assets/screens"
 CATALOG = ASSETS / "catalog.json"
-SORA = ROOT / "app/src/main/res/font/sora.ttf"
+SORA = ROOT / "core/ui/src/main/res/font/sora.ttf"
 
 POSTER = (500, 750)
 BACKDROP = (1280, 720)

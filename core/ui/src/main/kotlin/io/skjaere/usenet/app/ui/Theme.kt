@@ -16,7 +16,7 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
-import io.skjaere.usenet.app.R
+import io.skjaere.usenet.ui.R
 
 /** Design D: A's palette (dark, amber), B's density. Values from the mockups. */
 @Immutable

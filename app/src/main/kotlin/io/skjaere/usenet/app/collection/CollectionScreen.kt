@@ -1,6 +1,5 @@
 package io.skjaere.usenet.app.collection
 
-import android.content.pm.PackageManager
 import android.view.KeyEvent
 import androidx.activity.compose.ReportDrawnWhen
 import androidx.compose.foundation.BorderStroke
@@ -58,14 +57,12 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -298,14 +295,6 @@ private fun collectionViewModel(): CollectionViewModel {
     // The finished downloads where they show (L408): the TV's grid, which shares this model, gets none.
     val shown = downloadsShown()
     return viewModel { CollectionViewModel(CollectionDeps.of(container, shown), createSavedStateHandle()) }
-}
-
-/** No touch screen (a TV), or a remote or keyboard in use. */
-@Composable
-internal fun rememberDpad(): Boolean {
-    val context = LocalContext.current
-    val touch = remember(context) { context.packageManager.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN) }
-    return !touch || LocalInputModeManager.current.inputMode == InputMode.Keyboard
 }
 
 @Composable

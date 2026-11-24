@@ -75,7 +75,8 @@ class DownloadPlaySourcesTest {
 
     @Test
     fun `only the two Downloads pages take TopBar's stacked form`() {
-        val bar = assertNotNull(blockIn(source("ui/Components.kt"), "TopBar"), "no TopBar")
+        // TopBar is the UI kit's, in its own module.
+        val bar = assertNotNull(blockIn(File(KIT_COMPONENTS).readText(), "TopBar"), "no TopBar")
         assertTrue(Regex("""\bstacked\s*:\s*Boolean\s*=\s*false\b""").containsMatchIn(bar.text.substringBefore('{')), "TopBar's stacked isn't an opt-in")
         val takers = sources.filter { (_, text) -> STACKED.containsMatchIn(text) }.keys.sorted()
         assertEquals(listOf("$APP/download/DownloadsScreen.kt", "$APP/download/DownloadsShowScreen.kt"), takers)
@@ -136,6 +137,7 @@ class DownloadPlaySourcesTest {
 
     private companion object {
         const val APP = "src/main/kotlin/io/skjaere/usenet/app"
+        const val KIT_COMPONENTS = "../core/ui/src/main/kotlin/io/skjaere/usenet/app/ui/Components.kt"
 
         /** The coordinator's title plays. */
         val PLAYBACK = Regex("""\bplayback\s*\.\s*play(Episode|Movie)\s*\(""")

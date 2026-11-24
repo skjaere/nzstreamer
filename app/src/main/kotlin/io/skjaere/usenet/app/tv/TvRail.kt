@@ -59,6 +59,7 @@ import io.skjaere.usenet.app.ui.AppType
 import io.skjaere.usenet.app.ui.TvSafeArea
 import io.skjaere.usenet.app.ui.colors
 import io.skjaere.usenet.app.ui.OwnedRipple
+import io.skjaere.usenet.app.ui.RailState
 import io.skjaere.usenet.app.ui.turnsOver
 import io.skjaere.usenet.app.ui.tryFocus
 import kotlinx.coroutines.channels.Channel
@@ -73,19 +74,19 @@ import kotlin.reflect.KClass
  * it is still loading, which Android gives as a move down into the window), the current tab's place
  * in it ([selected]), and whether OK on an item is taking the focus into the content ([entering]).
  * A screen's first focus waits while the user holds the rail, unless OK is entering
- * ([io.skjaere.usenet.app.ui.InitialFocus]). Only the user's moves open the rail: when what the
- * content shows changes under the focus, the shell puts the focus back into the content
- * ([contentChanged], [settling]).
+ * ([io.skjaere.usenet.app.ui.InitialFocus], which reads it as the UI kit's [RailState]). Only the
+ * user's moves open the rail: when what the content shows changes under the focus, the shell puts
+ * the focus back into the content ([contentChanged], [settling]).
  */
 @Stable
-class RailFocus(private val tabs: List<Tab>) {
-    var hasFocus by mutableStateOf(false)
+class RailFocus(private val tabs: List<Tab>) : RailState {
+    override var hasFocus by mutableStateOf(false)
         internal set
-    var held by mutableStateOf(false)
+    override var held by mutableStateOf(false)
         internal set
     var selected by mutableIntStateOf(0)
         internal set
-    var entering by mutableStateOf(false)
+    override var entering by mutableStateOf(false)
         internal set
     internal val items = List(tabs.size) { FocusRequester() }
 
@@ -111,7 +112,7 @@ class RailFocus(private val tabs: List<Tab>) {
     internal var settlePending = false
 
     /** What the content shows has changed, as the shell can't see (results arriving): the shell checks where the focus is. */
-    fun contentChanged() {
+    override fun contentChanged() {
         settlePending = true
         changes.trySend(Unit)
     }

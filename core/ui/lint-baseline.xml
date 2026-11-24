@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<issues format="6" by="lint 8.13.2" type="baseline" client="gradle" dependencies="false" name="AGP (8.13.2)" variant="all" version="8.13.2">
+
+    <issue
+        id="ModifierParameter"
+        message="Modifier parameter should be the first optional parameter"
+        errorLine1="fun NavRow(title: String, status: String? = null, warn: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {"
+        errorLine2="                                                                         ~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/ui/Components.kt"
+            line="86"
+            column="74"/>
+    </issue>
+
+    <issue
+        id="ModifierParameter"
+        message="Modifier parameter should be the first optional parameter"
+        errorLine1="fun PosterBox(width: Int, height: Int, tint: Color = Color(0xFF2E4A5C), modifier: Modifier = Modifier) {"
+        errorLine2="                                                                        ~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/ui/Components.kt"
+            line="197"
+            column="73"/>
+    </issue>
+
+    <issue
+        id="ModifierParameter"
+        message="Modifier parameter should be the first optional parameter"
+        errorLine1="fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit, detail: String? = null, modifier: Modifier = Modifier) {"
+        errorLine2="                                                                                                    ~~~~~~~~">
+        <location
+            file="src/main/kotlin/io/skjaere/usenet/app/ui/Fields.kt"
+            line="93"
+            column="101"/>
+    </issue>
+
+</issues>

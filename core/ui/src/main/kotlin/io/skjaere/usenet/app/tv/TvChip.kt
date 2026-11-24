@@ -39,7 +39,7 @@ import io.skjaere.usenet.app.ui.turnsOver
  * TalkBack calls it, [dimmed] a chip with nothing in it, which can still be picked.
  */
 @Composable
-internal fun TvChip(
+fun TvChip(
     label: String,
     selected: Boolean,
     modifier: Modifier,

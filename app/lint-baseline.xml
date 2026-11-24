@@ -112,39 +112,6 @@
     </issue>
 
     <issue
-        id="ModifierParameter"
-        message="Modifier parameter should be the first optional parameter"
-        errorLine1="fun NavRow(title: String, status: String? = null, warn: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {"
-        errorLine2="                                                                         ~~~~~~~~">
-        <location
-            file="src/main/kotlin/io/skjaere/usenet/app/ui/Components.kt"
-            line="86"
-            column="74"/>
-    </issue>
-
-    <issue
-        id="ModifierParameter"
-        message="Modifier parameter should be the first optional parameter"
-        errorLine1="fun PosterBox(width: Int, height: Int, tint: Color = Color(0xFF2E4A5C), modifier: Modifier = Modifier) {"
-        errorLine2="                                                                        ~~~~~~~~">
-        <location
-            file="src/main/kotlin/io/skjaere/usenet/app/ui/Components.kt"
-            line="197"
-            column="73"/>
-    </issue>
-
-    <issue
-        id="ModifierParameter"
-        message="Modifier parameter should be the first optional parameter"
-        errorLine1="fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit, detail: String? = null, modifier: Modifier = Modifier) {"
-        errorLine2="                                                                                                    ~~~~~~~~">
-        <location
-            file="src/main/kotlin/io/skjaere/usenet/app/ui/Fields.kt"
-            line="93"
-            column="101"/>
-    </issue>
-
-    <issue
         id="DiscouragedApi"
         message="Fixed screen orientations will be ignored in most cases, starting from Android 16. Android is moving toward a model where apps are expected to adapt to various orientations, display sizes, and aspect ratios."
         errorLine1="            android:screenOrientation=&quot;sensorLandscape&quot;"

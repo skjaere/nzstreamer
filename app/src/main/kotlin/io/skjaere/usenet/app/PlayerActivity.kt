@@ -1074,7 +1074,7 @@ class PlayerActivity : ComponentActivity() {
 
     /** One line of the player's own text, in the app's font. */
     private fun text(sizeSp: Float, weight: Int, color: Color) = TextView(this).apply {
-        typeface = ResourcesCompat.getFont(this@PlayerActivity, R.font.ibm_plex_sans)
+        typeface = ResourcesCompat.getFont(this@PlayerActivity, io.skjaere.usenet.ui.R.font.ibm_plex_sans)
         fontVariationSettings = "'wght' $weight"
         setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
         setTextColor(color.toArgb())

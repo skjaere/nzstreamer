@@ -45,7 +45,7 @@ import io.skjaere.usenet.app.ui.turnsOver
  * is where it was before it opened. [content] gets the modifier for its first item.
  */
 @Composable
-internal fun TvMenu(
+fun TvMenu(
     expanded: Boolean,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
@@ -80,7 +80,7 @@ internal fun TvMenu(
  * the menu. Not [enabled], it is greyed as Material greys an item, and TalkBack says it is dimmed.
  */
 @Composable
-internal fun TvMenuItem(text: String, modifier: Modifier = Modifier, selected: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
+fun TvMenuItem(text: String, modifier: Modifier = Modifier, selected: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val turned = interaction.turnsOver()
     val inset = if (LocalFormFactor.current == FormFactor.Tv) Modifier.padding(horizontal = 6.dp) else Modifier

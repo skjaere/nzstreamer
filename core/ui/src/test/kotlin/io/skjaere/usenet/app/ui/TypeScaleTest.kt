@@ -85,14 +85,17 @@ class TypeScaleTest {
 
     /**
      * Text sizes come from the type scale, so a TV's are its own: a size written into a screen under 12 sp would show
-     * as it is on a TV too.
+     * as it is on a TV too. The kit's own sources and the app's, read as text (this module's build declares the app's).
      */
     @Test
     fun `no screen sets a size under 12 sp of its own`() {
-        val sources = File("src/main/kotlin").walkTopDown().filter { it.extension == "kt" && it.name != "TvTokens.kt" }.toList()
-        assertTrue(sources.size > 50, "the app's sources weren't found from ${File(".").absolutePath}")
+        val (kit, app) = listOf("src/main/kotlin", "../../app/src/main/kotlin").map { root ->
+            File(root).walkTopDown().filter { it.extension == "kt" && it.name != "TvTokens.kt" }.toList()
+        }
+        assertTrue(kit.size > 10, "the kit's sources weren't found from ${File(".").absolutePath}")
+        assertTrue(app.size > 50, "the app's sources weren't found from ${File(".").absolutePath}")
         val size = Regex("""fontSize\s*=\s*([0-9.]+)\.sp""")
-        val small = sources.flatMap { file ->
+        val small = (kit + app).flatMap { file ->
             file.readLines().mapIndexedNotNull { i, line ->
                 size.findAll(line).firstOrNull { it.groupValues[1].toFloat() < 12f }?.let { "${file.name}:${i + 1}: ${line.trim()}" }
             }

@@ -64,6 +64,7 @@ include(":core:discover")
 include(":core:search")
 include(":core:logging")
 include(":core:plugin")
+include(":core:ui")
 include(":core:player")
 include(":app")
 

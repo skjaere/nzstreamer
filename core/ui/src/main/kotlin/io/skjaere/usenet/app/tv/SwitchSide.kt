@@ -32,7 +32,7 @@ import io.skjaere.usenet.app.ui.turnsOver
  * bold then, and it is as wide as they are in bold whether it is or not: showing the focus never moves the chips after it.
  */
 @Composable
-internal fun SwitchSide(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+fun SwitchSide(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val turned = interaction.turnsOver()
     val bold = AppType.bodyStrong

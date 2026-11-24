@@ -5,7 +5,7 @@ The mark is a play triangle whose back end runs out into three lines, a stream c
 shape is defined once, below, in the 108 x 108 units of an adaptive icon's layers: the vector
 drawables take it as path data, and the PNGs (legacy icons, the TV banner) are drawn from the same
 points. The splash animates it on Android 12+, the lines running in from the left. Colours are the
-app's (ui/Theme.kt AppColors); the wordmark is Sora Bold, from res/font.
+app's (ui/Theme.kt AppColors); the wordmark is Sora Bold, from the UI kit's res/font (core/ui).
 
 Run from anywhere with Python 3 and Pillow: python3 -I tools/brand/generate.py
 With --preview DIR it draws the splash as it plays into DIR instead, and writes nothing else.
@@ -17,7 +17,7 @@ from PIL import Image, ImageChops, ImageColor, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[2]
 RES = ROOT / "app/src/main/res"
-SORA = RES / "font/sora.ttf"
+SORA = ROOT / "core/ui/src/main/res/font/sora.ttf"
 
 BACKGROUND = "#0E0F12"
 SURFACE = "#1A1C21"
