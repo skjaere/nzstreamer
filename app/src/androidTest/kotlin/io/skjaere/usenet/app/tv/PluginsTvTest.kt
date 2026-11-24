@@ -1,5 +1,6 @@
 package io.skjaere.usenet.app.tv
 
+import android.os.SystemClock
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.SemanticsMatcher
@@ -303,7 +304,10 @@ class PluginsTvTest {
         then(PluginsPage.CHECK_AGAIN) { fakes.listing(listed("kestrel", "Kestrel"), readAt = PluginsPageFakes.NOW) }
     }
 
-    /** Remove asks, Cancel focused; two OKs in a row never remove; Remove, then the card's Install has the focus. */
+    /**
+     * Remove asks, Cancel focused; the OK that asked, pressed again just after, is kept from the question (OkGuard), which
+     * stays; Remove, then the card's Install has the focus.
+     */
     @Test
     fun removeAsksWithCancelFocusedThenTheCardsInstallHasTheFocus() {
         showThePage()
@@ -311,15 +315,22 @@ class PluginsTvTest {
         fakes.installed.value = listOf(installed("kestrel", "Kestrel", "Sports"))
         open("Settings")
         press(KeyEvent.KEYCODE_DPAD_RIGHT, "Remove")
+        val asked = SystemClock.uptimeMillis()
         remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
-        // OK again at once: the question's guard lets it by, or it lands on Cancel. Never Remove.
-        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        compose.waitUntil(PAGE_MS) { exists(hasText("Remove Kestrel?")) }
+        remote.waitForFocus("Cancel")
+        // The same OK again, stamped just after the one that asked, as a double press or a held key (which a remote over
+        // HDMI-CEC sends as presses of their own) comes: the question's guard keeps it from Cancel, and the question stays.
+        val again = asked + 50
+        instrumentation.sendKeySync(KeyEvent(again, again, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 0))
+        instrumentation.sendKeySync(KeyEvent(again, again + 30, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0))
         compose.waitForIdle()
-        if (exists(hasText("Remove Kestrel?"))) {
-            remote.waitForFocus("Cancel")
-            Thread.sleep(OkGuard.WINDOW_MS)
-            remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
-        }
+        assertTrue("the question stays", exists(hasText("Remove Kestrel?")))
+        assertEquals("Cancel", remote.focused())
+        assertFalse("nothing asked", fakes.asked.any { it.startsWith("remove") })
+        // Past the guard's window, OK on Cancel closes it, the plugin kept.
+        SystemClock.sleep(OkGuard.WINDOW_MS)
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
         compose.waitUntil(PAGE_MS) { !exists(hasText("Remove Kestrel?")) }
         assertFalse("kept", fakes.asked.any { it.startsWith("remove") })
         remote.waitForFocus("Remove")
@@ -329,7 +340,7 @@ class PluginsTvTest {
         assertTrue(exists(hasText(PluginsPage.removeText("Sports"))))
         remote.waitForFocus("Cancel")
         assertEquals("Cancel first", "Cancel", remote.focused())
-        Thread.sleep(OkGuard.WINDOW_MS)
+        SystemClock.sleep(OkGuard.WINDOW_MS)
         press(KeyEvent.KEYCODE_DPAD_RIGHT, "Remove")
         remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
         compose.waitUntil(PAGE_MS) { "remove kestrel" in fakes.asked }
