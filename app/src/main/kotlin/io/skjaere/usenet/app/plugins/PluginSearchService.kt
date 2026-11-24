@@ -16,6 +16,7 @@ import io.skjaere.usenet.releases.RankingContext
 import io.skjaere.usenet.releases.Severity
 import io.skjaere.usenet.search.RankedItem
 import io.skjaere.usenet.search.ResultGrouper
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -63,38 +64,47 @@ class PluginSearchService(
     private inner class Searcher(private val plugin: PluginState, private val name: String) : PluginSearch {
         override fun search(words: String, runtimeMinutes: Int?, fresh: Boolean): Flow<Found> = flow {
             val started = now()
-            val asked = indexers()
-            val on = asked.filter { it.enabled }
-            val names = names(asked)
-            if (plugin.paused(started)) {
-                emit(Found(on.map { IndexerLine(names.getValue(it.id), IndexerLine.State.Limited, 0, paused(name)) }, emptyList()))
-                return@flow
-            }
-            if (on.isEmpty()) {
-                emit(Found(emptyList(), emptyList()))
-                return@flow
-            }
-            val context = ranking().copy(runtimeMinutes = runtimeMinutes)
-            val answers = Answers(null)
-            val failures = HashMap<String, NewznabError>()
-            // A release keeps its handle as more indexers answer, its ranking brought up to date.
-            val handles = HashMap<String, Handle>()
-            // Counted from its start: a search dropped before an indexer answered may have asked one all the same. One that
-            // ends with every answer from the cache didn't, and no longer counts.
-            plugin.count(started)
+            // Counted from its start, the cap checked in the same step, before anything waits: searches begun together
+            // (one per row of a list) each find it as those before them left it. A search dropped before an indexer
+            // answered may have asked one all the same, and stays counted; one that ends with every answer from the cache,
+            // or asking none, didn't, and no longer counts.
+            val counted = plugin.begin(started)
             var requested = false
-            search().search(asked, fresh) { SearchQuery.Text(words) }.collect { outcome ->
-                requested = requested || outcome.requested
-                if (outcome is IndexerOutcome.Failed) failures[outcome.indexer.id] = outcome.error
-                if (answers.take(outcome) == null) return@collect
-                val releases = grouper.ranked(answers.accepted, context, asked.map { it.id }).map { ranked ->
-                    val handle = handles[ranked.key]?.also { plugin.table.update(it, ranked) } ?: plugin.table.add(ranked).also { handles[ranked.key] = it }
-                    ranked.info(names, handle)
+            try {
+                val asked = indexers()
+                val on = asked.filter { it.enabled }
+                val names = names(asked)
+                if (!counted) {
+                    emit(Found(on.map { IndexerLine(names.getValue(it.id), IndexerLine.State.Limited, 0, paused(name)) }, emptyList()))
+                    return@flow
                 }
-                val statuses = answers.statuses.associateBy { it.id }
-                emit(Found(on.map { line(names.getValue(it.id), statuses[it.id], failures[it.id]) }, releases))
+                if (on.isEmpty()) {
+                    plugin.uncount(started)
+                    emit(Found(emptyList(), emptyList()))
+                    return@flow
+                }
+                val context = ranking().copy(runtimeMinutes = runtimeMinutes)
+                val answers = Answers(null)
+                val failures = HashMap<String, NewznabError>()
+                // A release keeps its handle as more indexers answer, its ranking brought up to date.
+                val handles = HashMap<String, Handle>()
+                search().search(asked, fresh) { SearchQuery.Text(words) }.collect { outcome ->
+                    requested = requested || outcome.requested
+                    if (outcome is IndexerOutcome.Failed) failures[outcome.indexer.id] = outcome.error
+                    if (answers.take(outcome) == null) return@collect
+                    val releases = grouper.ranked(answers.accepted, context, asked.map { it.id }).map { ranked ->
+                        val handle = handles[ranked.key]?.also { plugin.table.update(it, ranked) } ?: plugin.table.add(ranked).also { handles[ranked.key] = it }
+                        ranked.info(names, handle)
+                    }
+                    val statuses = answers.statuses.associateBy { it.id }
+                    emit(Found(on.map { line(names.getValue(it.id), statuses[it.id], failures[it.id]) }, releases))
+                }
+            } catch (e: Throwable) {
+                // The host's own failure before any indexer was asked counts nothing; a search dropped meanwhile stays counted.
+                if (counted && e !is CancellationException && !requested) plugin.uncount(started)
+                throw e
             }
-            if (!requested) plugin.uncount(started)
+            if (counted && !requested) plugin.uncount(started)
         }.flowOn(work).catch { e ->
             if (e !is Exception) throw e
             // The host's own failure, never the plugin's: its search ends with what it found, and the plugin goes on.
@@ -108,21 +118,22 @@ class PluginSearchService(
         private val counted = mutableListOf<Long>()
         private var loggedAt: Long? = null
 
-        /** Whether a search beginning [at] is paused: [CAP] began in the minute before it. Logged once a minute. */
+        /**
+         * A search beginning [at], in one step: counted, unless [CAP] began in the minute before it, when it is paused
+         * (false), logged once a minute.
+         */
         @Synchronized
-        fun paused(at: Long): Boolean {
+        fun begin(at: Long): Boolean {
             counted.removeAll { it <= at - CAP_WINDOW_MS }
-            if (counted.size < CAP) return false
+            if (counted.size < CAP) {
+                counted += at
+                return true
+            }
             if (loggedAt.let { it == null || at - it >= CAP_WINDOW_MS }) {
                 loggedAt = at
                 log.warn("Plugin {}: searches paused, {} in the last minute asked the indexers anew", id, counted.size)
             }
-            return true
-        }
-
-        @Synchronized
-        fun count(at: Long) {
-            counted += at
+            return false
         }
 
         /** A search begun [at] that asked no indexer anew: every answer came from the cache. */

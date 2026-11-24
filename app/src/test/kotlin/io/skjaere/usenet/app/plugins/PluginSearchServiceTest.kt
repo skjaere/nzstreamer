@@ -16,6 +16,8 @@ import io.skjaere.usenet.plugin.ReleaseHandle
 import io.skjaere.usenet.releases.RankingContext
 import io.skjaere.usenet.releases.RankingPrefs
 import io.skjaere.usenet.releases.StaticDeviceCapabilities
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
@@ -28,6 +30,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -276,6 +279,22 @@ class PluginSearchServiceTest {
         clock = 60_000
         assertEquals(1, kestrel.found("words 13").last().releases.size)
         assertEquals(1, LogBuffer.snapshot().filter { it.seq > from }.count { "paused" in it.message }, "logged once a minute")
+    }
+
+    /**
+     * Searches started together (one per row of a list) each wait for the app's ranking settings before their first
+     * request: the cap is taken as each begins, so no more than ten of them ask the indexers, the rest paused at once.
+     */
+    @Test
+    fun `searches started together get no further past the cap than one at a time`() = runTest {
+        val fake = FakeSearch { words, _ -> listOf(results(quarry, words, item(quarry, "Copper.Crown.2019.1080p.WEB-DL.H.264-GOOD"), requested = true)) }
+        val service = PluginSearchService(
+            { fake }, { listOf(quarry) }, { yield(); context }, now = { clock }, work = StandardTestDispatcher(testScheduler),
+        )
+        val kestrel = service.of("kestrel", "Kestrel")
+        val found = (1..15).map { round -> async { kestrel.search("words $round", null).toList() } }.awaitAll()
+        assertEquals(10, fake.asked.size, "the indexers asked by searches begun together")
+        assertEquals(5, found.count { it.single().indexers.single().state == IndexerLine.State.Limited }, "the rest paused")
     }
 
     /** A search whose requests fail still asked the indexer, and counts: a plugin can't hammer an indexer that is down. */
