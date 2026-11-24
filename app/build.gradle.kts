@@ -1,6 +1,7 @@
 import com.android.build.api.artifact.SingleArtifact
 import com.android.build.api.variant.BuiltArtifactsLoader
 import org.gradle.api.configuration.BuildFeatures
+import org.gradle.process.ExecOperations
 import java.net.URI
 import java.util.Properties
 import javax.inject.Inject
@@ -385,6 +386,9 @@ android {
         // shared libraries come from: a change to either alone runs it again too.
         it.inputs.file(rootProject.file("tools/beta-cert.sha256")).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("pluginSigner")
         it.inputs.file(rootProject.file("gradle/libs.versions.toml")).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("versionCatalog")
+        // PluginIndexTest reads the plugin list tools/release writes from invented releases: a change to it alone runs it again.
+        it.inputs.file(rootProject.file("tools/release/testdata/plugin-index.json")).withPathSensitivity(PathSensitivity.RELATIVE)
+            .withPropertyName("pluginListSample")
         // CastStartSourcesTest reads the sources it bans Google's widgets in as text, comments and the device tests' included,
         // and every resource's XML (L108): a comment, a device test or a layout changed alone runs it again too.
         it.inputs.files(fileTree("src") { include("main/kotlin/**", "discover/kotlin/**", "androidTest/kotlin/**", "release/kotlin/**", "main/res/**/*.xml") })
@@ -858,6 +862,103 @@ val checkNoDiscover by tasks.registering(JavaExec::class) {
     }
 }
 tasks.named { it == "assembleRelease" || it == "bundleRelease" }.configureEach { finalizedBy(checkNoDiscover) }
+
+// checkPluginLinks (L625): published plugins against this build. Each plugin APK in the folder -PpluginLinks=<folder>
+// gives, named <id>-<anything>.apk, must name nothing outside its own package that this release build's dex, or
+// android.jar at minSdk 26, lacks (plugin-check's link check): such a plugin would fail with NoSuchMethodError and the
+// like as NZStreamer runs it. CI's step "Published plugins against this build" downloads the plugin list's versions of
+// this tree's plugin API into such a folder and runs it (tools/release/check-published-plugins.sh); by hand, it checks
+// any plugin APKs, the skeleton's among them. Every APK is checked, then the task fails naming each that broke; each
+// one's report is build/reports/checkPluginLinks/<file>.txt. The release dex holds no dev credentials.
+abstract class PluginLinkCheck @Inject constructor(private val exec: ExecOperations) : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.NAME_ONLY)
+    abstract val pluginApks: ConfigurableFileCollection
+
+    /** The release build's APK folder; [hostLoader] names the one APK in it. */
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val hostApks: DirectoryProperty
+
+    @get:Internal
+    abstract val hostLoader: Property<BuiltArtifactsLoader>
+
+    @get:Classpath
+    abstract val tool: ConfigurableFileCollection
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val dexdump: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val androidJar: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val apiVersions: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val reports: DirectoryProperty
+
+    @TaskAction
+    fun check() {
+        val apks = pluginApks.files.filter { it.isFile && it.name.endsWith(".apk") }.sortedBy { it.name }
+        if (apks.isEmpty()) {
+            throw GradleException("No plugin APK to check: give -PpluginLinks=<a folder of plugin APKs, each named <id>-<anything>.apk>")
+        }
+        val host = hostLoader.get().load(hostApks.get())?.elements?.singleOrNull()?.outputFile
+            ?: throw GradleException("No single release APK in ${hostApks.get().asFile.name}")
+        val broken = apks.filter { apk ->
+            val id = apk.name.substringBefore('-')
+            if (!Regex("[a-z][a-z0-9]{0,30}").matches(id) || id == "true" || id == "false") {
+                throw GradleException("${apk.name} isn't named <id>-<anything>.apk with a plugin's id")
+            }
+            exec.javaexec {
+                classpath = tool
+                mainClass.set("io.skjaere.usenet.plugincheck.MainKt")
+                args(
+                    "link", "--id", id, "--apk", apk.path, "--host", host,
+                    "--dexdump", dexdump.get().asFile.path, "--android-jar", androidJar.get().asFile.path,
+                    "--api-versions", apiVersions.get().asFile.path,
+                    "--report", reports.file("${apk.nameWithoutExtension}.txt").get().asFile.path,
+                )
+                isIgnoreExitValue = true
+            }.exitValue != 0
+        }
+        if (broken.isNotEmpty()) {
+            throw GradleException("${broken.joinToString { it.name }}: each names what this build lacks (above, and in its report)")
+        }
+    }
+}
+
+val pluginCheckTool: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    attributes { attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage.JAVA_RUNTIME)) }
+}
+
+dependencies {
+    pluginCheckTool(project(":tools:plugin-check"))
+}
+
+tasks.register<PluginLinkCheck>("checkPluginLinks") {
+    group = "verification"
+    description = "Fails when a plugin APK in -PpluginLinks=<folder> names what this release build or minSdk 26 lacks (L625)."
+    pluginApks.from(
+        providers.gradleProperty("pluginLinks")
+            .map<FileCollection> { folder -> fileTree(rootProject.file(folder)) { include("*.apk") } }
+            .orElse(files()),
+    )
+    hostApks.set(releaseApk)
+    hostLoader.set(releaseApkLoader)
+    tool.from(pluginCheckTool)
+    val sdkDir = androidComponents.sdkComponents.sdkDirectory
+    val platform = sdkDir.map { it.dir("platforms/android-${android.compileSdk}") }
+    dexdump.set(sdkDir.map { it.file("build-tools/${android.buildToolsVersion}/dexdump") })
+    androidJar.set(platform.map { it.file("android.jar") })
+    apiVersions.set(platform.map { it.file("data/api-versions.xml") })
+    reports.set(layout.buildDirectory.dir("reports/checkPluginLinks"))
+}
 
 // checkBetaHasNoDevSettings: the beta built without -PbetaDevSettings is published for anyone (by the site's publish
 // script, kept private), so it must carry none of local.properties' credentials: the provider's host, username and

@@ -116,6 +116,25 @@ class ReleaseNotesTest(unittest.TestCase):
                 self.assertEqual(1, done.returncode, done.stdout)
                 self.assertEqual("", done.stdout)
 
+    def test_plugin_notes_add_the_plugins_licence_footer_with_no_library_list(self):
+        body = "## 1.0.3\n\n### Features\n\n* an invented feature\n"
+        done = self.run_script("plugin-notes", self.write("body.txt", body))
+        self.assertEqual(0, done.returncode, done.stderr)
+        notes = done.stdout
+        self.assertTrue(notes.startswith(body.rstrip("\n") + "\n\n" + MARKER + "\n"), notes)
+        for name in ("LICENSE.md", "THIRD_PARTY_NOTICES.md", "Apache-2.0.txt", "PolyForm Noncommercial License 1.0.0",
+                     "runs inside NZStreamer"):
+            self.assertIn(name, notes)
+        # A plugin's APK holds its own code alone: the app's libraries are no part of it.
+        self.assertNotIn("github.com/", notes)
+        self.assertTrue(notes.endswith("\n") and not notes.endswith("\n\n"))
+        # Run again over its own output, it gives the same notes: the footer is replaced, never added twice.
+        again = self.run_script("plugin-notes", self.write("again.txt", notes))
+        self.assertEqual((0, notes), (again.returncode, again.stdout))
+        empty = self.run_script("plugin-notes", self.write("empty.txt", ""))
+        self.assertTrue(empty.stdout.startswith(MARKER + "\n"), empty.stdout)
+        self.assertEqual(2, self.run_script("plugin-notes").returncode)
+
     def test_scan_passes_clean_notes_and_fails_a_private_value_by_line_alone(self):
         clean = self.run_script("scan", self.write("notes.txt", "## 0.2.0\n\n* an invented fix\n"))
         self.assertEqual(0, clean.returncode, clean.stdout + clean.stderr)

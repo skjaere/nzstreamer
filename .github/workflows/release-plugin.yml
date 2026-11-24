@@ -1,0 +1,313 @@
+# A plugin's release (L588): its APK built from the release's tag plugin-<id>-vMAJOR.MINOR.PATCH, signed with the beta
+# key, checked as tools/release/check-plugin-apk.sh checks one, attached to the release's draft as <id>.apk with its
+# .sha256, its plugin.json (what the APK is, from its own bytes) and the licence files, and the release then published as
+# a prerelease that is never Latest: releases/latest/download/NZStreamer.apk, the README's install address and Obtainium
+# keep giving the app. Then plugin-index.yml writes the plugin list again, which every NZStreamer reads.
+# release-please.yml calls it once for each plugin a run released. Run it by hand from main for a plugin's tag whose
+# draft is there. Nothing a pull request does can start it: it has no pull request trigger, and its job runs in the
+# release-signing environment, which holds the key's secrets and takes main alone. Every run's ref is main, the tag being
+# an input: a run from a tag would run that tag's copy of this file, so the environment allows no tag, and the first
+# step refuses any ref but main.
+# As release-apk.yml: values from the event reach the shell through env, never inside a run: script; the key lives in
+# the runner's temp folder for the one build that signs; no Gradle cache; every action pinned by its full commit id. No
+# test runs while the key is there: a test JVM inherits the build's environment, the key's properties with it, so the
+# plugin's tests and plugin-check's rules run first (CI's check ran them on the tagged commit already), and the signed
+# build makes the APK alone, whose rules plugin-check checks again as it finishes.
+name: release-plugin
+
+on:
+  workflow_call:
+    inputs:
+      id:
+        type: string
+        required: true
+      tag:
+        type: string
+        required: true
+    secrets:
+      BETA_KEYSTORE_BASE64:
+        required: true
+      BETA_STORE_PASSWORD:
+        required: true
+      BETA_KEY_ALIAS:
+        required: true
+      BETA_KEY_PASSWORD:
+        required: true
+      BETA_SCAN_CANARIES:
+        required: false
+  workflow_dispatch:
+    inputs:
+      id:
+        description: The plugin's id, its folder under plugins/
+        type: string
+        required: true
+      tag:
+        description: The release's tag, plugin-<id>-vMAJOR.MINOR.PATCH, whose draft release is there already
+        type: string
+        required: true
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plugin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: release-signing
+    permissions:
+      contents: write
+    concurrency:
+      group: release-plugin-${{ inputs.tag }}
+      cancel-in-progress: false
+    env:
+      ID: ${{ inputs.id }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      # Run from main only. The tag must be this plugin's version tag; a published release takes no new file, and a file
+      # already on the draft would stop the upload after the build: both are refused before it.
+      - name: Check the tag and its draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ $GITHUB_REF == refs/heads/main ]] ||
+            { echo "::error::Run it from main, giving the plugin and its tag as inputs: this run's ref is $GITHUB_REF"; exit 1; }
+          [[ $ID =~ ^[a-z][a-z0-9]{0,30}$ && $ID != true && $ID != false ]] ||
+            { echo "::error::The plugin's id must be a lower-case letter and up to 30 lower-case letters and digits"; exit 1; }
+          [[ $TAG =~ ^plugin-([a-z][a-z0-9]{0,30})-v(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]?)\.(0|[1-9][0-9]?)$ ]] &&
+            [[ ${BASH_REMATCH[1]} == "$ID" ]] && ((BASH_REMATCH[2] < 2100)) ||
+            { echo "::error::The tag must be plugin-$ID-vMAJOR.MINOR.PATCH, MAJOR under 2100 and MINOR and PATCH under 100"; exit 1; }
+          release=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft,assets --jq '[.isDraft, (.assets | length)] | @tsv') ||
+            { echo "::error::$TAG has no release: release-please makes its draft, or gh release create --draft makes one"; exit 1; }
+          read -r draft assets <<<"$release"
+          [[ $draft == true ]] || { echo "::error::$TAG's release is published already: it takes no new APK"; exit 1; }
+          [[ $assets == 0 ]] || { echo "::error::$TAG's draft holds files already: delete them from the draft first"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          submodules: true # third_party/rapidyenc
+          fetch-depth: 0 # the tag's commit must be on main
+          persist-credentials: false
+
+      # The plugin's code: ((MAJOR * 100 + MINOR) * 100 + PATCH) * 100, as the plugin convention makes it from its
+      # version.txt, which release-please wrote for this release.
+      - name: Version, code and commit
+        id: v
+        run: |
+          [[ -f plugins/$ID/version.txt && -f plugins/$ID/listing.json ]] ||
+            { echo "::error::$TAG has no plugins/$ID/version.txt and listing.json"; exit 1; }
+          version=${TAG#"plugin-$ID-v"}
+          [[ $(tr -d '[:space:]' <"plugins/$ID/version.txt") == "$version" ]] ||
+            { echo "::error::plugins/$ID/version.txt at $TAG is not $version"; exit 1; }
+          [[ $version =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]
+          code=$((((BASH_REMATCH[1] * 100 + BASH_REMATCH[2]) * 100 + BASH_REMATCH[3]) * 100))
+          ((code > 0)) || { echo "::error::versionCode $code: a plugin's first release is 0.0.1 or later"; exit 1; }
+          git merge-base --is-ancestor HEAD origin/main || { echo "::error::$TAG's commit is not on main"; exit 1; }
+          {
+            echo "version=$version"
+            echo "code=$code"
+            echo "commit=$(git rev-parse HEAD)"
+          } >>"$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK packages
+        run: |
+          sdkmanager=$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager
+          ndk=$(sed -n 's/^ndk = "\([0-9.]*\)"$/\1/p' gradle/libs.versions.toml)
+          [[ -n $ndk ]] || { echo "::error::gradle/libs.versions.toml names no NDK version"; exit 1; }
+          (yes || true) | "$sdkmanager" --licenses >/dev/null
+          "$sdkmanager" --install "platforms;android-36" "build-tools;35.0.0" "ndk;$ndk" "cmake;3.22.1" >/dev/null
+
+      # No cache: a signed release reads nothing another workflow's run could have written.
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-disabled: true
+          cache-provider: basic
+
+      # Before the key is in the runner: the plugin's unit tests, and plugin-check's rules on its debug build (its
+      # libraries, its API stamp from the tree, its dex and manifest). The same refusals as the signed build's below.
+      - name: The plugin's tests and rules, before the key
+        env:
+          MALLOC_ARENA_MAX: "2"
+        run: |
+          [[ ! -L local.properties && ! -e local.properties ]] || { echo "::error::The checkout holds a local.properties"; exit 1; }
+          names='withDebrid|hideDebrid|betaDevSettings|betaConnections|betaSigning|betaScanExtra|usenetLibsDir|googleMavenMirror'
+          for props in gradle.properties "${GRADLE_USER_HOME:-$HOME/.gradle}/gradle.properties"; do
+            ! grep -qE "^[[:space:]]*($names)[[:space:]]*[=:]" "$props" 2>/dev/null ||
+              { echo "::error::$props sets a debrid, beta, library or repository property"; exit 1; }
+          done
+          ./gradlew --no-daemon --no-build-cache --no-configuration-cache \
+            -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8" --max-workers=4 \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.internal.http.socketTimeout=300000 -Dorg.gradle.internal.http.connectionTimeout=300000 \
+            ":plugins:$ID:test" ":plugins:$ID:checkPluginRulesDebug"
+
+      # A secret the caller didn't pass arrives empty, with no error of its own.
+      - name: Check the key's secrets
+        env:
+          BETA_KEYSTORE_BASE64: ${{ secrets.BETA_KEYSTORE_BASE64 }}
+          BETA_STORE_PASSWORD: ${{ secrets.BETA_STORE_PASSWORD }}
+          BETA_KEY_ALIAS: ${{ secrets.BETA_KEY_ALIAS }}
+          BETA_KEY_PASSWORD: ${{ secrets.BETA_KEY_PASSWORD }}
+        run: |
+          empty=()
+          for name in BETA_KEYSTORE_BASE64 BETA_STORE_PASSWORD BETA_KEY_ALIAS BETA_KEY_PASSWORD; do
+            [[ -n ${!name} ]] || empty+=("$name")
+          done
+          ((${#empty[@]} == 0)) ||
+            { echo "::error::Empty: ${empty[*]}. They are the release-signing environment's secrets; a caller passes them with secrets: inherit"; exit 1; }
+
+      # The canaries (optional) are strings the APK and the notes must never carry: each value is masked, and
+      # check-plugin-apk.sh reads them from the file. The key and the canaries stay in the runner's temp folder, each in a
+      # folder of its own: the key's goes as soon as the build is done, the canaries' once the APK is checked. The
+      # draft's notes, release-please's changelog of commit subjects, are looked at now, and again before publishing.
+      - name: The key and the canaries into the runner's temp folder
+        id: key
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BETA_KEYSTORE_BASE64: ${{ secrets.BETA_KEYSTORE_BASE64 }}
+          BETA_SCAN_CANARIES: ${{ secrets.BETA_SCAN_CANARIES }}
+        run: |
+          umask 077
+          mkdir "$RUNNER_TEMP/key" "$RUNNER_TEMP/canaries"
+          printf '%s' "$BETA_KEYSTORE_BASE64" | base64 --decode >"$RUNNER_TEMP/key/beta.p12"
+          python3 -I -B tools/release/canaries.py "$RUNNER_TEMP/canaries/canaries.tsv"
+          if [[ -s $RUNNER_TEMP/canaries/canaries.tsv ]]; then
+            echo "canaries=true" >>"$GITHUB_OUTPUT"
+            gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json body --jq .body >"$RUNNER_TEMP/canaries/body.txt"
+            python3 -I -B tools/release/canaries.py --scan "$RUNNER_TEMP/canaries/body.txt"
+          fi
+
+      # The plugin's release build alone, signed: the plugin convention takes the key's four beta* properties from
+      # these variables, here alone (GITHUB_ACTIONS), and refuses -PbetaSigning. One build, no daemon left after it, no
+      # cache read or written, no configuration cache (it would store the passwords).
+      - name: Build ${{ inputs.id }} ${{ steps.v.outputs.version }}, signed
+        env:
+          MALLOC_ARENA_MAX: "2"
+          ORG_GRADLE_PROJECT_betaStoreFile: ${{ runner.temp }}/key/beta.p12
+          ORG_GRADLE_PROJECT_betaStorePassword: ${{ secrets.BETA_STORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_betaKeyAlias: ${{ secrets.BETA_KEY_ALIAS }}
+          ORG_GRADLE_PROJECT_betaKeyPassword: ${{ secrets.BETA_KEY_PASSWORD }}
+        run: |
+          [[ ! -L local.properties && ! -e local.properties ]] || { echo "::error::The checkout holds a local.properties"; exit 1; }
+          names='withDebrid|hideDebrid|betaDevSettings|betaConnections|betaSigning|betaScanExtra|usenetLibsDir|googleMavenMirror'
+          for props in gradle.properties "${GRADLE_USER_HOME:-$HOME/.gradle}/gradle.properties"; do
+            ! grep -qE "^[[:space:]]*($names)[[:space:]]*[=:]" "$props" 2>/dev/null ||
+              { echo "::error::$props sets a debrid, beta, library or repository property"; exit 1; }
+          done
+          for name in ${names//|/ }; do
+            variable=ORG_GRADLE_PROJECT_$name
+            [[ -z ${!variable+set} ]] || { echo "::error::$variable is set"; exit 1; }
+          done
+          ./gradlew --no-daemon --no-build-cache --no-configuration-cache \
+            -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8" --max-workers=4 \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.internal.http.socketTimeout=300000 -Dorg.gradle.internal.http.connectionTimeout=300000 \
+            ":plugins:$ID:assembleRelease"
+
+      - name: Remove the key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/key"
+
+      # Signed by the beta key alone (tools/beta-cert.sha256), the plugin's package, code, name and the tree's API stamp,
+      # no component or permission, plugin-check's rules passed on this build, none of the canaries in it. Stages the
+      # APK as <id>.apk, and its .sha256, for the upload.
+      - name: Check the APK
+        env:
+          CODE: ${{ steps.v.outputs.code }}
+          VERSION: ${{ steps.v.outputs.version }}
+          CANARIES: ${{ steps.key.outputs.canaries }}
+        run: |
+          flags=()
+          if [[ $CANARIES == true ]]; then
+            flags=(--canaries "$RUNNER_TEMP/canaries/canaries.tsv")
+          fi
+          bash tools/release/check-plugin-apk.sh --id "$ID" --digest-file tools/beta-cert.sha256 --code "$CODE" \
+            --version "$VERSION" --out "$RUNNER_TEMP/apk" "${flags[@]}"
+
+      - name: Remove the canaries
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/canaries"
+
+      # What the list will say of this release, read from the staged APK's own bytes (its package, versions, SDKs, API
+      # stamp, libraries, signer, SHA-256 and size) and the plugin's listing.json (its name and summary).
+      - name: Write plugin.json
+        run: |
+          python3 -I -B tools/release/plugin_index.py describe --id "$ID" --tag "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --apk "$RUNNER_TEMP/apk/$ID.apk" --listing "plugins/$ID/listing.json" --out "$RUNNER_TEMP/apk/plugin.json"
+
+      # The APK as <id>.apk, the name the list's address rule gives it; its .sha256 names it, so sha256sum -c checks the
+      # download. No --clobber: a file already there fails the upload, so bytes once attached are never replaced.
+      - name: Attach the APK, plugin.json and the licence files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" "$RUNNER_TEMP/apk/$ID.apk" "$RUNNER_TEMP/apk/$ID.apk.sha256" \
+            "$RUNNER_TEMP/apk/plugin.json" LICENSE.md THIRD_PARTY_NOTICES.md LICENSES/Apache-2.0.txt
+
+      # The plugin's licence footer. The notes pass the privacy scan before they are written. Editing a release whose tag
+      # is gone would make the tag again at another commit: the tag must be there, at the commit built.
+      - name: Add the licence footer to the notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.v.outputs.commit }}
+        run: |
+          notes=$RUNNER_TEMP/notes
+          mkdir "$notes"
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json body --jq .body >"$notes/body.txt"
+          python3 -I -B tools/release/release_notes.py plugin-notes "$notes/body.txt" >"$notes/notes.txt"
+          python3 -I -B tools/release/release_notes.py scan "$notes/notes.txt"
+          ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha') ||
+            { echo "::error::$TAG is no tag in this repository: the release can't be edited"; exit 1; }
+          read -r type tagged <<<"$ref"
+          if [[ $type == tag ]]; then
+            tagged=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tagged" --jq .object.sha)
+          fi
+          [[ $tagged == "$COMMIT" ]] || { echo "::error::$TAG is at $tagged, not at the commit built, $COMMIT"; exit 1; }
+          gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes-file "$notes/notes.txt"
+
+      # The notes as they are now pass the privacy scan and hold none of the canaries, and the tag is still at the commit
+      # built. Published in one call as a prerelease, never Latest: GitHub makes a newly published full release Latest by
+      # default, and releases/latest/download/NZStreamer.apk must keep giving the app. release-please's own prerelease
+      # option marks only 0.x versions, so it can't do this. Then the release is read back: a prerelease, published, and
+      # releases/latest still an app release (v...).
+      - name: Publish the release as a prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.v.outputs.commit }}
+          BETA_SCAN_CANARIES: ${{ secrets.BETA_SCAN_CANARIES }}
+        run: |
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json body --jq .body >"$RUNNER_TEMP/notes/now.txt"
+          python3 -I -B tools/release/release_notes.py scan "$RUNNER_TEMP/notes/now.txt"
+          python3 -I -B tools/release/canaries.py --scan "$RUNNER_TEMP/notes/now.txt"
+          ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha') ||
+            { echo "::error::$TAG is no tag in this repository: publishing would make it at another commit"; exit 1; }
+          read -r type tagged <<<"$ref"
+          if [[ $type == tag ]]; then
+            tagged=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tagged" --jq .object.sha)
+          fi
+          [[ $tagged == "$COMMIT" ]] || { echo "::error::$TAG is at $tagged, not at the commit built, $COMMIT"; exit 1; }
+          gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false
+          state=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isPrerelease,isDraft --jq '[.isPrerelease, .isDraft] | @tsv')
+          read -r prerelease draft <<<"$state"
+          [[ $prerelease == true && $draft == false ]] ||
+            { echo "::error::$TAG is not a published prerelease (isPrerelease $prerelease, isDraft $draft): fix it by hand"; exit 1; }
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name) ||
+            { echo "::error::No release is Latest: mark the app's newest release Latest by hand"; exit 1; }
+          [[ $latest =~ ^v(0|[1-9][0-9]*)\. ]] ||
+            { echo "::error::Latest is $latest, not an app release: mark the app's newest release Latest by hand"; exit 1; }
+
+  # The plugin list, written again from every published plugin release, this one's with them.
+  index:
+    needs: plugin
+    permissions:
+      contents: write
+    uses: ./.github/workflows/plugin-index.yml
+    secrets: inherit

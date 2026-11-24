@@ -1,6 +1,7 @@
 # CI, on every push to main and every pull request: the public privacy scan (on a push, also who made each pushed
-# commit), the Python tools' tests and the CLA workflow's check, ./gradlew check and the unit tests' coverage, and a
-# beta built as the release workflow builds one, signed with a throwaway key. Its token only reads. Its one secret,
+# commit), the Python tools' tests and the CLA workflow's check, ./gradlew check and the unit tests' coverage, the
+# plugins published on GitHub against this build, and a beta built as the release workflow builds one, signed with a
+# throwaway key. Its token only reads. Its one secret,
 # Codecov's upload token, reaches only the steps that send the coverage report to Codecov: the step after them empties
 # it, so no later step, the actions' own post steps included, has it.
 name: CI
@@ -124,6 +125,19 @@ jobs:
       - name: Gradle check
         run: |
           ./gradlew check --continue \
+            -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8" --max-workers=4 \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.internal.http.socketTimeout=300000 -Dorg.gradle.internal.http.connectionTimeout=300000
+
+      # The plugins published on GitHub against this build (L625): each version the plugin list gives of this tree's
+      # plugin API, downloaded and checked as the app checks one (the list's SHA-256, the beta key alone), then
+      # plugin-check's link check against the release build's dex, which check built: a change that would break a
+      # published plugin fails here, before NZStreamer is released. The list's address is the app's own, read from
+      # PluginSource.kt. Until the first plugin release the list answers 404, which passes with a notice. Its Gradle run
+      # takes check's flags, so it runs in check's daemon.
+      - name: Published plugins against this build
+        run: |
+          bash tools/release/check-published-plugins.sh -- \
             -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8" --max-workers=4 \
             -Pkotlin.compiler.execution.strategy=in-process \
             -Dorg.gradle.internal.http.socketTimeout=300000 -Dorg.gradle.internal.http.connectionTimeout=300000

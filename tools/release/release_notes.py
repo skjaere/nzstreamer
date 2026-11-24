@@ -7,6 +7,10 @@
         Prints the body with the licence footer at its end, in place of any footer an earlier run added. The libraries
         are owner/repo<TAB>version<TAB>commit<TAB>yes|no, the last saying whether the library has THIRD_PARTY_NOTICES.md
         at that commit.
+    release_notes.py plugin-notes <body>
+        Prints a plugin release's body with the plugin's licence footer at its end, in place of any footer an earlier run
+        added (release-plugin.yml). A plugin's APK holds its own code alone: NZStreamer gives it every library it uses as
+        it runs, so its footer names no library of its own.
     release_notes.py scan <file>
         Runs tools/privacy-scan.sh on the file, as the only file of a tree, named release-notes.txt.
 
@@ -71,6 +75,14 @@ def footer(libraries):
     return "\n".join(lines) + "\n"
 
 
+def plugin_footer():
+    lines = [MARKER, "---",
+             "**Licences.** This plugin is part of NZStreamer, under the PolyForm Noncommercial License 1.0.0: LICENSE.md,",
+             "attached. It runs inside NZStreamer, which gives it the libraries it uses as it runs: their licences are",
+             "NZStreamer's, listed in THIRD_PARTY_NOTICES.md, attached with Apache-2.0.txt, the Apache License 2.0's text."]
+    return "\n".join(lines) + "\n"
+
+
 def read_libraries(path):
     libraries = []
     with open(path, encoding="utf-8") as f:
@@ -96,6 +108,12 @@ def notes(body_path, libraries_path):
     return (body + "\n\n" if body else "") + footer(libraries)
 
 
+def plugin_notes(body_path):
+    with open(body_path, encoding="utf-8") as f:
+        body = f.read().split(MARKER, 1)[0].rstrip()
+    return (body + "\n\n" if body else "") + plugin_footer()
+
+
 def scan(path):
     with tempfile.TemporaryDirectory(prefix="release-notes-scan-") as repo:
         shutil.copyfile(path, os.path.join(repo, "release-notes.txt"))
@@ -113,10 +131,13 @@ def main(argv):
             print("\n".join(pins(args[0])))
         elif command == "notes" and len(args) == 2:
             sys.stdout.write(notes(*args))
+        elif command == "plugin-notes" and len(args) == 1:
+            sys.stdout.write(plugin_notes(*args))
         elif command == "scan" and len(args) == 1:
             return 0 if scan(args[0]) == 0 else 1
         else:
-            print("usage: release_notes.py pins <catalog> | notes <body> <libraries.tsv> | scan <file>", file=sys.stderr)
+            print("usage: release_notes.py pins <catalog> | notes <body> <libraries.tsv> | plugin-notes <body> | scan <file>",
+                  file=sys.stderr)
             return 2
     except (Bad, OSError, UnicodeDecodeError) as error:
         print(f"release_notes: {error}", file=sys.stderr)

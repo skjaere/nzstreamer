@@ -1,7 +1,9 @@
 # release-please, on each push to main: it keeps a release pull request open from the conventional commits since the
 # last release (version.txt and the changelog, per release-please-config.json). Merging that pull request makes the
 # release as a draft, with its tag; then release-apk.yml builds the APK, attaches it and publishes the release.
-# A release made with the workflow token starts no other workflow, so the APK job is called from here.
+# A plugin is a package of its own (plugins/<id>, tagged plugin-<id>-v1.2.3, L588): each one released goes to
+# release-plugin.yml, which publishes it as a prerelease that is never Latest and writes the plugin list again.
+# A release made with the workflow token starts no other workflow, so the APK and plugin jobs are called from here.
 name: release-please
 
 on:
@@ -23,13 +25,31 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+    # release_created and tag_name are the app's (the root package's) alone; plugins lists the plugins released.
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
+      plugins: ${{ steps.plugins.outputs.plugins }}
     steps:
       # No release-type input: the manifest and release-please-config.json decide. The workflow token.
       - id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+
+      # The plugins this run released, as a JSON list of {id, tag} ([] with none): each path under plugins/ in the
+      # action's paths_released, with its tag from that path's <path>--tag_name output. A matrix job can read only a job's
+      # outputs, declared above once, so the list is built here from all of the step's outputs.
+      # tools/release/test_release_config.py runs this filter over samples of them.
+      - id: plugins
+        shell: bash
+        env:
+          OUTPUTS: ${{ toJSON(steps.release.outputs) }}
+        run: |
+          plugins=$(jq -c '
+            . as $outputs
+            | ($outputs.paths_released // "[]" | fromjson)
+            | map(select(startswith("plugins/")) | {id: ltrimstr("plugins/"), tag: $outputs[. + "--tag_name"]})
+          ' <<<"$OUTPUTS")
+          echo "plugins=$plugins" >>"$GITHUB_OUTPUT"
 
   # The release's APK. The signing secrets are the release-signing environment's; secrets: inherit passes them on, and
   # release-apk.yml fails when one arrives empty.
@@ -42,4 +62,22 @@ jobs:
     with:
       tag: ${{ needs.release-please.outputs.tag_name }}
       publish: true
+    secrets: inherit
+
+  # Each plugin the run released (L588): release-plugin.yml builds it from its tag, checks it, publishes it as a
+  # prerelease that is never Latest and writes the plugin list again. Its signing secrets are the release-signing
+  # environment's, as the apk job's. One plugin's failure leaves the others to finish.
+  plugins:
+    needs: release-please
+    if: needs.release-please.outputs.plugins != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.release-please.outputs.plugins) }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-plugin.yml
+    with:
+      id: ${{ matrix.id }}
+      tag: ${{ matrix.tag }}
     secrets: inherit

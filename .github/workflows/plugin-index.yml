@@ -1,0 +1,102 @@
+# The plugin list (L589, W156): index.json on the plugin-index branch, which every NZStreamer reads. It is rebuilt whole
+# from the repository's published plugin prereleases by tools/release/plugin_index.py, never appended to, so a failed
+# run, a withdrawn version (its release retitled "Withdrawn: ...") or a lost file is put right by running it again.
+# release-plugin.yml calls it after each plugin release; run it by hand from main after withdrawing a version. Only this
+# workflow writes the branch: release-please and CI never run for it, and the maintainer's push guard refuses it from a
+# workstation. The list passes the privacy scan and the canaries' before it is written, through the contents API with
+# the old file's blob id, so a change made meanwhile fails the write rather than being overwritten: run it again.
+name: plugin-index
+
+on:
+  workflow_call:
+    secrets:
+      BETA_SCAN_CANARIES:
+        required: false
+  workflow_dispatch:
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  index:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    # One run at a time, none cancelled: each rebuilds the whole list from the releases, so a waiting run that a newer
+    # one replaces loses nothing.
+    concurrency:
+      group: plugin-index
+      cancel-in-progress: false
+    steps:
+      - name: Check the ref
+        run: |
+          [[ $GITHUB_REF == refs/heads/main ]] ||
+            { echo "::error::Run it from main: this run's ref is $GITHUB_REF"; exit 1; }
+
+      # main's tools and the beta key's certificate digest, which every plugin release must be signed with.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The list on the branch now, and its blob id for the write; a 404 while the branch holds no list yet.
+      - name: Read the list on the branch
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir=$RUNNER_TEMP/index
+          mkdir "$dir"
+          if gh api "repos/$GITHUB_REPOSITORY/contents/index.json?ref=plugin-index" >"$dir/contents.json" 2>"$dir/error.txt"; then
+            jq -r .content "$dir/contents.json" | base64 --decode >"$dir/current.json"
+            echo "sha=$(jq -r .sha "$dir/contents.json")" >>"$GITHUB_OUTPUT"
+          elif grep -q 'HTTP 404' "$dir/error.txt"; then
+            echo "::notice::The plugin-index branch holds no index.json yet: this run writes the first"
+          else
+            cat "$dir/error.txt" >&2
+            exit 1
+          fi
+
+      # Every published plugin prerelease, its plugin.json checked against its tag, its APK and the beta key's digest,
+      # the newest version of each plugin API kept. While the plugins are the same, the list keeps the branch's time, so
+      # its bytes are the same too.
+      - name: Build the list from the releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current=()
+          if [[ -f $RUNNER_TEMP/index/current.json ]]; then
+            current=(--current "$RUNNER_TEMP/index/current.json")
+          fi
+          python3 -I -B tools/release/plugin_index.py build --repo "$GITHUB_REPOSITORY" --signer tools/beta-cert.sha256 \
+            --out "$RUNNER_TEMP/index/index.json" "${current[@]}"
+
+      # The list holds the plugins' own words: it passes the privacy scan and holds none of the canaries.
+      - name: Scan the list
+        env:
+          BETA_SCAN_CANARIES: ${{ secrets.BETA_SCAN_CANARIES }}
+        run: |
+          python3 -I -B tools/release/release_notes.py scan "$RUNNER_TEMP/index/index.json"
+          python3 -I -B tools/release/canaries.py --scan "$RUNNER_TEMP/index/index.json"
+
+      # Written only when it changed, in a request body from a file: the list's base64 can be longer than one argument
+      # may be. The old blob id makes a change made since it was read fail the write.
+      - name: Write the list if it changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.current.outputs.sha }}
+        run: |
+          dir=$RUNNER_TEMP/index
+          if [[ -f $dir/current.json ]] && cmp -s "$dir/current.json" "$dir/index.json"; then
+            echo "::notice::The plugin list is unchanged"
+            exit 0
+          fi
+          base64 -w0 "$dir/index.json" >"$dir/content.txt"
+          jq -n --rawfile content "$dir/content.txt" --arg sha "$SHA" \
+            '{message: "Plugin list from the published plugin releases", branch: "plugin-index", content: $content}
+              + (if $sha == "" then {} else {sha: $sha} end)' >"$dir/request.json"
+          gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/index.json" --input "$dir/request.json" --jq .commit.sha ||
+            { echo "::error::The list wasn't written: the plugin-index branch must be there, and a change made since it was read fails the write (run this again)"; exit 1; }

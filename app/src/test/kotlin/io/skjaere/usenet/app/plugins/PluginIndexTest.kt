@@ -8,6 +8,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Test
+import java.io.File
 import java.time.Instant
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -290,6 +291,26 @@ class PluginIndexTest {
         assertFalse(assertNotNull(list.offer("harbor", installed = 3, sdk = 34, compat)).withdrawn)
         val fixed = index(plugin("harbor", versions = listOf(version("harbor", 2)), withdrawn = buildJsonArray { add(JsonPrimitive(2)) }))
         assertNull(fixed.offer("harbor", installed = null, sdk = 34, compat), "withdrawn and not installed: not listed")
+    }
+
+    @Test
+    fun `the list CI writes is read whole, nothing dropped`() {
+        // What tools/release/plugin_index.py writes from invented releases, held to its output byte for byte by
+        // test_plugin_index.py: two plugins, the newest version of each API, one version withdrawn.
+        val index = listed(File("../tools/release/testdata/plugin-index.json").readText())
+        assertEquals(emptyList(), index.dropped)
+        assertEquals(Instant.parse("2026-12-02T08:30:00Z"), index.generated)
+        assertEquals(listOf("kestrel", "quillmere"), index.plugins.map { it.id })
+        val kestrel = index.plugins.first()
+        assertEquals("Kestrel", kestrel.name)
+        assertEquals(setOf(1_000_200L), kestrel.withdrawn)
+        assertEquals(listOf(1_010_000L to 1, 1_000_100L to 0), kestrel.versions.map { it.versionCode to it.apiMinor })
+        assertEquals(HOST_LIBS.split(",").associate { it.substringBefore("=") to it.substringAfter("=") }, kestrel.versions.first().libs)
+        // A host of API 1.0 is offered its API's newest version, and told 1.1's needs a newer NZStreamer.
+        val offer = assertNotNull(index.offer("kestrel", installed = null, sdk = 34, compat))
+        assertEquals(1_000_100L, offer.offered?.versionCode)
+        assertEquals(1_010_000L, offer.needsNewer?.versionCode)
+        assertEquals(30_000L, index.offer("quillmere", installed = null, sdk = 34, compat)?.offered?.versionCode)
     }
 
     private fun index(vararg plugins: String): PluginIndex = listed(list(*plugins))

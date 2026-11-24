@@ -1,0 +1,91 @@
+{
+  "format": 1,
+  "generated": "2026-12-02T08:30:00Z",
+  "plugins": [
+    {
+      "id": "kestrel",
+      "name": "Kestrel",
+      "package": "app.nzstreamer.plugin.kestrel",
+      "source": "https://github.com/skjaere/nzstreamer/tree/main/plugins/kestrel",
+      "summary": "Invented games from an invented server, in a tab of their own.",
+      "versions": [
+        {
+          "api": "1.1",
+          "changes": "https://github.com/skjaere/nzstreamer/releases/tag/plugin-kestrel-v1.1.0",
+          "libs": {
+            "activity-compose": "1.13.0",
+            "compose-bom": "2026.06.01",
+            "kotlin-stdlib": "2.3.21",
+            "kotlinx-coroutines": "1.11.0",
+            "kotlinx-serialization-json": "1.11.0",
+            "lifecycle-viewmodel-compose": "2.10.0",
+            "slf4j-api": "2.0.20"
+          },
+          "minSdk": 26,
+          "released": "2026-11-29",
+          "sha256": "d19d292c778ccca795740b5193f7148b2d047e2281e1aea2a4040248271461e4",
+          "size": 680,
+          "targetSdk": 36,
+          "url": "https://github.com/skjaere/nzstreamer/releases/download/plugin-kestrel-v1.1.0/kestrel.apk",
+          "versionCode": 1010000,
+          "versionName": "1.1.0"
+        },
+        {
+          "api": "1.0",
+          "changes": "https://github.com/skjaere/nzstreamer/releases/tag/plugin-kestrel-v1.0.1",
+          "libs": {
+            "activity-compose": "1.13.0",
+            "compose-bom": "2026.06.01",
+            "kotlin-stdlib": "2.3.21",
+            "kotlinx-coroutines": "1.11.0",
+            "kotlinx-serialization-json": "1.11.0",
+            "lifecycle-viewmodel-compose": "2.10.0",
+            "slf4j-api": "2.0.20"
+          },
+          "minSdk": 26,
+          "released": "2026-11-27",
+          "sha256": "fc0933066246097f437af8a9ae2c7567977439d06562ef55c9a71ba03f760490",
+          "size": 680,
+          "targetSdk": 36,
+          "url": "https://github.com/skjaere/nzstreamer/releases/download/plugin-kestrel-v1.0.1/kestrel.apk",
+          "versionCode": 1000100,
+          "versionName": "1.0.1"
+        }
+      ],
+      "withdrawn": [
+        1000200
+      ]
+    },
+    {
+      "id": "quillmere",
+      "name": "Quillmere",
+      "package": "app.nzstreamer.plugin.quillmere",
+      "source": "https://github.com/skjaere/nzstreamer/tree/main/plugins/quillmere",
+      "summary": "An invented plugin's invented summary.",
+      "versions": [
+        {
+          "api": "1.0",
+          "changes": "https://github.com/skjaere/nzstreamer/releases/tag/plugin-quillmere-v0.3.0",
+          "libs": {
+            "activity-compose": "1.13.0",
+            "compose-bom": "2026.06.01",
+            "kotlin-stdlib": "2.3.21",
+            "kotlinx-coroutines": "1.11.0",
+            "kotlinx-serialization-json": "1.11.0",
+            "lifecycle-viewmodel-compose": "2.10.0",
+            "slf4j-api": "2.0.20"
+          },
+          "minSdk": 26,
+          "released": "2026-11-26",
+          "sha256": "a87ed97a714e5b707e10dac49dc8943eacaa4477b6d7118562c115ce80f74d10",
+          "size": 760,
+          "targetSdk": 36,
+          "url": "https://github.com/skjaere/nzstreamer/releases/download/plugin-quillmere-v0.3.0/quillmere.apk",
+          "versionCode": 30000,
+          "versionName": "0.3.0"
+        }
+      ],
+      "withdrawn": []
+    }
+  ]
+}
