@@ -63,6 +63,7 @@ include(":core:metadata")
 include(":core:discover")
 include(":core:search")
 include(":core:logging")
+include(":core:plugin")
 include(":core:player")
 include(":app")
 

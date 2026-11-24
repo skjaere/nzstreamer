@@ -458,6 +458,8 @@ dependencies {
     implementation(project(":core:metadata"))
     implementation(project(":core:search"))
     implementation(project(":core:logging"))
+    // The plugin API (L612): the host implements it, and plugins loaded into the app's process compile against it alone.
+    implementation(project(":core:plugin"))
     // Set up with your phone (TV-8): in the release dex from the start, so checkMinApi checks its JDK calls.
     implementation(project(":core:handoff"))
     // Play on TV's link: in the release dex from the start too, so checkMinApi checks its JDK calls.
