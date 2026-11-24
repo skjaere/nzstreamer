@@ -499,7 +499,7 @@ class PluginRegistry(
 
     /** [plugin]'s instance as [version]: its host, under the list's name for it, and the tab it gives, guarded. Under [lock]. */
     private fun instantiate(version: PluginVersion, plugin: NzPlugin): Outcome {
-        val host = hosts.create(version, record(version.id)?.name ?: version.id) { e -> failed(version, "its scope", e) }
+        val host = hosts.create(version, record(version.id)?.name ?: version.id) { what, e -> failed(version, what, e) }
         val tab = calls.call(version, "tab", nothing = null) { plugin.tab() }
         if (tab == null) {
             letGo(version, plugin, host)
@@ -634,19 +634,20 @@ class PluginRegistry(
 
         /**
          * The app's registry: the plugins' files under its own storage, Android's reading of their archives, its secrets,
-         * the crash guard's files beside the plugins', the app's indexers searched for each plugin through [search], and
-         * each plugin's GETs through [http], the app's service client.
+         * the crash guard's files beside the plugins', the app's indexers searched for each plugin through [search], each
+         * plugin's items played through [play], and each plugin's GETs through [http], the app's service client.
          */
         fun of(
             context: Context,
             secrets: NamedSecrets,
             scope: CoroutineScope,
             search: PluginSearchService? = null,
+            play: PluginPlayService? = null,
             http: (() -> HttpClient)? = null,
         ): PluginRegistry {
             val store = PluginStore(context.filesDir, context.cacheDir, secrets)
             val loader = PluginLoader(PluginVerifier(AndroidArchiveReader(context.packageManager)))
-            return PluginRegistry(store, loader, PluginHosts(store, secrets, search = search, http = http), PluginCrashGuard(store.root), scope)
+            return PluginRegistry(store, loader, PluginHosts(store, secrets, search = search, http = http, play = play), PluginCrashGuard(store.root), scope)
         }
     }
 }

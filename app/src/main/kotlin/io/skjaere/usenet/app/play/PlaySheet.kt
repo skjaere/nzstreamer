@@ -261,7 +261,7 @@ fun PlaySheet(
             SearchingSheet(s, tv, startedFrom, castTo, castGoesOn, searchSteps, onHide = onMinimize, onCancel = onCancel)
         }
         is PlayState.NoRelease -> ModalBottomSheet(onDismissRequest = onMinimize, modifier = Modifier.tvSheetTop(tv).okGuard().searchKeyOpensSearch(onMinimize), sheetState = sheet, containerColor = colors.background, dragHandle = handle) {
-            NoReleaseSheet(s, tv, startedFrom, onSearch = { onSearch(s.searchRoute()) }, onClose = onDismiss)
+            NoReleaseSheet(s, tv, startedFrom, onSearch = s.searchRoute()?.let { route -> { onSearch(route) } }, onClose = onDismiss)
         }
         is PlayState.Running -> ModalBottomSheet(onDismissRequest = onMinimize, modifier = Modifier.tvSheetTop(tv).okGuard().searchKeyOpensSearch(onMinimize), sheetState = sheet, containerColor = colors.background, dragHandle = handle) {
             RunningSheet(s, tv, startedFrom, castTo, castGoesOn, onHide = onMinimize, onCancel = onCancel)
@@ -759,8 +759,13 @@ internal fun FileRow(file: FileChoice, modifier: Modifier, clickLabel: String = 
     }
 }
 
+/**
+ * Nothing playable was found: what each search did ([PlayState.NoRelease.stages]), the note under them, then Search when the
+ * sheet has one ([onSearch]; a plugin's item has none, L627) and Show the n found while some were hidden, and Close. On a
+ * TV the first focus is Search, else Close.
+ */
 @Composable
-private fun NoReleaseSheet(s: PlayState.NoRelease, tv: Boolean, from: StartedFrom?, onSearch: () -> Unit, onClose: () -> Unit) {
+private fun NoReleaseSheet(s: PlayState.NoRelease, tv: Boolean, from: StartedFrom?, onSearch: (() -> Unit)?, onClose: () -> Unit) {
     val first = rememberFirstOnTv(tv)
     var showHidden by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
     Column(Modifier.navigationBarsPadding().padding(bottom = sheetBottom(tv)).verticalScroll(rememberScrollState())) {
@@ -778,7 +783,7 @@ private fun NoReleaseSheet(s: PlayState.NoRelease, tv: Boolean, from: StartedFro
         }
         s.note?.let { Text(it, style = AppType.small, color = colors.muted, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) }
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            PrimaryButton("Search “${s.nameQuery}”", onSearch, Modifier.fillMaxWidth().focusRequester(first).tvFocusLook(tv))
+            if (onSearch != null) PrimaryButton("Search “${s.nameQuery}”", onSearch, Modifier.fillMaxWidth().focusRequester(first).tvFocusLook(tv))
             if (s.hidden.isNotEmpty()) SecondaryButton(if (showHidden) "Hide the ${s.hidden.size} found" else "Show the ${s.hidden.size} found", { showHidden = !showHidden }, Modifier.fillMaxWidth().tvFocusLook(tv))
             if (showHidden) GroupCard(Modifier.padding(horizontal = 0.dp)) {
                 s.hidden.forEachIndexed { i, h ->
@@ -789,7 +794,7 @@ private fun NoReleaseSheet(s: PlayState.NoRelease, tv: Boolean, from: StartedFro
                     }
                 }
             }
-            SecondaryButton("Close", onClose, Modifier.fillMaxWidth().tvFocusLook(tv))
+            SecondaryButton("Close", onClose, Modifier.fillMaxWidth().then(if (onSearch == null) Modifier.focusRequester(first) else Modifier).tvFocusLook(tv))
         }
     }
 }

@@ -29,10 +29,10 @@ import java.io.File
 
 /**
  * Makes the [PluginHost] each loaded instance of a plugin gets (L613, L635): its id, its own folders and secrets, a scope
- * of its own on the main thread, the user's indexers searched through [search] under the plugin's name (L630), GETs
- * through the app's service client ([http], L631), and an address judged as an indexer's (L593). Its play and watch answer
- * nothing until those services are wired for plugins (L627, L594). Without [search] or [http] (a test's registry) that
- * service answers nothing too.
+ * of its own on the main thread, the user's indexers searched through [search] under the plugin's name (L630), its items
+ * played through the app's play ([play], L627), GETs through the app's service client ([http], L631), and an address
+ * judged as an indexer's (L593). Its watch answers nothing until that service is wired for plugins (L594). Without
+ * [search], [play] or [http] (a test's registry) that service answers nothing too.
  */
 class PluginHosts(
     private val store: PluginStore,
@@ -40,20 +40,28 @@ class PluginHosts(
     private val main: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val search: PluginSearchService? = null,
     private val http: (() -> HttpClient)? = null,
+    private val play: PluginPlayService? = null,
 ) {
     /**
-     * The host of [version]'s instance, [name] the plugin's as the list gives it: [failed] gets an exception that escapes
-     * its scope, which the scope's handler keeps from closing NZStreamer (L619).
+     * The host of [version]'s instance, [name] the plugin's as the list gives it: [failed] gets what of its code threw
+     * outside composition and the throwable, an exception that escapes its scope ("its scope") among them, which the scope's
+     * handler keeps from closing NZStreamer, and a play's releases() or picker that threw (L619).
      */
-    fun create(version: PluginVersion, name: String = version.id, failed: (Throwable) -> Unit): HostedPlugin = HostedPlugin(
+    fun create(version: PluginVersion, name: String = version.id, failed: (what: String, e: Throwable) -> Unit): HostedPlugin = HostedPlugin(
         id = version.id,
         dataDir = store.dataDir(version.id).apply { mkdirs() },
         cacheDir = store.cacheDir(version.id).apply { mkdirs() },
         secrets = Secrets(version.id, secrets),
-        scope = CoroutineScope(SupervisorJob() + main + CoroutineExceptionHandler { _, e -> failed(e) }),
+        scope = CoroutineScope(SupervisorJob() + main + CoroutineExceptionHandler { _, e -> failed(SCOPE, e) }),
         search = search?.of(version.id, name) ?: NoSearch,
         http = http?.let { PluginHttpImpl(version, it) } ?: NoHttp,
+        play = play?.of(version, PluginCalls { _, what, e -> failed(what, e) }) ?: NoPlay,
     )
+
+    private companion object {
+        /** What failed, as the log names an exception that escaped the instance's scope. */
+        const val SCOPE = "its scope"
+    }
 }
 
 /**
@@ -68,8 +76,8 @@ class HostedPlugin internal constructor(
     override val scope: CoroutineScope,
     override val search: PluginSearch = NoSearch,
     override val http: PluginHttp = NoHttp,
+    override val play: PluginPlay = NoPlay,
 ) : PluginHost {
-    override val play: PluginPlay = NoPlay
     override val watch: PluginWatch = NoWatch
 
     /** As the app judges an indexer's address, from the address alone ([UrlSecurity]). */

@@ -184,6 +184,8 @@ class SheetMirrorTest {
             AttemptFailure.NoVideo to "No video file",
             AttemptFailure.NoMatchingEpisode(2, 4) to "No file for S02E04",
             AttemptFailure.NoRememberedFile("Harbor.Lights.S02E04.mkv") to "The file that played before isn't in it",
+            // A plugin's item's file (L627): the plugin's words for what it looked for, as an episode's names it.
+            AttemptFailure.NoMatchingFile("No file for the race") to "No file for the race",
             AttemptFailure.NoPlayableAudio(listOf("TrueHD Atmos")) to "No audio the TV can play (TrueHD Atmos)",
             AttemptFailure.NoPlayableVideo(emptyList()) to "No video the TV can play",
             AttemptFailure.Provider(UsenetError.AuthFailed("481 Authentication rejected by $host")) to "A provider on the TV rejected the login",

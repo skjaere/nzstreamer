@@ -139,7 +139,7 @@ class PlaySheetTest {
         )
         val ep = EpisodePlay.of(show, Episode(1, 2, "The Well", null, LocalDate.of(2021, 3, 6), null, null), today = LocalDate.of(2026, 10, 18))
         val sheet = noRelease(ep, FindResult(ep.request, emptyList(), emptyList(), emptyList()), LocalDate.of(2026, 10, 18))
-        val request = assertNotNull(sheet.searchRoute().request())
+        val request = assertNotNull(sheet.searchRoute()?.request())
         assertEquals("Moonwell Village s01e02" to null, request.text to request.pick)
 
         fun item(title: String) = NewznabItem(

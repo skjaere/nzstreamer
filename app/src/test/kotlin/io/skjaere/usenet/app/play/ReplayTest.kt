@@ -807,6 +807,8 @@ class ReplayTest {
             AttemptFailure.MissingArticles("430"), AttemptFailure.Passworded, AttemptFailure.NoPlayableAudio(listOf("TrueHD")),
             // It never really played here, its sound over a black screen: Resume shouldn't choose it again.
             AttemptFailure.NoPlayableVideo(listOf("2160p Dolby Vision profile 7")), AttemptFailure.Unsupported("RAR"), AttemptFailure.NoVideo, AttemptFailure.NoMatchingEpisode(2, 5), AttemptFailure.Failed(UsenetError.Corrupt("CRC")),
+            // No file a plugin's picker wants (L627): the release's, as one without the episode is.
+            AttemptFailure.NoMatchingFile("No file for the race"),
             // A file the player can't read is the release's (L319).
             AttemptFailure.Unreadable(UnreadableFile.UnknownFormat, "MKV"), AttemptFailure.Unreadable(UnreadableFile.Broken, null),
             // A copy of a disc is the release's shape, whatever plays it (L313).

@@ -184,7 +184,7 @@ class MoviePlayTest {
         assertEquals(SearchPick(TitleType.Movie, 900011, "Copper Crown"), none.searchPick)
         assertNull(none.note)
         assertEquals(listOf("Indexer A" to "1 result, none playable", "Indexer B" to "1 result, none playable"), none.stages)
-        assertEquals(SearchRoute("Copper Crown 2019", "Movie", 900011, "Copper Crown"), searchRoute(none.nameQuery, none.searchPick))
+        assertEquals(SearchRoute("Copper Crown 2019", "Movie", 900011, "Copper Crown"), none.searchRoute())
     }
 
     @Test

@@ -67,6 +67,8 @@ import io.skjaere.usenet.app.onMainThread
 import io.skjaere.usenet.app.play.CastTo
 import io.skjaere.usenet.app.play.EpisodePlay
 import io.skjaere.usenet.app.play.EpisodeTarget
+import io.skjaere.usenet.app.play.ItemFound
+import io.skjaere.usenet.app.play.ItemTarget
 import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.play.PlayOrigin
 import io.skjaere.usenet.app.play.PlayOutcome
@@ -285,6 +287,7 @@ class PlayOnCastDeviceTest {
             override fun play(request: PlayRequest, origin: PlayOrigin): Deferred<PlayOutcome> = throw AssertionError("nothing plays here")
             override fun castFile(nzbId: String, file: FileCandidate, origin: PlayOrigin) = throw AssertionError("nothing plays here")
             override fun castDownload(row: Download, origin: PlayOrigin) = throw AssertionError("nothing plays here")
+            override fun playItem(item: ItemTarget, releases: suspend () -> ItemFound, origin: PlayOrigin) = throw AssertionError("nothing plays here")
         }
         val router = PlayRouter(
             PlayRouterDeps(
@@ -456,6 +459,7 @@ class PlayOnCastDeviceTest {
             override fun play(request: PlayRequest, origin: PlayOrigin): Deferred<PlayOutcome> = throw AssertionError("not this play")
             override fun castFile(nzbId: String, file: FileCandidate, origin: PlayOrigin) = throw AssertionError("not this play")
             override fun castDownload(row: Download, origin: PlayOrigin) = throw AssertionError("not this play")
+            override fun playItem(item: ItemTarget, releases: suspend () -> ItemFound, origin: PlayOrigin) = throw AssertionError("not this play")
         }
         val app = PlayRouterDeps.of(container)
         val router = PlayRouter(

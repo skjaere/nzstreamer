@@ -29,7 +29,7 @@ import kotlin.test.assertTrue
  * escapes it is logged by the plugin's id, version and kind, recorded with the crash guard, and turns that version off at
  * once, its scope cancelled before its close(). And what the host hands an instance: its own folders and secrets, an
  * address judged as an indexer's, and services that answer nothing until they are wired for plugins, or where the
- * registry is given none of the app's (search and HTTP: PluginSearchServiceTest, PluginHttpTest).
+ * registry is given none of the app's (search, play and HTTP: PluginSearchServiceTest, ItemPlayTest, PluginHttpTest).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class PluginScopeTest {
@@ -93,7 +93,7 @@ class PluginScopeTest {
     }
 
     @Test
-    fun `play and watch answer nothing until they are wired, search and http nothing without the app's services`() = runTest {
+    fun `watch answers nothing until it is wired, search, play and http nothing without the app's services`() = runTest {
         val h = harness()
         val registry = h.registry().apply { start(); firstActivity() }
         h.install(registry, "skeleton", 1)

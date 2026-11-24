@@ -9,6 +9,8 @@ import io.skjaere.usenet.app.home.UpNextRow
 import io.skjaere.usenet.app.home.playsOn
 import io.skjaere.usenet.app.play.EpisodePlay
 import io.skjaere.usenet.app.play.EpisodeTarget
+import io.skjaere.usenet.app.play.ItemFound
+import io.skjaere.usenet.app.play.ItemTarget
 import io.skjaere.usenet.app.play.CastTo
 import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.play.PlayOrigin
@@ -101,6 +103,7 @@ class PlayRouterTest {
         }
         override fun castFile(nzbId: String, file: FileCandidate, origin: PlayOrigin) { here += "file ${file.name} of $nzbId${from(origin)}" }
         override fun castDownload(row: Download, origin: PlayOrigin) { here += "download ${row.title}${from(origin)}" }
+        override fun playItem(item: ItemTarget, releases: suspend () -> ItemFound, origin: PlayOrigin) { here += "item ${item.title}${from(origin)}" }
     }
 
     private val ep = EpisodePlay(
@@ -451,6 +454,7 @@ class PlayRouterTest {
                     override fun play(request: PlayRequest, origin: PlayOrigin): Deferred<PlayOutcome> = CompletableDeferred(PlayOutcome.Launched).also { origins += origin }
                     override fun castFile(nzbId: String, file: FileCandidate, origin: PlayOrigin) { origins += origin }
                     override fun castDownload(row: Download, origin: PlayOrigin) { origins += origin }
+                    override fun playItem(item: ItemTarget, releases: suspend () -> ItemFound, origin: PlayOrigin) { origins += origin }
                 },
                 tv = PlayOnTv { _, _, _, _ -> error("never a TV") },
                 watch = { null }, episode = { error("not looked up") }, movie = { _, _ -> error("not looked up") }, now = { now },
@@ -476,6 +480,41 @@ class PlayRouterTest {
 
     /** A file Import opened (L147): its NZB prepared and stored, a video in it. */
     private val imported = FileCandidate(0, StreamableFile("Copper.Crown.2026.1080p.mkv", 1_400_000_000, 0, 0, 0, 0))
+
+    private val race = ItemTarget("kestrel", "gp-kestrel:race", "Grand Prix of Kestrel · Race", "Round 20")
+    private val nothingFound: suspend () -> ItemFound = { ItemFound.NOTHING }
+
+    /** L627: a plugin's item plays here with This phone or a TV chosen, as Choose release does: a TV can't play an item yet. */
+    @Test
+    fun `a plugin's item plays here with This phone or a TV chosen`() {
+        router.playItem(race, nothingFound)
+        tvChosen()
+        router.playItem(race, nothingFound)
+        tvChosen(TvState.NotOpen)
+        router.playItem(race, nothingFound)
+        assertEquals(List(3) { "item Grand Prix of Kestrel · Race" }, here)
+        assertTrue(onTv.isEmpty() && asked.isEmpty() && lookups.isEmpty())
+        assertEquals(0, sheets)
+    }
+
+    /** L627, L80: on the connected Cast device a plugin's item plays from the cast origin; while it connects, nowhere. */
+    @Test
+    fun `a plugin's item casts to the connected Cast device, plays nowhere while it connects, and asks first for a speaker`() {
+        castChosen()
+        router.playItem(race, nothingFound)
+        assertEquals(listOf("item Grand Prix of Kestrel · Race cast to Kitchen display"), here)
+        for (link in listOf(CastLink.Connecting, CastLink.Reconnecting)) {
+            castChosen(link)
+            router.playItem(race, nothingFound)
+        }
+        assertEquals(2, sheets)
+        assertEquals(1, here.size)
+        speakerChosen()
+        router.playItem(race, nothingFound)
+        assertEquals(1, here.size, "nothing before the answer")
+        soundOnly().answered(PlayOnAsk.SoundOnly.Answer.CastAnyway)
+        assertEquals("item Grand Prix of Kestrel · Race cast to Hallway speaker", here.last())
+    }
 
     /** W44 (i), L147: Import's file plays here, as before, with This phone or a TV chosen: a TV can't play an NZB of this phone's. */
     @Test

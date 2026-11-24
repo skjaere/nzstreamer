@@ -90,5 +90,8 @@ fun RecentSearch.route(): SearchRoute = searchRoute(query, pick)
 /** What the play sheet's Search opens after a failure: its search, by the TMDB title it is for when known; null when it offers none. */
 fun PlayState.Failed.searchRoute(): SearchRoute? = search?.let { searchRoute(it, searchPick) }
 
-/** What the no-release sheet's Search opens: its search, by the TMDB title it is for or in the show's language. */
-fun PlayState.NoRelease.searchRoute(): SearchRoute = searchRoute(nameQuery, searchPick, searchLanguage)
+/**
+ * What the no-release sheet's Search opens: its search, by the TMDB title it is for or in the show's language; null when
+ * it offers none (a plugin's item, L627).
+ */
+fun PlayState.NoRelease.searchRoute(): SearchRoute? = nameQuery?.let { searchRoute(it, searchPick, searchLanguage) }

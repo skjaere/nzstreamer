@@ -356,7 +356,7 @@ class PluginSearchServiceTest {
         val service = service(fake, listOf(quarry))
         val store = PluginStore(File(dir, "files"), File(dir, "cache"), FakeSecrets())
         val host = PluginHosts(store, FakeSecrets(), main = StandardTestDispatcher(testScheduler), search = service)
-            .create(PluginVersion("kestrel", 1, 1), "Kestrel") {}
+            .create(PluginVersion("kestrel", 1, 1), "Kestrel") { _, _ -> }
         repeat(10) { assertEquals("Server error", host.search.search("Copper Crown", null).last().indexers.single().text) }
         assertEquals("Paused: too many searches from Kestrel", host.search.search("Copper Crown", null).single().indexers.single().text)
         host.cancel()

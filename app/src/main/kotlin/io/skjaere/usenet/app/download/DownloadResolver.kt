@@ -1410,7 +1410,7 @@ class DownloadResolver(
         internal fun reason(failure: AttemptFailure): String = when (failure) {
             is AttemptFailure.MissingArticles, AttemptFailure.Passworded, is AttemptFailure.NoPlayableAudio, is AttemptFailure.NoPlayableVideo,
             is AttemptFailure.Unreadable, is AttemptFailure.DiscCopy -> shortFailure(failure)
-            AttemptFailure.NoVideo, is AttemptFailure.NoMatchingEpisode -> failure.text
+            AttemptFailure.NoVideo, is AttemptFailure.NoMatchingEpisode, is AttemptFailure.NoMatchingFile -> failure.text
             // A torrent's (L460), as the play sheet says them where they name no service.
             AttemptFailure.NoLongerCached -> NO_LONGER_CACHED
             AttemptFailure.RemovedByService, is AttemptFailure.ServiceRefused, AttemptFailure.NoWorkingLink -> failure.text

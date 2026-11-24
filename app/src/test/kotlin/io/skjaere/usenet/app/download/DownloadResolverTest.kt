@@ -21,6 +21,7 @@ import io.skjaere.usenet.app.play.IMPORT_GONE
 import io.skjaere.usenet.app.play.MissingReleases
 import io.skjaere.usenet.app.play.PlayingPack
 import io.skjaere.usenet.app.play.VideoTiming
+import io.skjaere.usenet.core.AttemptFailure
 import io.skjaere.usenet.core.AvailabilityBackend
 import io.skjaere.usenet.core.MissingOn
 import io.skjaere.usenet.core.NzbPreparer
@@ -3495,6 +3496,13 @@ class DownloadResolverTest {
         override fun holdPrepare(key: String, prepared: PreparedNzb) = packs.hold(key, prepared)
 
         override suspend fun packs(show: Int, season: Int) = packs.forSeason(show, season)
+    }
+
+    /** L627: the file a picker looked for and didn't find is said in the picker's words, a plugin's as an episode's. */
+    @Test
+    fun `a file no picker found is said in the picker's own words`() {
+        assertEquals("No file for S02E04", DownloadResolver.reason(AttemptFailure.NoMatchingEpisode(2, 4)))
+        assertEquals("No file for the race", DownloadResolver.reason(AttemptFailure.NoMatchingFile("No file for the race")))
     }
 
     private companion object {

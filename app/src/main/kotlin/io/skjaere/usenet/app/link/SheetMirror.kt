@@ -85,6 +85,8 @@ object SheetMirror {
         // The release's own shape, whichever device opened it (L313): the TV's words as they are.
         is AttemptFailure.DiscCopy -> f.text
         is AttemptFailure.NoMatchingEpisode -> "No file for S%02dE%02d".format(java.util.Locale.ROOT, f.season, f.episode)
+        // A plugin's words for the file it looked for, as an episode's names it: never a provider's or a server's.
+        is AttemptFailure.NoMatchingFile -> f.label
         is AttemptFailure.NoRememberedFile -> "The file that played before isn't in it"
         is AttemptFailure.NoPlayableAudio -> "No audio the TV can play" + if (f.found.isEmpty()) "" else " (${f.found.joinToString()})"
         is AttemptFailure.NoPlayableVideo -> "No video the TV can play" + if (f.found.isEmpty()) "" else ": ${f.found.joinToString()}"

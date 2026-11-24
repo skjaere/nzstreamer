@@ -10,6 +10,8 @@ import io.skjaere.usenet.app.download.DownloadLaunch
 import io.skjaere.usenet.app.home.UpNextPlay
 import io.skjaere.usenet.app.play.EpisodePlay
 import io.skjaere.usenet.app.play.EpisodeTarget
+import io.skjaere.usenet.app.play.ItemFound
+import io.skjaere.usenet.app.play.ItemTarget
 import io.skjaere.usenet.app.play.CastTo
 import io.skjaere.usenet.app.play.MovieTarget
 import io.skjaere.usenet.app.play.PlayOrigin
@@ -54,6 +56,9 @@ interface PlayHere {
 
     /** A finished download's file, [row]'s, cast from [origin] with nothing searched (L418, L447). */
     fun castDownload(row: Download, origin: PlayOrigin)
+
+    /** A plugin's item, from the releases the plugin gives ([releases]), this phone's or a cast's (L627). */
+    fun playItem(item: ItemTarget, releases: suspend () -> ItemFound, origin: PlayOrigin)
 }
 
 /** What a phone asks a TV to play (L6, L25): an episode or a movie, and this phone's own place for it ([from], L39). */
@@ -114,6 +119,8 @@ class PlayRouterDeps(
                 override fun castDownload(row: Download, origin: PlayOrigin) {
                     DownloadLaunch.of(row)?.let { launch -> c.playback.castDownload(row, launch, origin) }
                 }
+                override fun playItem(item: ItemTarget, releases: suspend () -> ItemFound, origin: PlayOrigin) =
+                    c.playback.playItem(item, releases, origin)
             },
             // Made on the first play on a TV: a TV's own pages route through here too, and never play on one.
             tv = PlayOnTv { tv, title, subtitle, ask -> c.tvStart.start(tv, title, subtitle, ask) },
@@ -230,6 +237,24 @@ class PlayRouter(private val deps: PlayRouterDeps) {
                     Where.Here -> outcome.follow(deps.here.play(request, PlayOrigin.Here))
                     is Where.Cast -> outcome.follow(deps.here.play(request, to.origin))
                     is Where.Tv, Where.Nowhere -> outcome.complete(PlayOutcome.Stopped)
+                }
+            }
+        }
+    }
+
+    /**
+     * A plugin's item ([io.skjaere.usenet.plugin.PluginPlay], L627), routed as a release chosen by hand ([chosen]): on this
+     * phone with This phone or a TV chosen (a TV can't play an item yet), on the Cast device with one chosen. While the
+     * device connects nothing plays; to a speaker, as the answer to its question says.
+     */
+    fun playItem(item: ItemTarget, releases: suspend () -> ItemFound) {
+        when (deps.target()) {
+            PlayTarget.Phone, is PlayTarget.Tv -> deps.here.playItem(item, releases, PlayOrigin.Here)
+            is PlayTarget.Cast -> routed { to ->
+                when (to) {
+                    Where.Here -> deps.here.playItem(item, releases, PlayOrigin.Here)
+                    is Where.Cast -> deps.here.playItem(item, releases, to.origin)
+                    is Where.Tv, Where.Nowhere -> Unit
                 }
             }
         }

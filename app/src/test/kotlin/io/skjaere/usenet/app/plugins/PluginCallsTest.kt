@@ -1,9 +1,13 @@
 package io.skjaere.usenet.app.plugins
 
 import io.skjaere.usenet.logging.LogBuffer
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -144,5 +148,30 @@ class PluginCallsTest {
         assertEquals("given", calls.call(version, "ask", nothing = "nothing") { "given" })
         assertEquals(listOf("skeleton 3 tab" to "IllegalArgumentException", "skeleton 3 list" to "NoClassDefFoundError"), failures)
         assertIs<OutOfMemoryError>(runCatching { calls.call(version, "big", nothing = Unit) { throw OutOfMemoryError("no room") } }.exceptionOrNull())
+    }
+
+    /**
+     * L619, L627: a suspending call into the plugin's code (a play's releases()) is guarded the same way. A cancellation the
+     * plugin's code throws of its own while its caller goes on (a timeout of its own) is its failure; the caller's own
+     * cancellation goes on up, and is nobody's error.
+     */
+    @Test
+    fun `a suspending call is guarded the same, and its caller's own cancellation goes on up`() = runTest {
+        val failures = mutableListOf<String>()
+        val calls = PluginCalls { version, what, e -> failures += "${version.id} ${version.versionCode} $what ${e.javaClass.simpleName}" }
+        val version = PluginVersion("skeleton", 3, key = 7)
+        assertEquals(null, calls.calling(version, "releases", nothing = null) { throw IllegalStateException("plugin's words") })
+        assertEquals("given", calls.calling(version, "releases", nothing = "nothing") { "given" })
+        assertEquals(null, calls.calling(version, "releases", nothing = null) { throw CancellationException("its own timeout") })
+        assertEquals(listOf("skeleton 3 releases IllegalStateException", "skeleton 3 releases CancellationException"), failures)
+
+        val waiting = launch { calls.calling(version, "releases", nothing = Unit) { awaitCancellation() } }
+        runCurrent()
+        waiting.cancel()
+        waiting.join()
+        assertTrue(waiting.isCancelled)
+        assertEquals(2, failures.size, "the caller's cancellation is nobody's error")
+        assertIs<OutOfMemoryError>(runCatching { calls.calling(version, "big", nothing = Unit) { throw OutOfMemoryError("no room") } }.exceptionOrNull())
+        assertEquals(2, failures.size)
     }
 }

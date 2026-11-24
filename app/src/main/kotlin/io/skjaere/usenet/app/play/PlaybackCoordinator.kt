@@ -114,7 +114,7 @@ import kotlinx.serialization.UseSerializers
 import org.slf4j.LoggerFactory
 import java.util.Locale
 
-/** What progress is recorded against: an episode or movie from TMDB, else the release itself. */
+/** What progress is recorded against: an episode or movie from TMDB, a plugin's item, else the release itself. */
 @Serializable
 data class WatchTarget(
     val kind: WatchKind,
@@ -123,15 +123,18 @@ data class WatchTarget(
     val season: Int? = null,
     val episode: Int? = null,
     val movieTmdbId: Int? = null,
+    /** A plugin's item's watch key, item:<plugin id>:<its key> ([WatchKey.item], L626); null for anything else. */
+    val itemKey: String? = null,
 ) {
     /**
-     * The key of the TMDB episode or movie, under which the release that played it is remembered;
+     * The key of the TMDB episode or movie, or of the plugin's item, under which the release that played it is remembered;
      * null for a release played without TMDB, whose key is the release itself.
      */
     val rememberedKey: String?
         get() = when {
             kind == WatchKind.Episode && showTmdbId != null && season != null && episode != null -> WatchKey.episode(showTmdbId, season, episode)
             kind == WatchKind.Movie && movieTmdbId != null -> WatchKey.movie(movieTmdbId)
+            kind == WatchKind.Item && itemKey != null -> itemKey
             else -> null
         }
 
@@ -760,13 +763,17 @@ sealed interface PlayState {
     /** The episode finder is asking the indexers. */
     data class Searching(val title: String, val subtitle: String?, val line: String) : PlayState
 
-    /** The finder found nothing playable; [stages] explain what each search did. */
+    /**
+     * The finder found nothing playable; [stages] explain what each search did. For a plugin's item (L627), the plugin's
+     * lines and note, nothing hidden, and no [nameQuery]: the sheet then offers no Search.
+     */
     data class NoRelease(
         val title: String,
         val subtitle: String?,
         val stages: List<Pair<String, String>>,
         val note: String?,
-        val nameQuery: String,
+        /** What the sheet's Search searches; null for none. */
+        val nameQuery: String?,
         val hidden: List<io.skjaere.usenet.search.RankedItem>,
         /** The TMDB title [nameQuery] is searched as (a movie, by its id); null searches the words. */
         val searchPick: SearchPick? = null,
@@ -1148,16 +1155,42 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         job = launchPlay(known.title, known.subtitle, origin = origin) {
             val target = facts?.invoke(known) ?: known
             val remembered = container.library.lastRelease(WatchKey.movie(target.tmdbId))
-            // A torrent the play would leave out (kept from the service since) isn't played alone: the film is searched for.
-            val playable = remembered?.let { Replay.leftOut(Replay.candidate(it), offService()) == null } == true
-            val stored = remembered?.let { if (it.source == null) it.nzbId?.let { id -> container.store.stored(id) } != null else playable && kept(it) } == true
             MoviePlay.run(
-                target, remembered, stored, java.time.LocalDate.now(),
+                target, remembered, playsAlone(remembered), java.time.LocalDate.now(),
                 play = { request, retry -> runPipeline(request, retry) },
                 searching = { line -> _state.value = PlayState.Searching(target.title, target.subtitle, line) },
                 // Play's own pick shows no list, and can't take one back: it waits for torrents still checked, 10 s at most (L199).
                 find = { io.skjaere.usenet.app.search.findMovieReleases(container, target).last() },
                 leftOut = leftOut,
+            )?.let { _state.value = it }
+        }
+    }
+
+    /**
+     * Whether [remembered], the release that played a title before, is stored to play alone: its NZB in the store, a
+     * torrent's listing kept from its service. A torrent the play would leave out (kept from the service since) isn't: the
+     * title is searched for.
+     */
+    private suspend fun playsAlone(remembered: RememberedRelease?): Boolean {
+        val release = remembered ?: return false
+        if (release.source == null) return release.nzbId?.let { id -> container.store.stored(id) } != null
+        return Replay.leftOut(Replay.candidate(release), offService()) == null && kept(release)
+    }
+
+    /**
+     * Play on a plugin's item ([ItemPlay], L627): the release that played it before, alone, while its NZB is stored; else,
+     * or when that fails, the releases the plugin accepts ([releases], asked at most once), in its order. [origin]: this
+     * device's, or a cast's. Items have no downloads (W161), so no download plays in its place.
+     */
+    fun playItem(item: ItemTarget, releases: suspend () -> ItemFound, origin: PlayOrigin = PlayOrigin.Here) {
+        replaceJob(origin, item.title, item.subtitle, item.watch) { playItem(item, releases, it) }
+        job = launchPlay(item.title, item.subtitle, origin = origin) {
+            val remembered = container.library.lastRelease(item.watchKey)
+            ItemPlay.run(
+                item, remembered, playsAlone(remembered),
+                play = { request, retry -> runPipeline(request, retry) },
+                searching = { line -> _state.value = PlayState.Searching(item.title, item.subtitle, line) },
+                releases = releases,
             )?.let { _state.value = it }
         }
     }

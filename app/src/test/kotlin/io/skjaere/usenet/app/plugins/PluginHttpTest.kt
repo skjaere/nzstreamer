@@ -171,7 +171,7 @@ class PluginHttpTest {
     @Test
     fun `a plugin's host judges an address as an indexer's, and gets through the app's client`() = runBlocking<Unit> {
         val store = PluginStore(File(dir, "files"), File(dir, "cache"), FakeSecrets())
-        val host = PluginHosts(store, FakeSecrets(), main = Dispatchers.Unconfined, http = { client }).create(version, "Kestrel") {}
+        val host = PluginHosts(store, FakeSecrets(), main = Dispatchers.Unconfined, http = { client }).create(version, "Kestrel") { _, _ -> }
         mapOf(
             "https://sports.example.org/api" to AddressSafety.Encrypted,
             "http://kestrel.local:1867" to AddressSafety.LocalHttp,
