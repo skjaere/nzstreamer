@@ -11,11 +11,11 @@ import java.time.format.DateTimeParseException
 
 /**
  * The plugin list (L589), format 1, as CI writes it from the published plugin prereleases (tools/release): when it was
- * [generated], and its [plugins], each with the versions CI keeps (the newest for each API) and the versionCodes it
- * [ListedPlugin.withdrawn]. Read with this build's rules ([read]): keys it doesn't know are passed over, the format and
- * the caps hold for the whole list, and an entry that breaks a rule is dropped alone ([dropped], by kind). Its text is
- * plain text, drawn as text; it never decides what loads: an installed plugin is checked again at every load, and only a
- * withdrawal turns one off.
+ * [generated], and its [plugins], each with the versions CI keeps (the newest for each API and set of shared libraries,
+ * 20 at most) and the versionCodes it [ListedPlugin.withdrawn]. Read with this build's rules ([read]): keys it doesn't
+ * know are passed over, the format and the caps hold for the whole list, and an entry that breaks a rule is dropped
+ * alone ([dropped], by kind). Its text is plain text, drawn as text; it never decides what loads: an installed plugin is
+ * checked again at every load, and only a withdrawal turns one off.
  */
 class PluginIndex(val generated: Instant, val plugins: List<ListedPlugin>, val dropped: List<ListDrop>) {
     /**

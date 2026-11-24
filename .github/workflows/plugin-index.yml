@@ -61,8 +61,8 @@ jobs:
           fi
 
       # Every published plugin prerelease, its plugin.json checked against its tag, its APK and the beta key's digest,
-      # the newest version of each plugin API kept. While the plugins are the same, the list keeps the branch's time, so
-      # its bytes are the same too.
+      # the newest version of each plugin API and set of shared libraries kept, 20 at most for a plugin. While the
+      # plugins are the same, the list keeps the branch's time, so its bytes are the same too.
       - name: Build the list from the releases
         env:
           GH_TOKEN: ${{ github.token }}
