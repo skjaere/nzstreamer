@@ -22,8 +22,9 @@ import java.util.Locale
  * tests can't go: Android's own reading of an archive, its signer and its typed meta-data, and a PathClassLoader over a
  * read-only file in filesDir whose parent is the app's loader, in the app's own process. Each build goes through the
  * registry's install as a download would (the call the installer makes once its download is checked against the list),
- * and a fresh registry over the same files loads what was stored, as the next start would. What is refused is refused
- * before its loader is made: the loader's own count stays 0.
+ * and a fresh registry over the same files loads what was stored, as the next start would. An install checks the file
+ * alone and never makes a class loader; a start loads, so each refusal is shown there too, stored as if it had passed,
+ * refused before its loader is made: the loader's own count stays 0.
  *
  * M-load, from a registry's start to the skeleton's instance (the hash, the archive's checks, the PathClassLoader, the
  * entry class), for the stored file's first load and a later one, goes to the instrumentation's status as m-load.
@@ -93,7 +94,7 @@ class PluginStoreDeviceTest {
         val result = registry.install(SkeletonBuild.Foreign, download)
         assertEquals(Refusal.Signer, (result as? InstallResult.Refused)?.refusal)
         assertEquals("It isn't signed by NZStreamer, so nothing was installed.", Refusal.Signer.installLine)
-        assertEquals("no class loader made over it", 0, registry.loader.classLoadersMade)
+        assertEquals("an install checks the file alone: no class loader", 0, registry.loader.classLoadersMade)
         assertNothingStored(registry)
 
         // Stored as if both its file and its recorded SHA-256 had been replaced: the next start's checks refuse it too.
@@ -119,8 +120,17 @@ class PluginStoreDeviceTest {
         val result = registry.install(SkeletonBuild.Newer, newer)
         assertEquals(Refusal.Incompatible, (result as? InstallResult.Refused)?.refusal)
         assertEquals("It was made for another NZStreamer version, so nothing was installed.", Refusal.Incompatible.installLine)
-        assertEquals("no class loader made over it", 0, registry.loader.classLoadersMade)
+        assertEquals("an install checks the file alone: no class loader", 0, registry.loader.classLoadersMade)
         assertNothingStored(registry)
+
+        // Stored as if it had passed, its SHA-256 recorded: the next start's checks refuse it before any class of it loads.
+        val sha256 = Sha256.of(newer)
+        registry.store.writeVersion(SKELETON, 3, newer, sha256)
+        registry.store.writeRegistry(RegistryFile(listOf(PluginRecord(SKELETON, "Skeleton", 3, "3", sha256, slot = 1, installedAt = 0))))
+        val next = plugins.registry().apply { start() }
+        val refused = next.await(SKELETON, "refused") { it.status is PluginStatus.Refused }
+        assertEquals(Refusal.Incompatible, (refused.status as PluginStatus.Refused).refusal)
+        assertEquals("no class loader made over it at a start", 0, next.loader.classLoadersMade)
     }
 
     @Test
@@ -131,7 +141,7 @@ class PluginStoreDeviceTest {
         changeAByte(download)
         val result = registry.install(SkeletonBuild.V1, download, listed)
         assertEquals(Refusal.Hash, (result as? InstallResult.Refused)?.refusal)
-        assertEquals("no class loader made over it", 0, registry.loader.classLoadersMade)
+        assertEquals("an install checks the file alone: no class loader", 0, registry.loader.classLoadersMade)
         assertNothingStored(registry)
 
         // A byte of the stored copy changed after its install: the next start refuses it before anything reads it.
