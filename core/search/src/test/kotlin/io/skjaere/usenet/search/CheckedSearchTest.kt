@@ -21,6 +21,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -177,5 +178,28 @@ class CheckedSearchTest {
             ),
             seen,
         )
+    }
+
+    /**
+     * L630: whether the search asked the indexer anew goes with its answer as it becomes [IndexerOutcome.Checking], for a
+     * plugin's soft cap: an answer from the cache says it didn't.
+     */
+    @Test
+    fun `a torrent indexer's checking says whether the search asked it`() = runTest {
+        val asked = item(prowlarr, "Harbor.Lights.S01E02.1080p.WEB-DL.H.264-GOOD", "1111111111111111111111111111111111111111")
+        val kept = item(quarry, "Harbor.Lights.S01E02.2160p.WEB.H265-KESTREL", "4444444444444444444444444444444444444444")
+        val seen = collect(
+            CheckedSearch(
+                FakeSearch(
+                    listOf(
+                        0L to IndexerOutcome.Results(prowlarr, page(asked), query, requested = true),
+                        0L to IndexerOutcome.Results(quarry, page(kept), query, requested = false),
+                    ),
+                ),
+            ) { _, items -> flow { emit(items.settled(cached)) } },
+        )
+        val checking = seen.map { it.outcome }.filterIsInstance<IndexerOutcome.Checking>().associateBy { it.indexer.id }
+        assertTrue(checking.getValue("p").requested, "an answer the indexer was asked for")
+        assertFalse(checking.getValue("q").requested, "an answer from the cache")
     }
 }

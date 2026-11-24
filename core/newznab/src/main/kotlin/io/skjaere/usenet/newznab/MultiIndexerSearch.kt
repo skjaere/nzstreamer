@@ -29,9 +29,13 @@ class CapsCache(
     private val mutex = Mutex()
     private val entries = mutableMapOf<String, Pair<Instant, IndexerCaps>>()
 
-    suspend fun get(indexer: IndexerConfig): IndexerCaps {
+    suspend fun get(indexer: IndexerConfig): IndexerCaps = get(indexer) {}
+
+    /** [get], calling [asking] just before it asks [indexer] for them: not for caps it still keeps. */
+    internal suspend fun get(indexer: IndexerConfig, asking: () -> Unit): IndexerCaps {
         val key = indexer.cacheKey()
         mutex.withLock { entries[key] }?.takeIf { (at, _) -> at.plus(ttl).isAfter(clock.instant()) }?.let { return it.second }
+        asking()
         val caps = client.caps(indexer)
         mutex.withLock { entries[key] = clock.instant() to caps }
         return caps
@@ -50,8 +54,21 @@ class CapsCache(
 sealed interface IndexerOutcome {
     val indexer: IndexerConfig
 
-    data class Results(override val indexer: IndexerConfig, val page: SearchPage, val query: SearchQuery) : IndexerOutcome
-    data class Failed(override val indexer: IndexerConfig, val error: NewznabError) : IndexerOutcome
+    /**
+     * Whether this search sent [indexer] a request of its own for it (L630): its caps or its query asked anew, whether
+     * that answered, failed or ran out of time. Not for an answer kept from an earlier request, one already on its way for
+     * the same search, or an indexer kept out by its limit. A plugin's soft cap counts these.
+     */
+    val requested: Boolean get() = false
+
+    data class Results(
+        override val indexer: IndexerConfig,
+        val page: SearchPage,
+        val query: SearchQuery,
+        override val requested: Boolean = false,
+    ) : IndexerOutcome
+
+    data class Failed(override val indexer: IndexerConfig, val error: NewznabError, override val requested: Boolean = false) : IndexerOutcome
     /** The indexer can't run this kind of search (from its caps). */
     data class Skipped(override val indexer: IndexerConfig, val reason: String) : IndexerOutcome
 
@@ -59,7 +76,13 @@ sealed interface IndexerOutcome {
      * A torrent indexer answered ([found], for [query]), and its torrents are being checked against the debrid service's
      * cache (L199): [waiting] of them, none shown yet. The indexer has answered; its torrents come in [Checked]s.
      */
-    data class Checking(override val indexer: IndexerConfig, val query: SearchQuery, val found: SearchPage, val waiting: Int) : IndexerOutcome
+    data class Checking(
+        override val indexer: IndexerConfig,
+        val query: SearchQuery,
+        val found: SearchPage,
+        val waiting: Int,
+        override val requested: Boolean = false,
+    ) : IndexerOutcome
 
     /**
      * Some of a torrent indexer's torrents settled ([items], each with its [NewznabItem.availability]), never one twice;
@@ -114,8 +137,10 @@ class MultiIndexerSearch(
         indexers.filter { it.enabled }.forEach { indexer ->
             launch {
                 val timeoutMs = timeoutOf(indexer)
-                val outcome = withTimeoutOrNull(timeoutMs) { searchOne(indexer, fresh, plan) }
-                    ?: IndexerOutcome.Failed(indexer, NewznabError.Timeout(noAnswerWithin(timeoutMs)))
+                val asked = Asked()
+                // A request sent before the time ran out still reached the indexer.
+                val outcome = withTimeoutOrNull(timeoutMs) { searchOne(indexer, fresh, plan, asked) }
+                    ?: IndexerOutcome.Failed(indexer, NewznabError.Timeout(noAnswerWithin(timeoutMs)), requested = asked.value)
                 send(outcome)
             }
         }
@@ -123,13 +148,14 @@ class MultiIndexerSearch(
 
     private fun timeoutOf(indexer: IndexerConfig): Long = if (indexer.kind == IndexerKind.Torznab) torznabTimeoutMs else perIndexerTimeoutMs
 
-    private suspend fun searchOne(indexer: IndexerConfig, fresh: Boolean, plan: (IndexerCaps) -> SearchQuery?): IndexerOutcome = try {
+    /** [indexer]'s outcome; [asked] says whether a request of this search's own went to it, caps or query, as soon as one does. */
+    private suspend fun searchOne(indexer: IndexerConfig, fresh: Boolean, plan: (IndexerCaps) -> SearchQuery?, asked: Asked): IndexerOutcome = try {
         val left = stillLimited(indexer)
         // Kept out, it isn't asked: every request meanwhile would be refused, and count against it. What it answered
         // before and is still kept is given as ever, as no request is made for it; anything else, Search indexers'
         // fresh search too, is its limit.
         val limited = left?.let { IndexerOutcome.Failed(indexer, NewznabError.ApiLimitReached(API_LIMIT_REACHED, it)) }
-        val found = if (left == null) caps.get(indexer) else caps.kept(indexer)
+        val found = if (left == null) caps.get(indexer) { asked.value = true } else caps.kept(indexer)
         val query = found?.let(plan)?.let { query ->
             if (indexer.kind == IndexerKind.Torznab && query.categories.isEmpty()) query.withCategories(torznabCategories(found, query)) else query
         }
@@ -140,7 +166,7 @@ class MultiIndexerSearch(
                 // Failures are never cached; a changed URL, key or User-Agent is a different entry (L553).
                 val key = "${limitKey(indexer)}|${indexer.userAgent.trim()}|$query"
                 if (limited == null) {
-                    IndexerOutcome.Results(indexer, page(indexer, key, fresh) { client.search(indexer, query) }, query)
+                    IndexerOutcome.Results(indexer, page(indexer, key, fresh, asked) { client.search(indexer, query) }, query, asked.value)
                 } else {
                     kept(key).takeIf { !fresh }?.let { IndexerOutcome.Results(indexer, it, query) } ?: limited
                 }
@@ -148,12 +174,19 @@ class MultiIndexerSearch(
         }
     } catch (e: NewznabException) {
         holdOff(indexer, e.error)
-        IndexerOutcome.Failed(indexer, e.error)
+        // A failure reaches the indexer and is never kept: a search that sent the request asked it.
+        IndexerOutcome.Failed(indexer, e.error, asked.value)
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
         // Anything else is still this indexer's failure alone; it must not fail the whole search.
-        IndexerOutcome.Failed(indexer, NewznabError.BadResponse(NewznabClient.safeMessage(e, indexer)))
+        IndexerOutcome.Failed(indexer, NewznabError.BadResponse(NewznabClient.safeMessage(e, indexer)), asked.value)
+    }
+
+    /** Whether one indexer's part of a search sent it a request of its own; set as the request is made, read once it ends. */
+    private class Asked {
+        @Volatile
+        var value = false
     }
 
 
@@ -177,13 +210,13 @@ class MultiIndexerSearch(
     }
 
     /**
-     * [key]'s answer: cached, else from the request already on its way for it, else from a new one ([ask]); [fresh]
-     * always asks anew. The indexer counts a request against its API limit as it arrives, so one whose search was
-     * dropped (typing on, Search indexers pressed over the preview's own search) goes on into the cache, and the same
-     * search a moment later waits for it instead of asking again; and its limit, if that is what it answered, keeps
+     * [key]'s answer: cached, else from the request already on its way for it, else from a new one ([ask]), which [asked]
+     * then says; [fresh] always asks anew. The indexer counts a request against its API limit as it arrives, so one whose
+     * search was dropped (typing on, Search indexers pressed over the preview's own search) goes on into the cache, and the
+     * same search a moment later waits for it instead of asking again; and its limit, if that is what it answered, keeps
      * [indexer] out as a waited-for one's does.
      */
-    private suspend fun page(indexer: IndexerConfig, key: String, fresh: Boolean, ask: suspend () -> SearchPage): SearchPage {
+    private suspend fun page(indexer: IndexerConfig, key: String, fresh: Boolean, asked: Asked, ask: suspend () -> SearchPage): SearchPage {
         val dispatcher = currentCoroutineContext()[ContinuationInterceptor]
         val timeoutMs = timeoutOf(indexer)
         val request = synchronized(lock) {
@@ -205,6 +238,7 @@ class MultiIndexerSearch(
             }.also { started ->
                 sent[key] = started
                 started.invokeOnCompletion { synchronized(lock) { sent.remove(key, started) } }
+                asked.value = true
             }
         }
         request.start()

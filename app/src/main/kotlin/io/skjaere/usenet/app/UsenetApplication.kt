@@ -93,6 +93,7 @@ import io.skjaere.usenet.app.play.servicesSaved
 import io.skjaere.usenet.app.plugins.PluginInstaller
 import io.skjaere.usenet.app.plugins.PluginList
 import io.skjaere.usenet.app.plugins.PluginRegistry
+import io.skjaere.usenet.app.plugins.PluginSearchService
 import io.skjaere.usenet.app.plugins.named
 import io.skjaere.usenet.app.refresh.LibrarySummaryStore
 import io.skjaere.usenet.app.refresh.RateGate
@@ -481,10 +482,17 @@ class AppContainer(private val context: Context) {
     val crashLog = CrashLog(File(context.filesDir, "$LOGS_DIR/last-crash.txt")) { logHeader }
 
     /**
+     * The user's indexers searched for plugins (L630): every search's [checkedSearch] and [indexerConfigs], ranked as
+     * Search ranks for whom Play goes to; each plugin's cap and handle table. A play or Choose release of a plugin's maps
+     * its handles back to releases here.
+     */
+    val pluginSearch = PluginSearchService({ checkedSearch }, { indexerConfigs() }, { rankingContext() })
+
+    /**
      * The installed plugins (L616, L619): their files read as the process starts ([UsenetApplication.onCreate]), their code
      * loaded only once MainActivity is first created, never in a process started for a service or a receiver alone.
      */
-    val plugins: PluginRegistry = PluginRegistry.of(context, data.secrets.named(), appScope)
+    val plugins: PluginRegistry = PluginRegistry.of(context, data.secrets.named(), appScope, pluginSearch)
 
     /**
      * The plugin list on GitHub (L620): read as Settings › Plugins opens and once a day while a plugin is installed, never

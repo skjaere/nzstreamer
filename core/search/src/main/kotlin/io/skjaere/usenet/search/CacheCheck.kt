@@ -49,7 +49,8 @@ class CheckedSearch(
             outcome as IndexerOutcome.Results
             val indexer = outcome.indexer
             val waiting = items.associateBy { it.key }.toMutableMap()
-            send(IndexerOutcome.Checking(indexer, outcome.query, outcome.page, waiting.size))
+            // Whether the search asked the indexer goes with it, for a plugin's soft cap (L630).
+            send(IndexerOutcome.Checking(indexer, outcome.query, outcome.page, waiting.size, outcome.requested))
             // Each answer's check on its own: the next answer, and the outcome after it, never wait for this one.
             launch {
                 try {

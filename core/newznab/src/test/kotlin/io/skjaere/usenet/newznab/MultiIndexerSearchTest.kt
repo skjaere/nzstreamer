@@ -552,4 +552,112 @@ class MultiIndexerSearchTest {
         }
         assertEquals(2, fake.requests.count { it.url.parameters["t"] == "tvsearch" })
     }
+
+    /**
+     * L630: whether a search asked the indexer anew, for a plugin's soft cap. A first search did, and so does a fresh one
+     * and one whose answer is no longer kept; the same search again within its 15 minutes is answered from the cache and
+     * didn't.
+     */
+    @Test
+    fun `a first search and a fresh one asked the indexer, the same one within 15 minutes didn't`() = runBlocking<Unit> {
+        var now = Instant.parse("2026-11-24T12:00:00Z")
+        val clock = object : Clock() {
+            override fun getZone() = ZoneOffset.UTC
+            override fun withZone(zone: java.time.ZoneId?) = this
+            override fun instant() = now
+        }
+        val multi = MultiIndexerSearch(fake.client, CapsCache(fake.client, clock), clock = clock)
+        suspend fun once(fresh: Boolean = false) = assertIs<IndexerOutcome.Results>(multi.search(listOf(good), fresh, plan).toList().single())
+
+        assertTrue(once().requested, "a first search")
+        assertFalse(once().requested, "the same search, answered from the cache")
+        now = now.plus(Duration.ofMinutes(10))
+        assertFalse(once().requested, "the same search within its 15 minutes")
+        assertTrue(once(fresh = true).requested, "a fresh search")
+        now = now.plus(Duration.ofMinutes(16))
+        assertTrue(once().requested, "the same search once its answer is no longer kept")
+        assertEquals(3, fake.requests.count { it.url.parameters["t"] == "tvsearch" })
+    }
+
+    /**
+     * A search of the same words while the first one's request is still on its way waits for that request: it asked the
+     * indexer nothing, and only the first counts. On the test's clock, so the second search is waiting before the answer
+     * comes.
+     */
+    @Test
+    fun `a search that joins the same request on its way didn't ask the indexer`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val answer = CompletableDeferred<Unit>()
+        val http = HttpClient(
+            MockEngine(
+                MockEngineConfig().apply {
+                    this.dispatcher = dispatcher
+                    addHandler { request ->
+                        if (request.url.parameters["t"] == "caps") return@addHandler xml(fixture("newznab-caps.xml"))
+                        answer.await()
+                        xml(fixture("newznab-search.xml"))
+                    }
+                },
+            ),
+        ) {
+            install(HttpTimeout)
+            expectSuccess = false
+        }
+        val client = NewznabClient(http, defaultDispatcher = dispatcher)
+        val multi = MultiIndexerSearch(client, CapsCache(client), requests = CoroutineScope(SupervisorJob()))
+        val first = async(dispatcher) { multi.search(listOf(good), plan = plan).toList().single() }
+        testScheduler.runCurrent()
+        val joined = async(dispatcher) { multi.search(listOf(good), plan = plan).toList().single() }
+        testScheduler.runCurrent()
+        answer.complete(Unit)
+
+        assertTrue(assertIs<IndexerOutcome.Results>(first.await()).requested, "the search that sent the request")
+        val second = assertIs<IndexerOutcome.Results>(joined.await())
+        assertFalse(second.requested, "the search that waited for it")
+        assertEquals(2, second.page.items.size)
+        http.close()
+    }
+
+    /**
+     * A request that fails, or gets no answer in time, still reached the indexer, and a failure is never kept: each such
+     * search asked anew, its caps' request included. An indexer kept out by its limit is answered without a request.
+     */
+    @Test
+    fun `a search whose request failed or timed out asked the indexer, one kept out by its limit didn't`() = runBlocking<Unit> {
+        val failing = FakeIndexers { request ->
+            when {
+                request.url.host == "broken.example" -> throw IllegalStateException("engine failed for ${request.url}")
+                request.url.parameters["t"] == "caps" -> xml(fixture("newznab-caps.xml"))
+                request.url.host == "slow.example" -> { delay(5_000); xml(fixture("newznab-search.xml")) }
+                // Its caps answered; its search is refused.
+                else -> xml(fixture("error-auth.xml"))
+            }
+        }
+        val multi = MultiIndexerSearch(failing.client, CapsCache(failing.client), perIndexerTimeoutMs = 2_000)
+        val outcomes = multi.search(listOf(badKey, slow, broken), plan = plan).toList().associateBy { it.indexer.id }
+        val late = assertIs<IndexerOutcome.Failed>(outcomes.getValue("slow"))
+        assertIs<NewznabError.Timeout>(late.error)
+        assertTrue(late.requested, "a request with no answer in time")
+        listOf(outcomes, multi.search(listOf(badKey, broken), plan = plan).toList().associateBy { it.indexer.id }).forEachIndexed { round, answered ->
+            val refused = assertIs<IndexerOutcome.Failed>(answered.getValue("bad"))
+            assertIs<NewznabError.Auth>(refused.error)
+            assertTrue(refused.requested, "a refused request, search ${round + 1}")
+            val unreachable = assertIs<IndexerOutcome.Failed>(answered.getValue("broken"))
+            assertIs<NewznabError.Network>(unreachable.error)
+            assertTrue(unreachable.requested, "a caps request that failed, search ${round + 1}")
+        }
+        assertEquals(2, failing.requests.count { it.url.host == "bad.example" && it.url.parameters["t"] == "tvsearch" }, "a failure was kept")
+
+        val limiting = FakeIndexers { request ->
+            if (request.url.parameters["t"] == "caps") xml(fixture("newznab-caps.xml")) else respond("nope", HttpStatusCode.TooManyRequests, headersOf(HttpHeaders.RetryAfter, "3600"))
+        }
+        val kept = MultiIndexerSearch(limiting.client, CapsCache(limiting.client))
+        assertTrue(assertIs<IndexerOutcome.Failed>(kept.search(listOf(good), plan = plan).toList().single()).requested, "the request its limit answered")
+        listOf(false, true).forEach { fresh ->
+            val held = assertIs<IndexerOutcome.Failed>(kept.search(listOf(good), fresh = fresh, plan = plan).toList().single())
+            assertIs<NewznabError.ApiLimitReached>(held.error)
+            assertFalse(held.requested, "kept out by its limit, fresh = $fresh")
+        }
+        assertEquals(1, limiting.requests.count { it.url.parameters["t"] == "tvsearch" })
+    }
 }

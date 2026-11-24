@@ -26,25 +26,28 @@ import kotlinx.coroutines.flow.flowOf
 import java.io.File
 
 /**
- * Makes the [PluginHost] each loaded instance of a plugin gets (L613, L635): its id, its own folders and secrets, and a
- * scope of its own on the main thread. What the host offers beyond them, its search, play, watch and HTTP, answers nothing
- * until those services are wired for plugins (L630, L627, L594, L631); address safety likewise.
+ * Makes the [PluginHost] each loaded instance of a plugin gets (L613, L635): its id, its own folders and secrets, a scope
+ * of its own on the main thread, and the user's indexers searched through [search] under the plugin's name (L630). What
+ * the host offers beyond them, its play, watch and HTTP, answers nothing until those services are wired for plugins
+ * (L627, L594, L631); address safety likewise. Without [search] (a test's registry) its search answers nothing too.
  */
 class PluginHosts(
     private val store: PluginStore,
     private val secrets: NamedSecrets,
     private val main: CoroutineDispatcher = Dispatchers.Main.immediate,
+    private val search: PluginSearchService? = null,
 ) {
     /**
-     * The host of [version]'s instance: [failed] gets an exception that escapes its scope, which the scope's handler keeps
-     * from closing NZStreamer (L619).
+     * The host of [version]'s instance, [name] the plugin's as the list gives it: [failed] gets an exception that escapes
+     * its scope, which the scope's handler keeps from closing NZStreamer (L619).
      */
-    fun create(version: PluginVersion, failed: (Throwable) -> Unit): HostedPlugin = HostedPlugin(
+    fun create(version: PluginVersion, name: String = version.id, failed: (Throwable) -> Unit): HostedPlugin = HostedPlugin(
         id = version.id,
         dataDir = store.dataDir(version.id).apply { mkdirs() },
         cacheDir = store.cacheDir(version.id).apply { mkdirs() },
         secrets = Secrets(version.id, secrets),
         scope = CoroutineScope(SupervisorJob() + main + CoroutineExceptionHandler { _, e -> failed(e) }),
+        search = search?.of(version.id, name) ?: NoSearch,
     )
 }
 
@@ -58,8 +61,8 @@ class HostedPlugin internal constructor(
     override val cacheDir: File,
     override val secrets: PluginSecrets,
     override val scope: CoroutineScope,
+    override val search: PluginSearch = NoSearch,
 ) : PluginHost {
-    override val search: PluginSearch = NoSearch
     override val play: PluginPlay = NoPlay
     override val watch: PluginWatch = NoWatch
     override val http: PluginHttp = NoHttp

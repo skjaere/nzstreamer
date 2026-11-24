@@ -123,6 +123,16 @@ class ResultGrouper(
         )
     }
 
+    /**
+     * [items] as one list ranked by [context], the playable ones first, best first, whatever titles, episodes or dates
+     * their names give: a search of words alone for a plugin (L630), which decides itself what each release is of. A
+     * release more than one indexer listed counts once ([oneOfEach], by [indexerOrder]).
+     */
+    fun ranked(items: List<NewznabItem>, context: RankingContext, indexerOrder: List<String> = emptyList()): List<RankedItem> {
+        val unique = items.oneOfEach(indexerOrder).associateBy { it.key }
+        return ranker.rank(unique.values.map { it.toFacts() }, context).map { RankedItem(unique.getValue(it.facts.id), it) }
+    }
+
     private fun sectionKey(p: ParsedRelease) = p.normalizedTitle + (p.year?.let { " ($it)" } ?: "")
 
     private fun groupKey(p: ParsedRelease, movie: KnownTitle?): String = when {
