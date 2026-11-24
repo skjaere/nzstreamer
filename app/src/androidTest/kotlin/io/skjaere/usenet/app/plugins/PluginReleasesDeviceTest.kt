@@ -47,11 +47,15 @@ import io.skjaere.usenet.plugin.PluginNav
 import io.skjaere.usenet.plugin.PluginTab
 import io.skjaere.usenet.plugin.ReleaseHandle
 import io.skjaere.usenet.plugin.ReleaseInfo
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
@@ -65,6 +69,7 @@ import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The host's Choose release for a plugin's item on a device (L628, L627): an in-process plugin of the test's own, Kestrel,
@@ -228,21 +233,33 @@ class PluginReleasesDeviceTest {
         val remote = Remote(compose)
         showTheSlot(tv = true)
         leaveTouchMode(compose.activity)
-        val opened = SystemClock.uptimeMillis()
-        compose.runOnIdle { kestrel.nav!!.openReleases(kestrel.item, emptyList(), listOf(Offered(kestrel.good, "No date in the name")), null) }
-        waitFor(hasText("Nothing names this game for sure yet. Play never picks these; press OK on one if it's the right game."))
-        compose.waitUntil(5_000) { remote.isFocused(card(GOOD) and hasText("Possible")) }
+        // Each play as it starts, heard from before the first OK: the mock can play a release in under a second, so a
+        // play may be over, its player launched and the sheet Idle again, before a look at the play's state saw it.
+        val starts = AtomicInteger()
+        val listening = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.UNDISPATCHED) {
+            container.playback.starting.collect { starts.incrementAndGet() }
+        }
+        try {
+            val opened = SystemClock.uptimeMillis()
+            compose.runOnIdle { kestrel.nav!!.openReleases(kestrel.item, emptyList(), listOf(Offered(kestrel.good, "No date in the name")), null) }
+            waitFor(hasText("Nothing names this game for sure yet. Play never picks these; press OK on one if it's the right game."))
+            compose.waitUntil(5_000) { remote.isFocused(card(GOOD) and hasText("Possible")) }
 
-        // Stamped as pressed just after the page opened, as the second press of a double OK.
-        instrumentation.sendKeySync(KeyEvent(opened + 50, opened + 50, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 0))
-        instrumentation.sendKeySync(KeyEvent(opened + 50, opened + 60, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0))
-        compose.waitForIdle()
-        SystemClock.sleep(OkGuard.WINDOW_MS)
-        compose.waitForIdle()
-        assertEquals("an OK that opened the page played", PlayState.Idle, container.playback.state.value)
+            // Stamped as pressed just after the page opened, as the second press of a double OK.
+            instrumentation.sendKeySync(KeyEvent(opened + 50, opened + 50, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 0))
+            instrumentation.sendKeySync(KeyEvent(opened + 50, opened + 60, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0))
+            compose.waitForIdle()
+            SystemClock.sleep(OkGuard.WINDOW_MS)
+            compose.waitForIdle()
+            assertEquals("an OK that opened the page played", 0, starts.get())
 
-        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
-        compose.waitUntil(10_000) { container.playback.state.value != PlayState.Idle }
+            // Its launch waits for whoever takes it: the press's wait for the screen to settle (the sheet, then the
+            // page closing) can outlast the whole play.
+            remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+            assertEquals("the press after the page's first moments played it", "$FAKE_INDEXER/cc-2019-good", launched().release.key)
+        } finally {
+            listening.cancel()
+        }
     }
 
     /** Slot 1's screens, as the app's graph has them, with the play sheet's host over them as AppNav has it. */
