@@ -17,7 +17,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -448,5 +450,38 @@ class PluginSlotsTest {
             atClose,
             "swap, error, withdrawal, Remove",
         )
+    }
+    /**
+     * NzPlugin.close's promise, where a slot still draws a page as its version goes (an error on the page shown, or in a
+     * page still drawn as it leaves): close() waits until no composition draws a page of the instance, none begins from
+     * then on, and one that never lets go (a composition that no longer runs) holds it back a second at most.
+     */
+    @Test
+    fun `a version is let go only once none of its pages is drawn`() = runTest {
+        val h = RegistryHarness(dir, this)
+        val made = mutableListOf<FakePlugin>()
+        h.loading.plugin = { _, _ -> FakePlugin().also { made += it } }
+        val registry = h.registry().apply { start(); firstActivity() }
+        h.install(registry, "skeleton", 1)
+        val first = registry.running("skeleton")!!
+        assertTrue(first.pages.take(), "its page drawn")
+        first.host.scope.launch { throw IllegalStateException("the fake's refresh") }
+        runCurrent()
+        assertEquals(PluginStatus.OffAfterError, registry.installed("skeleton").status, "listed off at once")
+        assertFalse("close" in made.single().calls, "closed while its page is drawn")
+        assertFalse(first.pages.take(), "a page begun as it goes")
+        first.pages.release()
+        runCurrent()
+        assertEquals(listOf("tab", "close"), made.single().calls, "closed once its page went")
+
+        // A composition that never lets go: a second at most.
+        registry.turnOnAgain("skeleton")
+        val second = registry.running("skeleton")!!
+        assertTrue(second.pages.take())
+        second.host.scope.launch { throw IllegalStateException("the fake's refresh") }
+        advanceTimeBy(900)
+        assertFalse("close" in made.last().calls, "closed before its second")
+        advanceTimeBy(200)
+        assertTrue("close" in made.last().calls, "closed once its second was up")
     }
 }

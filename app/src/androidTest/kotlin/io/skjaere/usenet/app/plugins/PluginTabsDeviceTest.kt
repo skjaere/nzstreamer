@@ -334,8 +334,9 @@ class PluginTabsDeviceTest {
 
     /**
      * L619, L590: the fake's work in its scope throws; NZStreamer goes on, the version is off after an error, its tab stays
-     * with the host's placeholder; Open Plugins goes Home, then Settings › Plugins with its card in view and no entry of
-     * its slot left on the back stack (L581); there Turn on again loads it again, and Remove takes it, its tab with it.
+     * with the host's placeholder, and its close() comes once its page has gone; Open Plugins goes Home, then Settings ›
+     * Plugins with its card in view and no entry of its slot left on the back stack (L581); there Turn on again loads it
+     * again, and Remove takes it, its tab with it.
      */
     @Test
     fun theFakesScopeThrowingShowsThePlaceholderWhoseOpenPluginsLeavesTheSlotForItsCard() {
@@ -352,6 +353,7 @@ class PluginTabsDeviceTest {
         compose.onNode(hasText("The fake plugin was turned off after an error. What you watched is kept.")).assertIsDisplayed()
         assertEquals("its tab kept", listOf("Home", "Discover", "Fake", "Collection", "Search"), barLabels())
         compose.waitUntil(5_000) { fake.closed.get() == 1 }
+        assertEquals("none of its pages drawn as it closed (NzPlugin.close)", listOf(0), fake.composedAtClose)
 
         press(PluginPlaceholder.OPEN_PLUGINS)
         waitFor(hasText(PluginsPage.INTRO))

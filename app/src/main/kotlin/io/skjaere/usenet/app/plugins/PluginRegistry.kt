@@ -19,10 +19,12 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.io.IOException
@@ -111,7 +113,7 @@ class PluginRegistry(
                     keepStartCheck()
                     if (off.value) {
                         records.filter { it.id !in forTest }.forEach { record ->
-                            runningInstance(record.id)?.let(::letGo)
+                            runningInstance(record.id)?.let { letGo(it) }
                             statuses[record.id] = PluginStatus.PluginsOff
                         }
                         publish()
@@ -327,7 +329,7 @@ class PluginRegistry(
     }
 
     /** At the swap point, a withdrawn version that still runs is let go, and stays off (L621). True where it went. Under [lock]. */
-    private fun withdrawnGoes(record: PluginRecord): Boolean {
+    private suspend fun withdrawnGoes(record: PluginRecord): Boolean {
         if (record.state != StoredState.Withdrawn) return false
         val instance = runningInstance(record.id) ?: return false
         statuses[record.id] = PluginStatus.Withdrawn
@@ -396,7 +398,7 @@ class PluginRegistry(
             forTest.remove(id)
             icons.remove(id)
             publish()
-            running?.let(::letGo)
+            running?.let { letGo(it) }
             persist()
             crashGuard.removed(id)
             try {
@@ -516,8 +518,14 @@ class PluginRegistry(
         LoadResult.Failed(LoadFailure.Other)
     }
 
-    /** Lets [instance] go: its scope cancelled first, then its close(), guarded (L635). */
-    private fun letGo(instance: PluginInstance) = letGo(instance.version, instance.plugin, instance.host)
+    /**
+     * Lets [instance] go once none of its pages is drawn ([PageHolds]: the slots follow the status published just before),
+     * then its scope cancelled, then its close(), guarded (L635).
+     */
+    private suspend fun letGo(instance: PluginInstance) {
+        if (!instance.pages.letGo(PAGES_GONE_MS)) log.warn("Plugin {} let go with a page still drawn after {} ms", instance.version, PAGES_GONE_MS)
+        letGo(instance.version, instance.plugin, instance.host)
+    }
 
     private fun letGo(version: PluginVersion, plugin: NzPlugin, host: HostedPlugin) {
         host.cancel()
@@ -556,7 +564,7 @@ class PluginRegistry(
         // Listed off before it is let go, so its slot draws none of its pages after its close().
         statuses[version.id] = if (withdrawn) PluginStatus.Withdrawn else PluginStatus.OffAfterError
         publish()
-        running?.let(::letGo)
+        running?.let { letGo(it) }
     }
 
     private suspend fun readFiles() {
@@ -629,6 +637,9 @@ class PluginRegistry(
     companion object {
         /** At most two plugins installed at once (L618); the graph's four slots let a later raise change nothing there. */
         const val MAX_INSTALLED = 2
+
+        /** How long a version let go waits for its pages to go: a frame or two, a page's exit as it leaves, and then some. */
+        const val PAGES_GONE_MS = 1_000L
 
         private val log = LoggerFactory.getLogger(PluginRegistry::class.java)
 
@@ -738,4 +749,45 @@ class PluginInstance internal constructor(val version: PluginVersion, val plugin
     val id: String get() = version.id
     val versionCode: Long get() = version.versionCode
     val key: Long get() = version.key
+
+    /** The compositions that draw its pages now: the registry lets it go only once none does. */
+    internal val pages = PageHolds()
+}
+
+/**
+ * The compositions that draw an instance's pages (NzPlugin.close's promise: none of its pages is drawn after it). A slot's
+ * entry holds it while a page of it is composed. Once the registry lets the instance go, none begins, and its close()
+ * waits until each that drew one has let go: the slot's next frame, as it follows the status the registry published just
+ * before, or a page's exit as it leaves the screen.
+ */
+class PageHolds {
+    private var held = 0
+    private var going = false
+    private val none = MutableStateFlow(true)
+
+    /** A composition begins to draw one of its pages: false once the instance is let go, when it draws nothing of it. */
+    @Synchronized
+    fun take(): Boolean {
+        if (going) return false
+        held++
+        none.value = false
+        return true
+    }
+
+    /** That composition no longer draws it. */
+    @Synchronized
+    fun release() {
+        held--
+        if (held == 0) none.value = true
+    }
+
+    /**
+     * No page begins from now on; waits until none is drawn, [timeoutMs] at most (a composition that no longer runs: its
+     * app gone to the background, where nothing is drawn, and which drops the page before it draws again). False where
+     * one still was.
+     */
+    suspend fun letGo(timeoutMs: Long): Boolean {
+        synchronized(this) { going = true }
+        return withTimeoutOrNull(timeoutMs) { none.first { it } } != null
+    }
 }

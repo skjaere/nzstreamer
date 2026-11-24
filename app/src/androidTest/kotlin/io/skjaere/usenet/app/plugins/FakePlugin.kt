@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -64,6 +65,10 @@ class FakePlugin(val id: String = FAKE, label: String = "Fake") : NzPlugin {
     /** How many of its instances were let go. */
     val closed = AtomicInteger()
 
+    /** Its pages composed now, and how many were as each close() was called: none, by NzPlugin.close's promise. */
+    private val composed = AtomicInteger()
+    val composedAtClose: MutableList<Int> = java.util.concurrent.CopyOnWriteArrayList()
+
     /** Its one item: a game of an invented cup, its key stored as item:<id>:cc-2019:final. */
     val item = PlayItem(ITEM_KEY, ITEM_TITLE, ITEM_SUBTITLE, runtimeMinutes = 118, noun = "game")
 
@@ -71,6 +76,7 @@ class FakePlugin(val id: String = FAKE, label: String = "Fake") : NzPlugin {
 
     @Composable
     override fun Page(page: String, arg: String?, host: PluginHost, nav: PluginNav) {
+        Counted()
         when (page) {
             "" -> OwnPage(host, nav)
             else -> SecondPage(arg, nav)
@@ -79,6 +85,7 @@ class FakePlugin(val id: String = FAKE, label: String = "Fake") : NzPlugin {
 
     @Composable
     override fun Settings(host: PluginHost, nav: PluginNav) {
+        Counted()
         val first = rememberFirstFocus()
         Column(Modifier.fillMaxSize().tvFocusMemory().verticalScroll(rememberScrollState())) {
             TopBar(settingsTitle(label), onBack = { nav.back() })
@@ -90,7 +97,17 @@ class FakePlugin(val id: String = FAKE, label: String = "Fake") : NzPlugin {
     }
 
     override fun close() {
+        composedAtClose += composed.get()
         closed.incrementAndGet()
+    }
+
+    /** Counts a page of it composed, from its composition until it leaves it. */
+    @Composable
+    private fun Counted() {
+        DisposableEffect(Unit) {
+            composed.incrementAndGet()
+            onDispose { composed.decrementAndGet() }
+        }
     }
 
     /** Work of its own in [host]'s scope, as a list's refresh would be, that fails as it starts. */

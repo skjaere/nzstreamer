@@ -16,6 +16,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.RememberObserver
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -31,7 +33,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavController
 import androidx.navigation.NavDestination.Companion.hasRoute
@@ -110,21 +111,43 @@ private fun SlotContent(
     registry: PluginRegistry,
     draw: @Composable (PluginInstance, PluginNav) -> Unit,
 ) {
-    val plugins by registry.plugins.collectAsStateWithLifecycle()
+    // Followed whatever the entry's lifecycle: a page leaving the screen (its exit transition, its lifecycle no longer
+    // started) still drops a version let go at once, rather than draw it until it has gone.
+    val plugins by registry.plugins.collectAsState()
     val plugin = plugins?.firstOrNull { it.slot == slot.number } ?: return
     val status = plugin.status
     if (status is PluginStatus.Running) {
         key(status.instance.key) {
-            val pluginNav = remember { PluginNavImpl(nav, slot, entry, status.instance.host.chooser) }
-            draw(status.instance, pluginNav)
-            val rail = LocalRailFocus.current
-            LaunchedEffect(Unit) { rail?.contentChanged() }
+            // Held while composed, so the registry closes the instance only once none of its pages is drawn; one it lets go
+            // meanwhile draws nothing more.
+            val drawn = remember { PageHold(status.instance.pages) }
+            if (drawn.held) {
+                val pluginNav = remember { PluginNavImpl(nav, slot, entry, status.instance.host.chooser) }
+                draw(status.instance, pluginNav)
+                val rail = LocalRailFocus.current
+                LaunchedEffect(Unit) { rail?.contentChanged() }
+            }
         }
         return
     }
     val placeholder = PluginPlaceholder.of(plugin) ?: return
     val tv = LocalFormFactor.current == FormFactor.Tv
     PlaceholderPage(placeholder, tv) { entry.ifResumed { NavSlotMoves(nav).openPlugins(plugin.id, tv) } }
+}
+
+/** An entry's hold on [pages] from its composition until it leaves it, or its composition is dropped ([PageHolds]). */
+private class PageHold(private val pages: PageHolds) : RememberObserver {
+    val held = pages.take()
+
+    override fun onRemembered() = Unit
+
+    override fun onForgotten() {
+        if (held) pages.release()
+    }
+
+    override fun onAbandoned() {
+        if (held) pages.release()
+    }
 }
 
 /**
