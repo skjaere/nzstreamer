@@ -56,7 +56,8 @@ data class ItemFound(
  * accepts, in its order, those the host doesn't play here left out as a film's search leaves them. None of those, but
  * possible matches that play here: Play plays none of them, and Choose release opens with them alone (L627, L628). Nothing
  * to play at all: the no-release sheet with the plugin's lines and note, its Search when the item has one (L629), and
- * nothing hidden to show, as names the plugin passed over can carry what it keeps from the user.
+ * nothing hidden to show, as names the plugin passed over can carry what it keeps from the user; or, where the release
+ * that played it failed, that failure, with the item's Search, as a film's.
  */
 internal object ItemPlay {
     /** [release] alone, the file that played in it, as Resume on Home plays it. */
@@ -98,7 +99,9 @@ internal object ItemPlay {
                 choose(open)
                 return PlayState.Idle
             }
-            return failed ?: PlayState.NoRelease(
+            // The release that played it failed, and nothing else: its failure, with the item's Search, as a film's.
+            failed?.let { return it.copy(search = target.searchWords, searchNote = target.searchNote?.takeIf { target.searchWords != null }) }
+            return PlayState.NoRelease(
                 target.title, target.subtitle, found.lines, found.note, nameQuery = target.searchWords, hidden = emptyList(), searchNote = target.searchNote,
             )
         }

@@ -94,8 +94,11 @@ fun RecentSearch.page(): Any? = openedTitle?.let { if (it.type == TitleType.Tv) 
 /** Opens the Search tab on [this] recent search, picked title and all. */
 fun RecentSearch.route(): SearchRoute = searchRoute(query, pick)
 
-/** What the play sheet's Search opens after a failure: its search, by the TMDB title it is for when known; null when it offers none. */
-fun PlayState.Failed.searchRoute(): SearchRoute? = search?.let { searchRoute(it, searchPick) }
+/**
+ * What the play sheet's Search opens after a failure: its search, by the TMDB title it is for when known, a plugin's item's
+ * with the plugin's note (L629); null when it offers none.
+ */
+fun PlayState.Failed.searchRoute(): SearchRoute? = search?.let { searchRoute(it, searchPick, note = searchNote) }
 
 /**
  * What the no-release sheet's Search opens: its search, by the TMDB title it is for or in the show's language, a plugin's

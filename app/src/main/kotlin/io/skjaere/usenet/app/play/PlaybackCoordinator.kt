@@ -883,6 +883,8 @@ sealed interface PlayState {
         val cast: CastFailed? = null,
         /** Of [notTried], those left as what they play from failed (a provider down, a debrid account's limit): no grab saved by it. */
         val noRoute: Int = 0,
+        /** A plugin's note over the search its Search opens (L629), with a plugin's item's own [search] words. */
+        val searchNote: String? = null,
     ) : PlayState {
         /** Nothing was tried: each release was skipped without a grab as found incomplete before ([missing]). */
         val onlySkipped: Boolean get() = failures.isEmpty() && missing.isNotEmpty()

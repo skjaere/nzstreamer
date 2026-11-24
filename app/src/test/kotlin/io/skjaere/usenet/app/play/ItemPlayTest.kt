@@ -162,12 +162,24 @@ class ItemPlayTest {
         assertEquals(listOf(other, third), request.candidates)
     }
 
+    /**
+     * As a film's Play: the failure of the release that played it, and where the item has a search, its Search with the
+     * plugin's note (L629, PluginPlay's promise); with none, the failure alone.
+     */
     @Test
-    fun `when the remembered release fails and the plugin has nothing else, its failure shows, with no search`() {
+    fun `when the remembered release fails and the plugin has nothing else, its failure shows, with the item's Search`() {
         val failure = failed(remembered.title)
-        val (_, end) = run(stored = true, found = ItemFound(listOf(good)), outcomes = listOf(failure))
-        assertEquals(failure, end)
-        assertNull(assertIs<PlayState.Failed>(end).search)
+        val note = "Indexer results can show scores."
+        val searched = race.copy(searchWords = "Kestrel Grand Prix", searchNote = note)
+        val (_, end) = run(stored = true, found = ItemFound(listOf(good)), outcomes = listOf(failure), target = searched)
+        val shown = assertIs<PlayState.Failed>(end)
+        assertEquals(failure.failures, shown.failures)
+        assertEquals("Kestrel Grand Prix" to note, shown.search to shown.searchNote)
+        assertEquals(SearchRoute(query = "Kestrel Grand Prix", note = note), shown.searchRoute())
+
+        val (_, plain) = run(stored = true, found = ItemFound(listOf(good)), outcomes = listOf(failure))
+        assertEquals(failure, plain)
+        assertNull(assertIs<PlayState.Failed>(plain).searchRoute())
     }
 
     @Test
