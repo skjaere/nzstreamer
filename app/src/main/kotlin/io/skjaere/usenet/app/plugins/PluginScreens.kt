@@ -223,8 +223,10 @@ private fun PlaceholderPage(placeholder: PluginPlaceholder, tv: Boolean, onOpenP
 class NavSlotMoves(private val nav: NavController) : SlotMoves {
     override fun shown(): List<KClass<*>> {
         val drawn = nav.visibleEntries.value.mapNotNull { entry -> PluginSlots.routeTypes.firstOrNull { entry.destination.hasRoute(it) } }
-        return drawn + PluginSlots.routeTypes.filter(::onBackStack)
+        return drawn + stacked()
     }
+
+    override fun stacked(): List<KClass<*>> = PluginSlots.routeTypes.filter(::onBackStack)
 
     // Asked by type: the back stack as a whole is the navigation library's own API (RestrictedApi); an entry not on it is refused.
     private fun onBackStack(type: KClass<*>): Boolean = try {

@@ -13,6 +13,9 @@ interface SlotMoves {
      */
     fun shown(): List<KClass<*>>
 
+    /** The route types of the entries on the current back stack alone, not those only drawn as they leave. */
+    fun stacked(): List<KClass<*>>
+
     /** Goes to a top-level tab as the bar and the rail do ([io.skjaere.usenet.app.switchTab]). */
     fun switchTab(route: Any, restore: Boolean = true)
 
@@ -68,8 +71,8 @@ fun SlotMoves.beforeRemove(slot: Int) {
  * The plugin slots' side of the app's navigation (L581, L590). AppNav calls [check] with the registry's plugins as they
  * change and whenever its back stack does. For each slot:
  * - While an entry of the slot is on the current back stack or still drawn (its tab, its pages, its settings, or the
- *   host's Choose release pushed over them, [onStack]), its plugin waits; a slot no plugin holds (its plugin removed in a
- *   process that died) goes Home.
+ *   host's Choose release pushed over them, [onStack]), its plugin waits; a slot no plugin holds with an entry on the
+ *   back stack (its plugin removed in a process that died) goes Home.
  * - Off the screen, its plugin is at its swap point ([swapPoint], the registry's): an update takes over, a withdrawn
  *   version goes. Asked on every change, so a read that finds work while Settings shows is taken at once too.
  * - Its saved stack is cleared once the slot is off the screen whenever the version that runs in it changed: at the swap
@@ -106,8 +109,10 @@ class PluginSlotWatch(
             val n = slot.number
             val plugin = plugins.firstOrNull { it.slot == n }
             note(n, plugin)
-            // A slot no plugin holds has nothing to draw: Home, then its stack is cleared once it is off the screen.
-            if (plugin == null && moves.own(n)) moves.switchTab(HomeRoute)
+            // A slot no plugin holds has nothing to draw: Home, then its stack is cleared once it is off the screen. Only for
+            // an entry on the back stack: one still drawn as it leaves (as clearing a saved stack restores and pops it) is
+            // going already, and Home, itself a change, would be asked again at every change while it is drawn.
+            if (plugin == null && moves.own(n, moves.stacked())) moves.switchTab(HomeRoute)
             if (moves.onStack(n)) continue
             if (plugin != null && swapPoint(plugin.id)) {
                 // Its own swap: what the registry lists now is the new version's, not a change made some other way.

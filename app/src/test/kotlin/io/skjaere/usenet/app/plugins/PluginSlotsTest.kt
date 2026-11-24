@@ -56,6 +56,8 @@ class PluginSlotsTest {
 
         override fun shown(): List<KClass<*>> = (stack + leaving).map { it::class }
 
+        override fun stacked(): List<KClass<*>> = stack.map { it::class }
+
         override fun switchTab(route: Any, restore: Boolean) {
             moves += "switchTab ${route::class.simpleName}"
             if (stack.size > 1) saved[stack[1]::class] = stack.drop(1)
@@ -174,6 +176,28 @@ class PluginSlotsTest {
         assertEquals(listOf("kestrel", "kestrel"), swaps.calls, "only the bound slot's plugin asked")
         watch.check(plugins)
         assertEquals(1, nav.moves.count { it == "clear 2" }, "a free slot cleared once")
+    }
+
+    /**
+     * L590: a page of a slot no plugin holds that is only still drawn as it leaves (clearing a saved stack restores it and
+     * pops it again; Settings › Plugins shows) isn't sent Home: it is going already, and Home at every change while it is
+     * drawn moved the app again and again, as its own move is a change. Its saved stack is cleared once it has gone.
+     */
+    @Test
+    fun `a slot no plugin holds whose page is only drawn as it leaves isn't sent Home`() = runTest {
+        val nav = FakeNav()
+        val watch = watch(nav, Swaps())
+        nav.navigate(SettingsRoute)
+        nav.navigate(PluginsRoute(focus = "skeleton"))
+        nav.leaving += PluginTab1
+        repeat(3) { watch.check(emptyList()) }
+        assertFalse("switchTab HomeRoute" in nav.moves, "Settings › Plugins moved: ${nav.moves}")
+        assertEquals(listOf<Any>(HomeRoute, SettingsRoute, PluginsRoute(focus = "skeleton")), nav.stack)
+        assertFalse("clear 1" in nav.moves, "not cleared while it is drawn")
+
+        nav.leaving.clear()
+        watch.check(emptyList())
+        assertEquals(1, nav.moves.count { it == "clear 1" }, "cleared once it has gone")
     }
 
     /**
