@@ -46,6 +46,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -267,6 +268,7 @@ class PluginEndToEndTvTest {
         assertTrue("its watch row", runBlocking { container.library.state(WATCH_KEY).first() }?.watched == true)
         // A key, as its settings page saves one (its field would take the TV's keyboard).
         runBlocking { running().host.secrets.put("key", INVENTED_KEY) }
+        assertNotNull("its key kept as its secret", runBlocking { container.data.secrets.get(SECRET) })
 
         // v2 listed while its tab shows: stored, waiting, v1 running on.
         server.list(Listed(SkeletonBuild.V1, "1.0.0"), Listed(SkeletonBuild.V2, "2.0.0"))
