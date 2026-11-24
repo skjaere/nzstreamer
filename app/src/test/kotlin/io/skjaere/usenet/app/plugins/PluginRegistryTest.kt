@@ -394,11 +394,6 @@ class PluginRegistryTest {
     }
 
     /**
-     * L638, L618: a plugin's card and tab show its tab's icon once its version loaded in this process, and keep it while
-     * it is off after an error; one that never loaded here has none (the core set's Build stands in), nor one installed
-     * again after Remove until it loads.
-     */
-    /**
      * Remove with the secret store failing as it writes (a full disk): the plugin is gone all the same, from the registry
      * and as the app shows it, so its card and tab go; its keys go at the next start's sweep. The store's message, which
      * can name a file, isn't logged: the failure's kind alone.
@@ -426,6 +421,11 @@ class PluginRegistryTest {
         assertEquals(emptyMap(), h.secrets.values.toMap(), "its keys swept at the next start")
     }
 
+    /**
+     * L638, L618: a plugin's card and tab show its tab's icon once its version loaded in this process, and keep it while
+     * it is off after an error; one that never loaded here has none (the core set's Build stands in), nor one installed
+     * again after Remove until it loads.
+     */
     @Test
     fun `a plugin's tab icon is kept once it loaded in this process, and goes with Remove`() = runTest {
         val h = harness()
