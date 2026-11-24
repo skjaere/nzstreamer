@@ -21,8 +21,10 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.onEach
 import org.slf4j.LoggerFactory
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
@@ -63,6 +65,19 @@ class PluginSearchService(
 
     private inner class Searcher(private val plugin: PluginState, private val name: String) : PluginSearch {
         override fun search(words: String, runtimeMinutes: Int?, fresh: Boolean): Flow<Found> = flow {
+            var any = false
+            emitAll(
+                searching(words, runtimeMinutes, fresh).flowOn(work).onEach { any = true }.catch { e ->
+                    if (e !is Exception || e is CancellationException) throw e
+                    // The host's own failure, never the plugin's: its search ends with what it found, and the plugin goes on.
+                    // The flow always ends with a Found, as the API says, an empty one where it had none to give.
+                    log.warn("Plugin {}'s search failed: {}", plugin.id, e.javaClass.name)
+                    if (!any) emit(Found(emptyList(), emptyList()))
+                },
+            )
+        }
+
+        private fun searching(words: String, runtimeMinutes: Int?, fresh: Boolean): Flow<Found> = flow {
             val started = now()
             // Counted from its start, the cap checked in the same step, before anything waits: searches begun together
             // (one per row of a list) each find it as those before them left it. A search dropped before an indexer
@@ -105,10 +120,6 @@ class PluginSearchService(
                 throw e
             }
             if (counted && !requested) plugin.uncount(started)
-        }.flowOn(work).catch { e ->
-            if (e !is Exception) throw e
-            // The host's own failure, never the plugin's: its search ends with what it found, and the plugin goes on.
-            log.warn("Plugin {}'s search failed: {}", plugin.id, e.javaClass.name)
         }
     }
 

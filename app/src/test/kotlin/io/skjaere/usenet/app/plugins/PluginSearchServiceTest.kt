@@ -297,6 +297,31 @@ class PluginSearchServiceTest {
         assertEquals(5, found.count { it.single().indexers.single().state == IndexerLine.State.Limited }, "the rest paused")
     }
 
+    /**
+     * The host's own failure in a plugin's search (its settings unreadable, its ranking's): the search still ends with a
+     * Found, an empty one where it had none to give, so a plugin taking the last one isn't turned off for the host's
+     * fault. Logged by its kind and the plugin's id; it counts nothing towards the cap.
+     */
+    @Test
+    fun `a host failure ends the search with a Found, never with none`() = runTest {
+        val fake = FakeSearch { words, _ -> listOf(results(quarry, words, item(quarry, "Copper.Crown.2019.1080p.WEB-DL.H.264-GOOD"), requested = true)) }
+        val from = LogBuffer.snapshot().lastOrNull()?.seq ?: 0L
+        val settingsFail = PluginSearchService(
+            { fake }, { throw java.io.IOException("unreadable: /data/$canaryHost/settings") }, { context }, now = { clock }, work = StandardTestDispatcher(testScheduler),
+        ).of("kestrel", "Kestrel")
+        val first = settingsFail.search("Copper Crown", null).last()
+        assertEquals(emptyList(), first.indexers)
+        assertEquals(emptyList(), first.releases)
+        val rankingFails = PluginSearchService(
+            { fake }, { listOf(quarry) }, { throw java.io.IOException("unreadable") }, now = { clock }, work = StandardTestDispatcher(testScheduler),
+        ).of("kestrel", "Kestrel")
+        repeat(PluginSearchService.CAP + 1) { assertEquals(emptyList(), rankingFails.search("Copper Crown", null).single().indexers, "not paused") }
+        assertEquals(emptyList(), fake.asked, "no indexer asked")
+        val logged = LogBuffer.snapshot().filter { it.seq > from }.map { it.message }.filter { "search failed" in it }
+        assertTrue(logged.isNotEmpty() && logged.all { "kestrel" in it && "IOException" in it }, "$logged")
+        assertFalse(logged.any { canaryHost in it || "settings" in it }, "$logged")
+    }
+
     /** A search whose requests fail still asked the indexer, and counts: a plugin can't hammer an indexer that is down. */
     @Test
     fun `searches whose requests failed count towards the cap`() = runTest {
