@@ -401,6 +401,24 @@ class PluginCrashGuardTest {
     }
 
     @Test
+    fun `the registry's Turn on again for a version an error turned off sticks at the next start`() = runTest {
+        val h = RegistryHarness(dir, this)
+        val process = TestProcess(h, this)
+        h.install(process.registry, "skeleton", 1)
+        process.registry.running("skeleton")!!.host.scope.launch { throw IllegalStateException("the plugin's refresh failed") }
+        advanceUntilIdle()
+        assertEquals(PluginStatus.OffAfterError, process.registry.installed("skeleton").status)
+        process.registry.turnOnAgain("skeleton")
+        assertTrue(process.registry.running("skeleton") != null)
+        process.end()
+
+        val next = TestProcess(h, this)
+        advanceUntilIdle()
+        assertTrue(next.registry.running("skeleton") != null, "on at the next start: the error's record went with Turn on again")
+        next.end()
+    }
+
+    @Test
     fun `a load that came back without the plugin running ends its marker too`() {
         guard().apply {
             startCheck(listOf(skeleton1))
