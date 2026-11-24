@@ -335,6 +335,30 @@ class PluginInstallerTest {
         assertEquals(1, s.registry.installed("copper").slot, "the slot freed")
     }
 
+    /**
+     * A read handed on while an update downloads waits for that update; Remove cancels it, and the read waiting behind it
+     * starts the same update again before the registry has let the plugin go. Nothing of that update is installed: the
+     * plugin the user removed doesn't come back.
+     */
+    @Test
+    fun `an update a read starts around a Remove never installs the removed plugin again`() = installerTest { s ->
+        s.listed(harbor(version("harbor", 1)))
+        s.installer.install("harbor")
+        advanceUntilIdle()
+        s.installer.pageLeft()
+        s.downloads.hold = CompletableDeferred()
+        s.read(harbor(version("harbor", 1), version("harbor", 2)))
+        s.read(harbor(version("harbor", 1), version("harbor", 2)))
+        s.downloads.hold = null
+
+        s.installer.remove("harbor")
+        advanceUntilIdle()
+        s.nothingKept("harbor")
+        assertEquals(emptyList(), s.h.store.readRegistry().plugins.map { it.id }, "no entry in the registry's file")
+        assertEquals(listOf("harbor" to 1L), s.h.loading.loads, "nothing loaded after the Remove")
+        assertNull(s.installer.states.value["harbor"], "its card back to Install")
+    }
+
     @Test
     fun `a third plugin isn't installed, nor downloaded`() = installerTest { s ->
         s.listed(harbor(version("harbor", 1)), plugin("kestrel", version("kestrel", 1)), plugin("copper", version("copper", 1)))

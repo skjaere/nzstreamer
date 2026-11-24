@@ -98,7 +98,7 @@ class PluginInstaller(
     fun installAgain(id: String): Job? {
         val name = list.value.index?.plugins?.firstOrNull { it.id == id }?.name ?: return null
         val version = installAgainVersion(id) ?: return null
-        return start(id, shown = true) { fetch(id, name, version) }
+        return start(id, shown = true) { fetch(id, name, version, update = true) }
     }
 
     /** Try again, after a failed install or Install again: the same again. */
@@ -168,7 +168,7 @@ class PluginInstaller(
             }
             val update = index.offer(plugin.id, maxOf(plugin.versionCode, waiting ?: 0), sdk, compat)?.offered ?: return@mapNotNull null
             if (update.versionCode == plugin.failedUpdate?.versionCode) return@mapNotNull null
-            start(plugin.id, shown = false) { fetch(plugin.id, listed.name, update) }
+            start(plugin.id, shown = false) { fetch(plugin.id, listed.name, update, update = true) }
         }
         updates.joinAll()
     }
@@ -210,9 +210,10 @@ class PluginInstaller(
     /**
      * Plugin [id]'s [version] as the list gives it, by the list's [name]: downloaded, then installed by the registry, whose
      * checks read it only once its SHA-256 was the list's; the download deleted after, whatever came of it. The card's
-     * state at the end: installed, or why not; none for an update stored to wait for its swap.
+     * state at the end: installed, or why not; none for an update stored to wait for its swap. An [update] is for the
+     * plugin installed now, and installs nothing where it was removed meanwhile.
      */
-    private suspend fun Fetch.fetch(id: String, name: String, version: ListedVersion): InstallState? {
+    private suspend fun Fetch.fetch(id: String, name: String, version: ListedVersion, update: Boolean = false): InstallState? {
         val file = when (val download = downloads().download(id, version) { downloaded(it, version.size) }) {
             is Download.Done -> download.file
             is Download.NoSpace -> {
@@ -226,12 +227,13 @@ class PluginInstaller(
         }
         try {
             checking()
-            return when (val result = registry.install(file, InstallRequest(id, name, version.versionCode, version.sha256))) {
+            return when (val result = registry.install(file, InstallRequest(id, name, version.versionCode, version.sha256, update))) {
                 is InstallResult.Installed -> InstallState.Installed(result.slot)
                 InstallResult.UpdateWaiting -> null
                 is InstallResult.Refused -> InstallState.Failed(result.refusal.installLine)
-                // Two installed already, or that version already couldn't start: the card has its own line for either.
-                InstallResult.NoRoom, InstallResult.NotAgain -> null
+                // Two installed already, or that version already couldn't start: the card has its own line for either. An
+                // update of a plugin removed meanwhile: its card is back to Install.
+                InstallResult.NoRoom, InstallResult.NotAgain, InstallResult.NotInstalled -> null
                 // The store couldn't write it: a disk that filled up says so, as the space check would have.
                 InstallResult.Failed -> InstallState.Failed(space().let { free -> if (free < version.size) spaceLine(version.size - free, television()) else DOWNLOAD_FAILED })
             }.also { if (it is InstallState.Failed) log.warn("Plugin {} {} not installed", id, version.versionCode) }

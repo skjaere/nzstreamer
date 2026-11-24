@@ -201,8 +201,9 @@ class PluginRegistry(
      * Installs [download], a file whose SHA-256 the list's matched, as [request] names it: checked again (L583, L584),
      * stored read-only, bound to the lowest free slot and, once the first screen's start check ran, loaded (before it, the
      * start's own load takes it). A higher version of one installed is stored beside it, and waits for the swap
-     * ([atSwapPoint]); the same version again replaces its file and, if it isn't running, loads it. Nothing of a refused or
-     * failed install is kept, nor of one cancelled before its checks passed; once they passed, it goes to its end.
+     * ([atSwapPoint]); the same version again replaces its file and, if it isn't running, loads it. An update of a plugin
+     * that was removed meanwhile ([InstallRequest.update]) installs nothing. Nothing of a refused or failed install is
+     * kept, nor of one cancelled before its checks passed; once they passed, it goes to its end.
      */
     suspend fun install(download: File, request: InstallRequest): InstallResult {
         filesRead.await()
@@ -210,6 +211,9 @@ class PluginRegistry(
             val id = request.id
             val existing = record(id)
             when {
+                existing == null && request.update -> return@withLock InstallResult.NotInstalled.also {
+                    log.info("Plugin {} {} not installed: removed while its update came", id, request.versionCode)
+                }
                 existing == null && records.size >= MAX_INSTALLED -> return@withLock InstallResult.NoRoom
                 existing?.failedVersion?.versionCode == request.versionCode -> return@withLock InstallResult.NotAgain
                 existing != null && request.versionCode < existing.versionCode -> return@withLock InstallResult.Refused(Refusal.Older)
@@ -621,8 +625,12 @@ class PluginRegistry(
     }
 }
 
-/** A plugin to install: its [id], the list's [name] for it, the [versionCode] the list gives and its file's [sha256]. */
-class InstallRequest(val id: String, val name: String, val versionCode: Long, val sha256: String)
+/**
+ * A plugin to install: its [id], the list's [name] for it, the [versionCode] the list gives and its file's [sha256]; an
+ * [update] where it is for a plugin installed already (an automatic update, or Install again), so that, should the plugin
+ * be removed while it came, nothing of it is installed.
+ */
+class InstallRequest(val id: String, val name: String, val versionCode: Long, val sha256: String, val update: Boolean = false)
 
 sealed interface InstallResult {
     /** Installed in [slot], and loaded once the first screen asked. */
@@ -638,6 +646,9 @@ sealed interface InstallResult {
 
     /** That version already couldn't start, and isn't tried again (L581). */
     data object NotAgain : InstallResult
+
+    /** An update for a plugin that was removed while it came: nothing of it is kept. */
+    data object NotInstalled : InstallResult
 
     /** It couldn't be stored (a full disk): nothing of it is kept. */
     data object Failed : InstallResult
