@@ -48,12 +48,13 @@ import java.util.concurrent.atomic.AtomicInteger
  * loads, so a test changes it before a reload; its own page, whose rows open its second page (with an argument, and Back)
  * and its settings, play its one item ([item], with what [releases] hands the host) and mark it watched, the item's state
  * as the host's watch says it; its settings page; a search of the user's indexers ([search]); and work in its host's scope
- * that throws ([failIn]). On a TV each page takes its first focus as the skeleton's do, and keeps the row that had the
- * focus for the remote's way back from the rail (the kit's tvFocusMemory), as a plugin's scrolling page must: its scroll
- * is a focus group of its own, which the shell's content would otherwise enter at its first row. Its classes are the test
- * APK's, outside any plugin's package; its words are invented.
+ * that throws ([failIn]). On a TV each page takes its first focus as the skeleton's do, unless [takesFirstFocus] is false
+ * (its own page then asks for none, and the shell puts the focus in), and keeps the row that had the focus for the
+ * remote's way back from the rail (the kit's tvFocusMemory), as a plugin's scrolling page must: its scroll is a focus
+ * group of its own, which the shell's content would otherwise enter at its first row. Its classes are the test APK's,
+ * outside any plugin's package; its words are invented.
  */
-class FakePlugin(val id: String = FAKE, label: String = "Fake") : NzPlugin {
+class FakePlugin(val id: String = FAKE, label: String = "Fake", private val takesFirstFocus: Boolean = true) : NzPlugin {
     /** The label its next version's tab() gives. */
     @Volatile
     var label: String = label
@@ -122,7 +123,7 @@ class FakePlugin(val id: String = FAKE, label: String = "Fake") : NzPlugin {
     @Composable
     private fun OwnPage(host: PluginHost, nav: PluginNav) {
         val states by remember(host) { host.watch.observe(listOf(ITEM_KEY)) }.collectAsState(emptyMap())
-        val first = rememberFirstFocus()
+        val first = rememberFirstFocus(asks = takesFirstFocus)
         Column(Modifier.fillMaxSize().tvFocusMemory().verticalScroll(rememberScrollState())) {
             TopBar(ownPage(label), onBack = null)
             Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -192,12 +193,15 @@ class FakePlugin(val id: String = FAKE, label: String = "Fake") : NzPlugin {
     }
 }
 
-/** On a TV, a page's first focus once the rail lets it take one, as the skeleton's pages take theirs; a phone's take none. */
+/**
+ * On a TV, a page's first focus once the rail lets it take one, as the skeleton's pages take theirs, where it [asks]; a
+ * phone's take none.
+ */
 @Composable
-private fun rememberFirstFocus(): FocusRequester {
+private fun rememberFirstFocus(asks: Boolean = true): FocusRequester {
     val first = remember { FocusRequester() }
     val initial = rememberInitialFocus()
     val tv = LocalFormFactor.current == FormFactor.Tv
-    LaunchedEffect(tv) { if (tv) initial.request(first) }
+    LaunchedEffect(tv) { if (tv && asks) initial.request(first) }
     return first
 }

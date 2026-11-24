@@ -71,10 +71,11 @@ import org.junit.runner.RunWith
  * from there Home, as on every tab (TvBackPrecedenceTest). The rail's focus state kept as the tabs change: as the registry
  * first loads (a skeleton a process before stored, the shell over a registry of the test's own that starts later), the
  * focus held on the rail stays there, on Home or on an item the plugin's comes in above, the rail open with its names,
- * and Right comes back where it was in the content; at a cold start on the plugin's
- * tab its page takes the focus as it loads; as another plugin's label changes, the focus in the page and on the rail stays
- * put. The placeholder of a plugin off after an error: its Open Plugins focused after OK, and focusing the card in
- * Settings › Plugins. And the real skeleton v1 from the test APK's assets: its second page, and Back (L595's last gap).
+ * and Right comes back where it was in the content; at a cold start on the plugin's tab its page takes the focus as it
+ * loads, or is given it by the shell where it asks for none; as another plugin's label changes, the focus in the page and
+ * on the rail stays put. The placeholder of a plugin off after an error: its Open Plugins focused after OK, and focusing
+ * the card in Settings › Plugins, Back from there focusing Settings' Plugins row. And the real skeleton v1 from the test
+ * APK's assets: its second page, and Back (L595's last gap).
  *
  * TMDB is a strict fake: what Home asks of other titles is refused, never sent.
  */
@@ -324,6 +325,25 @@ class PluginRailTvTest {
         } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
             throw AssertionError("the focus never went into its page; it is on \"${remote.focused()}\"", e)
         }
+    }
+
+    /**
+     * L590: the same with a page that asks for no first focus of its own (a plugin's rule asks only that it has something
+     * to focus): as it first shows, once its registry loads, it tells the rail the content changed, and the shell puts the
+     * focus into it, on its first row.
+     */
+    @Test
+    @FakeCount(0)
+    fun atAColdStartOnItsTabAPageAskingNoFocusIsGivenItByTheShell() {
+        val shy = FakePlugin(KESTREL, "Kestrel", takesFirstFocus = false)
+        val next = plugins.registry()
+        showTheShell(next)
+        compose.runOnIdle { nav.switchTab(PluginTab1) }
+        compose.waitForIdle()
+        next.start()
+        fakes.install(shy, next.registry)
+        waitFor(hasText(FakePlugin.ownPage("Kestrel")))
+        waitForFocusOn(control(SECOND_PAGE), "its first row, put there by the shell")
     }
 
     /**
