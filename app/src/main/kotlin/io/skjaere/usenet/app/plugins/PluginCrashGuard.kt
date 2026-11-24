@@ -26,7 +26,10 @@ interface PluginGuard {
     /** A version's instance was let go, its close() returned: a crash no longer blames it. */
     fun letGo(id: String, versionCode: Long)
 
-    /** At a start, before any plugin loads: what the last start left, for the versions this one is to load ([toLoad]). */
+    /**
+     * At a start, before any plugin loads: what the last start left, for the versions this one may load ([toLoad]): each
+     * installed version that is on, and each update that waits for its swap point.
+     */
     fun startCheck(toLoad: List<Pair<String, Long>>): StartCheck
 
     /** The registry kept what [startCheck] found: its records go. */
@@ -60,7 +63,8 @@ class StartCheck(val pluginsOff: Boolean, val crashed: Set<Pair<String, Long>>, 
  *   outside composition is recorded there too.
  * - loading: a version about to load, deleted once its load came back. Found at a start, it counts one death during
  *   that version's load (a native crash names no frame, and so does a kill); a second in a row turns it off as a crash
- *   would. One alone is tried again.
+ *   would. One alone is tried again. Counted by version: an update's death at its swap point counts against it alone,
+ *   and the version before loading cleanly at the start clears none of it.
  * - starts.json: when the last start that loaded plugins began, how many in a row crashed within [EARLY_MS] of it (two
  *   turn the plugins off until Turn on again), and the loads' death counts.
  * Not covered: a plugin that blocks the main thread (an ANR names no frame), and a crash in the app's code that a plugin's
@@ -114,7 +118,8 @@ class PluginCrashGuard(private val folder: File, private val now: () -> Long = S
         synchronized(files) {
             markerFile.delete()
             val starts = readStarts()
-            if (starts.markers.any { it.id == id }) write(startsFile, StartsRecord.serializer(), starts.copy(markers = starts.markers.filter { it.id != id }))
+            val others = starts.markers.filterNot { it.id == id && it.versionCode == versionCode }
+            if (others.size != starts.markers.size) write(startsFile, StartsRecord.serializer(), starts.copy(markers = others))
         }
     }
 
@@ -138,14 +143,14 @@ class PluginCrashGuard(private val folder: File, private val now: () -> Long = S
             else -> read(markerFile, Marker.serializer())?.let { listOf(it.id to it.versionCode) } ?: toLoad
         }
         markerFile.delete()
-        val counts = starts.markers.associateBy { it.id }.toMutableMap()
-        died.forEach { (id, version) ->
-            val count = (counts[id]?.takeIf { it.versionCode == version }?.count ?: 0) + 1
+        val counts = starts.markers.associateBy { it.id to it.versionCode }.toMutableMap()
+        died.forEach { version ->
+            val count = (counts[version]?.count ?: 0) + 1
             if (count >= 2) {
-                crashed += id to version
-                counts.remove(id)
+                crashed += version
+                counts.remove(version)
             } else {
-                counts[id] = MarkerCount(id, version, count)
+                counts[version] = MarkerCount(version.first, version.second, count)
             }
         }
         val lastStart = starts.lastStart

@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -200,6 +201,62 @@ class PluginCrashGuardTest {
         }
         diesLoading(guard(), skeleton1)
         assertEquals(emptySet(), guard().startCheck(listOf(skeleton1)).crashed, "a clean load between clears the count")
+    }
+
+    @Test
+    fun `a clean load of one version leaves the deaths of another's load counted`() {
+        val both = listOf(skeleton1, skeleton2)
+        // An update's load at its swap point dies.
+        guard().apply { startCheck(both); recordsApplied(); loading("skeleton", 2) }
+        guard().apply {
+            assertEquals(emptySet(), startCheck(both).crashed, "one death alone is tried again")
+            recordsApplied()
+            // The version before loads cleanly as the start's, then the update's load dies again at its swap point.
+            loading("skeleton", 1)
+            loadDone("skeleton", 1, running = true)
+            loading("skeleton", 2)
+        }
+        assertEquals(setOf(skeleton2), guard().startCheck(both).crashed, "the update's second death in a row")
+    }
+
+    @Test
+    fun `an update that dies as it takes over is tried once more, and after a second death goes back for good`() = runTest {
+        val h = RegistryHarness(dir, this)
+
+        /** A new process, which the test ends as the update's load kills it: the scope's handler stands for the death. */
+        class Process {
+            val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler) + CoroutineExceptionHandler { _, _ -> })
+            val guard = PluginCrashGuard(File(h.files, "plugins"), now = { testScheduler.currentTime }).also { h.guard = it }
+            val registry = h.registry(scope).apply { start(); firstActivity() }
+        }
+
+        val first = Process()
+        h.install(first.registry, "skeleton", 1)
+        h.install(first.registry, "skeleton", 2)
+        h.loading.throwing["skeleton" to 2L] = { OutOfMemoryError("the process dies as version 2 loads") }
+        repeat(2) { n ->
+            val process = if (n == 0) first else Process()
+            advanceUntilIdle()
+            assertEquals(1L, process.registry.running("skeleton")?.versionCode, "version 1 runs")
+            assertTrue(process.registry.installed("skeleton").updateWaiting, "version 2 waits")
+            process.scope.launch { process.registry.atSwapPoint("skeleton") }
+            advanceUntilIdle()
+            process.scope.cancel()
+        }
+
+        val next = Process()
+        advanceUntilIdle()
+        with(next.registry.installed("skeleton")) {
+            assertEquals(1L, versionCode)
+            assertFalse(updateWaiting, "version 2 doesn't wait any more")
+            assertEquals("2", failedUpdate?.versionName)
+            assertEquals("its code didn't load", failedUpdate?.reason)
+        }
+        assertEquals(1L, next.registry.running("skeleton")?.versionCode)
+        assertFalse(next.registry.atSwapPoint("skeleton"), "not tried again")
+        assertFalse(File(h.files, "plugins/skeleton/code/2").exists())
+        assertIs<InstallResult.NotAgain>(h.install(next.registry, "skeleton", 2))
+        next.scope.cancel()
     }
 
     @Test

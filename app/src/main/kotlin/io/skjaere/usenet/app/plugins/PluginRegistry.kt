@@ -130,10 +130,21 @@ class PluginRegistry(
         }
     }
 
-    /** The guard's start check, kept: the versions it found off are off in the registry's file before its records go. Under [lock]. */
+    /**
+     * The guard's start check, kept: the versions it found off are off in the registry's file before its records go. An
+     * update waiting for its swap point is checked too: one a crash blamed, or whose load there died twice in a row,
+     * couldn't start, and isn't tried again (L581); the version before runs on. Under [lock].
+     */
     private suspend fun keepStartCheck() {
-        val toLoad = records.filter { it.id !in forTest && (it.state == StoredState.On || it.state == StoredState.Refused) }
-        val check = crashGuard.startCheck(toLoad.map { it.id to it.versionCode })
+        val ours = records.filter { it.id !in forTest }
+        val toLoad = ours.filter { it.state == StoredState.On || it.state == StoredState.Refused }
+        val waiting = ours.mapNotNull { record -> record.pending?.let { record.id to it.versionCode } }
+        val check = crashGuard.startCheck(toLoad.map { it.id to it.versionCode } + waiting)
+        val failedUpdates = waiting.filter { it in check.crashed || it in check.errored }
+        failedUpdates.forEach { (id, versionCode) ->
+            log.warn("Plugin {} {} couldn't take over from {}: it crashed as it took over", id, versionCode, record(id)?.versionCode)
+            update(id) { it.copy(pending = null, failedVersion = FailedVersion(versionCode, it.pending!!.versionName, LoadFailure.Other.reason)) }
+        }
         val turnedOff = toLoad.mapNotNull { record ->
             val version = record.id to record.versionCode
             when (version) {
@@ -146,7 +157,8 @@ class PluginRegistry(
             log.warn("Plugin {} {} is off: {}", id, record(id)?.versionCode, state)
             update(id) { it.copy(state = state) }
         }
-        if (turnedOff.isNotEmpty()) persist()
+        if (turnedOff.isNotEmpty() || failedUpdates.isNotEmpty()) persist()
+        failedUpdates.forEach { (id, versionCode) -> withContext(io) { store.deleteVersion(id, versionCode) } }
         crashGuard.recordsApplied()
         off.value = check.pluginsOff
         startChecked = true
