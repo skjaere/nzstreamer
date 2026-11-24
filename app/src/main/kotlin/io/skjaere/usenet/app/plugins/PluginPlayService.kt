@@ -33,10 +33,15 @@ class PluginPlayService(
         lists.open(target(item, version, calls), found(version.id, accepted.toList(), offered.map { it.handle to it.reason }, leftOut))
     }
 
-    /** [item] as the host plays it: its picker the plugin's, guarded; its noun and its search's words and note (L628, L629). */
+    /**
+     * [item] as the host plays it: its picker the plugin's, guarded; its noun and its search's words and note (L628, L629),
+     * taken as the plugin's openSearch takes them: words trimmed, no Search (nor its note) for blank ones, a blank note none.
+     */
     private fun target(item: PlayItem, version: PluginVersion, calls: PluginCalls): ItemTarget {
         val picker = item.picker?.let { PluginFilePickers.of(it, version, calls) } ?: FilePicker.Largest
-        return ItemTarget(version.id, item.key, item.title, item.subtitle, picker, item.noun, item.search?.words, item.search?.note)
+        val words = item.search?.words?.trim()?.takeIf(String::isNotEmpty)
+        val note = item.search?.note?.takeIf { words != null && it.isNotBlank() }
+        return ItemTarget(version.id, item.key, item.title, item.subtitle, picker, item.noun, words, note)
     }
 
     /** Plugin [id]'s answer in the host's terms: its handles mapped back, in its order, one the host no longer keeps left out. */

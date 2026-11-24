@@ -330,6 +330,15 @@ class ItemPlayTest {
         assertEquals("Quarrydown Ellerholt" to "Indexer results can show scores.", target.searchWords to target.searchNote)
         play.play(PlayItem("ev-000731:main", "Quarrydown FC vs. Ellerholt United", "KCL", 105, noun = "Game!")) { ItemReleases(emptyList()) }
         assertEquals(Triple(null, null, null), routed.last().let { Triple(it.noun, it.searchWords, it.searchNote) }, "a noun outside its rule is none")
+        // As the plugin's openSearch takes them: no words, no Search (nor its note); a blank note, none.
+        fun offered(offer: SearchOffer): Pair<String?, String?> {
+            play.play(PlayItem("ev-000731:main", "Quarrydown FC vs. Ellerholt United", "KCL", 105, search = offer)) { ItemReleases(emptyList()) }
+            return routed.last().let { it.searchWords to it.searchNote }
+        }
+        assertEquals(null to null, offered(SearchOffer("   ", "Indexer results can show scores.")), "blank words: no Search")
+        assertEquals("Quarrydown Ellerholt" to null, offered(SearchOffer("  Quarrydown Ellerholt ", " ")), "words trimmed, a blank note none")
+        val (_, sheet) = run(stored = false, remembered = null, found = ItemFound.NOTHING, target = routed.first().copy(searchWords = null, searchNote = null))
+        assertNull(assertIs<PlayState.NoRelease>(sheet).searchRoute(), "no Search “” on the sheet")
     }
 
     /** A host made with the app's play service plays its items through it, its errors charged to its own version. */
