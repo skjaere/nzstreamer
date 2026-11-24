@@ -491,6 +491,13 @@ class PluginsPageModelTest {
         // The page's Turn on again: the first card's first button.
         val off = page(listOf(installed(status = PluginStatus.PluginsOff)), kestrel, pluginsOff = true)
         assertEquals(on(action = CardAction.Settings), after(off, PluginsFocus.TurnPluginsOn, running))
+        // The registry clears plugins-off before its plugins load: while one still says so, the page is still off, its Turn
+        // on again keeping the focus; once loaded, the first button of the card as the load left it.
+        val loading = page(listOf(installed(status = PluginStatus.PluginsOff)), kestrel, pluginsOff = false, slots = false)
+        assertEquals(true, loading.pluginsOff)
+        assertEquals(PluginsFocus.TurnPluginsOn, after(off, PluginsFocus.TurnPluginsOn, loading))
+        val erroredOnLoad = page(listOf(installed(status = PluginStatus.OffAfterError)), kestrel, slots = false)
+        assertEquals(on(action = CardAction.TurnOnAgain), after(loading, PluginsFocus.TurnPluginsOn, erroredOnLoad))
         // Check again keeps the focus while it reads, and after.
         val reading = page(listOf(installed()), list(listed("kestrel", "Kestrel", version(12, "1.2")), checking = true))
         assertEquals(PluginsFocus.CheckAgain, after(running, PluginsFocus.CheckAgain, reading))

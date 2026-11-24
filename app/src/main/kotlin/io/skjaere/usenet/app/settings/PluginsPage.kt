@@ -164,10 +164,13 @@ data class PluginsPage(
             compat: PluginCompat,
         ): PluginsPage {
             val plugins = installed.orEmpty()
+            // The registry clears its flag before its plugins load: until one has, the page is still off, so a TV's focus
+            // stays on Turn on again and then goes where the loads left the cards.
+            val off = pluginsOff || plugins.any { it.status == PluginStatus.PluginsOff }
             val index = list.index
             val device = if (television) "TV" else "phone"
             val cards = Cards(index, installs, now, zone, device, after, slots, sdk, compat)
-            val own = plugins.map { cards.installed(it, pluginsOff, installAgain(it.id)) }
+            val own = plugins.map { cards.installed(it, off, installAgain(it.id)) }
             // The others the list offers: two installed, or on their way, grey a third's Install (L618).
             val coming = installs.filter { (id, state) -> plugins.none { it.id == id } && (state is InstallState.Downloading || state is InstallState.Checking) }.keys
             val full = (plugins.map { it.id } + coming).distinct().size >= PluginRegistry.MAX_INSTALLED
@@ -185,7 +188,7 @@ data class PluginsPage(
                 index != null && all.isEmpty() -> PagePlaceholder.NoneListed
                 else -> null
             }
-            return PluginsPage(lines, pluginsOff && plugins.isNotEmpty(), all, placeholder, source(list.readAt, now, zone), list.checking)
+            return PluginsPage(lines, off && plugins.isNotEmpty(), all, placeholder, source(list.readAt, now, zone), list.checking)
         }
 
         /**

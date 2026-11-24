@@ -254,10 +254,9 @@ class PluginsTvTest {
         press(KeyEvent.KEYCODE_DPAD_UP, "Turn on again")
         remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
         compose.waitUntil(PAGE_MS) { "turn plugins on again" in fakes.asked }
-        then("Settings") {
-            fakes.pluginsOff.value = false
-            fakes.installed.value = listOf(installed("kestrel", "Kestrel", "Sports"))
-        }
+        // As the registry does it: the flag cleared first, the plugins loaded after it.
+        then("Turn on again") { fakes.pluginsOff.value = false }
+        then("Settings") { fakes.installed.value = listOf(installed("kestrel", "Kestrel", "Sports")) }
 
         // No list yet (a 404): Check again.
         fakes.installed.value = emptyList()
