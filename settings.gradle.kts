@@ -48,6 +48,7 @@ rootProject.name = "nzstreamer"
 include(":native:rapidyenc")
 include(":tools:mock-seed")
 include(":tools:api-check")
+include(":tools:plugin-check")
 include(":tools:native-check")
 include(":tools:manifest-check")
 include(":tools:feature-check")

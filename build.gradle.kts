@@ -83,3 +83,54 @@ allprojects {
         }
     }
 }
+
+// The plugin API's dumps (L625): what a plugin can call of :core:plugin and :core:ui, their public and protected
+// signatures as Kotlin sees them (tools/plugin-check's ApiDump), checked in as core/plugin/api/plugin.api and
+// core/ui/api/ui.api with plugin-api.txt's version as their first line. Read from each module's release class jar, as the
+// app carries it. checkPluginApi (in check) fails on any difference, so no change to either reaches a plugin unnoticed;
+// dumpPluginApi writes the dump again for a change made on purpose, under L614's version rules.
+listOf(":core:plugin", ":core:ui").forEach { path ->
+    project(path) {
+        pluginManager.withPlugin("com.android.library") {
+            val pluginCheckTool = configurations.create("pluginCheckTool") {
+                isCanBeConsumed = false
+                attributes { attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage.JAVA_RUNTIME)) }
+            }
+            dependencies { pluginCheckTool(project(":tools:plugin-check")) }
+            // Locals: the argument providers must not capture the script (configuration cache).
+            val releaseClasses = files(tasks.named { it == "bundleLibCompileToJarRelease" })
+            val versionFile = rootProject.layout.projectDirectory.file("core/plugin/plugin-api.txt")
+            val dumpFile = layout.projectDirectory.file("api/${project.name}.api")
+            tasks.register<JavaExec>("dumpPluginApi") {
+                group = "verification"
+                description = "Writes the plugin API's dump of this module's release classes, for a change made on purpose (L614)."
+                inputs.files(releaseClasses).withPropertyName("releaseClasses")
+                inputs.file(versionFile).withPropertyName("pluginApiVersion")
+                outputs.file(dumpFile)
+                classpath = pluginCheckTool
+                mainClass = "io.skjaere.usenet.plugincheck.MainKt"
+                argumentProviders += object : CommandLineArgumentProvider {
+                    override fun asArguments() = listOf("dump") + releaseClasses.flatMap { listOf("--classes", it.path) } +
+                        listOf("--version-file", versionFile.asFile.path, "--out", dumpFile.asFile.path)
+                }
+            }
+            val checkPluginApi = tasks.register<JavaExec>("checkPluginApi") {
+                group = "verification"
+                description = "Fails when this module's release classes differ from its checked-in plugin API dump."
+                val report = layout.buildDirectory.file("reports/checkPluginApi.txt")
+                inputs.files(releaseClasses).withPropertyName("releaseClasses")
+                inputs.file(versionFile).withPropertyName("pluginApiVersion")
+                // A missing dump is the tool's to name, with how to write it.
+                inputs.files(dumpFile).withPropertyName("dump")
+                outputs.file(report)
+                classpath = pluginCheckTool
+                mainClass = "io.skjaere.usenet.plugincheck.MainKt"
+                argumentProviders += object : CommandLineArgumentProvider {
+                    override fun asArguments() = listOf("check-dump") + releaseClasses.flatMap { listOf("--classes", it.path) } +
+                        listOf("--version-file", versionFile.asFile.path, "--dump", dumpFile.asFile.path, "--report", report.get().asFile.path)
+                }
+            }
+            tasks.named("check") { dependsOn(checkPluginApi) }
+        }
+    }
+}

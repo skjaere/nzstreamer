@@ -1,0 +1,209 @@
+1.0
+public final enum class io/skjaere/usenet/plugin/AddressSafety : java/lang/Enum {
+	public static final field Encrypted Lio/skjaere/usenet/plugin/AddressSafety;
+	public static final field Invalid Lio/skjaere/usenet/plugin/AddressSafety;
+	public static final field LocalHttp Lio/skjaere/usenet/plugin/AddressSafety;
+	public static final field PublicHttp Lio/skjaere/usenet/plugin/AddressSafety;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lio/skjaere/usenet/plugin/AddressSafety;
+	public static fun values ()[Lio/skjaere/usenet/plugin/AddressSafety;
+}
+
+public final class io/skjaere/usenet/plugin/FileInfo {
+	public <init> (Ljava/lang/String;JZ)V
+	public final fun getPath ()Ljava/lang/String;
+	public final fun getSize ()J
+	public final fun isVideo ()Z
+}
+
+public final class io/skjaere/usenet/plugin/Found {
+	public <init> (Ljava/util/List;Ljava/util/List;)V
+	public final fun getIndexers ()Ljava/util/List;
+	public final fun getReleases ()Ljava/util/List;
+}
+
+public final class io/skjaere/usenet/plugin/HttpAnswer {
+	public <init> (ILjava/util/Map;[B)V
+	public final fun getBody ()[B
+	public final fun getHeaders ()Ljava/util/Map;
+	public final fun getStatus ()I
+}
+
+public final class io/skjaere/usenet/plugin/IndexerLine {
+	public <init> (Ljava/lang/String;Lio/skjaere/usenet/plugin/IndexerLine$State;ILjava/lang/String;)V
+	public final fun getFound ()I
+	public final fun getName ()Ljava/lang/String;
+	public final fun getState ()Lio/skjaere/usenet/plugin/IndexerLine$State;
+	public final fun getText ()Ljava/lang/String;
+}
+
+public final enum class io/skjaere/usenet/plugin/IndexerLine$State : java/lang/Enum {
+	public static final field Failed Lio/skjaere/usenet/plugin/IndexerLine$State;
+	public static final field Found Lio/skjaere/usenet/plugin/IndexerLine$State;
+	public static final field Limited Lio/skjaere/usenet/plugin/IndexerLine$State;
+	public static final field Searching Lio/skjaere/usenet/plugin/IndexerLine$State;
+	public static final field Skipped Lio/skjaere/usenet/plugin/IndexerLine$State;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lio/skjaere/usenet/plugin/IndexerLine$State;
+	public static fun values ()[Lio/skjaere/usenet/plugin/IndexerLine$State;
+}
+
+public final class io/skjaere/usenet/plugin/IndexerNote {
+	public <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun getIndexer ()Ljava/lang/String;
+	public final fun getWords ()Ljava/lang/String;
+}
+
+public final class io/skjaere/usenet/plugin/ItemReleases {
+	public <init> (Ljava/util/List;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)V
+	public final fun getAccepted ()Ljava/util/List;
+	public final fun getLeftOut ()Ljava/lang/String;
+	public final fun getLines ()Ljava/util/List;
+	public final fun getNote ()Ljava/lang/String;
+	public final fun getOffered ()Ljava/util/List;
+}
+
+public abstract interface class io/skjaere/usenet/plugin/NzPlugin {
+	public abstract fun Page (Ljava/lang/String;Ljava/lang/String;Lio/skjaere/usenet/plugin/PluginHost;Lio/skjaere/usenet/plugin/PluginNav;Landroidx/compose/runtime/Composer;I)V
+	public abstract fun Settings (Lio/skjaere/usenet/plugin/PluginHost;Lio/skjaere/usenet/plugin/PluginNav;Landroidx/compose/runtime/Composer;I)V
+	public abstract fun close ()V
+	public abstract fun tab ()Lio/skjaere/usenet/plugin/PluginTab;
+}
+
+public final class io/skjaere/usenet/plugin/Offered {
+	public <init> (Lio/skjaere/usenet/plugin/ReleaseHandle;Ljava/lang/String;)V
+	public final fun getHandle ()Lio/skjaere/usenet/plugin/ReleaseHandle;
+	public final fun getReason ()Ljava/lang/String;
+}
+
+public final class io/skjaere/usenet/plugin/PlayItem {
+	public <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Lio/skjaere/usenet/plugin/SearchOffer;Lio/skjaere/usenet/plugin/PluginFilePicker;)V
+	public final fun getKey ()Ljava/lang/String;
+	public final fun getPicker ()Lio/skjaere/usenet/plugin/PluginFilePicker;
+	public final fun getRuntimeMinutes ()Ljava/lang/Integer;
+	public final fun getSearch ()Lio/skjaere/usenet/plugin/SearchOffer;
+	public final fun getSubtitle ()Ljava/lang/String;
+	public final fun getTitle ()Ljava/lang/String;
+}
+
+public final class io/skjaere/usenet/plugin/PluginApi {
+	public static final field INSTANCE Lio/skjaere/usenet/plugin/PluginApi;
+	public static final field MAJOR I
+	public static final field META_API_MAJOR Ljava/lang/String;
+	public static final field META_API_MINOR Ljava/lang/String;
+	public static final field META_ENTRY Ljava/lang/String;
+	public static final field META_ID Ljava/lang/String;
+	public static final field META_LIBS Ljava/lang/String;
+	public static final field MINOR I
+	public static final field VERSION Ljava/lang/String;
+}
+
+public abstract interface class io/skjaere/usenet/plugin/PluginFilePicker {
+	public abstract fun getNoMatch ()Ljava/lang/String;
+	public abstract fun pick (Ljava/util/List;)Ljava/lang/Integer;
+	public abstract fun takesWhole (Ljava/lang/String;)Z
+}
+
+public abstract interface class io/skjaere/usenet/plugin/PluginHost {
+	public abstract fun addressSafety (Ljava/lang/String;)Lio/skjaere/usenet/plugin/AddressSafety;
+	public abstract fun getCacheDir ()Ljava/io/File;
+	public abstract fun getDataDir ()Ljava/io/File;
+	public abstract fun getHttp ()Lio/skjaere/usenet/plugin/PluginHttp;
+	public abstract fun getId ()Ljava/lang/String;
+	public abstract fun getPlay ()Lio/skjaere/usenet/plugin/PluginPlay;
+	public abstract fun getScope ()Lkotlinx/coroutines/CoroutineScope;
+	public abstract fun getSearch ()Lio/skjaere/usenet/plugin/PluginSearch;
+	public abstract fun getSecrets ()Lio/skjaere/usenet/plugin/PluginSecrets;
+	public abstract fun getWatch ()Lio/skjaere/usenet/plugin/PluginWatch;
+}
+
+public abstract interface class io/skjaere/usenet/plugin/PluginHttp {
+	public abstract fun get (Ljava/lang/String;Ljava/util/Map;ILkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class io/skjaere/usenet/plugin/PluginHttpException : java/io/IOException {
+	public <init> (Lio/skjaere/usenet/plugin/PluginHttpException$Kind;Ljava/lang/String;)V
+	public final fun getKind ()Lio/skjaere/usenet/plugin/PluginHttpException$Kind;
+}
+
+public final enum class io/skjaere/usenet/plugin/PluginHttpException$Kind : java/lang/Enum {
+	public static final field InvalidAddress Lio/skjaere/usenet/plugin/PluginHttpException$Kind;
+	public static final field RedirectRefused Lio/skjaere/usenet/plugin/PluginHttpException$Kind;
+	public static final field Timeout Lio/skjaere/usenet/plugin/PluginHttpException$Kind;
+	public static final field TooLarge Lio/skjaere/usenet/plugin/PluginHttpException$Kind;
+	public static final field Unreachable Lio/skjaere/usenet/plugin/PluginHttpException$Kind;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lio/skjaere/usenet/plugin/PluginHttpException$Kind;
+	public static fun values ()[Lio/skjaere/usenet/plugin/PluginHttpException$Kind;
+}
+
+public final class io/skjaere/usenet/plugin/PluginKeys {
+	public static final field INSTANCE Lio/skjaere/usenet/plugin/PluginKeys;
+	public final fun validArg (Ljava/lang/String;)Z
+	public final fun validKey (Ljava/lang/String;)Z
+	public final fun validLabel (Ljava/lang/String;)Z
+	public final fun validPage (Ljava/lang/String;)Z
+	public final fun validReason (Ljava/lang/String;)Z
+	public final fun validSecretName (Ljava/lang/String;)Z
+}
+
+public abstract interface class io/skjaere/usenet/plugin/PluginNav {
+	public abstract fun back ()V
+	public abstract fun open (Ljava/lang/String;Ljava/lang/String;)V
+	public abstract fun openReleases (Lio/skjaere/usenet/plugin/PlayItem;Ljava/util/List;Ljava/util/List;Ljava/lang/String;)V
+	public abstract fun openSearch (Ljava/lang/String;Ljava/lang/String;)V
+	public abstract fun openSettings ()V
+}
+
+public abstract interface class io/skjaere/usenet/plugin/PluginPlay {
+	public abstract fun play (Lio/skjaere/usenet/plugin/PlayItem;Lkotlin/jvm/functions/Function1;)V
+}
+
+public abstract interface class io/skjaere/usenet/plugin/PluginSearch {
+	public abstract fun search (Ljava/lang/String;Ljava/lang/Integer;Z)Lkotlinx/coroutines/flow/Flow;
+}
+
+public abstract interface class io/skjaere/usenet/plugin/PluginSecrets {
+	public abstract fun get (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun has (Ljava/lang/String;)Lkotlinx/coroutines/flow/Flow;
+	public abstract fun put (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class io/skjaere/usenet/plugin/PluginTab {
+	public <init> (Ljava/lang/String;Landroidx/compose/ui/graphics/vector/ImageVector;)V
+	public final fun getIcon ()Landroidx/compose/ui/graphics/vector/ImageVector;
+	public final fun getLabel ()Ljava/lang/String;
+}
+
+public abstract interface class io/skjaere/usenet/plugin/PluginWatch {
+	public abstract fun mark (Ljava/util/List;ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun observe (Ljava/util/Collection;)Lkotlinx/coroutines/flow/Flow;
+}
+
+public abstract interface class io/skjaere/usenet/plugin/ReleaseHandle {
+}
+
+public final class io/skjaere/usenet/plugin/ReleaseInfo {
+	public <init> (Ljava/lang/String;JLjava/time/Instant;Ljava/lang/String;ZLjava/lang/String;Lio/skjaere/usenet/plugin/ReleaseHandle;)V
+	public final fun getHandle ()Lio/skjaere/usenet/plugin/ReleaseHandle;
+	public final fun getIndexer ()Ljava/lang/String;
+	public final fun getName ()Ljava/lang/String;
+	public final fun getPlayable ()Z
+	public final fun getPostedAt ()Ljava/time/Instant;
+	public final fun getSize ()J
+	public final fun getWhyNot ()Ljava/lang/String;
+}
+
+public final class io/skjaere/usenet/plugin/SearchOffer {
+	public <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun getNote ()Ljava/lang/String;
+	public final fun getWords ()Ljava/lang/String;
+}
+
+public final class io/skjaere/usenet/plugin/WatchInfo {
+	public <init> (JJZLjava/time/Instant;)V
+	public final fun getDurationMs ()J
+	public final fun getLastPlayedAt ()Ljava/time/Instant;
+	public final fun getPositionMs ()J
+	public final fun getWatched ()Z
+}
