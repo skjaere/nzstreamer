@@ -514,13 +514,13 @@ internal suspend fun previousAiredEpisode(
  * throws (reading the settings or the library failing, say), else null: the sheet says so rather
  * than staying on "Searching…", and the app doesn't crash.
  */
-internal suspend fun failureOf(title: String, subtitle: String?, block: suspend () -> Unit): PlayState.Failed? = try {
+internal suspend fun failureOf(title: String, subtitle: String?, logged: String = title, block: suspend () -> Unit): PlayState.Failed? = try {
     block()
     null
 } catch (e: CancellationException) {
     throw e
 } catch (e: Exception) {
-    log.warn("Playing {} failed", title, e)
+    log.warn("Playing {} failed", logged, e)
     PlayState.Failed(title, subtitle, listOf(title to "Something went wrong" + (e.message?.let { ": $it" } ?: "")), notTried = 0, remote = listOf("Something went wrong on the TV"))
 }
 
@@ -1085,7 +1085,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         fun failed(f: PlayState.Failed) {
             outcome.complete(PlayOutcome.Failed(f))
         }
-        job = launchPlay(request.title, request.subtitle, ::failed, origin) {
+        job = launchPlay(request.title, request.subtitle, ::failed, origin, watchKey = request.watch?.itemKey) {
             runPipeline(request)?.let {
                 _state.value = it
                 failed(it)
@@ -1112,7 +1112,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
             if (again.cast == null) playFileHere(nzbId, file, request) else castFile(nzbId, file, again)
         }
         // Import's file plays from Usenet alone (L165): it needs a provider, whatever else could play.
-        job = launchPlay(request.title, request.subtitle, origin = origin, gate = { container.noUsableProvider() }) {
+        job = launchPlay(request.title, request.subtitle, origin = origin, gate = { container.noUsableProvider() }, watchKey = request.watch?.itemKey) {
             castImported(nzbId, file, request, to)?.let { _state.value = it }
         }
     }
@@ -1128,7 +1128,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         val plan = ResumePlan.of(state)
         val watch = WatchTarget.of(state)
         replaceJob(origin, plan.title, plan.subtitle, watch) { resume(state, it) }
-        job = launchPlay(plan.title, plan.subtitle, origin = origin) {
+        job = launchPlay(plan.title, plan.subtitle, origin = origin, watchKey = state.key) {
             val offService = offService()
             plan.run(
                 play = { runPipeline(it) },
@@ -1209,7 +1209,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
      */
     fun playItem(item: ItemTarget, releases: suspend () -> ItemFound, origin: PlayOrigin = PlayOrigin.Here) {
         replaceJob(origin, item.title, item.subtitle, item.watch) { playItem(item, releases, it) }
-        job = launchPlay(item.title, item.subtitle, origin = origin) {
+        job = launchPlay(item.title, item.subtitle, origin = origin, watchKey = item.watchKey) {
             val remembered = container.library.lastRelease(item.watchKey)
             ItemPlay.run(
                 item, remembered, playsAlone(remembered),
@@ -1301,7 +1301,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         val plan = sessions.retry(launch, positionMs, stopped = stopped)
         val origin = plan.origin ?: return
         replaceJob(origin, launch.title, launch.subtitle, launch.watch) { tryAnother(launch.copy(cast = it.cast), positionMs, forget, stopped) }
-        job = launchPlay(launch.title, launch.subtitle, origin = origin) {
+        job = launchPlay(launch.title, launch.subtitle, origin = origin, watchKey = launch.watchKey) {
             if (forget) forget(launch)
             when (plan) {
                 is RetryPlan.Again -> runPipeline(plan.request, plan.retry)?.let { _state.value = it }
@@ -1325,7 +1325,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         replaceJob(origin, launch.title, launch.subtitle, launch.watch, goesOn = CastStart.goesOn(launch, plan)) {
             tryAnotherForMissingParts(launch.copy(cast = it.cast), positionMs, asked)
         }
-        job = launchPlay(launch.title, launch.subtitle, origin = origin) {
+        job = launchPlay(launch.title, launch.subtitle, origin = origin, watchKey = launch.watchKey) {
             when (plan) {
                 is RetryPlan.Again -> runPipeline(plan.request, plan.retry)?.let { _state.value = it }
                 is RetryPlan.SearchEpisode -> lookUpAndPlay(plan.target, plan.retry)
@@ -1347,7 +1347,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         replaceJob(plan.origin, launch.title, launch.subtitle, launch.watch, goesOn = CastStart.goesOn(launch, plan)) {
             trySmaller(launch.copy(cast = it.cast), positionMs, measuredBps, playingBps)
         }
-        job = launchPlay(launch.title, launch.subtitle, origin = plan.origin) { runPipeline(plan.request, plan.retry)?.let { _state.value = it } }
+        job = launchPlay(launch.title, launch.subtitle, origin = plan.origin, watchKey = launch.watchKey) { runPipeline(plan.request, plan.retry)?.let { _state.value = it } }
     }
 
     /**
@@ -1420,7 +1420,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
      * [named], and the play goes on.
      */
     private suspend fun forget(watchKey: String, release: RememberedRelease, named: String = release.title) =
-        saveOrLog("forget $named for $watchKey") { container.library.forgetRelease(watchKey, release) }
+        saveOrLog("forget $named for ${PlayLog.key(watchKey)}") { container.library.forgetRelease(watchKey, release) }
 
     /** Forgets [launch]'s release as the one that played its title, a download's named by its download alone ([DownloadLaunch.releaseNamed]). */
     private suspend fun forget(launch: PlayerLaunch) = forget(launch.watchKey, launch.release.toRemembered(), DownloadLaunch.releaseNamed(launch))
@@ -1445,6 +1445,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         onFailed: (PlayState.Failed) -> Unit = {},
         origin: PlayOrigin = PlayOrigin.Here,
         gate: suspend () -> NoUsableProvider? = { container.noUsableSource() },
+        watchKey: String? = null,
         block: suspend () -> Unit,
     ): Job {
         val refused = notStarted.also { notStarted = null }
@@ -1458,7 +1459,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
                     onFailed(refused)
                     return@launch
                 }
-                failureOf(title, subtitle) {
+                failureOf(title, subtitle, PlayLog.title(title, watchKey)) {
                     val missing = gate()
                     if (missing == null) {
                         _searchSteps.value = searchingSteps(container.usableRoutes())
@@ -1555,7 +1556,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
             ?.takeIf { routes.keeps(it.playCandidate) && Replay.leftOut(it, offService) == null }
         // Times the play's start in the log, which had nothing to time a click by (#273); the engine's lock lines say if it then waits.
         log.info(
-            "play: {}: {} release{} to try{}{}", request.title, candidates.size, if (candidates.size == 1) "" else "s", if (request.chosen) ", chosen" else "",
+            "play: {}: {} release{} to try{}{}", PlayLog.title(request.title, request.watch?.itemKey), candidates.size, if (candidates.size == 1) "" else "s", if (request.chosen) ", chosen" else "",
             if (wayBack != null) ", then back to the one that was playing" else "",
         )
         if (candidates.isEmpty() && wayBack == null) {
@@ -1619,6 +1620,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
             { candidate -> if (candidate.source == PlayCandidate.USENET) usenet else service },
             probe,
             maxAttempts = container.settings.playback.first().attempts,
+            failureWords = PlayLog::failure,
             // Usenet's releases by what is known of them on the providers; a torrent's by what its accounts failed of it (L174).
             tried = triedBySource(
                 container.missingReleases.forPlay(byKey.mapValues { it.value.item }, request.chosen) { id -> indexers[id]?.name },
@@ -1927,7 +1929,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         val cast = launch.copy(cast = to, remote = null, startPositionMs = origin.start ?: launch.startPositionMs)
         replaceJob(origin, launch.title, launch.subtitle, launch.watch) { again -> if (again.cast == null) launchHere(launch) else castDownload(row, launch, again) }
         // A file on this phone needs no provider or service (L447).
-        job = launchPlay(launch.title, launch.subtitle, origin = origin, gate = { null }) {
+        job = launchPlay(launch.title, launch.subtitle, origin = origin, gate = { null }, watchKey = launch.watchKey) {
             val owner = Any()
             if (!container.downloads.hold(owner, row.id)) {
                 val gone = CastLoadFailure(CastFailKind.CouldNotPlay, DownloadStorage.FILE_GONE, fileUnreadable = true)
@@ -1977,7 +1979,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         val origin = PlayOrigin.after(launch)
         val gate: suspend () -> NoUsableProvider? = if (PlayerBranches.isDownload(launch.uri)) ({ null }) else ({ container.noUsableSource() })
         replaceJob(origin, launch.title, launch.subtitle, launch.watch)
-        job = launchPlay(launch.title, launch.subtitle, origin = origin, gate = gate) { handOver(launch, running)?.let { onDevice(it) } }
+        job = launchPlay(launch.title, launch.subtitle, origin = origin, gate = gate, watchKey = launch.watchKey) { handOver(launch, running)?.let { onDevice(it) } }
     }
 
     /**
@@ -1992,7 +1994,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         val origin = PlayOrigin.after(moving)
         replaceJob(origin, launch.title, launch.subtitle, launch.watch)
         val running = PlayState.Running(launch.title, launch.subtitle, null, 1, 1, launch.release.title, emptyList(), emptyMap(), null)
-        return launchMove(launch.title, launch.subtitle, origin) { handOver(moving, running)?.let { CastStart.moveEnd(it.load.outcome()).outcome } }
+        return launchMove(launch.title, launch.subtitle, origin, launch.watchKey) { handOver(moving, running)?.let { CastStart.moveEnd(it.load.outcome()).outcome } }
     }
 
     /**
@@ -2005,7 +2007,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         val request = importRequest(container.store.get(nzbId)?.title ?: file.name)
         val origin = PlayOrigin(start = positionMs, cast = to)
         replaceJob(origin, request.title, request.subtitle, request.watch)
-        return launchMove(request.title, request.subtitle, origin) {
+        return launchMove(request.title, request.subtitle, origin, request.watch?.itemKey) {
             var moved: MoveOutcome? = null
             val failed = castImported(nzbId, file, request, to, judged = false) { handed -> moved = CastStart.moveEnd(handed.load.outcome()).outcome }
             failed?.let { MoveOutcome.Failed(it.cast?.failure ?: CastLoadFailure(CastFailKind.CouldNotPlay, it.failures.firstOrNull()?.second)) } ?: moved
@@ -2041,7 +2043,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
         replaceJob(origin, launch.title, launch.subtitle, launch.watch) { again ->
             if (again.cast == null) playHere(launch.copy(startPositionMs = positionMs)) else playCompatible(launch, positionMs, again)
         }
-        job = launchPlay(launch.title, launch.subtitle, origin = origin) {
+        job = launchPlay(launch.title, launch.subtitle, origin = origin, watchKey = launch.watchKey) {
             val plan = compatiblePlan(launch, positionMs, origin.cast)
             runPipeline(plan?.request ?: PlayRequest(launch.title, launch.subtitle, emptyList(), watch = launch.watch), plan?.retry)?.let { _state.value = it }
         }
@@ -2064,14 +2066,14 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
      * isn't taken for a cast play's still starting, which would cancel this job. A service Android wouldn't start fails it
      * at once, and so does the job's own failure, in the words the sheet would have said. Cancel or another play: Stopped.
      */
-    private fun launchMove(title: String, subtitle: String?, origin: PlayOrigin, block: suspend () -> MoveOutcome?): Deferred<MoveOutcome> {
+    private fun launchMove(title: String, subtitle: String?, origin: PlayOrigin, watchKey: String?, block: suspend () -> MoveOutcome?): Deferred<MoveOutcome> {
         val refused = notStarted.also { notStarted = null }
         val outcome = CompletableDeferred<MoveOutcome>()
         job = scope.launch(PLAY + origin + _state.writer()) {
             _starting.tryEmit(Unit)
             var came: MoveOutcome? = refused?.cast?.failure?.let(MoveOutcome::Failed)
             if (came == null) {
-                failureOf(title, subtitle) { came = block() }?.let { failed ->
+                failureOf(title, subtitle, PlayLog.title(title, watchKey)) { came = block() }?.let { failed ->
                     came = MoveOutcome.Failed(CastLoadFailure(CastFailKind.CouldNotPlay, failed.failures.firstOrNull()?.second))
                 }
             }

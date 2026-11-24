@@ -44,7 +44,7 @@ object WatchSaver {
     /** Records [save] in the library, in the app's scope: it outlives the screen, and a failure is logged, never thrown. */
     fun save(container: AppContainer, save: WatchSave) {
         container.appScope.launch {
-            saveOrLog("save progress for ${save.template.key}") {
+            saveOrLog("save progress for ${PlayLog.key(save.template.key)}") {
                 container.library.recordProgress(save.template, save.positionMs, save.durationMs, save.release, replaces = save.replaces)
             }
         }
