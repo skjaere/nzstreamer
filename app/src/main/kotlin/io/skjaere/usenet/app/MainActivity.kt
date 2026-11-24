@@ -159,6 +159,11 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.RESUMED) { container.downloadHosts.schedule(DownloadHostRules.ScheduleCause.AppStart) }
         }
+        // The plugin list's daily read (L620), while a plugin is installed: at the first return to the app a day after the
+        // last attempt, and never from the background. Its read runs in the app's scope, so leaving doesn't cut it short.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) { container.pluginList.resumed() }
+        }
         // The TV's mode held for the next play (DisplayModeHold): this window asks for it while the play sheet finds that
         // play, and gives it up as it stops, once the next player's window asks for it (or the app has gone), or as soon
         // as the hold goes (the play didn't start, was cancelled or minimised; a minute passed; the display had left the

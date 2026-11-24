@@ -13,6 +13,7 @@ import io.skjaere.usenet.app.debrid.DevServices
 import io.skjaere.usenet.app.debrid.ServiceEndpoints
 import io.skjaere.usenet.app.discover.DiscoverLookup
 import io.skjaere.usenet.app.discover.FakeDiscover
+import io.skjaere.usenet.app.plugins.PluginSource
 import io.skjaere.usenet.app.plugins.PluginStateRule
 import io.skjaere.usenet.app.plugins.PluginStore
 import io.skjaere.usenet.app.plugins.PluginTrust
@@ -54,6 +55,10 @@ import java.io.File
  * start then sweeps their secrets away), so a process the sharded runs start again after a death finds none, and no
  * plugin's tab shows under the classes after the one that left it. The plugins' own classes clear up after themselves
  * ([PluginStateRule]).
+ *
+ * And no run ever reads GitHub's plugin list (L622): for the whole run the app's list is at an address that answers
+ * nothing ([PluginSource.CLOSED], honoured by a debug build alone), so a walk through Settings › Plugins finds GitHub
+ * unreachable. The plugins' own classes point it at a list of theirs on this device's loopback address.
  */
 class AppTestRunner : AndroidJUnitRunner() {
     /** The app's picture-in-picture mode as the run found it, put back as it ends; null once put back, or never read. */
@@ -67,6 +72,7 @@ class AppTestRunner : AndroidJUnitRunner() {
         }
         CastFakes.beforeTheApp()
         PluginTrust.testSigner = ownSigner(targetContext)
+        PluginSource.override = PluginSource.CLOSED
         listOf(targetContext.filesDir, targetContext.cacheDir).forEach { File(it, PluginStore.DIR).deleteRecursively() }
         super.onCreate(arguments)
     }

@@ -90,6 +90,7 @@ import io.skjaere.usenet.app.play.PlayerInFront
 import io.skjaere.usenet.app.play.UsableRoutes
 import io.skjaere.usenet.app.play.noUsableSource
 import io.skjaere.usenet.app.play.servicesSaved
+import io.skjaere.usenet.app.plugins.PluginList
 import io.skjaere.usenet.app.plugins.PluginRegistry
 import io.skjaere.usenet.app.plugins.named
 import io.skjaere.usenet.app.refresh.LibrarySummaryStore
@@ -160,6 +161,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -482,6 +484,18 @@ class AppContainer(private val context: Context) {
      * loaded only once MainActivity is first created, never in a process started for a service or a receiver alone.
      */
     val plugins: PluginRegistry = PluginRegistry.of(context, data.secrets.named(), appScope)
+
+    /**
+     * The plugin list on GitHub (L620): read as Settings › Plugins opens and once a day while a plugin is installed, never
+     * otherwise, through the services' client (made only then), at GitHub's address unless a device test points it at its
+     * own (PluginSource.current).
+     */
+    val pluginList: PluginList = PluginList.of(
+        context.filesDir,
+        installed = { plugins.plugins.filterNotNull().first().isNotEmpty() },
+        http = { serviceHttp.value },
+        scope = appScope,
+    )
 
     /** Whether MainActivity is started: the lists' refresher asks TMDB only then (not while the player streams). */
     val foreground = MutableStateFlow(false)
