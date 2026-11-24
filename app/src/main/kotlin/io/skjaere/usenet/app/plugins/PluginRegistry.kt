@@ -287,13 +287,14 @@ class PluginRegistry(
      * version the list withdrew that still runs is let go here, and stays off (L621).
      * True where something changed, so the slot's saved stack is to be cleared. No plugin code loads before the first
      * screen asked, nor before its start check ran, nor while plugins are off (L619): then the update waits for a later
-     * swap point, and nothing changed.
+     * swap point, and nothing changed. Nor where the slot came back on the screen while this waited for the start's load
+     * or the lock: [stillOff], asked once the lock is held on the caller's thread, says whether it is still off it.
      */
-    suspend fun atSwapPoint(id: String): Boolean {
+    suspend fun atSwapPoint(id: String, stillOff: () -> Boolean = { true }): Boolean {
         filesRead.await()
         if (asked.get()) checked.await()
         return lock.withLock {
-            if (!startChecked || off.value) return@withLock false
+            if (!startChecked || off.value || !stillOff()) return@withLock false
             val record = record(id) ?: return@withLock false
             val pending = record.pending ?: return@withLock withdrawnGoes(record)
             runningInstance(id)?.let { instance ->

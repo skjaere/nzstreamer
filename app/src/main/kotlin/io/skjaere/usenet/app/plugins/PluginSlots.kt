@@ -79,7 +79,8 @@ fun SlotMoves.beforeRemove(slot: Int) {
  *   host's Choose release pushed over them, [onStack]), its plugin waits; a slot no plugin holds with an entry on the
  *   back stack (its plugin removed in a process that died) goes Home.
  * - Off the screen, its plugin is at its swap point ([swapPoint], the registry's): an update takes over, a withdrawn
- *   version goes. Asked on every change, so a read that finds work while Settings shows is taken at once too.
+ *   version goes. Asked on every change, so a read that finds work while Settings shows is taken at once too; asked with
+ *   the slot's own check, which the registry runs again once it may act, so a slot opened as it waited isn't swapped.
  * - Its saved stack is cleared once the slot is off the screen whenever the version that runs in it changed: at the swap
  *   point, or some other way the slots don't see (an error lets a version go at once, Install again's newer version takes
  *   over through the registry itself, Turn on again, Remove); and for a slot no plugin holds. So no page comes back that
@@ -88,7 +89,7 @@ fun SlotMoves.beforeRemove(slot: Int) {
  * [latest]: the registry's plugins as they stand, read after the swap point answered.
  */
 class PluginSlotWatch(
-    private val swapPoint: suspend (String) -> Boolean,
+    private val swapPoint: suspend (id: String, stillOff: () -> Boolean) -> Boolean,
     private val moves: SlotMoves,
     private val latest: () -> List<InstalledPlugin>?,
 ) {
@@ -119,7 +120,8 @@ class PluginSlotWatch(
             // going already, and Home, itself a change, would be asked again at every change while it is drawn.
             if (plugin == null && moves.own(n, moves.stacked())) moves.switchTab(HomeRoute)
             if (moves.onStack(n)) continue
-            if (plugin != null && swapPoint(plugin.id)) {
+            // Asked again once the registry may act: the user may have opened the slot while it waited.
+            if (plugin != null && swapPoint(plugin.id) { !moves.onStack(n) }) {
                 // Its own swap: what the registry lists now is the new version's, not a change made some other way.
                 note(n, latest()?.firstOrNull { it.slot == n }, quiet = true)
                 dirty[n] = true

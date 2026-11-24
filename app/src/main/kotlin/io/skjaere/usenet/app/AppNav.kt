@@ -262,7 +262,7 @@ fun AppNav(
     LaunchedEffect(nav) {
         nav.currentBackStackEntryFlow.first()
         val registry = container.plugins
-        val watch = PluginSlotWatch({ id -> withContext(NonCancellable) { registry.atSwapPoint(id) } }, NavSlotMoves(nav)) { registry.plugins.value }
+        val watch = PluginSlotWatch({ id, stillOff -> withContext(NonCancellable) { registry.atSwapPoint(id, stillOff) } }, NavSlotMoves(nav)) { registry.plugins.value }
         combine(nav.currentBackStackEntryFlow, nav.visibleEntries, registry.plugins) { _, _, plugins -> plugins }.collect { watch.check(it) }
     }
     // A cast's notification tapped: its remote, as the bar's tap opens it.

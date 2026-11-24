@@ -202,6 +202,24 @@ class PluginRegistryTest {
         assertEquals(2L, next.running("skeleton")?.versionCode)
     }
 
+    /**
+     * L581: the swap point is asked once its slot left the screen, but waits for the start's load and the lock first; it
+     * asks again whether the slot is still off the screen once it holds the lock, and changes nothing where it isn't.
+     */
+    @Test
+    fun `the swap point changes nothing where its slot came back on the screen while it waited`() = runTest {
+        val h = harness()
+        val registry = h.registry().apply { start(); firstActivity() }
+        h.install(registry, "skeleton", 1)
+        val v1 = registry.running("skeleton")
+        h.install(registry, "skeleton", 2)
+        assertFalse(registry.atSwapPoint("skeleton") { false }, "its slot shows again")
+        assertSame(v1, registry.running("skeleton"), "v1 runs on")
+        assertTrue(registry.installed("skeleton").updateWaiting, "v2 still waits")
+        assertTrue(registry.atSwapPoint("skeleton") { true })
+        assertEquals(2L, registry.running("skeleton")?.versionCode)
+    }
+
     @Test
     fun `an update waits at the swap point while plugins are off, and takes over once they are on again`() = runTest {
         val h = harness()

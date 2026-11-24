@@ -114,12 +114,19 @@ class PluginSlotsTest {
         icon = (status as? PluginStatus.Running)?.instance?.tab?.icon,
     )
 
-    /** The registry's swap point as the slots call it: each call kept; [answer] says whether something changed. */
+    /**
+     * The registry's swap point as the slots call it: each call kept; [answer] says whether something changed. As the
+     * registry waits for its start's load and its lock, [whileWaiting] runs; then, as the registry does once it holds the
+     * lock, the slot is asked whether it is still off the screen, and nothing changes where it isn't.
+     */
     private class Swaps(var answer: (String) -> Boolean = { false }) {
         val calls = mutableListOf<String>()
+        var whileWaiting: () -> Unit = {}
 
-        suspend fun swap(id: String): Boolean {
+        suspend fun swap(id: String, stillOff: () -> Boolean): Boolean {
             calls += id
+            whileWaiting()
+            if (!stillOff()) return false
             return answer(id)
         }
     }
@@ -171,6 +178,35 @@ class PluginSlotsTest {
         nav.leaving.clear()
         watch.check(plugins)
         assertEquals(listOf("skeleton"), swaps.calls)
+    }
+
+    /**
+     * L581: the swap point waits for the start's load and the registry's lock before it acts, and the user may open the
+     * slot's tab meanwhile: the update doesn't take over under them, and waits until they leave.
+     */
+    @Test
+    fun `a slot opened while its swap point waited isn't swapped under the user`() = runTest {
+        val nav = FakeNav()
+        var plugins = listOf(installed(waitingVersion = 12))
+        val swaps = Swaps { id ->
+            plugins = listOf(installed(id, status = running(id, key = 2)))
+            true
+        }
+        val watch = watch(nav, swaps) { plugins }
+        swaps.whileWaiting = { if (nav.stack.size == 1) nav.switchTab(PluginTab1) }
+        watch.check(plugins)
+        assertEquals(listOf("skeleton"), swaps.calls, "asked while Home showed")
+        assertEquals(12L, plugins.single().waitingVersion, "the update still waits: its tab shows")
+        assertFalse("clear 1" in nav.moves)
+
+        swaps.whileWaiting = {}
+        nav.navigate(PluginPage1("second", null))
+        watch.check(plugins)
+        assertEquals(listOf("skeleton"), swaps.calls, "its pages show: not asked")
+        nav.switchTab(HomeRoute)
+        watch.check(plugins)
+        assertEquals(null, plugins.single().waitingVersion, "taken over once it left")
+        assertNull(nav.saved[PluginTab1::class], "and its stack cleared")
     }
 
     /** L590: a slot whose plugin was removed in a process that died: its pages, restored, go Home and are cleared. */
