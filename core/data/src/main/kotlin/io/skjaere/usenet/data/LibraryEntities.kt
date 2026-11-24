@@ -124,11 +124,15 @@ object SeasonCounts {
     }
 }
 
-enum class WatchKind { Episode, Movie, Release }
+/**
+ * What a [WatchState] is of. Stored by its name, so a kind added later needs no migration. [Item] is a plugin's: neither a
+ * TMDB title nor a release, shown by its stored title alone and kept like a film's history, never pruned as a release is.
+ */
+enum class WatchKind { Episode, Movie, Release, Item }
 
 /**
- * Progress for one playable thing: an episode of a TMDB show, a TMDB movie, or a release
- * played without metadata. [key] is built by [WatchKey]. The release fields remember what
+ * Progress for one playable thing: an episode of a TMDB show, a TMDB movie, a release
+ * played without metadata, or a plugin's item. [key] is built by [WatchKey]. The release fields remember what
  * played, so resume and re-watch need no new search or grab. The (watched, positionMs) index finds
  * what is in progress: it made the lists' in-progress query 40 % faster at 26k episodes (version 5).
  */
@@ -335,6 +339,9 @@ object WatchKey {
     fun episode(showTmdbId: Int, season: Int, episode: Int) = "episode:tmdb:$showTmdbId:s$season:e$episode"
     fun movie(tmdbId: Int) = "movie:tmdb:$tmdbId"
     fun release(nzbId: String, fileIndex: Int) = "release:$nzbId:$fileIndex"
+
+    /** A plugin's item ([WatchKind.Item]): under the plugin's id, so two plugins' own keys never meet. */
+    fun item(pluginId: String, key: String) = "item:$pluginId:$key"
 }
 
 /** The [WatchState.title] to store, which history and the player show. */

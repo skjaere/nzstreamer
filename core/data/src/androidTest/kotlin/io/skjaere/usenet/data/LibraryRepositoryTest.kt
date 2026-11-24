@@ -322,6 +322,34 @@ class LibraryRepositoryTest {
         assertEquals(listOf("again" to 5_000L), db.downloadWatches().watched().first().map { it.id to it.watchedAt })
     }
 
+    /**
+     * L626: a plugin's item is stored by its kind's name and read back as written, its release remembered, in Continue
+     * watching like any play. A kind a newer build wrote reads as an item rather than crash whatever reads the row, and
+     * neither is pruned with the releases played without TMDB.
+     */
+    @Test
+    fun aPluginItemRoundTripsAndAKindNoBuildKnowsReadsAsAnItem() = runBlocking<Unit> {
+        val key = WatchKey.item("skeleton", "ev-1:main-card")
+        val release = RememberedRelease("fake", "kc-main", "Kestrel.Cup.Main.Card.1080p.WEB-GRP", null, 0, "kc1")
+        library.recordProgress(WatchState(key, WatchKind.Item, title = "Kestrel Cup · Main card", updatedAt = 0), 600_000, 7_200_000, release = release)
+        val row = db.watchStates().get(key)!!
+        assertEquals(WatchKind.Item, row.kind)
+        assertEquals(Triple("Kestrel Cup · Main card", 600_000L, 7_200_000L), Triple(row.title, row.positionMs, row.durationMs))
+        assertEquals(release, library.lastRelease(key))
+        assertEquals(listOf(key), library.continueWatching.first().map { it.key })
+
+        time = 2_000
+        val newer = WatchKey.item("skeleton", "ev-2:main-card")
+        library.recordProgress(WatchState(newer, WatchKind.Item, title = "Kestrel Cup · Prelims", updatedAt = 0), 300_000, 3_600_000)
+        db.openHelper.writableDatabase.execSQL("UPDATE watch_state SET kind = ? WHERE `key` = ?", arrayOf<Any>("Hologram", newer))
+        val unknown = db.watchStates().get(newer)!!
+        assertEquals(WatchKind.Item to "Kestrel Cup · Prelims", unknown.kind to unknown.title)
+        assertEquals(listOf(newer, key), library.continueWatching.first().map { it.key })
+
+        db.watchStates().pruneReleases(0)
+        assertEquals(listOf(newer, key), library.continueWatching.first().map { it.key })
+    }
+
     @Test
     fun releaseOnlyEntriesArePrunedEpisodesAreNot() = runBlocking {
         library.recordProgress(episode(1, 1), positionMs = 600_000, durationMs = 2_700_000)

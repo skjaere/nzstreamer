@@ -320,8 +320,12 @@ internal class Converters {
     @TypeConverter
     fun fromKind(kind: WatchKind): String = kind.name
 
+    /**
+     * A name this build doesn't know, which a newer build wrote, reads as [WatchKind.Item]: kept, never pruned, shown by its
+     * stored title. valueOf would throw on it, and with it whatever page reads the row.
+     */
     @TypeConverter
-    fun toKind(value: String): WatchKind = WatchKind.valueOf(value)
+    fun toKind(value: String): WatchKind = WatchKind.entries.firstOrNull { it.name == value } ?: WatchKind.Item
 
     @TypeConverter
     fun fromSubtitleMode(mode: SubtitleMode?): String? = mode?.name
@@ -345,8 +349,9 @@ internal class Converters {
     @TypeConverter
     fun fromDownloadKind(kind: DownloadKind): String = kind.name
 
+    /** A name a newer build wrote reads as [DownloadKind.Release]: its row then fails with its own words rather than crash the page. */
     @TypeConverter
-    fun toDownloadKind(value: String): DownloadKind = DownloadKind.valueOf(value)
+    fun toDownloadKind(value: String): DownloadKind = DownloadKind.entries.firstOrNull { it.name == value } ?: DownloadKind.Release
 
     @TypeConverter
     fun fromDownloadState(state: DownloadState): String = state.name

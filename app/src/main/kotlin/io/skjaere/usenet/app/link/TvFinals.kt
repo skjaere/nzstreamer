@@ -97,7 +97,8 @@ class TvFinals(
         /**
          * [launch]'s end as its phone is told it: [positionMs] of [durationMs], watched past [LibraryRepository.WATCHED_FRACTION]
          * of it, and what it was (an episode or a movie, by their ids) for the phone to work its own watch key out again.
-         * Null for the TV's own play, a play with no length, or one played without TMDB.
+         * Null for the TV's own play, a play with no length, one played without TMDB, or a plugin's item, which a phone never
+         * sends a TV (a Final has no kind for it).
          */
         fun final(launch: PlayerLaunch, positionMs: Long, durationMs: Long, id: String): Final? {
             val remote = launch.remote ?: return null
@@ -106,7 +107,7 @@ class TvFinals(
             val kind = when (watch.kind) {
                 WatchKind.Episode -> FinalKind.Episode
                 WatchKind.Movie -> FinalKind.Movie
-                WatchKind.Release -> return null
+                WatchKind.Release, WatchKind.Item -> return null
             }
             return Final(
                 id, remote.session, launch.watchKey, kind, watch.title, showTmdbId = watch.showTmdbId, season = watch.season, episode = watch.episode,

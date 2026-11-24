@@ -61,7 +61,10 @@ sealed interface UpNextEdit {
             return before.drop(at + 1).firstOrNull { it in keys } ?: before.take(at).lastOrNull { it in keys }
         }
 
-        /** Null for a next episode, not begun, and for a release played without TMDB, which nothing marks: they offer Remove only. */
+        /**
+         * Null for a next episode, not begun, for a release played without TMDB, which nothing marks, and for a plugin's
+         * item, which nothing marks yet (L626): they offer Remove only.
+         */
         fun markWatched(row: UpNextRow): Mark? {
             val state = (row.play as? UpNextPlay.Resume)?.state ?: return null
             return when (state.kind) {
@@ -71,7 +74,7 @@ sealed interface UpNextEdit {
                     MarkEpisode(row.key, ShowMark(show, row.title, listOf(ref.season to ref.episode)), "Marked “${row.title} ${ref.label}” watched")
                 }
                 WatchKind.Movie -> state.movieTmdbId?.let { MarkMovie(row.key, MovieMark(it, state.title), "Marked “${row.title}” watched") }
-                WatchKind.Release -> null
+                WatchKind.Release, WatchKind.Item -> null
             }
         }
     }

@@ -32,6 +32,7 @@ class UpNextEditTest {
     private val notCollected = row("Salt & Signal", UpNextPlay.Resume(episode(7, "Salt & Signal", 1, 2)))
     private val film = row("Copper Crown", UpNextPlay.Resume(inProgress(WatchKey.movie(10), WatchKind.Movie, "Copper Crown", movie = 10)))
     private val northbound = row("Northbound", UpNextPlay.Resume(inProgress(WatchKey.release("n-northbound", 0), WatchKind.Release, "Northbound.2019.1080p.BluRay.x264-GRP")))
+    private val kestrel = row("Kestrel Cup · Main card", UpNextPlay.Resume(inProgress(WatchKey.item("skeleton", "ev-1:main-card"), WatchKind.Item, "Kestrel Cup · Main card")))
 
     /** Any of the show's episodes played again brings it back, whichever row it had. */
     @Test
@@ -68,6 +69,14 @@ class UpNextEditTest {
     fun `a next episode or a release offers no mark watched`() {
         assertNull(UpNextEdit.markWatched(orbit))
         assertNull(UpNextEdit.markWatched(northbound))
+    }
+
+    /** Nothing marks a plugin's item yet (L626): its row offers Remove only, taken out by the item's own key. */
+    @Test
+    fun `a plugin item offers no mark watched yet, and is taken out by what played`() {
+        assertNull(UpNextEdit.markWatched(kestrel))
+        val key = WatchKey.item("skeleton", "ev-1:main-card")
+        assertEquals(UpNextEdit.Remove(key, showTmdbId = null, watchKey = key, message = "Removed “Kestrel Cup · Main card” from Up next"), UpNextEdit.remove(kestrel))
     }
 
     /** As the collection's: the row after, else the one before; a show marked keeps its row (its next episode), so the focus stays. */
