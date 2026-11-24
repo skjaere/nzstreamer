@@ -219,6 +219,21 @@ class PluginDownloaderTest {
         assertEquals(emptyList(), folder.list().orEmpty().toList())
     }
 
+    /**
+     * A finished download is the caller's until it is installed or refused (the archive's checks read it, then the store
+     * copies it): another download starting meanwhile, another plugin's or an update's, leaves it whole.
+     */
+    @Test
+    fun `a finished download is left alone while another starts`() = runBlocking<Unit> {
+        val first = "harbor 1".toByteArray()
+        val second = "harbor 2".toByteArray()
+        val server = server { request -> LoopbackHttp.Response(200, if (request.path == apkPath(2)) second else first) }
+        val done = assertIs<Download.Done>(downloader(server).download("harbor", version(server, first)) {})
+        assertIs<Download.Done>(downloader(server).download("harbor", version(server, second, code = 2)) {})
+        assertTrue(done.file.isFile, "the first download kept for its caller")
+        assertContentEquals(first, done.file.readBytes())
+    }
+
     @Test
     fun `a file a download left as its process died goes as the next one starts`() = runBlocking<Unit> {
         folder.mkdirs()

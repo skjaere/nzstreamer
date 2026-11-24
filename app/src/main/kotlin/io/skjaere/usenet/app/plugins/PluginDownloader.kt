@@ -71,7 +71,7 @@ enum class DownloadFailure {
  * copy), before anything is asked; then the list's address, checked whole again, and at most [MAX_REDIRECTS] redirects,
  * every hop https (GitHub's release files are a redirect or two away, on another host), or http to the loopback address
  * where [source] allows it; at most the list's size read, the SHA-256 taken as the bytes come. A file whose hash isn't the
- * list's is deleted before anything reads it. Through [http], the app's service client, which follows no redirect itself,
+ * list's is deleted before anything reads it; what a dead process left in [folder] goes as this one's first download starts. Through [http], the app's service client, which follows no redirect itself,
  * as [PluginSource.USER_AGENT]. A Cancel (the caller's job cancelled) stops it and deletes what came.
  */
 class PluginDownloader(
@@ -160,12 +160,16 @@ class PluginDownloader(
         throw WriteFailed()
     }
 
-    /** The file is being written: anything else in the folder that no download of this process holds is a death's leftover. */
+    /**
+     * The file is being written. As the process's first download into the folder starts, what is there is a dead process's
+     * leftover, and goes: this process's own files are deleted by their downloads, or by their callers once installed or
+     * refused, so a finished download waiting for its checks is never swept from under them.
+     */
     private fun begin(file: File) {
         synchronized(running) {
             running += file.path
             if (!folder.isDirectory) folder.mkdirs()
-            folder.listFiles().orEmpty().filter { it.path !in running }.forEach { it.delete() }
+            if (swept.add(folder.path)) folder.listFiles().orEmpty().filter { it.path !in running }.forEach { it.delete() }
         }
     }
 
@@ -193,8 +197,11 @@ class PluginDownloader(
         private val REDIRECTS = setOf(301, 302, 303, 307, 308)
         private const val BUFFER_BYTES = 64 * 1024
 
-        /** The downloads this process writes now, by path: every downloader's, as they share one folder. */
+        /** The downloads this process writes now, by path: every downloader's, as they share one folder. Its lock is theirs. */
         private val running = mutableSetOf<String>()
+
+        /** The folders this process swept of a dead process's leftovers, by path: once each. Under [running]'s lock. */
+        private val swept = mutableSetOf<String>()
 
         /** A redirect's [location] against the [address] that gave it; null where it doesn't read as an address. */
         private fun next(address: String, location: String): String? = try {
