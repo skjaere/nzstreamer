@@ -185,6 +185,21 @@ class PluginCrashGuardTest {
     }
 
     @Test
+    fun `a throwable reached twice at every level is walked once, and blames as it would once`() {
+        // Each level's cause is also among its suppressed ones, 20 levels deep: walked by path, not once each, that is a
+        // million throwables to visit, and at 40 levels the walk would never end on the crashing thread.
+        val leaf = throwableAt(pluginFrame("skeleton"))
+        var crash: Throwable = leaf
+        repeat(20) { crash = throwableAt(cause = crash).apply { addSuppressed(cause!!) } }
+        var frames = 0
+        PluginCrashGuard.walk(crash) { frames++ }
+        assertEquals(20 * 1 + 2, frames, "each of the 21 throwables' frames once")
+        val walked = crash
+        val next = assertTimeoutPreemptively(Duration.ofSeconds(5), ThrowingSupplier { crashedProcess(walked) })
+        assertEquals(setOf(skeleton1), next.startCheck(listOf(skeleton1)).crashed)
+    }
+
+    @Test
     fun `a chain of causes deeper than 64 is walked 64 deep, and the walk returns`() {
         fun chain(depth: Int, pluginAt: Int): Throwable {
             var e: Throwable = throwableAt(*(if (pluginAt == depth) arrayOf(pluginFrame("skeleton")) else emptyArray()))
