@@ -1,0 +1,389 @@
+package io.skjaere.usenet.app.plugins
+
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Star
+import io.skjaere.usenet.app.HomeRoute
+import io.skjaere.usenet.app.PlaybackRoute
+import io.skjaere.usenet.app.PluginsRoute
+import io.skjaere.usenet.app.SettingsRoute
+import io.skjaere.usenet.plugin.PluginSecrets
+import io.skjaere.usenet.plugin.PluginTab
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.io.File
+import kotlin.reflect.KClass
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
+
+/**
+ * L581, L582, L590, L618: the four plugin slots in the app's navigation, over given back stacks. A slot's plugin is at
+ * its swap point only while no entry of the slot is on the current back stack or still drawn: its tab, its pages, its
+ * settings, or the host's Choose release pushed over them. Then an update takes over and the slot's saved stack is
+ * cleared, as it is whenever the slot's running version changes some other way (an error, Install again), and for a slot
+ * no plugin holds, whose destinations go Home. Open Plugins leaves the slot first, and Remove goes Home first where a
+ * slot entry is still on the current stack. The placeholder's words, the tabs the registry's plugins make, and the
+ * registry listing a version off before its close() runs, so no page of it is drawn after.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+class PluginSlotsTest {
+    @TempDir
+    lateinit var dir: File
+
+    /**
+     * The app's back stack as the bar and the rail move it: switchTab saves the current tab's history under its own
+     * screen and goes back to Home, then opens the tab, its history restored unless [restore] is false; [leaving] holds a
+     * page still drawn as it leaves (a transition).
+     */
+    private class FakeNav : SlotMoves {
+        val stack = mutableListOf<Any>(HomeRoute)
+        val leaving = mutableListOf<Any>()
+        val saved = mutableMapOf<KClass<*>, List<Any>>()
+        val moves = mutableListOf<String>()
+
+        override fun shown(): List<KClass<*>> = (stack + leaving).map { it::class }
+
+        override fun switchTab(route: Any, restore: Boolean) {
+            moves += "switchTab ${route::class.simpleName}"
+            if (stack.size > 1) saved[stack[1]::class] = stack.drop(1)
+            stack.subList(1, stack.size).clear()
+            if (route == HomeRoute) return
+            val restored = saved.remove(route::class).takeIf { restore }
+            stack.addAll(restored ?: listOf(route))
+        }
+
+        override fun navigate(route: Any) {
+            moves += "navigate ${route::class.simpleName}"
+            stack += route
+        }
+
+        override fun clear(slot: Int) {
+            moves += "clear $slot"
+            saved.remove(PluginSlots.of(slot).tab::class)
+        }
+    }
+
+    private object NoSecrets : PluginSecrets {
+        override suspend fun get(name: String): String? = null
+        override suspend fun put(name: String, value: String?) = Unit
+        override fun has(name: String): Flow<Boolean> = flowOf(false)
+    }
+
+    private fun running(id: String, key: Long, label: String = "Sports"): PluginStatus {
+        val host = HostedPlugin(id, File("unused"), File("unused"), NoSecrets, CoroutineScope(Job()))
+        return PluginStatus.Running(PluginInstance(PluginVersion(id, 1, key), FakePlugin(label), host, PluginTab(label, Icons.Filled.Star)))
+    }
+
+    private fun installed(
+        id: String = "skeleton", slot: Int = 1, status: PluginStatus = running(id, key = 1), label: String? = "Sports", name: String = "Sportarr",
+        waitingVersion: Long? = null, versionName: String = "1.1",
+    ) = InstalledPlugin(
+        id, name, slot, 11, versionName, label, status, waitingVersion = waitingVersion, failedUpdate = null, lastUpdate = null,
+        icon = (status as? PluginStatus.Running)?.instance?.tab?.icon,
+    )
+
+    /** The registry's swap point as the slots call it: each call kept; [answer] says whether something changed. */
+    private class Swaps(var answer: (String) -> Boolean = { false }) {
+        val calls = mutableListOf<String>()
+
+        suspend fun swap(id: String): Boolean {
+            calls += id
+            return answer(id)
+        }
+    }
+
+    private fun watch(nav: FakeNav, swaps: Swaps, latest: () -> List<InstalledPlugin>? = { null }) = PluginSlotWatch(swaps::swap, nav, latest)
+
+    @Test
+    fun `a slot entry on the current stack waits, and none swaps, its saved stack then cleared`() = runTest {
+        val nav = FakeNav()
+        var plugins = listOf(installed(waitingVersion = 12))
+        val swaps = Swaps { id ->
+            // The registry swaps while an update waits: a new instance runs, and nothing waits any more.
+            val waiting = plugins.single().updateWaiting
+            if (waiting) plugins = listOf(installed(id, status = running(id, key = 2)))
+            waiting
+        }
+        val watch = watch(nav, swaps) { plugins }
+        nav.switchTab(PluginTab1)
+        nav.navigate(PluginPage1("second", null))
+        watch.check(plugins)
+        assertEquals(emptyList(), swaps.calls, "its tab and its second page show: the update waits")
+        assertTrue(watch.onStack(1))
+
+        nav.switchTab(HomeRoute)
+        assertEquals(listOf(PluginTab1, PluginPage1("second", null)), nav.saved[PluginTab1::class], "the slot's history saved by the switch")
+        watch.check(plugins)
+        assertEquals(listOf("skeleton"), swaps.calls, "Home shows: the swap point")
+        assertNull(nav.saved[PluginTab1::class], "its saved stack cleared: the new version starts at its tab")
+        watch.check(plugins)
+        assertEquals(1, nav.moves.count { it == "clear 1" }, "the slots' own swap isn't counted again as the registry lists it")
+    }
+
+    @Test
+    fun `the host's Choose release over a plugin page counts as the slot's, and so does a page still drawn as it leaves`() = runTest {
+        val nav = FakeNav()
+        val swaps = Swaps()
+        val plugins = listOf(installed(waitingVersion = 12))
+        val watch = watch(nav, swaps) { plugins }
+        nav.switchTab(PluginTab1)
+        nav.navigate(PluginPage1("game", "ev-1"))
+        nav.navigate(PluginReleasesRoute("token"))
+        watch.check(plugins)
+        assertEquals(emptyList(), swaps.calls, "Choose release over the plugin's page")
+
+        nav.switchTab(HomeRoute)
+        nav.leaving += PluginReleasesRoute("token")
+        watch.check(plugins)
+        assertEquals(emptyList(), swaps.calls, "Choose release still drawn as it leaves")
+        nav.leaving.clear()
+        watch.check(plugins)
+        assertEquals(listOf("skeleton"), swaps.calls)
+    }
+
+    /** L590: a slot whose plugin was removed in a process that died: its pages, restored, go Home and are cleared. */
+    @Test
+    fun `an unbound slot goes Home and is cleared`() = runTest {
+        val nav = FakeNav()
+        val swaps = Swaps()
+        val plugins = listOf(installed("kestrel", slot = 1))
+        val watch = watch(nav, swaps) { plugins }
+        nav.stack.addAll(listOf(PluginTab2, PluginPage2("results", null)))
+        nav.saved[PluginTab3::class] = listOf(PluginTab3)
+        watch.check(null)
+        assertEquals(emptyList(), nav.moves, "nothing before the registry read its files")
+
+        watch.check(plugins)
+        assertEquals(listOf<Any>(HomeRoute), nav.stack, "slot 2's pages go Home")
+        assertNull(nav.saved[PluginTab3::class], "a free slot's saved stack cleared")
+        watch.check(plugins)
+        assertNull(nav.saved[PluginTab2::class], "and slot 2's, once it left")
+        assertEquals(listOf("kestrel", "kestrel"), swaps.calls, "only the bound slot's plugin asked")
+        watch.check(plugins)
+        assertEquals(1, nav.moves.count { it == "clear 2" }, "a free slot cleared once")
+    }
+
+    /**
+     * An error lets its version go at once, and Install again's newer version takes over through the registry itself: the
+     * slot's saved stack is cleared once the slot is off the screen, so no page of the old version comes back.
+     */
+    @Test
+    fun `a version let go outside the slots' own swap point clears the slot's saved stack once it is off the screen`() = runTest {
+        val nav = FakeNav()
+        val swaps = Swaps()
+        val watch = watch(nav, swaps)
+        nav.switchTab(PluginTab1)
+        nav.navigate(PluginPage1("second", null))
+        watch.check(listOf(installed(status = running("skeleton", key = 1))))
+        watch.check(listOf(installed(status = PluginStatus.OffAfterError)))
+        assertFalse("clear 1" in nav.moves, "the slot shows: its stack stays, the placeholder in its pages")
+
+        nav.switchTab(HomeRoute)
+        watch.check(listOf(installed(status = PluginStatus.OffAfterError)))
+        assertNull(nav.saved[PluginTab1::class], "cleared once it left")
+
+        // Turn on again, then Install again's swap, from Settings › Plugins.
+        nav.switchTab(PluginTab1)
+        nav.switchTab(HomeRoute)
+        watch.check(listOf(installed(status = running("skeleton", key = 2))))
+        assertNull(nav.saved[PluginTab1::class], "turned on again: what it showed before is gone")
+        nav.switchTab(PluginTab1)
+        nav.navigate(PluginPage1("second", null))
+        nav.switchTab(HomeRoute)
+        watch.check(listOf(installed(status = running("skeleton", key = 2))))
+        assertEquals(listOf(PluginTab1, PluginPage1("second", null)), nav.saved[PluginTab1::class], "the same version: its history kept")
+        watch.check(listOf(installed(status = running("skeleton", key = 3))))
+        assertNull(nav.saved[PluginTab1::class], "a new instance: cleared")
+    }
+
+    /** L582: a back stack saved across a process death opens the same plugin: its first load doesn't clear it. */
+    @Test
+    fun `the first load in a process keeps the slot's saved stack`() = runTest {
+        val nav = FakeNav()
+        val watch = watch(nav, Swaps())
+        nav.saved[PluginTab1::class] = listOf(PluginTab1, PluginPage1("second", null))
+        watch.check(listOf(installed(status = PluginStatus.Waiting)))
+        watch.check(listOf(installed(status = running("skeleton", key = 1))))
+        assertEquals(listOf(PluginTab1, PluginPage1("second", null)), nav.saved[PluginTab1::class])
+        assertFalse("clear 1" in nav.moves)
+    }
+
+    /** A read that finds an update or a withdrawal while Settings shows: reported then, not at the next navigation. */
+    @Test
+    fun `work found while the slot is off the screen is reported at once`() = runTest {
+        val nav = FakeNav()
+        val swaps = Swaps()
+        val watch = watch(nav, swaps)
+        nav.navigate(SettingsRoute)
+        nav.navigate(PluginsRoute())
+        watch.check(listOf(installed()))
+        watch.check(listOf(installed(waitingVersion = 12)))
+        assertEquals(listOf("skeleton", "skeleton"), swaps.calls)
+    }
+
+    /** L590, L581: Open Plugins leaves the slot first, so no entry of it is on the current stack while Plugins shows. */
+    @Test
+    fun `Open Plugins' way from a slot's tab leaves no slot entry on the current stack, phone and TV`() = runTest {
+        val phone = FakeNav()
+        phone.switchTab(PluginTab1)
+        phone.navigate(PluginPage1("second", null))
+        phone.openPlugins("skeleton", tv = false)
+        assertEquals(listOf<Any>(HomeRoute, SettingsRoute, PluginsRoute(focus = "skeleton")), phone.stack, "Home, then Settings, then Plugins")
+        assertFalse(watch(phone, Swaps()).onStack(1))
+
+        val tv = FakeNav()
+        // The Settings tab left on one of its pages: Plugins still opens over Settings itself, so Back goes there.
+        tv.switchTab(SettingsRoute)
+        tv.navigate(PlaybackRoute)
+        tv.switchTab(PluginTab1)
+        tv.openPlugins("skeleton", tv = true)
+        assertEquals(listOf<Any>(HomeRoute, SettingsRoute, PluginsRoute(focus = "skeleton")), tv.stack, "the Settings tab, then Plugins")
+        assertFalse(watch(tv, Swaps()).onStack(1))
+        assertEquals(listOf(PluginTab1), tv.saved[PluginTab1::class], "the slot's history saved, for the swap point to clear")
+    }
+
+    /** L581: should a slot entry still be on the current stack as Remove is pressed, Remove goes Home first, and never waits. */
+    @Test
+    fun `Remove with a slot entry still on the current stack goes Home first and doesn't wait`() = runTest {
+        val nav = FakeNav()
+        val swaps = Swaps()
+        val watch = watch(nav, swaps)
+        nav.switchTab(PluginTab1)
+        nav.navigate(PluginsRoute(focus = "skeleton"))
+        watch.check(listOf(installed()))
+
+        watch.beforeRemove(1)
+        assertEquals(listOf<Any>(HomeRoute), nav.stack, "Home first")
+        nav.moves += "remove"
+        watch.check(emptyList())
+        val moves = nav.moves.filterNot { it.startsWith("clear") && it != "clear 1" }
+        assertEquals(listOf("switchTab PluginTab1", "navigate PluginsRoute", "switchTab HomeRoute", "remove", "clear 1"), moves)
+        assertEquals(emptyList(), swaps.calls, "the removal waited for no swap point")
+        assertNull(nav.saved[PluginTab1::class])
+
+        // Off the stack already: nothing moves.
+        val quiet = FakeNav()
+        watch(quiet, Swaps()).beforeRemove(1)
+        assertEquals(emptyList(), quiet.moves)
+    }
+
+    /** L590 (card 5 and frame 6): the placeholder's page title is the tab's label, its card says why, and what stays. */
+    @Test
+    fun `the placeholder says why its plugin isn't running`() {
+        fun words(status: PluginStatus, label: String? = "Sports") =
+            PluginPlaceholder.of(installed(status = status, label = label))?.let { listOf(it.label, it.title, it.line) }
+        assertEquals(
+            listOf("Sports", "Sports is turned off", "The Sportarr plugin was turned off after it crashed NZStreamer. What you watched is kept."),
+            words(PluginStatus.OffAfterCrash),
+        )
+        assertEquals(
+            listOf("Sports", "Sports is turned off", "The Sportarr plugin was turned off after an error. What you watched is kept."),
+            words(PluginStatus.OffAfterError),
+        )
+        assertEquals(
+            listOf("Sports", "Sports is turned off", "The Sportarr plugin was turned off: version 1.1 was withdrawn. What you watched is kept."),
+            words(PluginStatus.Withdrawn),
+        )
+        assertEquals(
+            listOf("Sports", "Sports couldn't start: its file changed after it was installed.", "What you watched is kept."),
+            words(PluginStatus.Refused(Refusal.Hash)),
+        )
+        assertEquals(
+            listOf("Sports", "Sports couldn't start: its code didn't load.", "What you watched is kept."),
+            words(PluginStatus.CouldntStart(LoadFailure.Linkage)),
+        )
+        assertEquals(
+            listOf("Sports", "Sports is turned off", "Plugins are off: NZStreamer closed twice just after starting. What you watched is kept."),
+            words(PluginStatus.PluginsOff),
+        )
+        assertEquals("Sportarr", words(PluginStatus.OffAfterCrash, label = null)!!.first(), "never loaded: the list's name")
+        assertNull(words(PluginStatus.Waiting), "loading: nothing")
+        assertNull(words(running("skeleton", key = 1)), "running: its own page")
+        assertEquals("Open Plugins", PluginPlaceholder.OPEN_PLUGINS)
+    }
+
+    /** L618: a tab for each plugin that ever loaded, in slot order; Build where no instance gave an icon in this process. */
+    @Test
+    fun `the plugins' tabs`() {
+        assertEquals(emptyList(), pluginTabs(null))
+        val tabs = pluginTabs(
+            listOf(
+                installed("kestrel", slot = 1, status = PluginStatus.OffAfterCrash, label = "Kestrel"),
+                installed("harbor", slot = 2, status = PluginStatus.Refused(Refusal.Signer), label = null),
+                installed("skeleton", slot = 3, status = running("skeleton", key = 1, label = "Sports")),
+            ),
+        )
+        assertEquals(listOf("Kestrel", "Sports"), tabs.map { it.label }, "a plugin that never loaded has no tab")
+        assertEquals(listOf<Any>(PluginTab1, PluginTab3), tabs.map { it.route })
+        assertEquals(listOf<KClass<*>>(PluginTab1::class, PluginTab3::class), tabs.map { it.type })
+        assertSame(Icons.Filled.Build, tabs[0].icon)
+        assertSame(Icons.Filled.Star, tabs[1].icon)
+        assertEquals(listOf(1, 2, 3, 4), PluginSlots.all.map { it.number })
+        assertEquals(listOf(PluginSettings1, PluginSettings2, PluginSettings3, PluginSettings4), PluginSlots.all.map { it.settings })
+        assertEquals(PluginPage4("a", "b"), PluginSlots.of(4).page("a", "b"))
+    }
+
+    /** L613's rules for a page the plugin opens: the message names the rule, never the value. */
+    @Test
+    fun `a page outside its rule is refused, naming the rule alone`() {
+        PluginNavImpl.check("second-page", "ev-000731:main-card")
+        PluginNavImpl.check("a", null)
+        val page = assertFailsWith<IllegalArgumentException> { PluginNavImpl.check("Secret Page", null) }
+        assertEquals("A page's name is 1 to 40 lower-case letters, digits and dashes", page.message)
+        assertFailsWith<IllegalArgumentException> { PluginNavImpl.check("", null) }
+        val arg = assertFailsWith<IllegalArgumentException> { PluginNavImpl.check("page", "hunter2".repeat(40)) }
+        assertEquals("A page's argument is at most 200 characters", arg.message)
+    }
+
+    /**
+     * The KDoc's promise, that none of a plugin's pages is drawn after its version is let go: the registry lists the
+     * version as no longer running before its close() runs, at the swap point, after an error, on a withdrawal and on
+     * Remove, so a slot that follows the list stops drawing it first.
+     */
+    @Test
+    fun `the registry lists a version off before its close() runs`() = runTest {
+        val h = RegistryHarness(dir, this)
+        val atClose = mutableListOf<String>()
+        lateinit var registry: PluginRegistry
+        h.loading.plugin = { id, version ->
+            FakePlugin(onClose = {
+                val status = registry.plugins.value.orEmpty().firstOrNull { it.id == id }?.status
+                val still = (status as? PluginStatus.Running)?.instance?.versionCode == version
+                atClose += "$id $version ${if (still) "listed running" else "not listed running"}"
+            })
+        }
+        registry = h.registry().apply { start(); firstActivity() }
+        h.install(registry, "skeleton", 1)
+        h.install(registry, "kestrel", 1)
+        h.install(registry, "skeleton", 2)
+        assertTrue(registry.atSwapPoint("skeleton"))
+        registry.running("skeleton")!!.host.scope.launch { throw IllegalStateException("the fake's refresh") }
+        advanceUntilIdle()
+        assertEquals(PluginStatus.OffAfterError, registry.installed("skeleton").status)
+        registry.withdraw("kestrel", 1)
+        assertTrue(registry.atSwapPoint("kestrel"))
+        assertEquals(PluginStatus.Withdrawn, registry.installed("kestrel").status)
+        registry.turnOnAgain("skeleton")
+        assertNotNull(registry.running("skeleton"))
+        registry.remove("skeleton")
+        advanceUntilIdle()
+        assertEquals(
+            listOf("skeleton 1", "skeleton 2", "kestrel 1", "skeleton 2").map { "$it not listed running" },
+            atClose,
+            "swap, error, withdrawal, Remove",
+        )
+    }
+}

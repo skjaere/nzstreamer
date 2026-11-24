@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -20,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
@@ -76,7 +78,7 @@ fun PhoneShell(
                                 selected = destination.isTab(tab),
                                 onClick = { nav.switchTab(tab.route) },
                                 icon = { Icon(tab.icon, contentDescription = null) },
-                                label = { Text(tab.label, style = AppType.small) },
+                                label = { TabLabel(tab.label) },
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = colors.onAccent, indicatorColor = colors.accent,
                                     selectedTextColor = colors.accent, unselectedIconColor = colors.muted, unselectedTextColor = colors.muted,
@@ -96,6 +98,22 @@ fun PhoneShell(
         }
     }
 }
+
+/**
+ * A tab's name in the bar, on one line (L618): one that doesn't fit its tab (six tabs with Discover and two plugins, a large
+ * text size) shrinks until it fits, down to [LABEL_SHRINK] of its size, then ends in "…"; never two lines.
+ */
+@Composable
+private fun TabLabel(label: String) {
+    val size = AppType.small.fontSize
+    Text(
+        label, style = AppType.small, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+        autoSize = TextAutoSize.StepBased(minFontSize = size * LABEL_SHRINK, maxFontSize = size),
+    )
+}
+
+/** How far a tab's name may shrink to fit on one line. */
+private const val LABEL_SHRINK = 0.7f
 
 /**
  * A cast's missing-parts prompt in the bottom stack, above the bar (W37; CsPhoneMissingParts 2), or while it doesn't ask,

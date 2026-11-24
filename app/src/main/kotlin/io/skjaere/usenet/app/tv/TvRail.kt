@@ -27,7 +27,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -77,18 +76,46 @@ import kotlin.reflect.KClass
  * ([io.skjaere.usenet.app.ui.InitialFocus], which reads it as the UI kit's [RailState]). Only the
  * user's moves open the rail: when what the content shows changes under the focus, the shell puts
  * the focus back into the content ([contentChanged], [settling]).
+ *
+ * The shell makes one and gives it each new list of [tabs] ([update], L582): a plugin's tab added or removed, or its
+ * label changed. What it knows of the focus stays, each tab's item keeps its focus requester by the tab's type ([item]),
+ * and the current tab is kept by its type, wherever the new list puts it.
  */
 @Stable
-class RailFocus(private val tabs: List<Tab>) : RailState {
+class RailFocus(tabs: List<Tab>) : RailState {
     override var hasFocus by mutableStateOf(false)
         internal set
     override var held by mutableStateOf(false)
         internal set
-    var selected by mutableIntStateOf(0)
-        internal set
     override var entering by mutableStateOf(false)
         internal set
-    internal val items = List(tabs.size) { FocusRequester() }
+
+    /** The rail's tabs, as the shell last gave them. */
+    var tabs by mutableStateOf(tabs)
+        private set
+
+    /** The current tab's type: the one the content shows, or last showed. */
+    private var selectedType by mutableStateOf(tabs.firstOrNull()?.type)
+
+    /** The current tab's place among [tabs]. */
+    val selected: Int get() = tabs.indexOfFirst { it.type == selectedType }.coerceAtLeast(0)
+
+    private val requesters = HashMap<KClass<*>, FocusRequester>()
+
+    /** The rail's tabs from now on ([tabs]), as the registry's plugins come, go or change their label. */
+    fun update(tabs: List<Tab>) {
+        if (tabs != this.tabs) this.tabs = tabs
+    }
+
+    /** [tab] is the current one. */
+    fun select(tab: Tab) {
+        selectedType = tab.type
+    }
+
+    fun isSelected(tab: Tab): Boolean = tab.type == selectedType
+
+    /** [tab]'s item's focus requester: the same for a tab of the same type, whatever its label or place. */
+    fun item(tab: Tab): FocusRequester = requesters.getOrPut(tab.type) { FocusRequester() }
 
     /** Whether the content beside the rail has the focus, from which the user's arrows come into the rail. */
     internal var contentHasFocus = false
@@ -131,7 +158,7 @@ class RailFocus(private val tabs: List<Tab>) : RailState {
      * start (TV Home's centred empty card): a move left from it would go to what is below it, not to the rail. Entered
      * so, the rail takes the focus on the current tab's item, as from the column's first elements.
      */
-    val wayIn: FocusRequester get() = items[selected]
+    val wayIn: FocusRequester get() = tabs.getOrNull(selected)?.let(::item) ?: item(tabs.first())
 
     /** Moves the focus to the item of the tab whose route is [type]. */
     fun focus(type: KClass<*>): Boolean = focusItem(tabs.indexOfFirst { it.type == type })
@@ -143,10 +170,10 @@ class RailFocus(private val tabs: List<Tab>) : RailState {
     internal fun arrowIn(): Boolean = focusItem(selected, held = contentHasFocus)
 
     private fun focusItem(i: Int, held: Boolean = true): Boolean {
-        if (i < 0) return false
+        val tab = tabs.getOrNull(i) ?: return false
         content.saveFocusedChild()
         this.held = held
-        return items[i].tryFocus()
+        return item(tab).tryFocus()
     }
 
     /** Moves the focus back into the content: to the element it was left from, else to its first. */
@@ -221,14 +248,9 @@ internal fun TvRail(tabs: List<Tab>, rail: RailFocus, safe: WindowInsets, onOpen
             .focusGroup(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        tabs.forEachIndexed { i, tab ->
-            if (tab.pinned) return@forEachIndexed
-            RailItem(tab, i == rail.selected, expanded, rail.items[i]) { onOpen(tab) }
-        }
+        tabs.filterNot { it.pinned }.forEach { tab -> RailItem(tab, rail.isSelected(tab), expanded, rail.item(tab)) { onOpen(tab) } }
         Spacer(Modifier.weight(1f))
-        tabs.forEachIndexed { i, tab ->
-            if (tab.pinned) RailItem(tab, i == rail.selected, expanded, rail.items[i]) { onOpen(tab) }
-        }
+        tabs.filter { it.pinned }.forEach { tab -> RailItem(tab, rail.isSelected(tab), expanded, rail.item(tab)) { onOpen(tab) } }
     }
 }
 

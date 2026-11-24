@@ -78,8 +78,13 @@ fun TvShell(
     val entry by nav.currentBackStackEntryAsState()
     val current = tabs.indexOfFirst { entry?.destination.isTab(it) }
     val onTab = current >= 0
-    val rail = remember(tabs) { RailFocus(tabs) }
-    SideEffect { if (onTab) rail.selected = current }
+    // One rail for the shell's life: the tabs change in it (a plugin's tab comes, goes or is renamed, L582), its focus
+    // state kept, and LocalRailFocus never swapped over the content.
+    val rail = remember { RailFocus(tabs) }
+    SideEffect {
+        rail.update(tabs)
+        if (onTab) rail.select(tabs[current])
+    }
     val scope = rememberCoroutineScope()
     // The last OK's wait for its tab's screen: a later OK's replaces it.
     val entering = remember { arrayOfNulls<Job>(1) }
@@ -134,7 +139,7 @@ fun TvShell(
         searchKeys.collect {
             // Not before the NavHost has its graph (a key on a cold start).
             nav.currentBackStackEntryFlow.first()
-            tabs.firstOrNull { it.type == SearchRoute::class }?.let {
+            rail.tabs.firstOrNull { it.type == SearchRoute::class }?.let {
                 onSearchKey()
                 open(it, restore = false)
             }

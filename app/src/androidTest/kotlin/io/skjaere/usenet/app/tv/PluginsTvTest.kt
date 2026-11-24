@@ -203,7 +203,8 @@ class PluginsTvTest {
             remote.waitForFocus("Install", PAGE_MS)
             remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
             compose.waitUntil(PLUGIN_WAIT_MS) { exists(hasText("Installed. Skeleton is now a tab after ${pluginTabsFollow(FormFactor.Tv)}.")) }
-            remote.waitForFocus("Remove")
+            // Cancel's focus handed to Open <label>: the app's page has the slot's pages to open (PlTvInstall 3).
+            remote.waitForFocus("Open Skeleton")
 
             remote.press(KeyEvent.KEYCODE_BACK)
             remote.waitForFocus("Plugins | Skeleton")

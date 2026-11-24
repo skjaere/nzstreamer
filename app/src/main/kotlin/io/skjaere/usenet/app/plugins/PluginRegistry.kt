@@ -293,7 +293,12 @@ class PluginRegistry(
             if (!startChecked || off.value) return@withLock false
             val record = record(id) ?: return@withLock false
             val pending = record.pending ?: return@withLock withdrawnGoes(record)
-            runningInstance(id)?.let(::letGo)
+            runningInstance(id)?.let { instance ->
+                // Listed as loading before it is let go, so its slot draws none of its pages after its close().
+                statuses[id] = PluginStatus.Waiting
+                publish()
+                letGo(instance)
+            }
             when (val outcome = load(id, pending.versionCode, pending.sha256, record.highestLoaded)) {
                 is Outcome.Running -> {
                     update(id) {
@@ -324,10 +329,10 @@ class PluginRegistry(
     private fun withdrawnGoes(record: PluginRecord): Boolean {
         if (record.state != StoredState.Withdrawn) return false
         val instance = runningInstance(record.id) ?: return false
-        letGo(instance)
         statuses[record.id] = PluginStatus.Withdrawn
-        log.info("Plugin {} {} is off: withdrawn", record.id, record.versionCode)
         publish()
+        letGo(instance)
+        log.info("Plugin {} {} is off: withdrawn", record.id, record.versionCode)
         return true
     }
 
@@ -382,12 +387,15 @@ class PluginRegistry(
         filesRead.await()
         lock.withLock {
             record(id) ?: return@withLock
-            runningInstance(id)?.let(::letGo)
-            // The entry goes first: should the process die before the files do, the next start's sweep takes them.
+            val running = runningInstance(id)
+            // The entry goes first: should the process die before the files do, the next start's sweep takes them. Listed
+            // gone before its instance is let go, so its slot draws none of its pages after its close().
             records.removeAll { it.id == id }
             statuses.remove(id)
             forTest.remove(id)
             icons.remove(id)
+            publish()
+            running?.let(::letGo)
             persist()
             crashGuard.removed(id)
             try {
@@ -543,9 +551,11 @@ class PluginRegistry(
             update(version.id) { it.copy(state = StoredState.Errored) }
             persist()
         }
-        runningInstance(version.id)?.takeIf { it.versionCode == version.versionCode }?.let(::letGo)
+        val running = runningInstance(version.id)?.takeIf { it.versionCode == version.versionCode }
+        // Listed off before it is let go, so its slot draws none of its pages after its close().
         statuses[version.id] = if (withdrawn) PluginStatus.Withdrawn else PluginStatus.OffAfterError
         publish()
+        running?.let(::letGo)
     }
 
     private suspend fun readFiles() {

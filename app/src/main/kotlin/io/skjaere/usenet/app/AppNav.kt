@@ -12,6 +12,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -19,6 +20,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavController
 import androidx.navigation.NavDestination
@@ -47,6 +49,12 @@ import io.skjaere.usenet.app.link.TvRemoteScreen
 import io.skjaere.usenet.app.link.TvsScreen
 import io.skjaere.usenet.app.link.PhonesScreen
 import io.skjaere.usenet.app.play.PlaySheetHost
+import io.skjaere.usenet.app.plugins.NavSlotMoves
+import io.skjaere.usenet.app.plugins.PluginSlotWatch
+import io.skjaere.usenet.app.plugins.PluginSlots
+import io.skjaere.usenet.app.plugins.beforeRemove
+import io.skjaere.usenet.app.plugins.pluginScreens
+import io.skjaere.usenet.app.plugins.pluginTabs
 import io.skjaere.usenet.app.search.SearchScreen
 import io.skjaere.usenet.app.search.VoiceRequest
 import io.skjaere.usenet.app.search.openedTitle
@@ -73,13 +81,16 @@ import io.skjaere.usenet.app.ui.AppType
 import io.skjaere.usenet.app.ui.FormFactor
 import io.skjaere.usenet.app.ui.LocalFormFactor
 import io.skjaere.usenet.app.ui.colors
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.reflect.KClass
 
 /** A top-level tab: what the bottom bar (or a TV's rail) shows, the route it opens and its type. [pinned]: at the rail's bottom. */
@@ -93,25 +104,34 @@ private val settings = Tab("Settings", Icons.Filled.Settings, SettingsRoute, Set
 /**
  * The tabs on [formFactor]. A TV's rail starts with Search, as TVs' side menus do, and has Settings
  * as a tab of its own at the bottom: Home's gear isn't one press away there. The rail is entered at
- * the current tab, so the order costs nothing on the way in. The build's [extras] go in where each says.
+ * the current tab, so the order costs nothing on the way in. The build's [extras] go in where each says,
+ * and the installed [plugins]' tabs ([io.skjaere.usenet.app.plugins.pluginTabs]), in slot order, after
+ * Discover where the build has it, else after Home (L618, W160).
  */
-fun tabsFor(formFactor: FormFactor, extras: AppExtras? = appExtras): List<Tab> {
+fun tabsFor(formFactor: FormFactor, extras: AppExtras? = appExtras, plugins: List<Tab> = emptyList()): List<Tab> {
     val main = when (formFactor) {
         FormFactor.Phone -> listOf(home, collection, search)
         FormFactor.Tv -> listOf(search, home, collection, settings)
     }
-    return extras?.tabs(formFactor).orEmpty().fold(main) { tabs, extra ->
+    val built = extras?.tabs(formFactor).orEmpty().fold(main) { tabs, extra ->
         val at = tabs.indexOfFirst { it.type == extra.after }.takeIf { it >= 0 } ?: tabs.indexOfLast { !it.pinned }
         tabs.take(at + 1) + extra.tab + tabs.drop(at + 1)
     }
+    if (plugins.isEmpty()) return built
+    val follows = pluginsFollow(formFactor, extras).type
+    val at = built.indexOfFirst { it.type == follows }
+    return built.take(at + 1) + plugins + built.drop(at + 1)
 }
 
 /**
  * The tab plugin tabs follow on [formFactor] (L618), by its label, as Settings › Plugins says where a new one goes: the
  * build's extra tab placed after Home, Discover, where the build has one, else Home.
  */
-fun pluginTabsFollow(formFactor: FormFactor, extras: AppExtras? = appExtras): String =
-    extras?.tabs(formFactor)?.lastOrNull { it.after == HomeRoute::class }?.tab?.label ?: home.label
+fun pluginTabsFollow(formFactor: FormFactor, extras: AppExtras? = appExtras): String = pluginsFollow(formFactor, extras).label
+
+/** The build's extra tab placed after Home (the last of them, which goes right after it), else Home. */
+private fun pluginsFollow(formFactor: FormFactor, extras: AppExtras?): Tab =
+    extras?.tabs(formFactor)?.lastOrNull { it.after == HomeRoute::class }?.tab ?: home
 
 /** Whether [destination] is [tab]'s own screen (not a page opened from it). */
 fun NavDestination?.isTab(tab: Tab): Boolean = this?.hierarchy?.any { it.hasRoute(tab.type) } == true
@@ -216,17 +236,31 @@ fun AppNav(
                 appGraph(nav, container, jumps, formFactor, voice, downloadPages)
                 downloadScreens(nav, DownloadPlaces.shown(formFactor, container.television))
                 appExtras?.run { screens(nav, container, formFactor) }
+                // The plugin slots' destinations, fixed (L582): the graph never changes as plugins come and go.
+                pluginScreens(nav, container.plugins)
             }
         }
+        // The tabs are state: the plugins' as the registry lists them (L582, L618).
+        val installed by container.plugins.plugins.collectAsStateWithLifecycle()
+        val tabs = remember(formFactor, installed) { tabsFor(formFactor, plugins = pluginTabs(installed)) }
         when (formFactor) {
             FormFactor.Phone -> PhoneShell(
-                nav, tabsFor(formFactor), container.playback, tvStart = if (container.television) null else container.tvStart,
+                nav, tabs, container.playback, tvStart = if (container.television) null else container.tvStart,
                 playing = if (container.television) null else container.remotePlaying,
                 cast = if (container.television) null else container.castPlaying,
                 onRemote = { nav.openRemote() }, content = graph,
             )
-            FormFactor.Tv -> TvShell(nav, tabsFor(formFactor), container.playback, allSearchKeys, onSearchKey = voice::request, content = graph)
+            FormFactor.Tv -> TvShell(nav, tabs, container.playback, allSearchKeys, onSearchKey = voice::request, content = graph)
         }
+    }
+    // The plugin slots (L581, L590): each change of the back stack, of what is still drawn of it, and of the registry's
+    // plugins reported, so a slot off the screen is at its swap point, a slot no plugin holds goes Home, and a slot's saved
+    // stack is cleared as the version that runs there changes. The registry's swap runs to its end once started.
+    LaunchedEffect(nav) {
+        nav.currentBackStackEntryFlow.first()
+        val registry = container.plugins
+        val watch = PluginSlotWatch({ id -> withContext(NonCancellable) { registry.atSwapPoint(id) } }, NavSlotMoves(nav)) { registry.plugins.value }
+        combine(nav.currentBackStackEntryFlow, nav.visibleEntries, registry.plugins) { _, _, plugins -> plugins }.collect { watch.check(it) }
     }
     // A cast's notification tapped: its remote, as the bar's tap opens it.
     LaunchedEffect(nav, remotes) {
@@ -410,8 +444,17 @@ fun NavGraphBuilder.appGraph(
             onPlugins = { screen.ifResumed { nav.navigate(PluginsRoute()) } },
         )
     }
-    // A card's Settings and Open <label> come with the plugin slots' pages (L582): none until then.
-    composable<PluginsRoute> { screen -> PluginsScreen(focus = screen.toRoute<PluginsRoute>().focus, onBack = back(screen)) }
+    // A card's Settings opens its slot's settings page over the page, and Open <label> switches to its slot's tab (L582,
+    // L633); before Remove, the slot is left where an entry of it is still on the stack (L581).
+    composable<PluginsRoute> { screen ->
+        PluginsScreen(
+            focus = screen.toRoute<PluginsRoute>().focus,
+            onBack = back(screen),
+            onSettings = { slot -> screen.ifResumed { nav.navigate(PluginSlots.of(slot).settings) } },
+            onOpen = { slot -> screen.ifResumed { nav.switchTab(PluginSlots.of(slot).tab) } },
+            onRemove = { slot -> NavSlotMoves(nav).beforeRemove(slot) },
+        )
+    }
     composable<PhonesRoute> { screen ->
         PhonesScreen(onBack = back(screen), onPair = { screen.ifResumed { nav.navigate(PairPhoneRoute) } })
     }

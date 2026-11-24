@@ -169,8 +169,9 @@ class PluginsViewModel(private val deps: PluginsDeps, after: String, slots: Bool
  * one card per plugin (its icon, name, the list's summary, its state's lines and buttons), and the list's source with
  * Check again. No page per plugin. Remove asks first, Cancel focused on a TV and an OK just after it opens let by
  * (OkGuard). [focus]: the plugin whose card opens in view, its first button focused on a TV (Open Plugins' way in).
- * [onSettings] and [onOpen]: a card's Settings and "Open <label>", by its slot; until the slots' pages are there, null, and
- * the cards have neither.
+ * [onSettings] and [onOpen]: a card's Settings and "Open <label>", by its slot; without them (a test's page), the cards
+ * have neither. [onRemove]: a card's slot just before its plugin is removed, for the app to leave the slot first where an
+ * entry of it is still on the current stack (L581).
  *
  * On a TV the first focus is Turn on again while plugins are off, else the first card's first enabled button, else Check
  * again; a button that goes hands the focus to what took its place ([PluginsPage.focusAfter]), so something is focused
@@ -185,6 +186,7 @@ fun PluginsScreen(
     onSettings: ((Int) -> Unit)? = null,
     onOpen: ((Int) -> Unit)? = null,
     deps: PluginsDeps? = null,
+    onRemove: (Int) -> Unit = {},
 ) {
     val context = LocalContext.current
     val formFactor = LocalFormFactor.current
@@ -307,6 +309,7 @@ fun PluginsScreen(
     removing?.let { card ->
         RemoveQuestion(card, tv, onCancel = { asking = null }) {
             asking = null
+            card.slot?.let(onRemove)
             vm.remove(card.id)
         }
     }
