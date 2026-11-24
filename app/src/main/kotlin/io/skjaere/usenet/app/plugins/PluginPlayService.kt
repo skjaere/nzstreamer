@@ -44,7 +44,11 @@ class PluginPlayService(
         return ItemTarget(version.id, item.key, item.title, item.subtitle, picker, item.noun, words, note)
     }
 
-    /** Plugin [id]'s answer in the host's terms: its handles mapped back, in its order, one the host no longer keeps left out. */
+    /**
+     * Plugin [id]'s answer in the host's terms: its handles mapped back, in its order, one the host no longer keeps left
+     * out. A release handed more than once (each Found of a search lists the releases so far; two searches give it two
+     * handles) counts once, at its first place, and one accepted isn't offered as well: Play tries each release once.
+     */
     private fun found(
         id: String,
         accepted: List<ReleaseHandle>,
@@ -52,13 +56,18 @@ class PluginPlayService(
         leftOut: String?,
         lines: List<Pair<String, String>> = emptyList(),
         note: String? = null,
-    ) = ItemFound(
-        accepted = ranked(id, accepted),
-        offered = offered.mapNotNull { (handle, reason) -> ranked(id, listOf(handle)).singleOrNull()?.let { it to reason } },
-        leftOut = leftOut,
-        lines = lines,
-        note = note,
-    )
+    ): ItemFound {
+        val once = ranked(id, accepted).distinctBy { it.key }
+        val taken = once.mapTo(HashSet()) { it.key }
+        return ItemFound(
+            accepted = once,
+            offered = offered.mapNotNull { (handle, reason) -> ranked(id, listOf(handle)).singleOrNull()?.let { it to reason } }
+                .distinctBy { (item, _) -> item.key }.filterNot { (item, _) -> item.key in taken },
+            leftOut = leftOut,
+            lines = lines,
+            note = note,
+        )
+    }
 
     private inner class Player(private val version: PluginVersion, private val calls: PluginCalls) : PluginPlay {
         override fun play(item: PlayItem, releases: suspend () -> ItemReleases) {

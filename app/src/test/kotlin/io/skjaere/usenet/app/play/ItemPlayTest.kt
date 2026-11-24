@@ -317,6 +317,27 @@ class ItemPlayTest {
         assertTrue(asked.all { it == "kestrel" }, "only its own table: $asked")
     }
 
+    /**
+     * One release handed more than once (each Found of a search lists the releases so far, and two searches give one release
+     * two handles): Play tries it once, at its first place, and a release accepted isn't offered as well.
+     */
+    @Test
+    fun `a release the plugin hands more than once is tried once`() {
+        val handles = List(4) { i -> object : ReleaseHandle { override fun toString() = "handle $i" } }
+        val table = mapOf(handles[0] to other, handles[1] to other, handles[2] to good, handles[3] to good)
+        val routed = mutableListOf<suspend () -> ItemFound>()
+        val service = PluginPlayService(ranked = { _, given -> given.mapNotNull(table::get) }) { _, releases -> routed += releases }
+        val play = service.of(PluginVersion("kestrel", 3, key = 11), PluginCalls { _, _, e -> throw AssertionError("no error", e) })
+        play.play(PlayItem("gp-kestrel:race", "Grand Prix of Kestrel · Race", "Round 20", 95)) {
+            ItemReleases(accepted = listOf(handles[0], handles[2], handles[1], handles[0]), offered = listOf(Offered(handles[3], "Team codes only")))
+        }
+        val found = runBlocking { routed.single()() }
+        assertEquals(listOf(other, good), found.accepted)
+        assertEquals(emptyList(), found.offered, "accepted already")
+        val (r, _) = run(stored = false, remembered = null, found = found, outcomes = listOf(failed(other.item.title)))
+        assertEquals(listOf(other, good), r.plays.single().first.candidates, "each tried once")
+    }
+
     /** The item's own word for Choose release's lines and its Search's words and note go with it, as the host plays it. */
     @Test
     fun `the item's noun and its search's words and note reach the play`() {
