@@ -78,9 +78,10 @@ public final class io/skjaere/usenet/plugin/Offered {
 }
 
 public final class io/skjaere/usenet/plugin/PlayItem {
-	public <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Lio/skjaere/usenet/plugin/SearchOffer;Lio/skjaere/usenet/plugin/PluginFilePicker;)V defaults(5,6)
-	public synthetic <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Lio/skjaere/usenet/plugin/SearchOffer;Lio/skjaere/usenet/plugin/PluginFilePicker;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lio/skjaere/usenet/plugin/SearchOffer;Lio/skjaere/usenet/plugin/PluginFilePicker;)V defaults(5,6,7)
+	public synthetic <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lio/skjaere/usenet/plugin/SearchOffer;Lio/skjaere/usenet/plugin/PluginFilePicker;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun getKey ()Ljava/lang/String;
+	public final fun getNoun ()Ljava/lang/String;
 	public final fun getPicker ()Lio/skjaere/usenet/plugin/PluginFilePicker;
 	public final fun getRuntimeMinutes ()Ljava/lang/Integer;
 	public final fun getSearch ()Lio/skjaere/usenet/plugin/SearchOffer;
@@ -145,6 +146,7 @@ public final class io/skjaere/usenet/plugin/PluginKeys {
 	public final fun validArg (Ljava/lang/String;)Z
 	public final fun validKey (Ljava/lang/String;)Z
 	public final fun validLabel (Ljava/lang/String;)Z
+	public final fun validNoun (Ljava/lang/String;)Z
 	public final fun validPage (Ljava/lang/String;)Z
 	public final fun validReason (Ljava/lang/String;)Z
 	public final fun validSecretName (Ljava/lang/String;)Z

@@ -38,12 +38,13 @@ object PluginApi {
  * The rules for the values a plugin hands the host, the same checks the host makes. A value outside its rule is refused
  * where it is handed over, with an [IllegalArgumentException] that names the rule and never the value: the value types
  * check theirs as they are made, the host's services and [PluginNav] theirs as they are called. Nothing is cut or changed
- * to fit.
+ * to fit. An item's noun alone isn't refused: one outside its rule counts as none ([PlayItem.noun]).
  */
 object PluginKeys {
     private val KEY = Regex("[A-Za-z0-9._:-]{1,200}")
     private val PAGE = Regex("[a-z0-9-]{1,40}")
     private val SECRET_NAME = Regex("[a-z0-9._-]{1,40}")
+    private val NOUN = Regex("[a-z][a-z -]{0,19}")
 
     /** An item's key ([PlayItem.key], [PluginWatch]): 1 to 200 letters, digits, dots, underscores, colons and dashes. */
     fun validKey(key: String): Boolean = KEY.matches(key)
@@ -56,6 +57,12 @@ object PluginKeys {
 
     /** A secret's name ([PluginSecrets]): 1 to 40 lower-case letters, digits, dots, underscores and dashes. */
     fun validSecretName(name: String): Boolean = SECRET_NAME.matches(name)
+
+    /**
+     * An item's own word ([PlayItem.noun]), as Choose release's lines name it: a lower-case letter, then up to 19 lower-case
+     * letters, spaces and dashes.
+     */
+    fun validNoun(noun: String): Boolean = NOUN.matches(noun)
 
     /** A possible match's reason ([Offered.reason]): 1 to 60 characters, not all blank. */
     fun validReason(reason: String): Boolean = reason.isNotBlank() && reason.characters() <= 60

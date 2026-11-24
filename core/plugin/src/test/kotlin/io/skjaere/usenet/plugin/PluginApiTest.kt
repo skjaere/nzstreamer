@@ -66,6 +66,28 @@ class PluginApiTest {
         listOf("", " ", "l".repeat(17)).forEach { assertFalse(PluginKeys.validLabel(it), it) }
     }
 
+    /**
+     * The item's own word in Choose release's lines ("the right game"): a lower-case letter, then up to 19 lower-case
+     * letters, spaces and dashes. One outside the rule is no word at all, and the host's lines say "release" (L613, L628).
+     */
+    @Test
+    fun `an item's noun is 1 to 20 lower-case letters, spaces and dashes, starting with a letter`() {
+        listOf("game", "session", "main card", "pre-show", "g", "n".repeat(20)).forEach { assertTrue(PluginKeys.validNoun(it), it) }
+        listOf("", "Game", "GAME", "game 2", "1st", " game", "-game", "game.", "n".repeat(21), "jeu é", "a\nb").forEach {
+            assertFalse(PluginKeys.validNoun(it), it)
+        }
+    }
+
+    @Test
+    fun `an item keeps a noun inside the rule and reads one outside it as none`() {
+        assertEquals("game", PlayItem("ev-1:main-card", "Kestrel Cup", null, 120, noun = "game").noun)
+        assertEquals("main card", PlayItem("ev-1:main-card", "Kestrel Cup", null, 120, noun = "main card").noun)
+        assertEquals(null, PlayItem("ev-1:main-card", "Kestrel Cup", null, 120).noun)
+        listOf("Game", "game 2", "n".repeat(21)).forEach { outside ->
+            assertEquals(null, PlayItem("ev-1:main-card", "Kestrel Cup", null, 120, noun = outside).noun, outside)
+        }
+    }
+
     /** Made by the plugin, so a bad one fails in its own code; the message names the rule, never the value (crash records keep it). */
     @Test
     fun `a tab, a possible match and an item refuse a value outside the rules, naming no value`() {

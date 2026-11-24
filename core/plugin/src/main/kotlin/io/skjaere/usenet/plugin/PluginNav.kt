@@ -21,7 +21,7 @@ interface PluginNav {
      * Opens the host's Choose release for [item] over the current page: the [accepted] releases ranked as the search
      * ranked them, then the [offered] ones under "Possible matches", each with its reason in place of a rank, and [leftOut]
      * as the list's last line ("4 left out: a score in the name", never naming one). With nothing accepted, only the
-     * possible matches show. A tap plays that release alone, as [item]'s play ([PluginPlay.play]). A handle the host no
+     * possible matches show. The lines over them name the item by its [PlayItem.noun] ("the right game"). A tap plays that release alone, as [item]'s play ([PluginPlay.play]). A handle the host no
      * longer knows is left out.
      */
     fun openReleases(item: PlayItem, accepted: List<ReleaseHandle>, offered: List<Offered>, leftOut: String?)

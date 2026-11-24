@@ -32,11 +32,20 @@ class PlayItem(
      * is; the releases were ranked by the plugin's searches, which take the runtime themselves ([PluginSearch.search]).
      */
     val runtimeMinutes: Int?,
+    /**
+     * The plugin's word for the item in Choose release's lines over its possible matches: "game" makes "Tap one if it's
+     * the right game." A lower-case letter, then up to 19 lower-case letters, spaces and dashes ([PluginKeys.validNoun]).
+     * One outside the rule isn't refused but counts as none, as null does, and the lines then say "release".
+     */
+    noun: String? = null,
     /** What Search indexers on the no-release sheet searches; null: the sheet offers no Search. */
     val search: SearchOffer? = null,
     /** Which file of a release is the item's; null: the largest video that isn't a sample, as for a film. */
     val picker: PluginFilePicker? = null,
 ) {
+    /** The item's word in Choose release's lines, as given where it keeps to the rule; else null. */
+    val noun: String? = noun?.takeIf(PluginKeys::validNoun)
+
     init {
         require(PluginKeys.validKey(key)) { "An item's key is 1 to 200 letters, digits, dots, underscores, colons and dashes" }
     }
