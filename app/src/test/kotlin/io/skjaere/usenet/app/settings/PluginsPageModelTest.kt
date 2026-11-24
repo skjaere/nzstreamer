@@ -167,6 +167,32 @@ class PluginsPageModelTest {
         assertEquals("Open Kestrel", unnamed.buttons.first().label)
     }
 
+    /**
+     * L618: a plugin that never loaded has no tab. An install (or Install again) whose version didn't come up says why, as
+     * its card would after the page is left, and never "Installed. … is now a tab" with Open; nor once the list withdrew it.
+     */
+    @Test
+    fun `an install whose version didn't come up shows the plugin's own state, not Installed`() {
+        val kestrel = list(listed("kestrel", "Kestrel", version(12, "1.2")))
+        fun card(plugin: InstalledPlugin) = page(listOf(plugin), kestrel, mapOf("kestrel" to InstallState.Installed(1))).cards.single()
+
+        val errored = card(installed(label = null, status = PluginStatus.OffAfterError))
+        assertEquals(listOf<CardLine>(CardLine.Warn("Turned off after an error")), errored.lines)
+        assertEquals(buttons(CardAction.TurnOnAgain, CardAction.Remove), errored.buttons)
+        val couldnt = card(installed(label = null, status = PluginStatus.CouldntStart(LoadFailure.Linkage)))
+        assertEquals(listOf<CardLine>(CardLine.Warn("Couldn't start: its code didn't load.")), couldnt.lines)
+        assertEquals(buttons(CardAction.Remove), couldnt.buttons)
+        val refused = card(installed(status = PluginStatus.Refused(Refusal.Hash)))
+        assertEquals(listOf<CardLine>(CardLine.Warn("Couldn't start: its file changed after it was installed.")), refused.lines)
+        assertEquals(buttons(CardAction.InstallAgain, CardAction.Remove), refused.buttons)
+        assertEquals(buttons(CardAction.TurnOnAgain, CardAction.Remove), card(installed(status = PluginStatus.OffAfterCrash)).buttons)
+        assertEquals(
+            CardLine.Warn("Version 1.2 was withdrawn, so it's off until a fixed version is out."),
+            card(installed(withdrawn = true)).lines.single(),
+            "withdrawn while the page shows it",
+        )
+    }
+
     @Test
     fun `an installed plugin's card in each state, its lines and buttons`() {
         val kestrel = list(listed("kestrel", "Kestrel", version(12, "1.2")))

@@ -252,13 +252,17 @@ private class Cards(
     private val sdk: Int,
     private val compat: PluginCompat,
 ) {
-    /** An installed plugin's card: an install of its own first (Install again's), then its state. */
+    /**
+     * An installed plugin's card: an install of its own first (Install again's), then its state. "Installed" only while the
+     * version runs, or waits for its first load: one that didn't come up has no tab (L618), and says why.
+     */
     fun installed(plugin: InstalledPlugin, pluginsOff: Boolean, installAgain: Boolean): PluginCard {
         val label = plugin.label ?: plugin.name
+        val comesUp = !plugin.withdrawn && (plugin.status is PluginStatus.Running || plugin.status == PluginStatus.Waiting)
         val (lines, buttons) = when {
             // While plugins are off, its version and Remove alone, whatever its state.
             pluginsOff || plugin.status == PluginStatus.PluginsOff -> listOf(CardLine.Version("Version ${plugin.versionName}")) to listOf(CardButton(CardAction.Remove))
-            else -> installs[plugin.id]?.let { install(it, label) } ?: state(plugin, installAgain)
+            else -> installs[plugin.id]?.takeUnless { it is InstallState.Installed && !comesUp }?.let { install(it, label) } ?: state(plugin, installAgain)
         }
         val summary = index?.plugins?.firstOrNull { it.id == plugin.id }?.summary
         return PluginCard(plugin.id, plugin.name, summary?.takeIf { it.isNotBlank() }, plugin.icon, label, plugin.slot, lines, buttons)
