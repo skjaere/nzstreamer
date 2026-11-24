@@ -11,11 +11,12 @@ import kotlin.system.exitProcess
 
 /**
  * Usage, one mode a run:
- *   rules --id <id> --apk <plugin.apk> --version-code <n> --api-major <n> --api-minor <n> --shared-jar <jar>…
+ *   rules --id <id> --apk <plugin.apk> --version-code <n> --api-major <n> --api-minor <n> --libs <name=version,…> --shared-jar <jar>…
  *         --aapt2 <build-tools/…/aapt2> --dexdump <build-tools/…/dexdump> --android-jar <jar> --api-versions <xml> [--report <file>]
  *     A plugin APK's dex, entries, manifest and resources against every plugin's rules ([PluginDexRules],
- *     [PluginManifestRules]), and its JDK calls against minSdk 26 as :app:checkMinApi checks the app's. The shared jars
- *     are the plugin API's, the UI kit's and the shared libraries' class jars ([SharedClasses]).
+ *     [PluginManifestRules]), its entry class against its dex, and its JDK calls against minSdk 26 as :app:checkMinApi
+ *     checks the app's. The version code, stamp and libraries are what the build's sources say; the shared jars are the
+ *     plugin API's, the UI kit's and the shared libraries' class jars ([SharedClasses]).
  *   link --id <id> --apk <plugin.apk> --host <dex, apk or folder>… --dexdump <path> --android-jar <jar> --api-versions <xml> [--report <file>]
  *     Whether everything the plugin names outside its package is in NZStreamer's build ([LinkCheck]).
  *   dump --classes <jar or folder>… --version-file <plugin-api.txt> --out <file>
@@ -34,7 +35,7 @@ fun main(args: Array<String>) {
     when (mode) {
         "rules" -> rules(
             id = option("id"), apk = File(option("apk")), versionCode = option("version-code").toInt(),
-            apiMajor = option("api-major").toInt(), apiMinor = option("api-minor").toInt(), sharedJars = files("shared-jar"),
+            apiMajor = option("api-major").toInt(), apiMinor = option("api-minor").toInt(), libs = option("libs"), sharedJars = files("shared-jar"),
             aapt2 = option("aapt2"), dexdump = option("dexdump"), androidJar = File(option("android-jar")),
             apiVersions = File(option("api-versions")), report = report,
         )
@@ -76,19 +77,23 @@ internal const val DUMP_ADVICE = "A change made on purpose: write the dump again
     "member added to an interface a plugin implements (NzPlugin, PluginFilePicker) must have a body, or it is a change."
 
 private fun rules(
-    id: String, apk: File, versionCode: Int, apiMajor: Int, apiMinor: Int, sharedJars: List<File>,
+    id: String, apk: File, versionCode: Int, apiMajor: Int, apiMinor: Int, libs: String, sharedJars: List<File>,
     aapt2: String, dexdump: String, androidJar: File, apiVersions: File, report: File?,
 ) {
     if (!apk.isFile) fail("no APK at ${apk.name}")
     if (sharedJars.isEmpty()) fail("no --shared-jar: the plugin API's, the UI kit's and the shared libraries' class jars are needed")
     val classes = dexdump(dexdump, listOf(apk)) { true }
     val entries = ZipFile(apk).use { zip -> zip.entries().asSequence().map { it.name }.toList() }
-    val dex = PluginDexRules(id, SharedClasses.fromJars(sharedJars)).check(classes, entries)
-    val manifest = PluginManifestRules(id, versionCode, apiMajor, apiMinor).check(
+    val dexRules = PluginDexRules(id, SharedClasses.fromJars(sharedJars))
+    val xmltree = run(aapt2, "dump", "xmltree", "--file", "AndroidManifest.xml", apk.path)
+    val manifest = PluginManifestRules(id, versionCode, apiMajor, apiMinor, libs).check(
         badging = run(aapt2, "dump", "badging", "--include-meta-data", apk.path),
-        xmltree = run(aapt2, "dump", "xmltree", "--file", "AndroidManifest.xml", apk.path),
+        xmltree = xmltree,
         resources = run(aapt2, "dump", "resources", apk.path),
     )
+    // The manifest rules say what is wrong with an entry that is missing or outside the package; here, whether it loads.
+    val entry = PluginManifestRules.entry(xmltree)?.takeIf { it.startsWith("app.nzstreamer.plugin.$id.") }
+    val dex = dexRules.check(classes, entries) + entry?.let { dexRules.entry(it, classes) }.orEmpty()
     // The JDK's calls Android only has above minSdk, in the plugin's own classes, as checkMinApi finds the app's.
     val own = "app/nzstreamer/plugin/$id/"
     val api = apiVersions.inputStream().buffered().use(ApiDatabase::parse)
@@ -181,7 +186,7 @@ private fun fail(message: String): Nothing {
 }
 
 private fun usage(): Nothing = fail(
-    "usage: rules --id <id> --apk <apk> --version-code <n> --api-major <n> --api-minor <n> --shared-jar <jar>… --aapt2 <path> " +
+    "usage: rules --id <id> --apk <apk> --version-code <n> --api-major <n> --api-minor <n> --libs <list> --shared-jar <jar>… --aapt2 <path> " +
         "--dexdump <path> --android-jar <jar> --api-versions <xml> [--report <file>] | link --id <id> --apk <apk> " +
         "--host <dex, apk or folder>… --dexdump <path> --android-jar <jar> --api-versions <xml> [--report <file>] | " +
         "dump --classes <jar or folder>… --version-file <file> --out <file> | " +

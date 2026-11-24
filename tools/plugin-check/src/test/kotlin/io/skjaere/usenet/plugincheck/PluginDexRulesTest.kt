@@ -63,6 +63,29 @@ class PluginDexRulesTest {
         )
     }
 
+    /** The class the manifest names, as the host loads it: from the plugin's own dex, an NzPlugin, made with no argument. */
+    @Test
+    fun `the entry class is in its dex, an NzPlugin through its own classes, with a constructor that takes no argument`() {
+        val own = "app/nzstreamer/plugin/kestrel/"
+        fun cls(name: String, superclass: String = "java/lang/Object", interfaces: List<String> = emptyList(), methods: Set<String> = setOf("<init>()V")) =
+            DexClass(own + name, superclass, interfaces, methods, emptySet(), emptyList())
+        val plugin = cls("Kestrel", interfaces = listOf("io/skjaere/usenet/plugin/NzPlugin"))
+        val base = cls("Base", interfaces = listOf("io/skjaere/usenet/plugin/NzPlugin"))
+        val derived = cls("Derived", superclass = own + "Base")
+        val notAPlugin = cls("Tab")
+        val noEmptyConstructor = cls("Picky", interfaces = listOf("io/skjaere/usenet/plugin/NzPlugin"), methods = setOf("<init>(Ljava/lang/String;)V"))
+        val dex = listOf(plugin, base, derived, notAPlugin, noEmptyConstructor)
+        val kestrel = "app.nzstreamer.plugin.kestrel"
+        assertEquals(emptyList(), rules.entry("$kestrel.Kestrel", dex))
+        assertEquals(emptyList(), rules.entry("$kestrel.Derived", dex), "an NzPlugin through its own superclass")
+        assertEquals(listOf("its entry class, $kestrel.Kestrl, isn't in its dex"), rules.entry("$kestrel.Kestrl", dex))
+        assertEquals(listOf("its entry class, $kestrel.Tab, isn't an NzPlugin"), rules.entry("$kestrel.Tab", dex))
+        assertEquals(
+            listOf("its entry class, $kestrel.Picky, has no constructor that takes no argument"),
+            rules.entry("$kestrel.Picky", dex),
+        )
+    }
+
     @Test
     fun `android util Log is flagged`() {
         assertTrue(

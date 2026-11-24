@@ -5,7 +5,7 @@ import kotlin.test.assertEquals
 
 class PluginManifestRulesTest {
 
-    private val rules = PluginManifestRules(id = "kestrel", versionCode = 3, apiMajor = 1, apiMinor = 0)
+    private val rules = PluginManifestRules(id = "kestrel", versionCode = 3, apiMajor = 1, apiMinor = 0, libs = LIBS)
 
     private fun violations(badging: String = BADGING, xmltree: String = XMLTREE, resources: String = RESOURCES) =
         rules.check(badging, xmltree, resources)
@@ -116,12 +116,28 @@ class PluginManifestRulesTest {
     }
 
     @Test
-    fun `its libraries are name=version pairs in a string`() {
+    fun `its libraries are this build's, in a string`() {
         assertEquals(
-            listOf("its nzs.plugin.libs, kotlin-stdlib 2.3.21, isn't name=version pairs separated by commas"),
+            listOf("its nzs.plugin.libs is kotlin-stdlib 2.3.21, not this build's $LIBS"),
             withMetaData("nzs.plugin.libs", "\"kotlin-stdlib 2.3.21\" (Raw: \"kotlin-stdlib 2.3.21\")", "x"),
         )
         assertEquals(listOf("its nzs.plugin.libs is stored as an integer, not a string"), withMetaData("nzs.plugin.libs", "7", "7"))
+    }
+
+    /** Written by hand, or left from an older build: the host would compare the libraries with versions it wasn't built with. */
+    @Test
+    fun `libraries well formed but not this build's are refused`() {
+        val older = "kotlin-stdlib=2.3.21,kotlinx-coroutines=1.11.0,compose-bom=2026.01.01"
+        assertEquals(
+            listOf("its nzs.plugin.libs is $older, not this build's $LIBS"),
+            withMetaData("nzs.plugin.libs", "\"$older\" (Raw: \"$older\")", older),
+        )
+    }
+
+    @Test
+    fun `the entry is read from the manifest as the host reads it`() {
+        assertEquals("app.nzstreamer.plugin.kestrel.KestrelPlugin", PluginManifestRules.entry(XMLTREE))
+        assertEquals(null, PluginManifestRules.entry(XMLTREE.replace("\"nzs.plugin.entry\" (Raw: \"nzs.plugin.entry\")", "\"nzs.plugin.other\" (Raw: \"nzs.plugin.other\")")))
     }
 
     @Test
@@ -139,6 +155,9 @@ class PluginManifestRulesTest {
     }
 
     private companion object {
+        // The libraries the build stamps, as the fixture's manifest has them.
+        const val LIBS = "kotlin-stdlib=2.3.21,kotlinx-coroutines=1.11.0,compose-bom=2026.06.01"
+
         // aapt2 dump badging --include-meta-data, as build-tools 35 prints it.
         val BADGING = """
             package: name='app.nzstreamer.plugin.kestrel' versionCode='3' versionName='1.2.0' platformBuildVersionName='16' platformBuildVersionCode='36' compileSdkVersion='36' compileSdkVersionCodename='16'

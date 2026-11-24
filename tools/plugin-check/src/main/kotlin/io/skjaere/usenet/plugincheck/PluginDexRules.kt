@@ -60,6 +60,29 @@ class PluginDexRules(id: String, private val shared: SharedClasses) {
         return found.groupingBy { it }.eachCount().map { (text, count) -> if (count > 1) "$text ($count references)" else text }.sorted()
     }
 
+    /**
+     * The entry class the manifest names ([entry], dotted), as the host will load it: in the plugin's own dex, an
+     * NzPlugin through its own classes and interfaces, with a constructor that takes no argument. A name with a typo
+     * would pass every other rule and fail on every device. (The constructor's visibility isn't in what the dexdump
+     * reader keeps: a Kotlin class's is public unless written otherwise.)
+     */
+    fun entry(entry: String, classes: List<DexClass>): List<String> {
+        val own = classes.filter { it.name.startsWith(this.own) }.associateBy { it.name }
+        val entryClass = own[entry.replace('.', '/')] ?: return listOf("its entry class, $entry, isn't in its dex")
+        // Its supertypes, through the plugin's own classes: NzPlugin itself is the app's.
+        val seen = mutableSetOf<String>()
+        val next = ArrayDeque(listOf(entryClass.name))
+        while (next.isNotEmpty()) {
+            val name = next.removeFirst()
+            if (!seen.add(name)) continue
+            own[name]?.let { next.addAll(it.supertypes) }
+        }
+        return listOfNotNull(
+            "its entry class, $entry, isn't an NzPlugin".takeIf { NZ_PLUGIN !in seen },
+            "its entry class, $entry, has no constructor that takes no argument".takeIf { "<init>()V" !in entryClass.methods },
+        )
+    }
+
     private fun carried(name: String): String = when {
         isR(name) -> "carries ${dotted(name)}, an R class: plugins have no resources"
         name in shared -> "carries ${dotted(name)}, which NZStreamer gives every plugin: take its library compileOnly"
@@ -118,6 +141,7 @@ class PluginDexRules(id: String, private val shared: SharedClasses) {
         const val LOG = "android/util/Log"
         const val SYSTEM = "java/lang/System"
         const val NZSTREAMER = "io/skjaere/usenet/"
+        const val NZ_PLUGIN = "io/skjaere/usenet/plugin/NzPlugin"
         val SAVED = setOf("android/os/Parcelable", "java/io/Serializable")
     }
 }

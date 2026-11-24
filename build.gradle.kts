@@ -182,9 +182,9 @@ abstract class PluginBuildFeatures @Inject constructor(val features: BuildFeatur
 //   packageRelease, installRelease, with a flavour or not) by the plugin's path, or by name alone, which Gradle runs in
 //   every project that has it. Anything else (assemble, build) packages a plugin's release unsigned outside CI.
 // - plugin-check's rules (L625) after every assemble, and for the debug builds in check, holding the APK to what the
-//   sources say: version.txt's versionCode and plugin-api.txt's stamp, whatever the plugin's build file set. The
-//   skeleton's builds are test fixtures with versions and a stamp of their own (L623), which its build file lists for the
-//   rules as pluginCheckExpectations; no other plugin's is read.
+//   sources say: version.txt's versionCode, plugin-api.txt's stamp and the libraries above, whatever the plugin's build
+//   file or manifest set. The skeleton's builds are test fixtures with versions and a stamp of their own (L623), which
+//   its build file lists for the rules as pluginCheckExpectations; no other plugin's is read.
 subprojects {
     if (!path.startsWith(":plugins:")) return@subprojects
     val pluginId = name
@@ -325,6 +325,7 @@ subprojects {
                 inputs.property("versionCode", expectedCode)
                 inputs.property("apiMajor", apiMajor)
                 inputs.property("apiMinor", apiMinor)
+                inputs.property("libs", pluginHostLibs)
                 outputs.file(report)
                 classpath = pluginCheckTool
                 mainClass = "io.skjaere.usenet.plugincheck.MainKt"
@@ -335,7 +336,7 @@ subprojects {
                             ?: error("No single APK in the metadata of ${apkDir.get()}")
                         return listOf(
                             "rules", "--id", pluginId, "--apk", apk,
-                            "--version-code", "$expectedCode", "--api-major", apiMajor, "--api-minor", apiMinor,
+                            "--version-code", "$expectedCode", "--api-major", apiMajor, "--api-minor", apiMinor, "--libs", pluginHostLibs,
                             "--aapt2", buildTools.get().file("aapt2").asFile.path, "--dexdump", buildTools.get().file("dexdump").asFile.path,
                             "--android-jar", platform.get().file("android.jar").asFile.path,
                             "--api-versions", platform.get().file("data/api-versions.xml").asFile.path,

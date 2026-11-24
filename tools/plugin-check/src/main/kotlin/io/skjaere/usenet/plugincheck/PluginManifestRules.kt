@@ -6,7 +6,8 @@ package io.skjaere.usenet.plugincheck
  * - its package is app.nzstreamer.plugin.<id>, at the expected versionCode, with minSdk 26;
  * - no activity, service, receiver or provider, and no permission: a plugin is code NZStreamer loads, never an app;
  * - the five meta-data, once each and stored as the host reads them: the id and the entry as strings (an id "true" would
- *   be a boolean), the API stamp as two integers at the expected version, the libraries as a string of name=version pairs;
+ *   be a boolean), the API stamp as two integers at the expected version, the libraries as a string, this build's
+ *   [libs] exactly (a list written by hand, or left from another build, would have the host compare the wrong versions);
  * - no resource.
  *
  * The stored types come from two dumps. `dump xmltree` shows a string quoted, a boolean as true or false and a number
@@ -14,7 +15,13 @@ package io.skjaere.usenet.plugincheck
  * an integer's value and a float's raw bits, so the two agree only on an integer. (A float 0.0 has the bits of 0: nothing
  * tells the two apart.)
  */
-class PluginManifestRules(private val id: String, private val versionCode: Int, private val apiMajor: Int, private val apiMinor: Int) {
+class PluginManifestRules(
+    private val id: String,
+    private val versionCode: Int,
+    private val apiMajor: Int,
+    private val apiMinor: Int,
+    private val libs: String,
+) {
     private val packageName = "app.nzstreamer.plugin.$id"
 
     fun check(badging: String, xmltree: String, resources: String): List<String> {
@@ -74,7 +81,7 @@ class PluginManifestRules(private val id: String, private val versionCode: Int, 
         if (major != null && minor != null && (major != "$apiMajor" || minor != "$apiMinor")) {
             found += "its API stamp is $major.$minor, not $apiMajor.$apiMinor"
         }
-        if (libs != null && !LIBS_FORM.matches(libs)) found += "its $LIBS, $libs, isn't name=version pairs separated by commas"
+        if (libs != null && libs != this.libs) found += "its $LIBS is $libs, not this build's ${this.libs}"
         return found
     }
 
@@ -135,21 +142,25 @@ class PluginManifestRules(private val id: String, private val versionCode: Int, 
         }
     }
 
-    private companion object {
-        const val MIN_SDK = 26
-        const val ID = "nzs.plugin.id"
-        const val ENTRY = "nzs.plugin.entry"
-        const val API_MAJOR = "nzs.plugin.api.major"
-        const val API_MINOR = "nzs.plugin.api.minor"
-        const val LIBS = "nzs.plugin.libs"
-        val COMPONENTS = setOf("activity", "activity-alias", "service", "receiver", "provider")
-        val PERMISSIONS = setOf(
+    companion object {
+        /** The entry class's name the manifest gives, as the host reads it (one string meta-data), or null where it gives none. */
+        fun entry(xmltree: String): String? = XmlTree.parse(xmltree)
+            .filter { it.name == "meta-data" && it.parent?.name == "application" && it.attributes["name"]?.text == ENTRY }
+            .singleOrNull()?.attributes?.get("value")?.takeIf { it.stored == Stored.Text }?.text
+
+        private const val MIN_SDK = 26
+        private const val ID = "nzs.plugin.id"
+        private const val ENTRY = "nzs.plugin.entry"
+        private const val API_MAJOR = "nzs.plugin.api.major"
+        private const val API_MINOR = "nzs.plugin.api.minor"
+        private const val LIBS = "nzs.plugin.libs"
+        private val COMPONENTS = setOf("activity", "activity-alias", "service", "receiver", "provider")
+        private val PERMISSIONS = setOf(
             "uses-permission", "uses-permission-sdk-23", "uses-permission-sdk-m", "permission", "permission-group", "permission-tree",
         )
-        val PACKAGE_LINE = Regex("""^package: name='([^']*)' versionCode='([^']*)'""", RegexOption.MULTILINE)
-        val BADGED_META_DATA = Regex("""^meta-data: name='([^']*)' value='([^']*)'""", RegexOption.MULTILINE)
-        val RESOURCE_LINE = Regex("""^\s*resource 0x[0-9a-f]+ (\S+)""", RegexOption.MULTILINE)
-        val CLASS_NAME = Regex("""[A-Za-z_$][A-Za-z0-9_$]*(\.[A-Za-z_$][A-Za-z0-9_$]*)+""")
-        val LIBS_FORM = Regex("""[a-z0-9.-]+=[0-9A-Za-z.+-]+(,[a-z0-9.-]+=[0-9A-Za-z.+-]+)*""")
+        private val PACKAGE_LINE = Regex("""^package: name='([^']*)' versionCode='([^']*)'""", RegexOption.MULTILINE)
+        private val BADGED_META_DATA = Regex("""^meta-data: name='([^']*)' value='([^']*)'""", RegexOption.MULTILINE)
+        private val RESOURCE_LINE = Regex("""^\s*resource 0x[0-9a-f]+ (\S+)""", RegexOption.MULTILINE)
+        private val CLASS_NAME = Regex("""[A-Za-z_$][A-Za-z0-9_$]*(\.[A-Za-z_$][A-Za-z0-9_$]*)+""")
     }
 }
