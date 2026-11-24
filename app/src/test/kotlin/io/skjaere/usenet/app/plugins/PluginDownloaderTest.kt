@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.time.Instant
+import java.util.Locale
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -164,6 +165,18 @@ class PluginDownloaderTest {
         assertEquals("Not enough space on this phone. Free 0.1 MB, then try again.", PluginInstaller.spaceLine(byte.toFree, television = false))
         assertEquals(emptyList(), server.requests.map { it.path }, "nothing asked")
         assertIs<Download.Done>(downloader(server) { 1_400_000 }.download("harbor", listed) {})
+    }
+
+    /** The app's words are English with a decimal point, as the card's own size line is, whatever the device's language. */
+    @Test
+    fun `the space line's MB keep their decimal point on a device in another language`() {
+        val saved = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.GERMANY)
+            assertEquals("Not enough space on this phone. Free 0.7 MB, then try again.", PluginInstaller.spaceLine(700_000, television = false))
+        } finally {
+            Locale.setDefault(saved)
+        }
     }
 
     @Test

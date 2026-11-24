@@ -259,11 +259,13 @@ class PluginInstaller(
 
         /**
          * Too little space (L633): "Not enough space on this phone. Free 0.7 MB, then try again." ("this TV" on a TV),
-         * [toFree] in MB with one decimal, rounded up, so freeing that much is enough.
+         * [toFree] in MB with one decimal, rounded up, so freeing that much is enough; a decimal point in any language, as
+         * the card's size line has.
          */
         fun spaceLine(toFree: Long, television: Boolean): String {
             val tenths = ((toFree + 99_999) / 100_000).coerceAtLeast(1)
-            return "Not enough space on this ${if (television) "TV" else "phone"}. Free ${"%.1f".format(tenths / 10.0)} MB, then try again."
+            val mb = String.format(Locale.ROOT, "%.1f", tenths / 10.0)
+            return "Not enough space on this ${if (television) "TV" else "phone"}. Free $mb MB, then try again."
         }
 
         /** A recent update's line (L621): "Updated to 1.2 today", or "Updated to 1.2 · 20 Nov" from an earlier day. */
