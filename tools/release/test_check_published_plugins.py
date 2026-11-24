@@ -3,8 +3,8 @@
 
 Run: python3 -I -B -m unittest discover -s tools/release -p 'test_*.py'. Each test lays out a repository's top folder in
 a temp folder, the app's PluginSource.kt copied from this tree (so the address read is the app's own), and puts a fake
-curl on the PATH that answers from files the test sets, a fake SDK's apksigner and a fake ./gradlew, each logging what
-it was given. The plugins and their bytes are invented. Nothing here reaches GitHub.
+curl on the PATH that answers from files the test sets, a fake sleep that waits for nothing, a fake SDK's apksigner and a
+fake ./gradlew, each logging what it was given. The plugins and their bytes are invented. Nothing here reaches GitHub.
 """
 import hashlib
 import json
@@ -24,30 +24,47 @@ DIGEST = "ab" * 32
 OTHER_DIGEST = "cd" * 32
 RELEASES = "https://github.com/skjaere/nzstreamer/releases/download/"
 
-# Answers from $FAKE_DIR/answers.tsv (address, status, file), writes the file to -o and the status for -w, as curl does,
-# and logs its arguments one to a line, a blank line after each call.
+# Answers from $FAKE_DIR/answers.tsv (address, status, file, Retry-After): an address's first line for its first call,
+# its second for the second, its last for every one after; no line, or a status of 000, is no answer. It writes the file
+# to -o, the head's Retry-After to -D and the status for -w, as curl does, and logs its arguments one to a line, a blank
+# line after each call.
 FAKE_CURL = r"""#!/bin/bash
 printf '%s\n' "$@" "" >> "$FAKE_DIR/curl.log"
-out='' write='' fail=false address=''
+out='' write='' fail=false address='' head=''
 while (($#)); do
     case $1 in
         -o) out=$2; shift 2 ;;
         -w) write=$2; shift 2 ;;
+        -D) head=$2; shift 2 ;;
         -f | --fail) fail=true; shift ;;
         --) address=$2; shift 2 ;;
         *) shift ;;
     esac
 done
-answer=$(awk -F '\t' -v a="$address" '$1 == a { print $2 "\t" $3 }' "$FAKE_DIR/answers.tsv")
-[[ -n $answer ]] || { echo "curl: (6) Could not resolve host" >&2; [[ -n $write ]] && printf '000'; exit 6; }
-IFS=$'\t' read -r status file <<<"$answer"
+calls=$(grep -cxF -- "$address" "$FAKE_DIR/curl.log")
+answer=$(awk -F '\t' -v a="$address" -v n="$calls" '$1 == a { last = $2 "|" $3 "|" $4; if (++seen == n) { print last; found = 1; exit } }
+    END { if (!found && seen) print last }' "$FAKE_DIR/answers.tsv")
+IFS='|' read -r status file retry <<<"$answer"
+if [[ -z $answer || $status == 000 ]]; then
+    echo "curl: (6) Could not resolve host" >&2
+    [[ -n $write ]] && printf '000'
+    exit 6
+fi
 if ((status >= 400)) && $fail; then
     echo "curl: (22) The requested URL returned error: $status" >&2
     exit 22
 fi
+if [[ -n $head ]]; then
+    { printf 'HTTP/1.1 %s Answer\r\n' "$status"; [[ -z $retry ]] || printf 'Retry-After: %s\r\n' "$retry"; printf '\r\n'; } > "$head"
+fi
 [[ -n $file && -n $out ]] && cp "$FAKE_DIR/$file" "$out"
 [[ -n $write ]] && printf '%s' "$status"
 exit 0
+"""
+
+# A sleep that waits for nothing: it logs how long it was asked to wait, so a retry's wait is seen and costs no time.
+FAKE_SLEEP = r"""#!/bin/bash
+printf '%s\n' "$*" >> "$FAKE_DIR/sleep.log"
 """
 
 FAKE_GRADLEW = r"""#!/bin/bash
@@ -87,6 +104,7 @@ class CheckPublishedPluginsTest(unittest.TestCase):
         self.write("tools/beta-cert.sha256", DIGEST + "\n")
         self.write("gradlew", FAKE_GRADLEW, executable=True)
         self.write("fake/bin/curl", FAKE_CURL, executable=True)
+        self.write("fake/bin/sleep", FAKE_SLEEP, executable=True)
         self.write("sdk/build-tools/34.0.0/apksigner", "#!/bin/bash\nexit 97\n", executable=True)
         self.write("sdk/build-tools/36.0.0/apksigner", FAKE_APKSIGNER, executable=True)
         self.write("fake/certs.txt", certs(DIGEST))
@@ -105,12 +123,12 @@ class CheckPublishedPluginsTest(unittest.TestCase):
             os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR)
         return path
 
-    def answer(self, address, status, data=None):
+    def answer(self, address, status, data=None, retry_after=""):
         name = ""
         if data is not None:
             name = f"answer-{len(self.answers)}"
             self.write(f"fake/{name}", data, binary=True)
-        self.answers.append(f"{address}\t{status}\t{name}")
+        self.answers.append(f"{address}\t{status}\t{name}\t{retry_after}")
         self.write("fake/answers.tsv", "".join(line + "\n" for line in self.answers))
 
     def listed(self, builds, generated="2026-12-02T08:30:00Z", fmt=1):
@@ -134,6 +152,12 @@ class CheckPublishedPluginsTest(unittest.TestCase):
     def run_check(self, *args):
         return subprocess.run(["bash", SCRIPT, *args], cwd=self.root, env=self.env, capture_output=True, text=True,
                               timeout=60)
+
+    def forget(self, *logs):
+        """The fakes' logs named emptied, as before the script first ran."""
+        for log in logs:
+            if os.path.exists(os.path.join(self.fake, log)):
+                os.remove(os.path.join(self.fake, log))
 
     def calls(self, log):
         path = os.path.join(self.fake, log)
@@ -232,6 +256,45 @@ class CheckPublishedPluginsTest(unittest.TestCase):
                 done = self.run_check()
                 self.assertEqual(1, done.returncode, done.stdout + done.stderr)
                 self.assertEqual([], self.calls("gradle.log"))
+
+    def test_a_busy_github_or_no_answer_is_asked_again_twice_at_most(self):
+        # A 503, then the list; a 429 whose Retry-After says 30 s, then the list; no answer, then the list.
+        for case, first, retry, waits in (("a 503", 503, "", ["5"]), ("a 429 with Retry-After", 429, "30", ["30"]),
+                                          ("a Retry-After of an hour", 503, "3600", ["60"]), ("no answer", "000", "", ["5"])):
+            with self.subTest(case):
+                self.answers = []
+                self.forget("curl.log", "gradle.log", "sleep.log")
+                self.answer(list_address(), first, retry_after=retry)
+                self.answer(list_address(), 404)
+                done = self.run_check()
+                self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+                self.assertIn("::notice::", done.stdout)
+                self.assertEqual(2, len(self.calls("curl.log")))
+                self.assertEqual(waits, self.calls("sleep.log"), "the wait: GitHub's, a minute at most, else a few seconds")
+        # Busy every time: it fails, after three asks.
+        self.answers = []
+        self.forget("curl.log", "sleep.log")
+        self.answer(list_address(), 503)
+        done = self.run_check()
+        self.assertEqual(1, done.returncode, done.stdout + done.stderr)
+        self.assertIn("503", done.stderr)
+        self.assertEqual(3, len(self.calls("curl.log")))
+        self.assertEqual(["5", "10"], self.calls("sleep.log"))
+        # Any other answer isn't asked again.
+        self.answers = []
+        self.forget("curl.log", "sleep.log")
+        self.answer(list_address(), 403)
+        self.assertEqual(1, self.run_check().returncode)
+        self.assertEqual(1, len(self.calls("curl.log")))
+        self.assertEqual([], self.calls("sleep.log"))
+
+    def test_a_download_is_tried_again_by_curl_on_any_failure(self):
+        self.listed([("kestrel", "1.0.1", "1.0")])
+        self.assertEqual(0, self.run_check().returncode)
+        _, download = self.calls("curl.log")
+        joined = " ".join(download)
+        self.assertIn("--retry 3", joined)
+        self.assertIn("--retry-all-errors", download)
 
     def test_no_build_of_the_trees_api_passes_with_a_notice(self):
         self.listed([("kestrel", "2.0.0", "2.0")])

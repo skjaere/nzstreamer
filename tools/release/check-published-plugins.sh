@@ -4,7 +4,9 @@
 # Run it in the repository's top folder. It reads the plugin list at the app's own address, PluginSource.LIST in
 # app/src/main/kotlin/io/skjaere/usenet/app/plugins/PluginSource.kt, so the address lives in one place, as the app reads
 # it: https alone, no redirect followed, 256 KiB at most, the User-Agent NZStreamer. A 404 passes with a notice: no list
-# is published until the first plugin release makes the plugin-index branch's file.
+# is published until the first plugin release makes the plugin-index branch's file. A 429, a 5xx or no answer is asked
+# again, twice at most, after GitHub's Retry-After (a minute at most) or a few seconds, so a passing hiccup isn't a failed
+# check; anything else but a 200 fails at once, and so does a third busy answer. Each download is tried again by curl.
 # Each version the list gives that was built against the tree's plugin API major (core/plugin/plugin-api.txt) is
 # downloaded as the app downloads one (https on every hop, three redirects at most, the list's size as a cap), and must
 # have the list's size and SHA-256 and one signer, the beta key (tools/beta-cert.sha256, or the --digest-file given).
@@ -73,15 +75,27 @@ tools=$(printf '%s\n' "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# The list, as the app asks for it.
-status=$(curl -sS --proto =https --max-filesize 262144 --max-time 60 -A NZStreamer -o "$work/index.json" \
-    -w '%{http_code}' -- "$list") || fail "couldn't read the plugin list at $list"
+# The list, as the app asks for it; asked again while GitHub is busy or gives no answer, three times at most.
+for try in 1 2 3; do
+    rm -f "$work/head"
+    status=$(curl -sS --proto =https --max-filesize 262144 --max-time 60 -A NZStreamer -D "$work/head" \
+        -o "$work/index.json" -w '%{http_code}' -- "$list") || status=000
+    case $status in
+        429 | 5?? | 000) ((try < 3)) || break ;;
+        *) break ;;
+    esac
+    wait=$({ sed -n -E 's/^[Rr]etry-[Aa]fter: *([0-9]+)\r?$/\1/p' "$work/head" 2>/dev/null || true; } | tail -1)
+    wait=${wait:-$((try * 5))}
+    ((wait <= 60)) || wait=60
+    sleep "$wait"
+done
 case $status in
     404)
         notice "No plugin list is published yet ($list answers 404): no plugin to check against this build"
         exit 0
         ;;
     200) ;;
+    000) fail "couldn't read the plugin list at $list" ;;
     *) fail "the plugin list at $list answered $status" ;;
 esac
 builds=$(python3 -I -B "$here/plugin_index.py" builds --list "$work/index.json" --releases "$origin$path" \
@@ -96,7 +110,7 @@ count=0
 while IFS=$'\t' read -r id code url size sha; do
     file=$work/apks/$id-$code.apk
     curl -sS -f -L --proto =https --proto-redir =https --max-redirs 3 --max-filesize "$size" --max-time 300 \
-        -A NZStreamer -o "$file" -- "$url" || fail "couldn't download $id $code"
+        --retry 3 --retry-all-errors -A NZStreamer -o "$file" -- "$url" || fail "couldn't download $id $code"
     [[ $(stat -c %s "$file") == "$size" ]] || fail "$id $code is not the list's size"
     [[ $(sha256sum "$file" | cut -d' ' -f1) == "$sha" ]] || fail "$id $code doesn't have the list's SHA-256"
     certs=$("$tools/apksigner" verify --print-certs "$file") || fail "apksigner doesn't verify $id $code"
