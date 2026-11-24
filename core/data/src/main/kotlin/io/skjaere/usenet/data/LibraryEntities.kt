@@ -335,6 +335,9 @@ data class ShowMark(val tmdbId: Int, val name: String, val episodes: List<Pair<I
 
 data class MovieMark(val tmdbId: Int, val title: String)
 
+/** A plugin's item to mark: its watch [key] ([WatchKey.item]), and the [title] stored for one with no state yet. */
+data class ItemMark(val key: String, val title: String)
+
 object WatchKey {
     fun episode(showTmdbId: Int, season: Int, episode: Int) = "episode:tmdb:$showTmdbId:s$season:e$episode"
     fun movie(tmdbId: Int) = "movie:tmdb:$tmdbId"

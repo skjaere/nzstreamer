@@ -635,7 +635,8 @@ class PluginRegistry(
         /**
          * The app's registry: the plugins' files under its own storage, Android's reading of their archives, its secrets,
          * the crash guard's files beside the plugins', the app's indexers searched for each plugin through [search], each
-         * plugin's items played through [play], and each plugin's GETs through [http], the app's service client.
+         * plugin's items played through [play] and their watch state kept through [watch], and each plugin's GETs through
+         * [http], the app's service client.
          */
         fun of(
             context: Context,
@@ -643,11 +644,12 @@ class PluginRegistry(
             scope: CoroutineScope,
             search: PluginSearchService? = null,
             play: PluginPlayService? = null,
+            watch: PluginWatchService? = null,
             http: (() -> HttpClient)? = null,
         ): PluginRegistry {
             val store = PluginStore(context.filesDir, context.cacheDir, secrets)
             val loader = PluginLoader(PluginVerifier(AndroidArchiveReader(context.packageManager)))
-            return PluginRegistry(store, loader, PluginHosts(store, secrets, search = search, http = http, play = play), PluginCrashGuard(store.root), scope)
+            return PluginRegistry(store, loader, PluginHosts(store, secrets, search = search, http = http, play = play, watch = watch), PluginCrashGuard(store.root), scope)
         }
     }
 }

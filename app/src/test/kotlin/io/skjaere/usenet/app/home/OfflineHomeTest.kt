@@ -17,6 +17,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * L410, L450: Home offline, with no network, on a phone or tablet with a finished download. The line "Offline ·
@@ -54,6 +55,15 @@ class OfflineHomeTest {
             WatchState(WatchKey.release("n-lantern", 0), WatchKind.Release, title = "Lantern.Field.S01E02.720p.WEB.h264-GRP", positionMs = 900_000, durationMs = 3_000_000, updatedAt = 0),
         ),
         "Resume Lantern Field S01E02",
+    )
+
+    /** A plugin's item in progress (L626): it has no download, and plays on this phone whatever is chosen. */
+    private val race = UpNextRow(
+        "Grand Prix of Kestrel · Race", "1 h 12 min left", 0.28f, false, null,
+        UpNextPlay.Resume(
+            WatchState(WatchKey.item("kestrel", "gp-kestrel:race"), WatchKind.Item, title = "Grand Prix of Kestrel · Race", positionMs = 1_680_000, durationMs = 6_000_000, updatedAt = 0),
+        ),
+        "Resume Grand Prix of Kestrel · Race",
     )
 
     private val upNext = listOf(meridian, harbor, crown, lantern)
@@ -119,6 +129,15 @@ class OfflineHomeTest {
         assertEquals("Copper Crown isn't downloaded. It plays once you're online.", OfflineHome.bar(crown))
         // A release by what its name says, as its Play's words name it.
         assertEquals("Lantern Field S01E02 isn't downloaded. It plays once you're online.", OfflineHome.bar(lantern))
+    }
+
+    /** L626: offline, a plugin's item greys as it has no download, with a TV chosen too, and its bar names its stored title. */
+    @Test
+    fun `offline a plugin's item greys whatever is chosen, its bar naming it by its stored title`() {
+        listOf(PlayTarget.Phone, tv, cast).forEach { playOn ->
+            assertTrue(race.key in assertNotNull(OfflineHome.of(upNext + race, downloads, downloaded, offline = true, playOn = playOn)).greyed, "greyed with $playOn")
+        }
+        assertEquals("Grand Prix of Kestrel · Race isn't downloaded. It plays once you're online.", OfflineHome.bar(race))
     }
 
     private companion object {

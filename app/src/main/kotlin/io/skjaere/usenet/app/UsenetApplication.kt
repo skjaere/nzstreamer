@@ -95,6 +95,7 @@ import io.skjaere.usenet.app.plugins.PluginList
 import io.skjaere.usenet.app.plugins.PluginPlayService
 import io.skjaere.usenet.app.plugins.PluginRegistry
 import io.skjaere.usenet.app.plugins.PluginSearchService
+import io.skjaere.usenet.app.plugins.PluginWatchService
 import io.skjaere.usenet.app.plugins.named
 import io.skjaere.usenet.app.refresh.LibrarySummaryStore
 import io.skjaere.usenet.app.refresh.RateGate
@@ -498,13 +499,16 @@ class AppContainer(private val context: Context) {
         appScope.launch(Dispatchers.Main.immediate) { playRouter.playItem(item, releases) }
     }
 
+    /** Plugins' items' watch state (L594): the library's, each plugin's under its own id. */
+    val pluginWatch = PluginWatchService({ keys -> library.observeStates(keys) }) { items, watched -> library.markItems(items, watched) }
+
     /**
      * The installed plugins (L616, L619): their files read as the process starts ([UsenetApplication.onCreate]), their code
      * loaded only once MainActivity is first created, never in a process started for a service or a receiver alone. Their
-     * hosts search through [pluginSearch], play through [pluginPlay] and get through the services' client (L631), made only
-     * when first asked.
+     * hosts search through [pluginSearch], play through [pluginPlay], keep what was watched through [pluginWatch] and get
+     * through the services' client (L631), made only when first asked.
      */
-    val plugins: PluginRegistry = PluginRegistry.of(context, data.secrets.named(), appScope, pluginSearch, pluginPlay) { serviceHttp.value }
+    val plugins: PluginRegistry = PluginRegistry.of(context, data.secrets.named(), appScope, pluginSearch, pluginPlay, pluginWatch) { serviceHttp.value }
 
     /**
      * The plugin list on GitHub (L620): read as Settings › Plugins opens and once a day while a plugin is installed, never

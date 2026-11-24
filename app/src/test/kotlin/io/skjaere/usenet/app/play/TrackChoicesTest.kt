@@ -34,6 +34,8 @@ class TrackChoicesTest {
         assertNull(TrackChoices.showOf(launch(WatchTarget(WatchKind.Movie, "The Quiet Orbit", movieTmdbId = 900010))))
         assertNull(TrackChoices.showOf(launch(WatchTarget(WatchKind.Release, "Harbor.Lights.S01E01"))))
         assertNull(TrackChoices.showOf(launch(WatchTarget(WatchKind.Episode, "Harbor Lights S01E01"))))
+        // A plugin's item (L626) is no show's: it remembers no choice for one.
+        assertNull(TrackChoices.showOf(launch(WatchTarget(WatchKind.Item, "Grand Prix of Kestrel · Race", itemKey = "item:kestrel:gp-kestrel:race"))))
         assertNull(TrackChoices.showOf(null))
     }
 

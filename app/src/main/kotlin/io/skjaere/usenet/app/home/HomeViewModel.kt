@@ -227,7 +227,10 @@ class HomeViewModel(private val container: AppContainer, private val collectionR
         }
     }
 
-    /** A row's Mark watched, for an episode or film in progress ([UpNextEdit.markWatched]), with Undo; nothing for another row. */
+    /**
+     * A row's Mark watched, for an episode, film or plugin's item in progress ([UpNextEdit.markWatched]), with Undo; nothing
+     * for another row.
+     */
     fun markWatched(row: UpNextRow) {
         val edit = UpNextEdit.markWatched(row) ?: return
         _focusAfter.value = edit.focusAfter(shownKeys())
@@ -236,6 +239,7 @@ class HomeViewModel(private val container: AppContainer, private val collectionR
                 val snapshot = when (edit) {
                     is UpNextEdit.MarkEpisode -> library.markShows(listOf(edit.mark), watched = true)
                     is UpNextEdit.MarkMovie -> library.markMovies(listOf(edit.mark), watched = true)
+                    is UpNextEdit.MarkItem -> library.markItems(listOf(edit.mark), watched = true)
                 }
                 undoTimer.offer(edit.message, Undoable.Marked(snapshot))
             }

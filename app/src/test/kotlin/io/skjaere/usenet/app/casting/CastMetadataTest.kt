@@ -174,6 +174,22 @@ class CastMetadataTest {
         listOf("Harbor Lights", "Low Water", "still-hl").forEach { assertFalse(it in printed, "\"$it\" printed") }
     }
 
+    /**
+     * L626: a plugin's item is said by the title stored as it played and its line, as a film is, with no picture: nothing
+     * looks one up for an item's key ([io.skjaere.usenet.app.link.TvPlayingDeps.art] reads TMDB's keys alone). It is no
+     * release's name, which the device would tell every sender.
+     */
+    @Test
+    fun `a plugin's item is said by its title and line, as a film, with no picture`() {
+        val key = WatchKey.item("kestrel", "gp-kestrel:race")
+        val item = PlayerLaunch(uri, "Grand Prix of Kestrel · Race", "Round 20", key, WatchTarget(WatchKind.Item, "Grand Prix of Kestrel · Race", itemKey = key), release)
+        val said = CastMetadata.of(item, APP, art = null, showArtwork = true)
+        assertEquals(CastMetadata("Grand Prix of Kestrel · Race", "Round 20", CastMetadata.Kind.Film, imageUrl = null), said)
+        assertEquals(MediaMetadata.MEDIA_TYPE_MOVIE, said.mediaType)
+        assertEquals(said, CastMetadata.starting(item.title, item.subtitle, item.watch, APP))
+        assertNothingOfTheRelease(said)
+    }
+
     private companion object {
         const val APP = "NZStreamer"
         const val DEVICE = "Kitchen display"

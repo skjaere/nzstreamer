@@ -90,8 +90,8 @@ import kotlinx.coroutines.launch
  * goes back to the element last focused. When Up next changes under the focus (a play reorders it), the focused card
  * stays on screen, and one gone hands the focus to the next card, else the one before, else Home's first focus.
  *
- * A held OK on a card opens its menu ([edits], L24): Remove from Up next, and Mark watched for an episode or film in
- * progress. Then the Undo bar at the foot has the focus; as it goes, the focus goes to the next card, else the one
+ * A held OK on a card opens its menu ([edits], L24): Remove from Up next, and Mark watched for an episode, film or
+ * plugin's item in progress. Then the Undo bar at the foot has the focus; as it goes, the focus goes to the next card, else the one
  * before, else Home's first focus; after Undo, to the card brought back.
  */
 @Composable

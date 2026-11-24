@@ -1,6 +1,7 @@
 package io.skjaere.usenet.app.home
 
 import io.skjaere.usenet.data.CollectedShow
+import io.skjaere.usenet.data.ItemMark
 import io.skjaere.usenet.data.MovieMark
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.ShowMark
@@ -71,12 +72,20 @@ class UpNextEditTest {
         assertNull(UpNextEdit.markWatched(northbound))
     }
 
-    /** Nothing marks a plugin's item yet (L626): its row offers Remove only, taken out by the item's own key. */
+    /**
+     * L594, L626: a plugin's item in progress is marked watched alone, by its own key and stored title, and leaves Up next
+     * as a film does; the Undo bar names it, and its Undo puts back what the mark replaced ([io.skjaere.usenet.data.WatchSnapshot],
+     * LibraryRepositoryTest on a device). It is taken out of Up next by its own key.
+     */
     @Test
-    fun `a plugin item offers no mark watched yet, and is taken out by what played`() {
-        assertNull(UpNextEdit.markWatched(kestrel))
+    fun `a plugin's item is marked watched alone, with Undo, and taken out by what played`() {
         val key = WatchKey.item("skeleton", "ev-1:main-card")
+        assertEquals(UpNextEdit.MarkItem(key, ItemMark(key, "Kestrel Cup · Main card"), "Marked “Kestrel Cup · Main card” watched"), UpNextEdit.markWatched(kestrel))
         assertEquals(UpNextEdit.Remove(key, showTmdbId = null, watchKey = key, message = "Removed “Kestrel Cup · Main card” from Up next"), UpNextEdit.remove(kestrel))
+        // It leaves Up next as it is marked: the focus goes to the next row, else the one before.
+        val keys = listOf(harbor, kestrel, orbit).map { it.key }
+        assertEquals(orbit.key, UpNextEdit.markWatched(kestrel)!!.focusAfter(keys))
+        assertEquals(harbor.key, UpNextEdit.markWatched(kestrel)!!.focusAfter(listOf(harbor.key, kestrel.key)))
     }
 
     /** As the collection's: the row after, else the one before; a show marked keeps its row (its next episode), so the focus stays. */

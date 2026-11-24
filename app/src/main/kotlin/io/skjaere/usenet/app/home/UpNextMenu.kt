@@ -48,8 +48,8 @@ const val REMOVE_FROM_UP_NEXT = "Remove from Up next"
 const val MARK_WATCHED = "Mark watched"
 
 /**
- * What [row]'s menu offers, in order, and does (L21, W3): Remove from Up next on every row, Mark watched on an episode or a
- * film in progress. No Remove from collection (the row comes from what was played) and no Go to show.
+ * What [row]'s menu offers, in order, and does (L21, W3): Remove from Up next on every row, Mark watched on an episode, a
+ * film or a plugin's item in progress. No Remove from collection (the row comes from what was played) and no Go to show.
  */
 internal fun UpNextEdits.items(row: UpNextRow): List<Pair<String, () -> Unit>> = listOfNotNull(
     REMOVE_FROM_UP_NEXT to { remove(row) },

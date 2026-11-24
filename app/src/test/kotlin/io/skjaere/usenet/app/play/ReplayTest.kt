@@ -476,6 +476,43 @@ class ReplayTest {
         positionMs = 900_000, durationMs = 6_000_000, lastPlayedAt = 10, release = remembered.copy(title = "Northbound.2019.1080p.BluRay.x264-GRP", fileIndex = 0), updatedAt = 10,
     )
 
+    /** A plugin's item in progress (L626), its release remembered with the file that played. */
+    private val race = WatchState(
+        WatchKey.item("kestrel", "gp-kestrel:race"), WatchKind.Item, title = "Grand Prix of Kestrel · Race",
+        positionMs = 1_680_000, durationMs = 6_000_000, lastPlayedAt = 10, updatedAt = 10,
+        release = remembered.copy(title = "Kestrel.Grand.Prix.2026.Race.1080p.WEB.h264-KESTREL", fileIndex = 0, fileName = "Kestrel.Grand.Prix.2026.Race.mkv"),
+    )
+
+    /**
+     * L594, L626: Up next's Resume of a plugin's item needs no plugin. The release that played it plays again, its file as it
+     * played (by its name; gone, a release of one video plays that one, else nothing, as for a release played without
+     * TMDB), from where it stopped, under the item's key. It is named by its stored title, never parsed as a release's
+     * name, and it has no search: the host keeps no words for an item, so a failure offers no Search.
+     */
+    @Test
+    fun `a plugin's item resumes its release and file under its own key, and fails with no search`() = runBlocking<Unit> {
+        val plan = ResumePlan.of(race)
+        val request = assertNotNull(plan.request)
+        assertEquals("Grand Prix of Kestrel · Race" to null, request.title to request.subtitle)
+        val watch = WatchTarget(WatchKind.Item, "Grand Prix of Kestrel · Race", itemKey = race.key)
+        assertEquals(watch, request.watch)
+        assertEquals(race.key to race.release, request.resumeKey to request.remembered)
+        assertEquals(RememberedFile(0, FilePicker.Largest, name = "Kestrel.Grand.Prix.2026.Race.mkv", size = remembered.fileSize, wanted = SoleVideo), request.picker)
+        assertNull(plan.episode)
+        assertNull(watch.episodeTarget)
+        assertEquals(race.key, Replay.watchKey(request.watch, assertNotNull(race.release), request.resumeKey))
+        val failed = PlayState.Failed("Grand Prix of Kestrel · Race", null, listOf(assertNotNull(race.release).title to "Passworded"), notTried = 0)
+        val shown = assertNotNull(plan.run(play = { failed }, searchEpisode = { _, _ -> error("no episode") }))
+        assertEquals(failed, shown)
+        assertNull(shown.searchRoute())
+        val none = ResumePlan.of(race.copy(release = null)).run(play = { error("nothing to play") }, searchEpisode = { _, _ -> error("no episode") })
+        assertEquals(
+            PlayState.Failed("Grand Prix of Kestrel · Race", null, listOf("Grand Prix of Kestrel · Race" to "No release is remembered for it"), notTried = 0,
+                remote = listOf("No release is remembered for it")),
+            none,
+        )
+    }
+
     @Test
     fun `resuming an episode plays the release that played it, its file, against the TMDB episode`() {
         val plan = ResumePlan.of(episode)

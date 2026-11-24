@@ -516,6 +516,26 @@ class PlayRouterTest {
         assertEquals("item Grand Prix of Kestrel · Race cast to Hallway speaker", here.last())
     }
 
+    /**
+     * L594, L626: Up next's Resume of a plugin's item plays on this phone, a TV chosen or not: a TV has nothing to search it
+     * by, and can't play an item yet. Its play button says so, never the TV; a Cast device plays it, as the phone has its
+     * release.
+     */
+    @Test
+    fun `Up next's Resume of a plugin's item plays on this phone, a TV chosen or not, and casts`() {
+        val item = WatchState(race.watchKey, WatchKind.Item, title = race.title, positionMs = 1_680_000, durationMs = 6_000_000, updatedAt = now)
+        val row = UpNextRow(race.title, "1 h 12 min left", 0.28f, new = false, posterPath = null, play = UpNextPlay.Resume(item), playLabel = "Resume ${race.title}")
+        assertFalse(UpNextPlay.Resume(item).goesToTv)
+        tvChosen()
+        assertNull(row.playsOn(target))
+        router.upNext(UpNextPlay.Resume(item))
+        castChosen()
+        assertEquals(target, row.playsOn(target))
+        router.upNext(UpNextPlay.Resume(item))
+        assertEquals(listOf("resume item:kestrel:gp-kestrel:race", "resume item:kestrel:gp-kestrel:race cast to Kitchen display"), here)
+        assertTrue(onTv.isEmpty() && lookups.isEmpty())
+    }
+
     /** W44 (i), L147: Import's file plays here, as before, with This phone or a TV chosen: a TV can't play an NZB of this phone's. */
     @Test
     fun `Import's file plays here with This phone or a TV chosen`() {

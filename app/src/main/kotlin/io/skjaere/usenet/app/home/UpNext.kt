@@ -27,7 +27,7 @@ sealed interface UpNextPlay {
     data class NextEpisode(val show: CollectedShow, val episode: EpisodeRef) : UpNextPlay
 }
 
-/** One row of Home's Up next: a show, film or release. */
+/** One row of Home's Up next: a show, film, release or plugin's item. */
 data class UpNextRow(
     val title: String,
     /** "S02E05 · The Long Tide · 30 min left", "S03E01 · Low Water · 12 unwatched". */
@@ -192,6 +192,11 @@ object UpNext {
                 state.title, listOfNotNull(movie?.year?.toString(), left).joinToString(" · "), progress, false, movie?.posterPath, UpNextPlay.Resume(state),
                 "Resume ${state.title}", landscapePath = movie?.backdropPath,
             )
+        }
+        // A plugin's item (L594, L626): the title stored as it played, never parsed, the time left alone as its line, the
+        // plain tile; nothing gives it a picture.
+        if (state.kind == WatchKind.Item) {
+            return UpNextRow(state.title, left.orEmpty(), progress, false, null, UpNextPlay.Resume(state), "Resume ${state.title}")
         }
         // A release played without TMDB: named by what its name says.
         val name = ReleaseName(state.title)

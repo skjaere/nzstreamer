@@ -377,11 +377,12 @@ private fun RecentChip(recent: RecentSearch, onClick: () -> Unit) {
 
 /**
  * The row plays when tapped, as its Play button does; they sit side by side so a remote reaches both, and its ⋮ after them
- * (L21): Remove from Up next, and Mark watched for an episode or film in progress ([edits]). A long press on the row opens
- * the same menu, at the ⋮; TalkBack has its items as the row's actions. [modifier] goes on the row's playing part. With a
- * TV chosen ([playOn]) Play says so, and greys while that TV's NZStreamer isn't open (PtPhoneWhere B). [downloaded]: its
- * title's file is downloaded (L409), marked by the 16 dp tray with its tick after the title, which TalkBack hears as
- * "Downloaded"; its poster then that download's ([stored]) stored copy while fresh (L411), so it shows offline too.
+ * (L21): Remove from Up next, and Mark watched for an episode, film or plugin's item in progress ([edits]). A long press
+ * on the row opens the same menu, at the ⋮; TalkBack has its items as the row's actions. [modifier] goes on the row's
+ * playing part. With a TV chosen ([playOn]) Play says so, and greys while that TV's NZStreamer isn't open (PtPhoneWhere
+ * B). [downloaded]: its title's file is downloaded (L409), marked by the 16 dp tray with its tick after the title, which
+ * TalkBack hears as "Downloaded"; its poster then that download's ([stored]) stored copy while fresh (L411), so it shows
+ * offline too.
  * [greyed] offline (L410): its poster and words dimmed and read as dimmed, its Play greyed; its tap ([onPlay], Home's bar
  * then) and its ⋮ as they are.
  */

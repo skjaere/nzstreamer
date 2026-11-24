@@ -211,6 +211,10 @@ interface WatchStateDao {
     @Query("SELECT * FROM watch_state WHERE `key` IN (:keys)")
     suspend fun getAll(keys: List<String>): List<WatchState>
 
+    /** The live states of [keys], again as the table changes. At most 999 keys before Android 11: callers chunk. */
+    @Query("SELECT * FROM watch_state WHERE deleted = 0 AND `key` IN (:keys)")
+    fun observeAll(keys: List<String>): Flow<List<WatchState>>
+
     @Query("SELECT * FROM watch_state WHERE kind = 'Episode' AND deleted = 0 AND showTmdbId IN (:ids)")
     suspend fun episodesOf(ids: List<Int>): List<WatchState>
 

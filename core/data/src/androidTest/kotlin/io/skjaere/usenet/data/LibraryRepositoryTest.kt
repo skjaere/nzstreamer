@@ -6,10 +6,12 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.link.FinalKind
 import io.skjaere.usenet.link.LinkMessage
+import kotlinx.coroutines.async
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -348,6 +350,75 @@ class LibraryRepositoryTest {
 
         db.watchStates().pruneReleases(0)
         assertEquals(listOf(newer, key), library.continueWatching.first().map { it.key })
+    }
+
+    /**
+     * L594, L626: a plugin's items marked watched as a film is: one in progress loses its place and leaves Continue watching,
+     * one with no state yet is made, an item, with the title given, and one already so isn't written again. The mark's
+     * snapshot undoes it, while each row is as the mark left it. Unwatched changes only items that have a state.
+     */
+    @Test
+    fun pluginItemsAreMarkedWatchedAndTheMarkUndone() = runBlocking<Unit> {
+        val race = WatchKey.item("kestrel", "gp-kestrel:race")
+        val sprint = WatchKey.item("kestrel", "gp-kestrel:sprint")
+        val release = RememberedRelease("fake", "gp-race", "Kestrel.Grand.Prix.2026.Race.1080p.WEB.h264-KESTREL", null, 0, "gp1")
+        time = 1_000
+        library.recordProgress(WatchState(race, WatchKind.Item, title = "Grand Prix of Kestrel · Race", updatedAt = 0), 1_680_000, 6_000_000, release = release)
+        assertEquals(listOf(race), library.continueWatching.first().map { it.key })
+
+        time = 2_000
+        val snapshot = library.markItems(
+            listOf(ItemMark(race, "Grand Prix of Kestrel · Race"), ItemMark(sprint, "Grand Prix of Kestrel · Sprint")), watched = true,
+        )
+        val marked = db.watchStates().get(race)!!
+        assertEquals(listOf(true, 0L, 2_000L), listOf(marked.watched, marked.positionMs, marked.updatedAt))
+        assertEquals("its release stays remembered", release, marked.release)
+        val made = db.watchStates().get(sprint)!!
+        assertEquals(listOf(WatchKind.Item, "Grand Prix of Kestrel · Sprint", true), listOf(made.kind, made.title, made.watched))
+        assertEquals(emptyList<WatchState>(), library.continueWatching.first())
+        assertEquals(listOf(race), snapshot.before.map { it.key })
+        assertEquals(listOf(sprint), snapshot.created)
+
+        time = 3_000
+        library.markItems(listOf(ItemMark(race, "Grand Prix of Kestrel · Race")), watched = true)
+        assertEquals("marked again as it is: no new time", 2_000L, db.watchStates().get(race)!!.updatedAt)
+
+        time = 4_000
+        assertEquals(2, library.undoMarks(snapshot))
+        val back = db.watchStates().get(race)!!
+        assertEquals(listOf(false, 1_680_000L, 4_000L), listOf(back.watched, back.positionMs, back.updatedAt))
+        assertTrue("made by the mark, a tombstone now", db.watchStates().get(sprint)!!.deleted)
+        assertEquals(listOf(race), library.continueWatching.first().map { it.key })
+
+        time = 5_000
+        val pit = WatchKey.item("kestrel", "gp-kestrel:pit-lane")
+        val none = library.markItems(listOf(ItemMark(pit, "Grand Prix of Kestrel · Pit lane")), watched = false)
+        assertNull("unwatched makes nothing", db.watchStates().get(pit))
+        assertEquals(emptyList<String>(), none.created)
+    }
+
+    /**
+     * L594: a plugin's states over more keys than SQLite takes in one query (999 before Android 11), read in chunks as one
+     * list: the live ones alone, and again as one of them changes.
+     */
+    @Test
+    fun statesOfManyKeysAreObservedInChunks() = runBlocking<Unit> {
+        val keys = (1..1_200).map { WatchKey.item("kestrel", "round-$it") }
+        db.watchStates().upsert(keys.mapIndexed { i, key -> WatchState(key, WatchKind.Item, title = "Round ${i + 1}", positionMs = 60_000L + i, durationMs = 6_000_000, updatedAt = 1) })
+        db.watchStates().upsert(listOf(db.watchStates().get(keys[7])!!.copy(deleted = true), movie(900011)))
+        val asked = keys + WatchKey.item("kestrel", "round-none") + WatchKey.movie(900011)
+        val seen = library.observeStates(asked).first()
+        assertEquals((keys - keys[7] + WatchKey.movie(900011)).toSet(), seen.map { it.key }.toSet())
+        assertEquals(1_200, seen.size)
+        assertEquals(60_000L + 1_150, seen.single { it.key == keys[1_150] }.positionMs)
+
+        val later = withTimeout(10_000) {
+            val changed = async { library.observeStates(asked).first { rows -> rows.any { it.key == keys[1_150] && it.positionMs == 3_000_000L } } }
+            db.watchStates().upsert(listOf(db.watchStates().get(keys[1_150])!!.copy(positionMs = 3_000_000)))
+            changed.await()
+        }
+        assertEquals(1_200, later.size)
+        assertEquals(emptyList<WatchState>(), library.observeStates(emptyList()).first())
     }
 
     @Test

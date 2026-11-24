@@ -30,9 +30,9 @@ import java.io.File
 /**
  * Makes the [PluginHost] each loaded instance of a plugin gets (L613, L635): its id, its own folders and secrets, a scope
  * of its own on the main thread, the user's indexers searched through [search] under the plugin's name (L630), its items
- * played through the app's play ([play], L627), GETs through the app's service client ([http], L631), and an address
- * judged as an indexer's (L593). Its watch answers nothing until that service is wired for plugins (L594). Without
- * [search], [play] or [http] (a test's registry) that service answers nothing too.
+ * played through the app's play ([play], L627) and their watch state kept under its id ([watch], L594), GETs through the
+ * app's service client ([http], L631), and an address judged as an indexer's (L593). Without [search], [play], [watch] or
+ * [http] (a test's registry) that service answers nothing.
  */
 class PluginHosts(
     private val store: PluginStore,
@@ -41,6 +41,7 @@ class PluginHosts(
     private val search: PluginSearchService? = null,
     private val http: (() -> HttpClient)? = null,
     private val play: PluginPlayService? = null,
+    private val watch: PluginWatchService? = null,
 ) {
     /**
      * The host of [version]'s instance, [name] the plugin's as the list gives it: [failed] gets what of its code threw
@@ -56,6 +57,7 @@ class PluginHosts(
         search = search?.of(version.id, name) ?: NoSearch,
         http = http?.let { PluginHttpImpl(version, it) } ?: NoHttp,
         play = play?.of(version, PluginCalls { _, what, e -> failed(what, e) }) ?: NoPlay,
+        watch = watch?.of(version.id) ?: NoWatch,
     )
 
     private companion object {
@@ -77,9 +79,8 @@ class HostedPlugin internal constructor(
     override val search: PluginSearch = NoSearch,
     override val http: PluginHttp = NoHttp,
     override val play: PluginPlay = NoPlay,
+    override val watch: PluginWatch = NoWatch,
 ) : PluginHost {
-    override val watch: PluginWatch = NoWatch
-
     /** As the app judges an indexer's address, from the address alone ([UrlSecurity]). */
     override fun addressSafety(url: String): AddressSafety = when (UrlSecurity.of(url)) {
         UrlSecurity.Encrypted -> AddressSafety.Encrypted

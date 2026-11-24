@@ -5,12 +5,15 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.datasource.DataSourceException
 import io.skjaere.usenet.app.play.IMPORTED
 import io.skjaere.usenet.app.play.PlayerCast
+import io.skjaere.usenet.app.play.PlayerLaunch
 import io.skjaere.usenet.app.play.Prefetch
 import io.skjaere.usenet.app.play.STREAM_INSTEAD
 import io.skjaere.usenet.app.play.STREAM_INSTEAD_QUESTION
 import io.skjaere.usenet.app.play.TRY_ANOTHER
 import io.skjaere.usenet.app.play.MISSING_PARTS_QUESTION
 import io.skjaere.usenet.app.play.PlaybackFailure
+import io.skjaere.usenet.app.play.SavedRelease
+import io.skjaere.usenet.app.play.WatchTarget
 import io.skjaere.usenet.app.play.missingPartsWords
 import io.skjaere.usenet.core.UsenetUris
 import io.skjaere.usenet.data.Download
@@ -19,6 +22,7 @@ import io.skjaere.usenet.data.DownloadKind
 import io.skjaere.usenet.data.DownloadState
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
+import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.player.GapReached
 import io.skjaere.usenet.player.PlayUris
 import org.junit.jupiter.api.Test
@@ -129,6 +133,21 @@ class PlayerBranchesTest {
         assertTrue(PlayerBranches.titleStreams(null))
         // A stream's play is as before, whatever its watch: Import's own stream of the file offers another release where it can.
         assertEquals(PlayerBranches.Other.TryAnother, PlayerBranches.other(download = false, online = true, canTryAnother = true, titleStreams = false))
+    }
+
+    /**
+     * L626: a plugin's item has a title of its own, so its launch says it streams; only a download asks, and items have
+     * none in this version (W161), so its player offers another release as any stream's does.
+     */
+    @Test
+    fun `a plugin's item's play is a stream's, which only a download would ask to stream instead`() {
+        val key = WatchKey.item("kestrel", "gp-kestrel:race")
+        val item = PlayerLaunch(
+            "usenet://nzb-gp/0", "Grand Prix of Kestrel · Race", "Round 20", key, WatchTarget(WatchKind.Item, "Grand Prix of Kestrel · Race", itemKey = key),
+            SavedRelease("fake", "gp-race", "Kestrel.Grand.Prix.2026.Race.1080p.WEB.h264-KESTREL", null, 0, "nzb-gp"),
+        )
+        assertTrue(PlayerBranches.titleStreams(item))
+        assertEquals(PlayerBranches.Other.TryAnother, PlayerBranches.other(download = false, online = true, canTryAnother = true, titleStreams = true))
     }
 
     @Test

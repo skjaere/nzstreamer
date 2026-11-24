@@ -1,6 +1,7 @@
 package io.skjaere.usenet.app.home
 
 import io.skjaere.usenet.app.collection.model.focusAfterRemoval
+import io.skjaere.usenet.data.ItemMark
 import io.skjaere.usenet.data.LibraryRepository
 import io.skjaere.usenet.data.MovieMark
 import io.skjaere.usenet.data.ShowMark
@@ -9,7 +10,8 @@ import io.skjaere.usenet.metadata.EpisodeRef
 
 /**
  * What an Up next row's menu does to the library, worked out from the row: Remove from Up next on every row, Mark
- * watched on an episode (a special too) or a film in progress. Each says what the Undo bar says once it is done.
+ * watched on an episode (a special too), a film or a plugin's item in progress. Each says what the Undo bar says once it
+ * is done.
  */
 sealed interface UpNextEdit {
     /** The row's [UpNextRow.key]. */
@@ -38,6 +40,9 @@ sealed interface UpNextEdit {
     /** Marks the film in progress watched: it leaves Up next. */
     data class MarkMovie(override val key: String, val mark: MovieMark, override val message: String) : Mark
 
+    /** Marks a plugin's item in progress watched (L594), that item alone: it leaves Up next. */
+    data class MarkItem(override val key: String, val mark: ItemMark, override val message: String) : Mark
+
     companion object {
         fun remove(row: UpNextRow): Remove {
             val message = "Removed “${row.title}” from Up next"
@@ -61,10 +66,7 @@ sealed interface UpNextEdit {
             return before.drop(at + 1).firstOrNull { it in keys } ?: before.take(at).lastOrNull { it in keys }
         }
 
-        /**
-         * Null for a next episode, not begun, for a release played without TMDB, which nothing marks, and for a plugin's
-         * item, which nothing marks yet (L626): they offer Remove only.
-         */
+        /** Null for a next episode, not begun, and for a release played without TMDB, which nothing marks: they offer Remove only. */
         fun markWatched(row: UpNextRow): Mark? {
             val state = (row.play as? UpNextPlay.Resume)?.state ?: return null
             return when (state.kind) {
@@ -74,7 +76,8 @@ sealed interface UpNextEdit {
                     MarkEpisode(row.key, ShowMark(show, row.title, listOf(ref.season to ref.episode)), "Marked “${row.title} ${ref.label}” watched")
                 }
                 WatchKind.Movie -> state.movieTmdbId?.let { MarkMovie(row.key, MovieMark(it, state.title), "Marked “${row.title}” watched") }
-                WatchKind.Release, WatchKind.Item -> null
+                WatchKind.Item -> MarkItem(row.key, ItemMark(state.key, state.title), "Marked “${row.title}” watched")
+                WatchKind.Release -> null
             }
         }
     }

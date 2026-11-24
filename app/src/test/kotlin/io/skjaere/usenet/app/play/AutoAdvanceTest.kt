@@ -535,6 +535,8 @@ class AutoAdvanceTest {
         assertNull(AutoAdvance.episodeOf(launch(episode.copy(season = null))))
         assertNull(AutoAdvance.episodeOf(launch(WatchTarget(WatchKind.Movie, "Copper Crown", movieTmdbId = 12))))
         assertNull(AutoAdvance.episodeOf(launch(WatchTarget(WatchKind.Release, "Harbor.Lights.S01E01"))))
+        // A plugin's item (L626) leads on to nothing: what comes next is the plugin's to say, in its own tab.
+        assertNull(AutoAdvance.episodeOf(launch(WatchTarget(WatchKind.Item, "Grand Prix of Kestrel · Race", itemKey = "item:kestrel:gp-kestrel:race"))))
         // The bare-URI path (an opened NZB file) has no launch at all.
         assertNull(AutoAdvance.episodeOf(null))
     }

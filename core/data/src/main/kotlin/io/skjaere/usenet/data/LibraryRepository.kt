@@ -166,6 +166,16 @@ class LibraryRepository(
 
     fun state(key: String): Flow<WatchState?> = watch.observe(key)
 
+    /**
+     * The live states of [keys], whatever their kind (a key with none, or a tombstone, left out), again as one of them
+     * changes: a plugin's items (L594). Read in chunks under SQLite's 999 arguments, as one list.
+     */
+    fun observeStates(keys: Collection<String>): Flow<List<WatchState>> {
+        val chunks = keys.distinct().chunked(CHUNK)
+        if (chunks.isEmpty()) return flowOf(emptyList())
+        return combine(chunks.map { watch.observeAll(it) }) { parts -> parts.flatMap { it } }.distinctUntilChanged()
+    }
+
     /** Every show's episode watches in one query, for the lists. */
     fun showWatchAggregates(): Flow<List<ShowWatchAggregate>> = watch.showWatchAggregates(MIN_RESUME_MS)
 
@@ -287,6 +297,18 @@ class LibraryRepository(
             db.withTransaction {
                 val templates = chunk.map { WatchState(key = WatchKey.movie(it.tmdbId), kind = WatchKind.Movie, movieTmdbId = it.tmdbId, title = it.title, updatedAt = at) }
                 mark(watch.getAll(templates.map { it.key }), if (watched) templates else emptyList(), watched, at)
+            }
+        }
+        return WatchSnapshot(parts.flatMap { it.before }, parts.flatMap { it.created }, at)
+    }
+
+    /** As [markMovies], for plugins' items ([WatchKind.Item], L594): unwatched changes only items that have a state. */
+    suspend fun markItems(items: List<ItemMark>, watched: Boolean): WatchSnapshot {
+        val at = clock.now()
+        val parts = items.chunked(CHUNK).map { chunk ->
+            db.withTransaction {
+                val templates = chunk.map { WatchState(key = it.key, kind = WatchKind.Item, title = it.title, updatedAt = at) }
+                mark(watch.getAll(templates.map { it.key }.distinct()), if (watched) templates else emptyList(), watched, at)
             }
         }
         return WatchSnapshot(parts.flatMap { it.before }, parts.flatMap { it.created }, at)

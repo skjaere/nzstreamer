@@ -309,14 +309,15 @@ internal data object SoleVideo : FilePicker {
  * Resuming something in progress from Home: [request] plays the release that played it, if one is
  * remembered (the player then starts from the saved position). If that fails, an [episode] is
  * searched for as Play on the Show screen does; a film or release shows the failure, with a search
- * for [search] (a film's by its TMDB id).
+ * for [search] (a film's by its TMDB id); a plugin's item shows it with none (L594).
  */
 internal data class ResumePlan(
     val request: PlayRequest?,
     val episode: EpisodeTarget?,
     val title: String,
     val subtitle: String?,
-    val search: String,
+    /** Null for a plugin's item: the host keeps no words or note to search it by, and its stored title isn't its search. */
+    val search: String?,
     /** The TMDB title [search] is for; null for a release. */
     val searchPick: SearchPick? = null,
 ) {
@@ -343,11 +344,13 @@ internal data class ResumePlan(
         private const val NOT_REMEMBERED = "No release is remembered for it"
 
         fun of(state: WatchState): ResumePlan {
-            val watch = WatchTarget(state.kind, state.title, state.showTmdbId, state.season, state.episode, state.movieTmdbId)
+            val watch = WatchTarget.of(state)
             val episode = watch.episodeTarget
             val (title, subtitle, search) = when {
                 episode != null -> Triple(episode.showName, episode.label, episode.query)
                 state.kind == WatchKind.Movie -> Triple(state.title, null, state.title)
+                // A plugin's item (L626): named by the title stored as it played, never parsed as a release's name.
+                state.kind == WatchKind.Item -> Triple(state.title, null, null)
                 else -> ReleaseName(state.title).let { Triple(it.title, null, it.query) }
             }
             // By its TMDB id, so what plays from the search is the film or episode: from its saved position, and saving to it.

@@ -116,6 +116,18 @@ class SessionMetadataTest {
         assertNull(SessionMetadata.of(null, APP).metadata().subtitle)
     }
 
+    /** L626: a plugin's item is said as its top bar shows it, its stored title over its line, by its own watch key. */
+    @Test
+    fun `a plugin's item is said by its title over its line, by its own key`() {
+        val key = WatchKey.item("kestrel", "gp-kestrel:race")
+        val item = PlayerLaunch(uri, "Grand Prix of Kestrel · Race", "Round 20", key, WatchTarget(WatchKind.Item, "Grand Prix of Kestrel · Race", itemKey = key), release)
+        val said = SessionMetadata.of(item, APP)
+        assertEquals(SessionMetadata(key, "Grand Prix of Kestrel · Race", "Round 20", MediaMetadata.MEDIA_TYPE_MOVIE), said)
+        assertEquals(PlayerTitles("Grand Prix of Kestrel · Race", "Round 20"), PlayerTitles.of(item, bareTitle = null))
+        assertEquals(said, SessionMetadata.starting(item.title, item.subtitle, item.watch, APP))
+        assertNothingOfTheRelease(said)
+    }
+
     private companion object {
         const val APP = "NZStreamer"
     }

@@ -60,6 +60,12 @@ class UpNextTest {
         lastPlayedAt = playedAt, release = release, updatedAt = playedAt,
     )
 
+    /** A plugin's item, under item:<plugin>:<key>, by the title stored as it played. */
+    private fun item(key: String, title: String, positionMs: Long, durationMs: Long = 6_000_000, playedAt: Long) = WatchState(
+        WatchKey.item("kestrel", key), WatchKind.Item, title = title, positionMs = positionMs, durationMs = durationMs,
+        lastPlayedAt = playedAt, release = release, updatedAt = playedAt,
+    )
+
     /**
      * Up next as Home builds it: the collected shows as the store's rows (TMDB's answers for them as
      * stored facts, their states as the library's aggregate), what is in progress from the recent list
@@ -427,5 +433,42 @@ class UpNextTest {
         assertEquals(listOf("S02E05 · 30 min left", "2019 · 42 min left", "2019 · 30 min left", "S01E02 · Second Light", "S01E02 · 19 unwatched"), rows.map { it.cardLine })
         // The phone's rows keep the whole line.
         assertEquals("S02E05 · Episode 2.5 · 30 min left", rows.first().line)
+    }
+
+    /**
+     * L594, L626: a plugin's item in progress is a row of its own, NZStreamer's: named by the title stored as it played,
+     * never parsed as a release's name; the time left alone as its line, on a phone and on a TV's card; the progress bar;
+     * the plain tile, as nothing gives it a picture; Play read as "Resume <title>". It opens no page, so its card plays it,
+     * and TMDB is asked nothing for it.
+     */
+    @Test
+    fun `a plugin's item in progress is a row by its stored title, its line the time left alone, with the plain tile`() {
+        val race = item("gp-kestrel:race", "Grand Prix of Kestrel · Race", positionMs = 1_680_000, playedAt = 30)
+        val cup = item("kc-2026:final", "Kestrel Cup 2026 · Final", positionMs = 900_000, durationMs = 2_700_000, playedAt = 20)
+        val film = movie(10, "Copper Crown", positionMs = 1_200_000, playedAt = 10)
+        val rows = rows(listOf(race, cup, film))
+        assertEquals(listOf("Grand Prix of Kestrel · Race", "Kestrel Cup 2026 · Final", "Copper Crown"), rows.map { it.title })
+        val (raceRow, cupRow) = rows
+        assertEquals("1 h 12 min left", raceRow.line)
+        assertEquals("1 h 12 min left", raceRow.cardLine)
+        assertEquals("30 min left", cupRow.line)
+        assertEquals(0.28f, raceRow.progress)
+        assertNull(raceRow.posterPath)
+        assertNull(raceRow.landscapePath)
+        assertEquals(false, raceRow.new)
+        assertEquals("Resume Grand Prix of Kestrel · Race", raceRow.playLabel)
+        assertEquals("Resume Kestrel Cup 2026 · Final", cupRow.playLabel, "not parsed as a release's name")
+        assertEquals(UpNextPlay.Resume(race), raceRow.play)
+        assertEquals(race.key, raceRow.key)
+        assertEquals(race.key, raceRow.watchKey)
+        assertNull(raceRow.titleKey, "no page to open: its card plays it")
+        assertEquals(emptySet(), UpNext.seasons(rows.take(2)))
+    }
+
+    /** An item taken out of Up next has no row, as a film's: by its own key. */
+    @Test
+    fun `a plugin's item taken out has no row`() {
+        val race = item("gp-kestrel:race", "Grand Prix of Kestrel · Race", positionMs = 1_680_000, playedAt = 30)
+        assertEquals(emptyList(), rows(listOf(race), hidden = setOf(race.key)))
     }
 }

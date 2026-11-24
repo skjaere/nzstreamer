@@ -150,6 +150,13 @@ data class WatchTarget(
         } else {
             null
         }
+
+    companion object {
+        /** What [state] was recorded against: its kind, its title and its TMDB ids, or a plugin's item by its key. */
+        fun of(state: WatchState) = WatchTarget(
+            state.kind, state.title, state.showTmdbId, state.season, state.episode, state.movieTmdbId, itemKey = state.key.takeIf { state.kind == WatchKind.Item },
+        )
+    }
 }
 
 /**
@@ -1103,7 +1110,7 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
     fun resume(state: WatchState, origin: PlayOrigin = PlayOrigin.Here) {
         if (downloadHook.play(state.key, origin)) return
         val plan = ResumePlan.of(state)
-        val watch = WatchTarget(state.kind, state.title, state.showTmdbId, state.season, state.episode, state.movieTmdbId)
+        val watch = WatchTarget.of(state)
         replaceJob(origin, plan.title, plan.subtitle, watch) { resume(state, it) }
         job = launchPlay(plan.title, plan.subtitle, origin = origin) {
             val offService = offService()

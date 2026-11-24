@@ -111,4 +111,19 @@ class RemoteProgressTest {
         assertEquals(now - 8_000, a?.updatedAt)
         assertEquals(a, b)
     }
+
+    /**
+     * L626: a TV never sends a plugin's item's place (a TV plays none for a phone yet, and a Final has no kind for one): a
+     * Final of a kind this version doesn't know, as a later TV's item would read, writes nothing, and no Final's ids make
+     * an item's watch key, so the phone's own item row is never written over by a TV.
+     */
+    @Test
+    fun `a Final never reaches a plugin's item, whatever it says`() {
+        val item = WatchKey.item("kestrel", "gp-kestrel:race")
+        val unknown = episode(key = item).copy(kind = FinalKind.Unknown, showTmdbId = null, season = null, episode = null)
+        assertNull(RemoteProgress.key(unknown, sessions))
+        assertNull(RemoteProgress.decide(null, unknown, now), "nothing written for a kind it doesn't know")
+        assertNull(RemoteProgress.key(episode(key = item), sessions), "an episode's ids never make an item's key")
+        assertNull(RemoteProgress.key(movie().copy(watchKey = item), sessions))
+    }
 }
