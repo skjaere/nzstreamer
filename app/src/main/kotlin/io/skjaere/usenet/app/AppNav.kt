@@ -69,6 +69,7 @@ import io.skjaere.usenet.app.settings.LogsScreen
 import io.skjaere.usenet.app.settings.MetadataScreen
 import io.skjaere.usenet.app.settings.PlaybackScreen
 import io.skjaere.usenet.app.settings.PluginsScreen
+import io.skjaere.usenet.app.settings.SETTINGS_COMES_BACK_TO
 import io.skjaere.usenet.app.settings.PrivacyScreen
 import io.skjaere.usenet.app.settings.ProviderScreen
 import io.skjaere.usenet.app.settings.ProvidersScreen
@@ -423,6 +424,8 @@ fun NavGraphBuilder.appGraph(
     composable<SettingsRoute> { screen ->
         // A tab only on a TV.
         if (tv) TopLevelBack(nav, screen)
+        // The row it comes back to where Open Plugins covered it before it showed (L590): read once.
+        val comesBackTo = remember(screen) { screen.savedStateHandle.remove<String>(SETTINGS_COMES_BACK_TO) }
         SettingsScreen(
             onBack = if (tv) null else back(screen),
             onProviders = { screen.ifResumed { nav.navigate(ProvidersRoute) } },
@@ -445,6 +448,7 @@ fun NavGraphBuilder.appGraph(
             onDownloads = downloads.settings?.let { open -> { screen.ifResumed { open() } } },
             // Every build and every device (W157).
             onPlugins = { screen.ifResumed { nav.navigate(PluginsRoute()) } },
+            comesBackTo = comesBackTo,
         )
     }
     // A card's Settings opens its slot's settings page over the page, and Open <label> switches to its slot's tab (L582,

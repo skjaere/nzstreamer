@@ -137,14 +137,15 @@ fun qualityLabel(q: QualityPreference): String = when (q) {
  * [onDebridServices] Debrid services between them (L196). [onDownloads]: Settings › Downloads, after Cache, where downloads
  * show (item 20; W108, L369): on a TV, or in the TV's layout, there is none whoever passes it (null shows none).
  * [onPlugins]: Settings › Plugins, first in App, in every build and on every device (W157). The rows and their order are
- * [settingsHub]'s.
+ * [settingsHub]'s. [comesBackTo]: on a TV, the row a remote starts on where no row of this screen opened what covered it
+ * (Open Plugins from a plugin's tab: its Plugins row, as when that row opened the page).
  */
 @Composable
 fun SettingsScreen(
     onBack: (() -> Unit)?, onProviders: () -> Unit, onIndexers: () -> Unit, onMetadata: () -> Unit, onPlayback: () -> Unit, onCache: () -> Unit,
     onLogs: () -> Unit, onThisDevice: () -> Unit = {}, onPhoneSetup: (() -> Unit)? = null, onPhones: (() -> Unit)? = null,
     onTvs: (() -> Unit)? = null, onCast: (() -> Unit)? = null, onPrivacy: () -> Unit = {}, onTorrentIndexers: (() -> Unit)? = null,
-    onDebridServices: (() -> Unit)? = null, onDownloads: (() -> Unit)? = null, onPlugins: () -> Unit = {},
+    onDebridServices: (() -> Unit)? = null, onDownloads: (() -> Unit)? = null, onPlugins: () -> Unit = {}, comesBackTo: String? = null,
 ) {
     val container = LocalContext.current.container
     val vm: SettingsViewModel = viewModel { SettingsViewModel(container) }
@@ -159,7 +160,7 @@ fun SettingsScreen(
     fun opens(title: String, page: () -> Unit): () -> Unit = { opener = title; page() }
     val initial = rememberInitialFocus()
     // Where a remote starts, and where the shell's way in lands: not the first row at the top.
-    val entry = remember { opener ?: HubRow.Providers.title }
+    val entry = remember { opener ?: comesBackTo ?: HubRow.Providers.title }
     if (onBack == null) LaunchedEffect(Unit) {
         opener = null
         initial.request(row(entry))
@@ -223,6 +224,12 @@ fun SettingsScreen(
 }
 
 /** A row of the Settings hub, by the page it opens, with its [title]. */
+/**
+ * The saved-state key on a TV's Settings entry of the hub row its screen comes back to where none of its rows opened what
+ * covers it ([SettingsScreen]'s comesBackTo).
+ */
+const val SETTINGS_COMES_BACK_TO = "settingsComesBackTo"
+
 enum class HubRow(val title: String) {
     PhoneSetup(PHONE_SETUP_TITLE),
     Phones(PHONES_TITLE),

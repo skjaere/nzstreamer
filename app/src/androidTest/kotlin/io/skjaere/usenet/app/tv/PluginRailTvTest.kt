@@ -359,7 +359,8 @@ class PluginRailTvTest {
 
     /**
      * L590, SpTvListStates 5: the fake off after an error, OK on its item focuses the placeholder's Open Plugins; OK there,
-     * Settings › Plugins with its card's first button, Turn on again, focused; Back, Settings, its first row focused.
+     * Settings › Plugins with its card's first button, Turn on again, focused; Back, Settings, its Plugins row focused, as
+     * Back from the page its hub row opened leaves it.
      */
     @Test
     fun thePlaceholdersOpenPluginsIsFocusedAndFocusesItsCard() {
@@ -375,8 +376,8 @@ class PluginRailTvTest {
         waitFor(hasText(PluginsPage.INTRO))
         waitForFocusOn(control("Turn on again"), "its card's Turn on again")
         remote.press(KeyEvent.KEYCODE_BACK)
-        remote.waitForFocus("Usenet providers")
-        assertTrue("Settings, its Plugins row there", exists(hasText("Plugins") and hasClickAction()))
+        remote.waitForFocus("Plugins")
+        assertTrue("Settings, its Plugins row focused: \"${remote.focused()}\"", remote.focused().startsWith("Plugins | "))
     }
 
     /**

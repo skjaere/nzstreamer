@@ -334,10 +334,9 @@ class PluginEndToEndTvTest {
         assertNull("its key gone", runBlocking { container.data.secrets.get(SECRET) })
         assertTrue("its watch row kept", runBlocking { container.library.state(WATCH_KEY).first() }?.watched == true)
 
-        // Back on Settings, its first row focused, its hub row's line again "None yet": the rail without it.
+        // Back on Settings, its Plugins row focused, its line again "None yet": the rail without it.
         press(KeyEvent.KEYCODE_BACK)
-        remote.waitForFocus("Usenet providers")
-        assertTrue("the hub's row", exists(hasText("None yet")))
+        remote.waitForFocus("Plugins | None yet")
         assertFalse("its rail entry gone", exists(railItem("Skeleton")))
         assertSame("the same activity throughout", activity, compose.activity)
     }

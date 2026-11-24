@@ -3,6 +3,7 @@ package io.skjaere.usenet.app.plugins
 import io.skjaere.usenet.app.HomeRoute
 import io.skjaere.usenet.app.PluginsRoute
 import io.skjaere.usenet.app.SettingsRoute
+import io.skjaere.usenet.app.settings.HubRow
 import kotlin.reflect.KClass
 
 /** What the plugin slots do with the app's navigation, which AppNav does with its NavController. */
@@ -22,6 +23,9 @@ interface SlotMoves {
     /** Opens [route] over the current screen. */
     fun navigate(route: Any)
 
+    /** The Settings screen just opened, when it shows again, comes back to its hub row [row], as if that row had opened what goes over it. */
+    fun settingsComesBackTo(row: String)
+
     /** Back to [route]'s entry on the current back stack: everything over it goes, its history kept nowhere. */
     fun popTo(route: Any)
 
@@ -34,11 +38,13 @@ interface SlotMoves {
  * Plugins shows (L581), then Settings › Plugins with plugin [id]'s card in view (its first button focused on a TV). On a
  * phone, where Settings isn't a tab, Home's own screen, then Settings over it: Home's tab keeps its own pages, among which
  * a slot's page can be (its card's Settings, over Settings › Plugins), so they go, and Back from Plugins goes to Settings,
- * then Home. On a TV the Settings tab, at its own page, so Back from Plugins goes to Settings, as from its hub row.
+ * then Home. On a TV the Settings tab, at its own page, so Back from Plugins goes to Settings, as from its hub row: to that
+ * row, focused.
  */
 fun SlotMoves.openPlugins(id: String, tv: Boolean) {
     if (tv) {
         switchTab(SettingsRoute, restore = false)
+        settingsComesBackTo(HubRow.Plugins.title)
     } else {
         switchTab(HomeRoute)
         popTo(HomeRoute)

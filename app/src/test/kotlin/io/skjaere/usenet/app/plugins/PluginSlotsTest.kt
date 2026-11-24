@@ -91,6 +91,11 @@ class PluginSlotsTest {
             stack += route
         }
 
+        override fun settingsComesBackTo(row: String) {
+            check(stack.last() == SettingsRoute) { "Settings isn't the screen just opened: ${stack.last()}" }
+            moves += "Settings comes back to $row"
+        }
+
         override fun clear(slot: Int) {
             moves += "clear $slot"
             saved.remove(PluginSlots.of(slot).tab::class)
@@ -396,6 +401,12 @@ class PluginSlotsTest {
         assertEquals(listOf<Any>(HomeRoute, SettingsRoute, PluginsRoute(focus = "skeleton")), tv.stack, "the Settings tab, then Plugins")
         assertFalse(watch(tv, Swaps()).onStack(1))
         assertEquals(listOf(PluginTab1), tv.saved[PluginTab1::class], "the slot's history saved, for the swap point to clear")
+        // Back from Plugins lands on Settings' Plugins row, as Back from the page its hub row opened does.
+        assertEquals(
+            listOf("switchTab SettingsRoute", "Settings comes back to Plugins", "navigate PluginsRoute"),
+            tv.moves.takeLast(3), "Settings, coming back to its Plugins row, then Plugins",
+        )
+        assertFalse(phone.moves.any { it.startsWith("Settings comes back") }, "a phone's Settings takes no first focus")
     }
 
     /**

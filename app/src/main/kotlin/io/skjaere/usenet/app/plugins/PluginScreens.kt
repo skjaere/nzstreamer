@@ -42,6 +42,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.toRoute
 import io.skjaere.usenet.app.ifResumed
 import io.skjaere.usenet.app.settings.PluginsPage
+import io.skjaere.usenet.app.settings.SETTINGS_COMES_BACK_TO
 import io.skjaere.usenet.app.switchTab
 import io.skjaere.usenet.app.tv.LocalRailFocus
 import io.skjaere.usenet.app.tv.TopLevelBack
@@ -271,6 +272,11 @@ class NavSlotMoves(private val nav: NavController) : SlotMoves {
     override fun switchTab(route: Any, restore: Boolean) = nav.switchTab(route, restore)
 
     override fun navigate(route: Any) = nav.navigate(route)
+
+    // Kept with the Settings entry itself, read as its screen first shows: it is covered before it ever composes.
+    override fun settingsComesBackTo(row: String) {
+        nav.currentBackStackEntry?.savedStateHandle?.set(SETTINGS_COMES_BACK_TO, row)
+    }
 
     override fun popTo(route: Any) {
         nav.popBackStack(route, inclusive = false)
