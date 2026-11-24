@@ -18,9 +18,12 @@ import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import io.skjaere.usenet.ui.R
 
-/** Design D: A's palette (dark, amber), B's density. Values from the mockups. */
+/**
+ * Design D: A's palette (dark, amber), B's density. Values from the mockups. Not a data class: plugins draw with it,
+ * and a data class's copy takes every colour, so a colour added would change it, a removal in the kit's dump (L613).
+ */
 @Immutable
-data class AppColors(
+class AppColors(
     val background: Color = Color(0xFF0E0F12),
     val surface: Color = Color(0xFF1A1C21),
     val surfaceDim: Color = Color(0xFF16171B),
@@ -52,7 +55,20 @@ data class AppColors(
     val turnedWarn: Color = Color(0xFFB35400),
     /** The accent's words and marks on an element turned over (an episode's ✓, what is left of it): 5.8:1 on the cream, where [accent] has 1.9:1. */
     val turnedAccent: Color = Color(0xFF8A5000),
-)
+) {
+    // Equal as its colours are, as when it was a data class: Compose skips work by it, and provides a new
+    // one only where it changed.
+    override fun equals(other: Any?): Boolean = other is AppColors && values == other.values
+
+    override fun hashCode(): Int = values.hashCode()
+
+    /** Every value it holds, for equality: one added is added here too (KitApiTest counts them). */
+    internal val values: List<Color> get() = listOf(
+        background, surface, surfaceDim, divider, chip, outline, text, textSecondary, muted, chipText, accent,
+        onAccent, accentTint, goodBg, good, goodDot, warnBg, warn, warnStrong, langBg, lang, rowSelected,
+        markOutline, turnedSecondary, turnedWarn, turnedAccent,
+    )
+}
 
 val LocalAppColors = staticCompositionLocalOf { AppColors() }
 

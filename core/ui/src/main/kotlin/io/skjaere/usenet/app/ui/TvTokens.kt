@@ -18,9 +18,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 
-/** The sizes of [AppType]'s roles on a form factor. */
+/**
+ * The sizes of [AppType]'s roles on a form factor. Not a data class: plugins draw with it, and a data class's copy
+ * takes every style, so a style added would change it, a removal in the kit's dump (L613).
+ */
 @Immutable
-data class TypeScale(
+class TypeScale(
     /** The title of a page about one title (the movie page's). */
     val hero: TextStyle,
     val screenTitle: TextStyle,
@@ -36,6 +39,16 @@ data class TypeScale(
     /** An address to type by hand (the phone setup's): monospaced, so 0 and o, 1 and l can be told apart. */
     val address: TextStyle,
 ) {
+    // Equal as its styles are, as when it was a data class: Compose skips work by it, and provides a new
+    // one only where it changed.
+    override fun equals(other: Any?): Boolean = other is TypeScale && values == other.values
+
+    override fun hashCode(): Int = values.hashCode()
+
+    /** Every value it holds, for equality: one added is added here too (KitApiTest counts them). */
+    internal val values: List<TextStyle>
+        get() = listOf(hero, screenTitle, cardTitle, section, body, bodyStrong, secondary, small, release, tag, address)
+
     companion object {
         val Phone = TypeScale(
             hero = TextStyle(fontFamily = Sora, fontWeight = FontWeight.Bold, fontSize = 24.sp, lineHeight = 28.sp),
@@ -79,10 +92,11 @@ val LocalTypeScale = staticCompositionLocalOf { TypeScale.Phone }
  * How a focused element shows. A phone draws a thin ring ([focusOutline]); a TV, seen from across the room, turns the
  * components the app owns over ([invert]: the text's colour fills them and the background's writes on them), grows them
  * a little, draws 3 dp rings round the rest, and shows a pointer remote's hover as the focus ([hover]). No glow and no
- * blur: TVs' graphics are slow.
+ * blur: TVs' graphics are slow. Not a data class: plugins draw with it, and a data class's copy takes every part, so a
+ * part added would change it, a removal in the kit's dump (L613).
  */
 @Immutable
-data class FocusStyle(
+class FocusStyle(
     /** The width of [focusOutline]'s ring and of a focused card's. */
     val outline: Dp,
     val invert: Boolean,
@@ -96,6 +110,16 @@ data class FocusStyle(
     /** The focus and hover layers of material's controls that the app doesn't wrap, in the accent; null keeps material's own. */
     val ripple: RippleAlpha?,
 ) {
+    // Equal as its parts are, as when it was a data class: Compose skips work by it, and provides a new
+    // one only where it changed.
+    override fun equals(other: Any?): Boolean = other is FocusStyle && values == other.values
+
+    override fun hashCode(): Int = values.hashCode()
+
+    /** Every value it holds, for equality: one added is added here too (KitApiTest counts them). */
+    internal val values: List<Any?>
+        get() = listOf(outline, invert, rowScale, buttonScale, cardScale, cardPressedScale, pressedScale, hover, ripple)
+
     companion object {
         val Phone = FocusStyle(
             outline = 2.dp, invert = false, rowScale = 1f, buttonScale = 1f, cardScale = 1f, cardPressedScale = 1f, pressedScale = 1f,

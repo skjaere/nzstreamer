@@ -28,6 +28,8 @@ android {
         // its result.
         it.inputs.dir(rootProject.file("app/src/main/kotlin")).withPathSensitivity(PathSensitivity.RELATIVE)
             .withPropertyName("appMainSources")
+        // KitApiTest reads the kit's checked-in dump: a change to it alone runs it again.
+        it.inputs.file("api/ui.api").withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("kitApiDump")
     }
 }
 

@@ -53,34 +53,6 @@ public final class io/skjaere/usenet/app/tv/TvPillKt {
 public final class io/skjaere/usenet/app/ui/AppColors {
 	public synthetic <init> (JJJJJJJJJJJJJJJJJJJJJJJJJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public synthetic <init> (JJJJJJJJJJJJJJJJJJJJJJJJJJLkotlin/jvm/internal/DefaultConstructorMarker;)V defaults(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26)
-	public final fun component1-0d7_KjU ()J
-	public final fun component10-0d7_KjU ()J
-	public final fun component11-0d7_KjU ()J
-	public final fun component12-0d7_KjU ()J
-	public final fun component13-0d7_KjU ()J
-	public final fun component14-0d7_KjU ()J
-	public final fun component15-0d7_KjU ()J
-	public final fun component16-0d7_KjU ()J
-	public final fun component17-0d7_KjU ()J
-	public final fun component18-0d7_KjU ()J
-	public final fun component19-0d7_KjU ()J
-	public final fun component2-0d7_KjU ()J
-	public final fun component20-0d7_KjU ()J
-	public final fun component21-0d7_KjU ()J
-	public final fun component22-0d7_KjU ()J
-	public final fun component23-0d7_KjU ()J
-	public final fun component24-0d7_KjU ()J
-	public final fun component25-0d7_KjU ()J
-	public final fun component26-0d7_KjU ()J
-	public final fun component3-0d7_KjU ()J
-	public final fun component4-0d7_KjU ()J
-	public final fun component5-0d7_KjU ()J
-	public final fun component6-0d7_KjU ()J
-	public final fun component7-0d7_KjU ()J
-	public final fun component8-0d7_KjU ()J
-	public final fun component9-0d7_KjU ()J
-	public final fun copy-CRp9MJE (JJJJJJJJJJJJJJJJJJJJJJJJJJ)Lio/skjaere/usenet/app/ui/AppColors; defaults(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26)
-	public static synthetic fun copy-CRp9MJE$default (Lio/skjaere/usenet/app/ui/AppColors;JJJJJJJJJJJJJJJJJJJJJJJJJJILjava/lang/Object;)Lio/skjaere/usenet/app/ui/AppColors;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAccent-0d7_KjU ()J
 	public final fun getAccentTint-0d7_KjU ()J
@@ -109,7 +81,6 @@ public final class io/skjaere/usenet/app/ui/AppColors {
 	public final fun getWarnBg-0d7_KjU ()J
 	public final fun getWarnStrong-0d7_KjU ()J
 	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
 }
 
 public final class io/skjaere/usenet/app/ui/AppType {
@@ -212,17 +183,6 @@ public final class io/skjaere/usenet/app/ui/FocusLookKt {
 public final class io/skjaere/usenet/app/ui/FocusStyle {
 	public static final field Companion Lio/skjaere/usenet/app/ui/FocusStyle$Companion;
 	public synthetic <init> (FZFFFFFZLandroidx/compose/material/ripple/RippleAlpha;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1-D9Ej5fM ()F
-	public final fun component2 ()Z
-	public final fun component3 ()F
-	public final fun component4 ()F
-	public final fun component5 ()F
-	public final fun component6 ()F
-	public final fun component7 ()F
-	public final fun component8 ()Z
-	public final fun component9 ()Landroidx/compose/material/ripple/RippleAlpha;
-	public final fun copy-Q1bl1hc (FZFFFFFZLandroidx/compose/material/ripple/RippleAlpha;)Lio/skjaere/usenet/app/ui/FocusStyle; defaults(1,2,3,4,5,6,7,8,9)
-	public static synthetic fun copy-Q1bl1hc$default (Lio/skjaere/usenet/app/ui/FocusStyle;FZFFFFFZLandroidx/compose/material/ripple/RippleAlpha;ILjava/lang/Object;)Lio/skjaere/usenet/app/ui/FocusStyle;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getButtonScale ()F
 	public final fun getCardPressedScale ()F
@@ -234,7 +194,6 @@ public final class io/skjaere/usenet/app/ui/FocusStyle {
 	public final fun getRipple ()Landroidx/compose/material/ripple/RippleAlpha;
 	public final fun getRowScale ()F
 	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
 }
 
 public final class io/skjaere/usenet/app/ui/FocusStyle$Companion {
@@ -375,19 +334,6 @@ public final class io/skjaere/usenet/app/ui/TvTokensKt {
 public final class io/skjaere/usenet/app/ui/TypeScale {
 	public static final field Companion Lio/skjaere/usenet/app/ui/TypeScale$Companion;
 	public <init> (Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;)V
-	public final fun component1 ()Landroidx/compose/ui/text/TextStyle;
-	public final fun component10 ()Landroidx/compose/ui/text/TextStyle;
-	public final fun component11 ()Landroidx/compose/ui/text/TextStyle;
-	public final fun component2 ()Landroidx/compose/ui/text/TextStyle;
-	public final fun component3 ()Landroidx/compose/ui/text/TextStyle;
-	public final fun component4 ()Landroidx/compose/ui/text/TextStyle;
-	public final fun component5 ()Landroidx/compose/ui/text/TextStyle;
-	public final fun component6 ()Landroidx/compose/ui/text/TextStyle;
-	public final fun component7 ()Landroidx/compose/ui/text/TextStyle;
-	public final fun component8 ()Landroidx/compose/ui/text/TextStyle;
-	public final fun component9 ()Landroidx/compose/ui/text/TextStyle;
-	public final fun copy (Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;)Lio/skjaere/usenet/app/ui/TypeScale; defaults(1,2,3,4,5,6,7,8,9,10,11)
-	public static synthetic fun copy$default (Lio/skjaere/usenet/app/ui/TypeScale;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/ui/text/TextStyle;ILjava/lang/Object;)Lio/skjaere/usenet/app/ui/TypeScale;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAddress ()Landroidx/compose/ui/text/TextStyle;
 	public final fun getBody ()Landroidx/compose/ui/text/TextStyle;
@@ -401,7 +347,6 @@ public final class io/skjaere/usenet/app/ui/TypeScale {
 	public final fun getSmall ()Landroidx/compose/ui/text/TextStyle;
 	public final fun getTag ()Landroidx/compose/ui/text/TextStyle;
 	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
 }
 
 public final class io/skjaere/usenet/app/ui/TypeScale$Companion {
