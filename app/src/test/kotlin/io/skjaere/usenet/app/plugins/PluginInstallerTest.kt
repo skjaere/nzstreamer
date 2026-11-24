@@ -199,6 +199,26 @@ class PluginInstallerTest {
         assertEquals(emptyList(), s.h.loading.loads, "nothing loaded")
     }
 
+    /**
+     * A Cancel once the checks passed, as the file is stored and its code loads (the card still says Checking, with
+     * Cancel), doesn't stop the install half-way: it goes to its end, so the stored file, the registry's file and the
+     * plugin that runs agree.
+     */
+    @Test
+    fun `Cancel once the checks passed lets the install end whole`() = installerTest { s ->
+        s.listed(harbor(version("harbor", 1)))
+        s.h.loading.whileLoading = { _, _ ->
+            assertSame(InstallState.Checking, s.installer.states.value["harbor"], "Cancel still offered")
+            s.installer.cancel("harbor")
+        }
+        assertNotNull(s.installer.install("harbor"))
+        advanceUntilIdle()
+        assertNotNull(s.registry.running("harbor"), "loaded")
+        assertEquals(listOf("harbor"), s.h.store.readRegistry().plugins.map { it.id }, "in the registry's file")
+        assertTrue(s.h.store.apk("harbor", 1).let { it.isFile && !it.canWrite() }, "stored, read-only")
+        assertEquals(emptyList(), s.downloads.folder.list().orEmpty().toList(), "the download deleted")
+    }
+
     @Test
     fun `Install again fetches the installed version through every check`() = installerTest { s ->
         s.listed(harbor(version("harbor", 1)))
