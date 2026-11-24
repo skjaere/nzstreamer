@@ -13,8 +13,11 @@ import io.skjaere.usenet.app.debrid.DevServices
 import io.skjaere.usenet.app.debrid.ServiceEndpoints
 import io.skjaere.usenet.app.discover.DiscoverLookup
 import io.skjaere.usenet.app.discover.FakeDiscover
+import io.skjaere.usenet.app.plugins.PluginStateRule
+import io.skjaere.usenet.app.plugins.PluginStore
 import io.skjaere.usenet.app.plugins.PluginTrust
 import io.skjaere.usenet.app.plugins.SignerDigest
+import java.io.File
 
 /**
  * The app's device tests' runner: before any test, Discover's lists come from invented titles ([FakeDiscover.DEFAULT]),
@@ -46,7 +49,11 @@ import io.skjaere.usenet.app.plugins.SignerDigest
  *
  * And the plugins the device tests install, the skeleton's debug builds, are signed as the app under test is, not with the
  * beta key: the app trusts that signer too for the run ([PluginTrust.testSigner], honoured by a debug build alone, L622).
- * Nothing else ever sets it, so a debug build with no test running trusts the beta key alone.
+ * Nothing else ever sets it, so a debug build with no test running trusts the beta key alone. And no plugin a process
+ * before this one left is there as the app starts: filesDir/plugins and cacheDir/plugins are deleted first (the app's own
+ * start then sweeps their secrets away), so a process the sharded runs start again after a death finds none, and no
+ * plugin's tab shows under the classes after the one that left it. The plugins' own classes clear up after themselves
+ * ([PluginStateRule]).
  */
 class AppTestRunner : AndroidJUnitRunner() {
     /** The app's picture-in-picture mode as the run found it, put back as it ends; null once put back, or never read. */
@@ -60,6 +67,7 @@ class AppTestRunner : AndroidJUnitRunner() {
         }
         CastFakes.beforeTheApp()
         PluginTrust.testSigner = ownSigner(targetContext)
+        listOf(targetContext.filesDir, targetContext.cacheDir).forEach { File(it, PluginStore.DIR).deleteRecursively() }
         super.onCreate(arguments)
     }
 
