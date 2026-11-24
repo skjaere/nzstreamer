@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 
 /**
@@ -14,7 +15,8 @@ import java.io.IOException
  *   with it. Written through plugin.apk.tmp, checked against its SHA-256 again and made read-only before it is renamed.
  * - The plugin's own data in filesDir/plugins/<id>/data/, its cache in cacheDir/plugins/<id>/: emptied before an install
  *   hands them over, deleted with the plugin.
- * - The registry, filesDir/plugins/registry.json, written whole then renamed; one that doesn't read is an empty registry.
+ * - The registry, filesDir/plugins/registry.json, written whole and synced, then renamed; one that doesn't read is an
+ *   empty registry.
  * - Its secrets, plugin:<id>:<name> in the app's one secret store (L617).
  * Nothing of an id the registry doesn't name outlives it: each start sweeps it all away ([sweep]). The folder is left out
  * of backups and device transfer: code reaches a device only through the plugin list and its checks (L596).
@@ -119,11 +121,15 @@ class PluginStore(filesDir: File, cacheDir: File, private val secrets: NamedSecr
         )
     }
 
-    /** Writes [registry] whole, through a file renamed over the old one. */
+    /**
+     * Writes [registry] whole, through a file renamed over the old one. The file is synced before the rename: one renamed
+     * before its bytes reach the disk can be found empty after a power cut, which reads as no plugin, and the next start's
+     * sweep would delete every plugin's files and secrets.
+     */
     fun writeRegistry(registry: RegistryFile) {
         if (!root.isDirectory && !root.mkdirs()) throw IOException("Couldn't make the plugins' folder")
         val tmp = File(root, "$REGISTRY$TMP")
-        tmp.writeText(json.encodeToString(RegistryFile.serializer(), registry))
+        writeSynced(tmp, json.encodeToString(RegistryFile.serializer(), registry))
         if (!tmp.renameTo(registryFile)) {
             tmp.delete()
             throw IOException("Couldn't write the plugins' registry")
@@ -153,6 +159,14 @@ class PluginStore(filesDir: File, cacheDir: File, private val secrets: NamedSecr
 
         private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true; encodeDefaults = true }
         private val log = LoggerFactory.getLogger(PluginStore::class.java)
+    }
+}
+
+/** Writes [text] to [file] and syncs it to the disk before this returns, so a rename after it can't publish an empty file. */
+internal fun writeSynced(file: File, text: String) {
+    FileOutputStream(file).use { out ->
+        out.write(text.toByteArray())
+        out.fd.sync()
     }
 }
 

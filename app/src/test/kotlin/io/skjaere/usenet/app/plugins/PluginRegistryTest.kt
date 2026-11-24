@@ -81,6 +81,23 @@ class PluginRegistryTest {
     }
 
     @Test
+    fun `a start that finds nothing new writes no registry`() = runTest {
+        val h = harness()
+        h.registry().apply { start(); firstActivity() }.let { h.install(it, "skeleton", 1); h.install(it, "kestrel", 1) }
+        advanceUntilIdle()
+        val file = File(h.files, "plugins/registry.json")
+        val written = file.readText()
+        assertTrue(file.setLastModified(1_000_000L))
+
+        val next = h.registry().apply { start(); firstActivity() }
+        advanceUntilIdle()
+        assertNotNull(next.running("skeleton"))
+        assertNotNull(next.running("kestrel"))
+        assertEquals(1_000_000L, file.lastModified(), "the registry's file wasn't written again")
+        assertEquals(written, file.readText())
+    }
+
+    @Test
     fun `a plugin that can't start says why, and the other one loads`() = runTest {
         val h = harness()
         val registry = h.registry().apply { start() }

@@ -216,12 +216,15 @@ class PluginCrashGuard(private val folder: File, private val now: () -> Long = S
         null
     }
 
-    /** [value] to [file] whole, through a file renamed over it. A write that fails is logged: the guard never throws. */
+    /**
+     * [value] to [file] whole, through a file synced, then renamed over it: a crash record must outlive the power cut that
+     * may follow. A write that fails is logged: the guard never throws.
+     */
     private fun <T> write(file: File, serializer: KSerializer<T>, value: T) {
         try {
             if (!folder.isDirectory) folder.mkdirs()
             val tmp = File(folder, file.name + TMP)
-            tmp.writeText(json.encodeToString(serializer, value))
+            writeSynced(tmp, json.encodeToString(serializer, value))
             if (!tmp.renameTo(file)) {
                 tmp.delete()
                 log.warn("Plugins: the crash guard's {} wasn't replaced", file.name)

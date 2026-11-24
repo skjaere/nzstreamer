@@ -367,27 +367,33 @@ class PluginRegistry(
     /** Loads [record]'s version and keeps what it found: the label, the highest loaded, or why it didn't. Under [lock]. */
     private suspend fun run(record: PluginRecord): PluginStatus = when (val outcome = load(record.id, record.versionCode, record.sha256, record.highestLoaded)) {
         is Outcome.Running -> {
-            update(record.id) {
+            keep(record.id) {
                 it.copy(state = StoredState.On, label = outcome.instance.tab.label, highestLoaded = maxOf(it.highestLoaded, it.versionCode))
             }
-            persist()
             PluginStatus.Running(outcome.instance)
         }
         is Outcome.Refused -> {
-            update(record.id) { it.copy(state = StoredState.Refused) }
-            persist()
+            keep(record.id) { it.copy(state = StoredState.Refused) }
             PluginStatus.Refused(outcome.refusal)
         }
         is Outcome.Failed -> {
-            update(record.id) { it.copy(state = StoredState.On) }
-            persist()
+            keep(record.id) { it.copy(state = StoredState.On) }
             PluginStatus.CouldntStart(outcome.failure)
         }
         Outcome.Errored -> {
-            update(record.id) { it.copy(state = StoredState.Errored) }
-            persist()
+            keep(record.id) { it.copy(state = StoredState.Errored) }
             PluginStatus.OffAfterError
         }
+    }
+
+    /**
+     * [id]'s record as [change] leaves it, written only where that changed it: a start that finds nothing new writes no
+     * registry, so a power cut just after a start finds the file the last change wrote. Under [lock].
+     */
+    private suspend fun keep(id: String, change: (PluginRecord) -> PluginRecord) {
+        val before = record(id)
+        update(id, change)
+        if (record(id) != before) persist()
     }
 
     /**
