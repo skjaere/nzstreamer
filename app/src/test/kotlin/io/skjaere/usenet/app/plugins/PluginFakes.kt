@@ -80,9 +80,13 @@ internal class FakePlugin(
     }
 }
 
-/** The crash guard as the registry tells it what happened: the versions it recorded an error for. It keeps no file. */
+/**
+ * The crash guard as the registry tells it what happened: the versions it recorded an error for. It keeps no file; a
+ * test turns the plugins off at the next start check with [pluginsOff], and Turn on again turns them on.
+ */
 internal class FakeGuard : PluginGuard {
     val errors = mutableListOf<Pair<String, Long>>()
+    var pluginsOff = false
 
     override fun recordError(id: String, versionCode: Long) {
         synchronized(errors) { errors += id to versionCode }
@@ -96,13 +100,15 @@ internal class FakeGuard : PluginGuard {
 
     override fun letGo(id: String, versionCode: Long) {}
 
-    override fun startCheck(toLoad: List<Pair<String, Long>>) = StartCheck(pluginsOff = false, crashed = emptySet(), errored = emptySet())
+    override fun startCheck(toLoad: List<Pair<String, Long>>) = StartCheck(pluginsOff, crashed = emptySet(), errored = emptySet())
 
     override fun recordsApplied() {}
 
     override fun lasted() {}
 
-    override fun turnOnPlugins() {}
+    override fun turnOnPlugins() {
+        pluginsOff = false
+    }
 
     override fun turnedOnAgain(id: String, versionCode: Long) {}
 }

@@ -2,6 +2,7 @@ package io.skjaere.usenet.app.plugins
 
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -178,6 +179,56 @@ class PluginRegistryTest {
         val next = h.registry().apply { start(); firstActivity() }
         advanceUntilIdle()
         assertEquals(2L, next.running("skeleton")?.versionCode)
+    }
+
+    @Test
+    fun `an update waits at the swap point while plugins are off, and takes over once they are on again`() = runTest {
+        val h = harness()
+        h.registry().apply { start(); firstActivity() }.let { h.install(it, "skeleton", 1); h.install(it, "skeleton", 2) }
+        (h.guard as FakeGuard).pluginsOff = true
+        val registry = h.registry().apply { start(); firstActivity() }
+        advanceUntilIdle()
+        assertTrue(registry.pluginsOff.value)
+        val loads = h.loading.loads.size
+
+        assertFalse(registry.atSwapPoint("skeleton"), "no plugin code runs while plugins are off")
+        assertEquals(loads, h.loading.loads.size)
+        assertEquals(PluginStatus.PluginsOff, registry.installed("skeleton").status)
+        assertTrue(registry.installed("skeleton").updateWaiting, "the update still waits")
+
+        registry.turnPluginsOnAgain()
+        assertEquals(1L, registry.running("skeleton")?.versionCode)
+        assertTrue(registry.atSwapPoint("skeleton"))
+        assertEquals(2L, registry.running("skeleton")?.versionCode)
+    }
+
+    @Test
+    fun `the swap point loads nothing before the first screen asked`() = runTest {
+        val h = harness()
+        h.registry().apply { start(); firstActivity() }.let { h.install(it, "skeleton", 1); h.install(it, "skeleton", 2) }
+        val loads = h.loading.loads.size
+        val unasked = h.registry().apply { start() }
+        advanceUntilIdle()
+        assertFalse(unasked.atSwapPoint("skeleton"), "a process no screen asked in loads no plugin code")
+        assertEquals(loads, h.loading.loads.size)
+        assertTrue(unasked.installed("skeleton").updateWaiting)
+    }
+
+    @Test
+    fun `a swap point reported as the first screen asks waits for the start check`() = runTest {
+        val h = harness()
+        h.registry().apply { start(); firstActivity() }.let { h.install(it, "skeleton", 1); h.install(it, "skeleton", 2) }
+        val loads = h.loading.loads.size
+        // Reported before the start check has run, which finds plugins off: nothing loads.
+        (h.guard as FakeGuard).pluginsOff = true
+        val registry = h.registry().apply { start() }
+        val swapped = async { registry.atSwapPoint("skeleton") }
+        registry.firstActivity()
+        advanceUntilIdle()
+        assertFalse(swapped.await(), "it waited for the check, which found plugins off")
+        assertEquals(loads, h.loading.loads.size)
+        assertEquals(PluginStatus.PluginsOff, registry.installed("skeleton").status)
+        assertTrue(registry.installed("skeleton").updateWaiting)
     }
 
     @Test

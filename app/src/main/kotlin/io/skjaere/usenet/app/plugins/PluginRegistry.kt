@@ -50,12 +50,18 @@ class PluginRegistry(
     private val lock = Mutex()
     private val filesRead = CompletableDeferred<Unit>()
     private val asked = AtomicBoolean()
+
+    /** The first screen's start check came back (or failed): what waits for it may take the lock. */
+    private val checked = CompletableDeferred<Unit>()
     private val keys = AtomicLong()
     private val calls = PluginCalls(::failed)
 
     // Under [lock].
     private val records = mutableListOf<PluginRecord>()
     private val statuses = mutableMapOf<String, PluginStatus>()
+
+    /** Whether the crash guard's start check ran in this process: no plugin code loads before it (L619). Under [lock]. */
+    private var startChecked = false
 
     /** The plugins installForTest put in slots: in memory alone, never written to the registry's file. Under [lock]. */
     private val forTest = mutableMapOf<String, NzPlugin>()
@@ -89,18 +95,25 @@ class PluginRegistry(
         if (!asked.compareAndSet(false, true)) return
         scope.launch(io) {
             filesRead.await()
-            lock.withLock {
-                keepStartCheck()
-                if (off.value) {
-                    records.filter { it.id !in forTest }.forEach { statuses[it.id] = PluginStatus.PluginsOff }
-                    publish()
-                    return@withLock
+            try {
+                lock.withLock {
+                    keepStartCheck()
+                    if (off.value) {
+                        records.filter { it.id !in forTest }.forEach { record ->
+                            runningInstance(record.id)?.let(::letGo)
+                            statuses[record.id] = PluginStatus.PluginsOff
+                        }
+                        publish()
+                        return@withLock
+                    }
+                    loadWaiting()
+                    scope.launch(io) {
+                        delay(PluginCrashGuard.EARLY_MS)
+                        crashGuard.lasted()
+                    }
                 }
-                loadWaiting()
-                scope.launch(io) {
-                    delay(PluginCrashGuard.EARLY_MS)
-                    crashGuard.lasted()
-                }
+            } finally {
+                checked.complete(Unit)
             }
         }
     }
@@ -113,7 +126,7 @@ class PluginRegistry(
             crashGuard.turnOnPlugins()
             off.value = false
             records.filter { statuses[it.id] == PluginStatus.PluginsOff }.forEach { statuses[it.id] = PluginStatus.Waiting }
-            if (asked.get()) loadWaiting() else publish()
+            if (startChecked) loadWaiting() else publish()
         }
     }
 
@@ -136,6 +149,7 @@ class PluginRegistry(
         if (turnedOff.isNotEmpty()) persist()
         crashGuard.recordsApplied()
         off.value = check.pluginsOff
+        startChecked = true
     }
 
     /**
@@ -159,7 +173,8 @@ class PluginRegistry(
 
     /**
      * Installs [download], a file whose SHA-256 the list's matched, as [request] names it: checked again (L583, L584),
-     * stored read-only, bound to the lowest free slot and, once the first screen asked, loaded. A higher version of one
+     * stored read-only, bound to the lowest free slot and, once the first screen's start check ran, loaded (before it, the
+     * start's own load takes it). A higher version of one
      * installed is stored beside it, and waits for the swap ([atSwapPoint]); the same version again replaces its file and,
      * if it isn't running, loads it. Nothing of a refused or failed install is kept.
      */
@@ -189,13 +204,13 @@ class PluginRegistry(
                         val slot = PluginStore.SLOTS.first { slot -> records.none { it.slot == slot } }
                         records += PluginRecord(id, request.name, request.versionCode, facts.versionName, request.sha256, slot, installedAt = now())
                         persist()
-                        statuses[id] = if (asked.get()) begin(record(id)!!) else PluginStatus.Waiting
+                        statuses[id] = if (startChecked) begin(record(id)!!) else PluginStatus.Waiting
                         InstallResult.Installed(slot)
                     }
                     request.versionCode == existing.versionCode -> {
                         update(id) { it.copy(name = request.name, sha256 = request.sha256, state = if (it.state == StoredState.Refused) StoredState.On else it.state) }
                         persist()
-                        if (asked.get() && runningInstance(id) == null) statuses[id] = begin(record(id)!!)
+                        if (startChecked && runningInstance(id) == null) statuses[id] = begin(record(id)!!)
                         InstallResult.Installed(existing.slot)
                     }
                     else -> {
@@ -227,11 +242,15 @@ class PluginRegistry(
      * The swap point (L581): no entry of [id]'s slot is on the current back stack. An update waiting takes over: the old
      * instance's scope is cancelled and its close() called, the new version loads under a new instance key, and the old
      * version's folder goes once it did. One that can't start goes back to the version before and isn't tried again.
-     * True where something changed, so the slot's saved stack is to be cleared.
+     * True where something changed, so the slot's saved stack is to be cleared. No plugin code loads before the first
+     * screen asked, nor before its start check ran, nor while plugins are off (L619): then the update waits for a later
+     * swap point, and nothing changed.
      */
     suspend fun atSwapPoint(id: String): Boolean {
         filesRead.await()
+        if (asked.get()) checked.await()
         return lock.withLock {
+            if (!startChecked || off.value) return@withLock false
             val record = record(id) ?: return@withLock false
             val pending = record.pending ?: return@withLock false
             runningInstance(id)?.let(::letGo)
@@ -269,7 +288,7 @@ class PluginRegistry(
             crashGuard.turnedOnAgain(id, record.versionCode)
             update(id) { it.copy(state = StoredState.On) }
             persist()
-            statuses[id] = if (asked.get()) begin(record(id)!!) else PluginStatus.Waiting
+            statuses[id] = if (startChecked) begin(record(id)!!) else PluginStatus.Waiting
             publish()
         }
     }
