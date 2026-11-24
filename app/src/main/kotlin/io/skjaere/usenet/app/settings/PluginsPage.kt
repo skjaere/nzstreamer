@@ -262,7 +262,7 @@ private class Cards(
         val (lines, buttons) = when {
             // While plugins are off, its version and Remove alone, whatever its state.
             pluginsOff || plugin.status == PluginStatus.PluginsOff -> listOf(CardLine.Version("Version ${plugin.versionName}")) to listOf(CardButton(CardAction.Remove))
-            else -> installs[plugin.id]?.takeUnless { it is InstallState.Installed && !comesUp }?.let { install(it, label) } ?: state(plugin, installAgain)
+            else -> installs[plugin.id]?.takeUnless { it is InstallState.Installed && !comesUp }?.let { install(it, label, installed = true) } ?: state(plugin, installAgain)
         }
         val summary = index?.plugins?.firstOrNull { it.id == plugin.id }?.summary
         return PluginCard(plugin.id, plugin.name, summary?.takeIf { it.isNotBlank() }, plugin.icon, label, plugin.slot, lines, buttons)
@@ -284,11 +284,14 @@ private class Cards(
         return PluginCard(id, plugin.name, plugin.summary.takeIf { it.isNotBlank() }, null, plugin.name, null, lines, buttons)
     }
 
-    /** An install the page started, as its card follows it; none once it is done and the page was left. */
-    private fun install(state: InstallState, label: String): Pair<List<CardLine>, List<CardButton>> = when (state) {
+    /**
+     * An install the page started, as its card follows it; none once it is done and the page was left. A failed Install
+     * again keeps Remove beside Try again: the plugin is still [installed].
+     */
+    private fun install(state: InstallState, label: String, installed: Boolean = false): Pair<List<CardLine>, List<CardButton>> = when (state) {
         is InstallState.Downloading -> listOf(CardLine.Downloading(state.percent)) to listOf(CardButton(CardAction.Cancel))
         InstallState.Checking -> listOf(CardLine.Checking) to listOf(CardButton(CardAction.Cancel))
-        is InstallState.Failed -> listOf(CardLine.Warn(state.line)) to listOf(CardButton(CardAction.TryAgain))
+        is InstallState.Failed -> listOf(CardLine.Warn(state.line)) to listOfNotNull(CardButton(CardAction.TryAgain), CardButton(CardAction.Remove).takeIf { installed })
         is InstallState.Installed -> listOf(CardLine.Done("Installed. $label is now a tab after $after.")) to
             listOfNotNull(CardButton(CardAction.Open, "Open $label").takeIf { slots }) + running()
     }

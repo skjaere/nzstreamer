@@ -261,6 +261,12 @@ class PluginsPageModelTest {
         // Install again's own progress shows on the installed card.
         val again = page(listOf(installed(status = PluginStatus.Refused(Refusal.Hash))), kestrel, mapOf("kestrel" to InstallState.Downloading(10))).cards.single()
         assertEquals(buttons(CardAction.Cancel), again.buttons)
+        // A failed Install again: its line and Try again, and Remove still there, the plugin still installed.
+        val failedAgain = page(
+            listOf(installed(status = PluginStatus.Refused(Refusal.Hash))), kestrel, mapOf("kestrel" to InstallState.Failed("Couldn't download it. Check your connection.")),
+        ).cards.single()
+        assertEquals(listOf<CardLine>(CardLine.Warn("Couldn't download it. Check your connection.")), failedAgain.lines)
+        assertEquals(buttons(CardAction.TryAgain, CardAction.Remove), failedAgain.buttons)
     }
 
     @Test
