@@ -154,14 +154,21 @@ class PluginListClientTest {
         assertEquals(1, server.requests.size)
     }
 
+    /**
+     * Refused by its Content-Length before any of it is read; and cut where it gives none: a list far over the cap, sent
+     * as fast as the client takes it, of which the client reads one byte past the cap and lets the rest go, so most of it
+     * is never sent. One that read it all, to refuse it after, would have taken every byte. (With a Content-Length, OkHttp
+     * itself takes what comes in a tenth of a second, to keep the connection, into no buffer of the app's.)
+     */
     @Test
     fun `a body over 256 KiB is cut and refused, with its length given or not`() = runBlocking<Unit> {
-        val over = ByteArray(PluginIndex.MAX_BYTES + 1) { ' '.code.toByte() }
-        val withLength = server { LoopbackHttp.Response(200, over) }
-        assertEquals(ReadFailure.TooLarge, assertIs<ListAnswer.Failed>(client(withLength).read(null)).kind)
-        val lengthless = server { LoopbackHttp.Response(200, over, lengthless = true) }
-        assertEquals(ReadFailure.TooLarge, assertIs<ListAnswer.Failed>(client(lengthless).read(null)).kind)
-        val atTheCap = server { LoopbackHttp.Response(200, over.copyOf(PluginIndex.MAX_BYTES), lengthless = true) }
+        val withLength = server { LoopbackHttp.Response(200, ByteArray(PluginIndex.MAX_BYTES + 1) { ' '.code.toByte() }) }
+        assertEquals(ReadFailure.TooLarge, assertIs<ListAnswer.Failed>(client(withLength).read(null)).kind, "with its Content-Length")
+        val lengthless = server { LoopbackHttp.Response(200, lengthless = true, streamed = HUGE) }
+        assertEquals(ReadFailure.TooLarge, assertIs<ListAnswer.Failed>(client(lengthless).read(null)).kind, "read to the close")
+        lengthless.close()
+        assertTrue(lengthless.sent.get() < HUGE / 2, "cut: ${lengthless.sent.get()} of $HUGE bytes sent")
+        val atTheCap = server { LoopbackHttp.Response(200, ByteArray(PluginIndex.MAX_BYTES) { ' '.code.toByte() }, lengthless = true) }
         assertEquals(PluginIndex.MAX_BYTES, assertIs<ListAnswer.Fresh>(client(atTheCap).read(null)).body.size)
     }
 
@@ -183,6 +190,9 @@ class PluginListClientTest {
     }
 
     private companion object {
+        /** A list far over the cap: more than the loopback connection's buffers hold, so a cut read leaves most of it unsent. */
+        const val HUGE = 64L * 1024 * 1024
+
         val LIST = """
             {"format":1,"generated":"2026-12-01T10:00:00Z","plugins":[{"id":"harbor","package":"app.nzstreamer.plugin.harbor",
             "name":"Harbor Lights","summary":"Harbor Lights in a tab of its own.","withdrawn":[],"versions":[]}]}

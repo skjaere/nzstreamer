@@ -116,14 +116,17 @@ class PluginDownloaderTest {
         assertEquals(emptyList(), folder.list().orEmpty().toList())
     }
 
+    /** Cut: nothing past the list's size is written, nor counted as come; one byte past it, the download is refused. */
     @Test
     fun `a body longer than the list's size is cut and refused, its length given or not`() = runBlocking<Unit> {
         val listed = "harbor 1".toByteArray()
         val longer = ByteArray(300_000) { 'x'.code.toByte() }
         listOf(false, true).forEach { lengthless ->
             val server = server { LoopbackHttp.Response(200, longer, lengthless = lengthless) }
-            val failed = assertIs<Download.Failed>(downloader(server).download("harbor", version(server, listed)) {})
+            val heard = mutableListOf<Long>()
+            val failed = assertIs<Download.Failed>(downloader(server).download("harbor", version(server, listed)) { heard += it })
             assertEquals(DownloadFailure.TooLarge, failed.kind, if (lengthless) "read to the close" else "with its Content-Length")
+            assertTrue(heard.all { it <= listed.size }, "no more than the list's size taken: $heard")
             assertEquals(emptyList(), folder.list().orEmpty().toList())
         }
     }
