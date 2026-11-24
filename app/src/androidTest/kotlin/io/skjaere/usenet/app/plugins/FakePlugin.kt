@@ -44,15 +44,16 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * An in-process plugin of the device tests' own (L595, L622), put in a slot of a registry through its test seam by
- * [FakePluginRule]. As a plugin, through what its host gives it: its tab, whose [label] it gives each time a version of it
- * loads, so a test changes it before a reload; its own page, whose rows open its second page (with an argument, and Back)
- * and its settings, play its one item ([item], with what [releases] hands the host) and mark it watched, the item's state
- * as the host's watch says it; its settings page; a search of the user's indexers ([search]); and work in its host's scope
- * that throws ([failIn]). On a TV each page takes its first focus as the skeleton's do, unless [takesFirstFocus] is false
- * (its own page then asks for none, and the shell puts the focus in), and keeps the row that had the focus for the
- * remote's way back from the rail (the kit's tvFocusMemory), as a plugin's scrolling page must: its scroll is a focus
- * group of its own, which the shell's content would otherwise enter at its first row. Its classes are the test APK's,
- * outside any plugin's package; its words are invented.
+ * [FakePluginRule]. As a plugin, through what its host gives it: its tab, whose [label] it gives each time a version of
+ * it loads, so a test changes it before a reload; its own page, whose rows open its second page (with an argument, and
+ * Back) and its settings, play its one item ([item], with what [releases] hands the host) and mark it watched, the
+ * item's state as the host's watch says it, and last search the user's indexers on the Search tab with a note (its
+ * nav's openSearch, the last given kept in [ownPageNav]); its settings page; a search of the user's indexers
+ * ([search]); and work in its host's scope that throws ([failIn]). On a TV each page takes its first focus as the
+ * skeleton's do, unless [takesFirstFocus] is false (its own page then asks for none, and the shell puts the focus in),
+ * and keeps the row that had the focus for the remote's way back from the rail (the kit's tvFocusMemory), as a plugin's
+ * scrolling page must: its scroll is a focus group of its own, which the shell's content would otherwise enter at its
+ * first row. Its classes are the test APK's, outside any plugin's package; its words are invented.
  */
 class FakePlugin(val id: String = FAKE, label: String = "Fake", private val takesFirstFocus: Boolean = true) : NzPlugin {
     /** The label its next version's tab() gives. */
@@ -65,6 +66,10 @@ class FakePlugin(val id: String = FAKE, label: String = "Fake", private val take
 
     /** How many of its instances were let go. */
     val closed = AtomicInteger()
+
+    /** The nav its own page was last given, for a call it makes later from its scope. */
+    @Volatile
+    var ownPageNav: PluginNav? = null
 
     /** Its pages composed now, and how many were as each close() was called: none, by NzPlugin.close's promise. */
     private val composed = AtomicInteger()
@@ -122,6 +127,7 @@ class FakePlugin(val id: String = FAKE, label: String = "Fake", private val take
     /** Its own page: its rows, the first taking a TV's first focus, and its item's state under the last. */
     @Composable
     private fun OwnPage(host: PluginHost, nav: PluginNav) {
+        ownPageNav = nav
         val states by remember(host) { host.watch.observe(listOf(ITEM_KEY)) }.collectAsState(emptyMap())
         val first = rememberFirstFocus(asks = takesFirstFocus)
         Column(Modifier.fillMaxSize().tvFocusMemory().verticalScroll(rememberScrollState())) {
@@ -133,6 +139,8 @@ class FakePlugin(val id: String = FAKE, label: String = "Fake", private val take
                 NavRow(MARK, status = watchLine(states[ITEM_KEY])) {
                     host.scope.launch { host.watch.mark(listOf(ITEM_KEY to ITEM_TITLE), watched = true) }
                 }
+                // Last, so a remote's walk down the rows above meets them as before.
+                NavRow(SEARCH) { nav.openSearch(SEARCH_WORDS, SEARCH_NOTE) }
             }
         }
     }
@@ -163,6 +171,9 @@ class FakePlugin(val id: String = FAKE, label: String = "Fake", private val take
         const val SECOND = "second"
         const val SECOND_PAGE = "Second page"
         const val SETTINGS = "Settings"
+        const val SEARCH_WORDS = "Copper Crown"
+        const val SEARCH_NOTE = "Indexer results can show scores."
+        const val SEARCH = "Search indexers for $SEARCH_WORDS"
         const val PLAY = "Play $ITEM_TITLE"
         const val MARK = "Mark $ITEM_TITLE watched"
         const val GO_BACK = "Go back"

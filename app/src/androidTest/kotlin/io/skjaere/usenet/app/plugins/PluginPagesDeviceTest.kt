@@ -4,12 +4,14 @@ import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollToNodeAction
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isPopup
@@ -20,6 +22,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
 import androidx.test.core.app.ActivityScenario
@@ -27,6 +30,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.skjaere.usenet.app.AppNav
 import io.skjaere.usenet.app.FakeTmdb
 import io.skjaere.usenet.app.HomeContentShown
+import io.skjaere.usenet.app.HomeRoute
 import io.skjaere.usenet.app.PlayerActivity
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.home.MARK_WATCHED
@@ -50,6 +54,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
@@ -67,7 +72,8 @@ import java.util.concurrent.atomic.AtomicInteger
 /**
  * A plugin's pages on a phone (L582, L590, L593, L594, L627), the app's own shell and graph (AppNav) over the app's
  * registry, an in-process fake in its first slot ([FakePluginRule]): its second page and Back; its settings page, opened
- * from its card in Settings › Plugins; the play sheet over its page. With the mock (the fake indexer's Copper Crown, the
+ * from its card in Settings › Plugins; its Search, on the Search tab started afresh with its words and note; nothing it asks
+ * of its nav from its scope once another tab shows; the play sheet over its page. With the mock (the fake indexer's Copper Crown, the
  * mock NNTP server): its item played from a release its search found, the player keeping the progress and the release
  * under item:fake:<key>, never a release's key; and, played and stopped in progress, the plugin removed, Resume from
  * Home's Up next plays that release again from its stored NZB, asking no indexer. And Up next's Mark watched of a
@@ -146,6 +152,9 @@ class PluginPagesDeviceTest {
 
     private fun button(words: String) = hasText(words) and hasClickAction()
 
+    /** Home's own screen: its search field. */
+    private val homeShown = hasText("Search your indexers") and hasClickAction()
+
     private fun press(words: String) {
         waitFor(button(words))
         compose.onNode(button(words)).performScrollTo().performClick()
@@ -195,6 +204,57 @@ class PluginPagesDeviceTest {
         back()
         waitFor(hasText(PluginsPage.INTRO))
         assertFalse("its settings page closed", exists(hasText(FakePlugin.settingsTitle("Fake"))))
+    }
+
+    /**
+     * L629: its page's openSearch switches to the Search tab started afresh, whatever the tab showed before (its empty
+     * search here), with the plugin's words searched and its note above the results; Search's tab chosen in the bar, and
+     * no entry of the plugin's slot on the current stack (L581).
+     */
+    @Test
+    fun itsSearchOpensTheSearchTabAfreshWithItsWordsAndNote() {
+        mock.assumeUp(plays = false)
+        runBlocking { mock.setUp(plays = false) }
+        showTheApp()
+        waitFor(barTab("Search"))
+        compose.onNode(barTab("Search")).performClick()
+        waitFor(hasSetTextAction())
+        openTheFakesTab()
+        press(FakePlugin.SEARCH)
+        waitFor(hasText("Releases for “${FakePlugin.SEARCH_WORDS}” on your indexers"), 60_000)
+        waitFor(hasText(FakePlugin.SEARCH_NOTE, substring = true))
+        assertTrue("the bar's Search tab chosen", compose.onNode(barTab("Search")).fetchSemanticsNode().config.getOrNull(SemanticsProperties.Selected) == true)
+        val slotEntries = compose.runOnIdle { PluginSlots.routeTypes.filter { type -> runCatching { nav.getBackStackEntry(type) }.isSuccess } }
+        assertEquals("no entry of a slot on the back stack", emptyList<Any>(), slotEntries)
+    }
+
+    /**
+     * Each move a plugin's page asks for happens only while that page is the one shown: called later, from its scope, once
+     * Home shows, back, open, openSettings and openSearch move nothing.
+     */
+    @Test
+    fun itsPageMovesNothingOnceAnotherTabShows() {
+        showTheApp()
+        openTheFakesTab()
+        val pageNav = fake.ownPageNav ?: throw AssertionError("its page was given no nav")
+        waitFor(barTab("Home"))
+        compose.onNode(barTab("Home")).performClick()
+        waitFor(homeShown)
+        compose.waitForIdle()
+        val host = fakes.instance(fake).host
+        compose.runOnIdle {
+            host.scope.launch {
+                pageNav.back()
+                pageNav.open(FakePlugin.SECOND, "later")
+                pageNav.openSettings()
+                pageNav.openSearch(FakePlugin.SEARCH_WORDS, FakePlugin.SEARCH_NOTE)
+            }
+        }
+        compose.waitForIdle()
+        waitFor(homeShown)
+        assertTrue("Home still the screen: ${nav.currentDestination?.route}", compose.runOnIdle { nav.currentDestination?.hasRoute(HomeRoute::class) == true })
+        assertFalse("its pages opened", exists(hasText("later")) || exists(hasText(FakePlugin.settingsTitle("Fake"))))
+        assertFalse("Search opened", exists(hasText("Releases for “${FakePlugin.SEARCH_WORDS}” on your indexers")))
     }
 
     /**
