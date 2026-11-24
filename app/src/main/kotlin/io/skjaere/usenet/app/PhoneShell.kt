@@ -19,6 +19,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -73,17 +74,20 @@ fun PhoneShell(
                     if (!remote) cast?.let { CastPromptAbove(it) }
                     PlayMiniBar(playback, windowInsets = if (onTab) WindowInsets(0) else WindowInsets.navigationBars, tv = tvStart, playing = shown, onRemote = onRemote)
                     if (onTab) NavigationBar(containerColor = colors.surface) {
+                        // Each by its tab's type, so a plugin's tab coming in keeps the others' items as they were.
                         tabs.forEach { tab ->
-                            NavigationBarItem(
-                                selected = destination.isTab(tab),
-                                onClick = { nav.switchTab(tab.route) },
-                                icon = { Icon(tab.icon, contentDescription = null) },
-                                label = { TabLabel(tab.label) },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = colors.onAccent, indicatorColor = colors.accent,
-                                    selectedTextColor = colors.accent, unselectedIconColor = colors.muted, unselectedTextColor = colors.muted,
-                                ),
-                            )
+                            key(tab.type) {
+                                NavigationBarItem(
+                                    selected = destination.isTab(tab),
+                                    onClick = { nav.switchTab(tab.route) },
+                                    icon = { Icon(tab.icon, contentDescription = null) },
+                                    label = { TabLabel(tab.label) },
+                                    colors = NavigationBarItemDefaults.colors(
+                                        selectedIconColor = colors.onAccent, indicatorColor = colors.accent,
+                                        selectedTextColor = colors.accent, unselectedIconColor = colors.muted, unselectedTextColor = colors.muted,
+                                    ),
+                                )
+                            }
                         }
                     }
                 }

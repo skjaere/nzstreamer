@@ -70,7 +70,8 @@ import org.junit.runner.RunWith
  * its item takes the focus into its page, Down goes along its rows, Left to the rail and Right back, Back to the rail and
  * from there Home, as on every tab (TvBackPrecedenceTest). The rail's focus state kept as the tabs change: as the registry
  * first loads (a skeleton a process before stored, the shell over a registry of the test's own that starts later), the
- * focus held on the rail stays there, the rail open with its names, and Right comes back where it was in the content; at a cold start on the plugin's
+ * focus held on the rail stays there, on Home or on an item the plugin's comes in above, the rail open with its names,
+ * and Right comes back where it was in the content; at a cold start on the plugin's
  * tab its page takes the focus as it loads; as another plugin's label changes, the focus in the page and on the rail stays
  * put. The placeholder of a plugin off after an error: its Open Plugins focused after OK, and focusing the card in
  * Settings › Plugins. And the real skeleton v1 from the test APK's assets: its second page, and Back (L595's last gap).
@@ -269,6 +270,33 @@ class PluginRailTvTest {
         compose.waitForIdle()
         assertTrue("the focus kept on the rail's Home: \"${remote.focused()}\"", remote.isFocused(railItem("Home")))
         assertTrue("the rail still open, its names shown", exists(railItem("Skeleton") and hasText("Skeleton")))
+        remote.press(KeyEvent.KEYCODE_DPAD_RIGHT)
+        remote.waitForFocus(SECOND_STAND_IN)
+    }
+
+    /**
+     * L582: the same with the rail held on an item the plugin's comes in above (Collection, after Discover): each tab's item
+     * keeps its own element as the rail's list changes, so the focus stays on Collection's, never handed to the plugin's
+     * item, and Right comes back to the content.
+     */
+    @Test
+    @FakeCount(0)
+    fun theFocusOnARailItemBelowThePluginsStaysAsTheRegistryFirstLoads() {
+        storedByAProcessBefore()
+        val next = plugins.registry()
+        showTheShell(next)
+        compose.onNode(hasText(SECOND_STAND_IN) and hasClickAction()).requestFocus()
+        remote.waitForFocus(SECOND_STAND_IN)
+        remote.press(KeyEvent.KEYCODE_DPAD_LEFT)
+        waitForFocusOn(railItem("Home"), "the rail's Home")
+        assertEquals("on the rail", "Collection", remote.pressUntil(KeyEvent.KEYCODE_DPAD_DOWN, "Collection", max = 4))
+
+        next.start()
+        runBlocking { next.await(SKELETON, "running") { it.status is PluginStatus.Running } }
+        waitFor(railItem("Skeleton"))
+        compose.waitForIdle()
+        assertEquals("the rail", listOf("Search", "Home", "Discover", "Skeleton", "Collection", "Settings"), railLabels())
+        assertTrue("the focus kept on Collection's item: \"${remote.focused()}\"", remote.isFocused(railItem("Collection")))
         remote.press(KeyEvent.KEYCODE_DPAD_RIGHT)
         remote.waitForFocus(SECOND_STAND_IN)
     }

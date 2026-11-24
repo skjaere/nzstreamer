@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -248,9 +249,10 @@ internal fun TvRail(tabs: List<Tab>, rail: RailFocus, safe: WindowInsets, onOpen
             .focusGroup(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        tabs.filterNot { it.pinned }.forEach { tab -> RailItem(tab, rail.isSelected(tab), expanded, rail.item(tab)) { onOpen(tab) } }
+        // Each by its tab's type: as a plugin's tab comes in above an item, that item keeps its own element, its focus with it.
+        tabs.filterNot { it.pinned }.forEach { tab -> key(tab.type) { RailItem(tab, rail.isSelected(tab), expanded, rail.item(tab)) { onOpen(tab) } } }
         Spacer(Modifier.weight(1f))
-        tabs.filter { it.pinned }.forEach { tab -> RailItem(tab, rail.isSelected(tab), expanded, rail.item(tab)) { onOpen(tab) } }
+        tabs.filter { it.pinned }.forEach { tab -> key(tab.type) { RailItem(tab, rail.isSelected(tab), expanded, rail.item(tab)) { onOpen(tab) } } }
     }
 }
 
