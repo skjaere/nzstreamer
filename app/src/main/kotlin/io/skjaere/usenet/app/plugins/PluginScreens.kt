@@ -245,19 +245,24 @@ private fun PlaceholderPage(placeholder: PluginPlaceholder, tv: Boolean, onOpenP
 
 /** The slots' moves on the app's [nav] ([SlotMoves]). */
 class NavSlotMoves(private val nav: NavController) : SlotMoves {
-    override fun shown(): List<KClass<*>> {
-        // A page that clearing a saved stack restored and popped again stays listed until the next screen change settles,
-        // though it never showed: its lifecycle never left INITIALIZED, where a page leaving the screen is CREATED.
-        val drawn = nav.visibleEntries.value.filter { it.lifecycle.currentState.isAtLeast(Lifecycle.State.CREATED) }
-            .mapNotNull { entry -> PluginSlots.routeTypes.firstOrNull { entry.destination.hasRoute(it) } }
-        return drawn + stacked()
+    /**
+     * The slot routes' destinations by id, found once in the graph: a route type's own lookup asks kotlinx.serialization
+     * for its serializer each time, by reflection, and the watch asks on the main thread at every screen change.
+     */
+    private val routes: Map<Int, KClass<*>> by lazy {
+        nav.graph.mapNotNull { node -> PluginSlots.routeTypes.firstOrNull { node.hasRoute(it) }?.let { node.id to it } }.toMap()
     }
 
-    override fun stacked(): List<KClass<*>> = PluginSlots.routeTypes.filter(::onBackStack)
+    // A page that clearing a saved stack restored and popped again stays listed until the next screen change settles,
+    // though it never showed: its lifecycle never left INITIALIZED, where a page leaving the screen is CREATED.
+    override fun drawn(): List<KClass<*>> = nav.visibleEntries.value.filter { it.lifecycle.currentState.isAtLeast(Lifecycle.State.CREATED) }
+        .mapNotNull { entry -> routes[entry.destination.id] }
 
-    // Asked by type: the back stack as a whole is the navigation library's own API (RestrictedApi); an entry not on it is refused.
-    private fun onBackStack(type: KClass<*>): Boolean = try {
-        nav.getBackStackEntry(type)
+    override fun stacked(): List<KClass<*>> = routes.filterKeys(::onBackStack).values.toList()
+
+    // Asked by id: the back stack as a whole is the navigation library's own API (RestrictedApi); an entry not on it is refused.
+    private fun onBackStack(id: Int): Boolean = try {
+        nav.getBackStackEntry(id)
         true
     } catch (e: IllegalArgumentException) {
         false

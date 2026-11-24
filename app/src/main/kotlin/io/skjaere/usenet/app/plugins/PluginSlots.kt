@@ -8,10 +8,10 @@ import kotlin.reflect.KClass
 /** What the plugin slots do with the app's navigation, which AppNav does with its NavController. */
 interface SlotMoves {
     /**
-     * The route types of the entries on the current back stack, and of those still drawn as they leave (a page's exit
+     * The route types of the entries drawn: the screen shown, and those still drawn as they leave (a page's exit
      * transition); only the plugin slots' and Choose release's need be there.
      */
-    fun shown(): List<KClass<*>>
+    fun drawn(): List<KClass<*>>
 
     /** The route types of the entries on the current back stack alone, not those only drawn as they leave. */
     fun stacked(): List<KClass<*>>
@@ -47,6 +47,9 @@ fun SlotMoves.openPlugins(id: String, tv: Boolean) {
     navigate(PluginsRoute(focus = id))
 }
 
+/** The route types of the entries on the current back stack, and of those still drawn as they leave ([SlotMoves.drawn]). */
+fun SlotMoves.shown(): List<KClass<*>> = drawn() + stacked()
+
 /**
  * Whether an entry of slot [slot] is on the current back stack, or still drawn. The host's Choose release counts too: it
  * holds a plugin's releases and file picker for its play (L635), and is pushed over that plugin's page, so while one
@@ -78,15 +81,18 @@ fun SlotMoves.beforeRemove(slot: Int) {
  * - While an entry of the slot is on the current back stack or still drawn (its tab, its pages, its settings, or the
  *   host's Choose release pushed over them, [onStack]), its plugin waits; a slot no plugin holds with an entry on the
  *   back stack (its plugin removed in a process that died) goes Home.
- * - Off the screen, its plugin is at its swap point ([swapPoint], the registry's): an update takes over, a withdrawn
- *   version goes. Asked on every change, so a read that finds work while Settings shows is taken at once too; asked with
- *   the slot's own check, which the registry runs again once it may act, so a slot opened as it waited isn't swapped.
+ * - Off the screen, with work for it (an update waiting, a withdrawn version running), its plugin is at its swap point
+ *   ([swapPoint], the registry's): the update takes over, the withdrawn version goes. Asked on every change, so a read
+ *   that finds work while Settings shows is taken at once too; asked with the slot's own check, which the registry runs
+ *   again once it may act, so a slot opened as it waited isn't swapped.
  * - Its saved stack is cleared once the slot is off the screen whenever the version that runs in it changed: at the swap
  *   point, or some other way the slots don't see (an error lets a version go at once, Install again's newer version takes
  *   over through the registry itself, Turn on again, Remove); and for a slot no plugin holds. So no page comes back that
  *   another version, or none, drew. A plugin's first load in a process keeps it: a stack saved across a process death
  *   opens the same plugin (L582).
- * [latest]: the registry's plugins as they stand, read after the swap point answered.
+ * [latest]: the registry's plugins as they stand, read after the swap point answered. The watch runs on the main thread
+ * at every screen change, and each read of the navigation asks it for every slot route: a change reads it once ([Look]),
+ * and again only after something that may have moved it.
  */
 class PluginSlotWatch(
     private val swapPoint: suspend (id: String, stillOff: () -> Boolean) -> Boolean,
@@ -111,6 +117,7 @@ class PluginSlotWatch(
     /** The registry's [plugins] (null until it read its files: nothing is known then), or the back stack, changed. */
     suspend fun check(plugins: List<InstalledPlugin>?) {
         if (plugins == null) return
+        val look = Look()
         for (slot in PluginSlots.all) {
             val n = slot.number
             val plugin = plugins.firstOrNull { it.slot == n }
@@ -118,20 +125,57 @@ class PluginSlotWatch(
             // A slot no plugin holds has nothing to draw: Home, then its stack is cleared once it is off the screen. Only for
             // an entry on the back stack: one still drawn as it leaves (as clearing a saved stack restores and pops it) is
             // going already, and Home, itself a change, would be asked again at every change while it is drawn.
-            if (plugin == null && moves.own(n, moves.stacked())) moves.switchTab(HomeRoute)
-            if (moves.onStack(n)) continue
-            // Asked again once the registry may act: the user may have opened the slot while it waited.
-            if (plugin != null && swapPoint(plugin.id) { !moves.onStack(n) }) {
-                // Its own swap: what the registry lists now is the new version's, not a change made some other way.
-                note(n, latest()?.firstOrNull { it.slot == n }, quiet = true)
-                dirty[n] = true
+            if (plugin == null && moves.own(n, look.stacked())) {
+                moves.switchTab(HomeRoute)
+                look.moved()
+            }
+            if (look.onStack(n)) continue
+            if (plugin != null && plugin.swapWork()) {
+                // Asked again once the registry may act, with what shows then: the user may have opened the slot while it
+                // waited. Where it never asked, or swapped (its load waits too), the screen may have moved meanwhile.
+                var asked = false
+                val swapped = swapPoint(plugin.id) {
+                    asked = true
+                    look.moved()
+                    !look.onStack(n)
+                }
+                if (swapped || !asked) look.moved()
+                if (swapped) {
+                    // Its own swap: what the registry lists now is the new version's, not a change made some other way.
+                    note(n, latest()?.firstOrNull { it.slot == n }, quiet = true)
+                    dirty[n] = true
+                }
             }
             if (plugin == null && !clearedEmpty[n]) dirty[n] = true
-            if (dirty[n] && !moves.onStack(n)) {
+            if (dirty[n] && !look.onStack(n)) {
                 moves.clear(n)
+                look.moved()
                 dirty[n] = false
                 if (plugin == null) clearedEmpty[n] = true
             }
+        }
+    }
+
+    /** Whether the swap point has work for this plugin: an update waiting to take over, or a withdrawn version that runs. */
+    private fun InstalledPlugin.swapWork(): Boolean = updateWaiting || withdrawn && status is PluginStatus.Running
+
+    /** The navigation as one change of it left it: read once, and again only after something that may have moved it. */
+    private inner class Look {
+        private var stacked: List<KClass<*>>? = null
+        private var shown: List<KClass<*>>? = null
+
+        fun stacked(): List<KClass<*>> = stacked ?: moves.stacked().also { stacked = it }
+
+        /** As [SlotMoves.onStack] says it. */
+        fun onStack(slot: Int): Boolean {
+            val all = shown ?: (moves.drawn() + stacked()).also { shown = it }
+            return PluginReleasesRoute::class in all || moves.own(slot, all)
+        }
+
+        /** Something may have moved it: read again when next asked. */
+        fun moved() {
+            stacked = null
+            shown = null
         }
     }
 

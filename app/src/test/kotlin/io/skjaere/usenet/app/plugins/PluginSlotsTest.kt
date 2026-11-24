@@ -60,9 +60,14 @@ class PluginSlotsTest {
         val saved = mutableMapOf<KClass<*>, List<Any>>()
         val moves = mutableListOf<String>()
 
-        override fun shown(): List<KClass<*>> = (stack + leaving).map { it::class }
+        /** How many times the slots read what is drawn, and the back stack: each read asks the controller for every route. */
+        var drawnReads = 0
+        var stackedReads = 0
 
-        override fun stacked(): List<KClass<*>> = stack.map { it::class }
+        // What a phone or a TV draws: the screen on top, and any page leaving.
+        override fun drawn(): List<KClass<*>> = (listOf(stack.last()) + leaving).map { it::class }.also { drawnReads++ }
+
+        override fun stacked(): List<KClass<*>> = stack.map { it::class }.also { stackedReads++ }
 
         override fun switchTab(route: Any, restore: Boolean) {
             moves += "switchTab ${route::class.simpleName}"
@@ -108,10 +113,10 @@ class PluginSlotsTest {
 
     private fun installed(
         id: String = "skeleton", slot: Int = 1, status: PluginStatus = running(id, key = 1), label: String? = "Sports", name: String = "Sportarr",
-        waitingVersion: Long? = null, versionName: String = "1.1",
+        waitingVersion: Long? = null, versionName: String = "1.1", withdrawn: Boolean = false,
     ) = InstalledPlugin(
         id, name, slot, 11, versionName, label, status, waitingVersion = waitingVersion, failedUpdate = null, lastUpdate = null,
-        icon = (status as? PluginStatus.Running)?.instance?.tab?.icon,
+        withdrawn = withdrawn, icon = (status as? PluginStatus.Running)?.instance?.tab?.icon,
     )
 
     /**
@@ -209,12 +214,37 @@ class PluginSlotsTest {
         assertNull(nav.saved[PluginTab1::class], "and its stack cleared")
     }
 
+    /**
+     * The watch runs on the main thread at every screen change, and each read of the navigation asks the controller for
+     * every slot route: it reads it once a change, again only after something that may have moved it, and asks the
+     * registry's swap point only where there is work for it (an update waiting, a withdrawn version running).
+     */
+    @Test
+    fun `a change with nothing to do reads the navigation once`() = runTest {
+        val nav = FakeNav()
+        val swaps = Swaps()
+        val watch = watch(nav, swaps)
+        val two = listOf(installed("skeleton", slot = 1), installed("kestrel", slot = 2, status = running("kestrel", key = 2)))
+        watch.check(two)
+        nav.drawnReads = 0
+        nav.stackedReads = 0
+        watch.check(two)
+        assertEquals(1 to 1, nav.drawnReads to nav.stackedReads, "reads of what is drawn and of the back stack")
+        assertEquals(emptyList(), swaps.calls, "nothing waits for a swap point")
+
+        nav.stackedReads = 0
+        val waiting = listOf(two[0], installed("kestrel", slot = 2, status = running("kestrel", key = 2), waitingVersion = 12))
+        watch.check(waiting)
+        assertEquals(listOf("kestrel"), swaps.calls, "an update waits")
+        assertTrue(nav.stackedReads <= 2, "read again once after the swap point: ${nav.stackedReads}")
+    }
+
     /** L590: a slot whose plugin was removed in a process that died: its pages, restored, go Home and are cleared. */
     @Test
     fun `an unbound slot goes Home and is cleared`() = runTest {
         val nav = FakeNav()
         val swaps = Swaps()
-        val plugins = listOf(installed("kestrel", slot = 1))
+        val plugins = listOf(installed("kestrel", slot = 1, waitingVersion = 12))
         val watch = watch(nav, swaps) { plugins }
         nav.stack.addAll(listOf(PluginTab2, PluginPage2("results", null)))
         nav.saved[PluginTab3::class] = listOf(PluginTab3)
@@ -326,7 +356,10 @@ class PluginSlotsTest {
         assertFalse("clear 1" in nav.moves)
     }
 
-    /** A read that finds an update or a withdrawal while Settings shows: reported then, not at the next navigation. */
+    /**
+     * A read that finds an update or a withdrawal while Settings shows: reported then, not at the next navigation. With
+     * nothing for it to do, the swap point isn't asked.
+     */
     @Test
     fun `work found while the slot is off the screen is reported at once`() = runTest {
         val nav = FakeNav()
@@ -335,8 +368,13 @@ class PluginSlotsTest {
         nav.navigate(SettingsRoute)
         nav.navigate(PluginsRoute())
         watch.check(listOf(installed()))
+        assertEquals(emptyList(), swaps.calls, "nothing to do")
         watch.check(listOf(installed(waitingVersion = 12)))
-        assertEquals(listOf("skeleton", "skeleton"), swaps.calls)
+        assertEquals(listOf("skeleton"), swaps.calls, "an update waits")
+        watch.check(listOf(installed(withdrawn = true)))
+        assertEquals(listOf("skeleton", "skeleton"), swaps.calls, "its running version withdrawn")
+        watch.check(listOf(installed(withdrawn = true, status = PluginStatus.Withdrawn)))
+        assertEquals(listOf("skeleton", "skeleton"), swaps.calls, "gone already")
     }
 
     /** L590, L581: Open Plugins leaves the slot first, so no entry of it is on the current stack while Plugins shows. */
