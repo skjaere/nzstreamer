@@ -406,9 +406,10 @@ sealed class AttemptFailure(val text: String, val route: String? = null, val blo
     data class NoMatchingEpisode(val season: Int, val episode: Int) : AttemptFailure("No file for S%02dE%02d".format(season, episode))
     /**
      * No file of the release is the one a plugin's picker looks for: [label] is its words for what it looked for ("No file
-     * for the main card"), as an episode's names its episode.
+     * for the main card"), as an episode's names its episode. [pickerFailed]: the picker's own code had thrown, so it looked
+     * for nothing, and the release isn't at fault.
      */
-    data class NoMatchingFile(val label: String) : AttemptFailure(label)
+    data class NoMatchingFile(val label: String, val pickerFailed: Boolean = false) : AttemptFailure(label)
     /**
      * The file that played before isn't in the release any more, and nothing tells which other one
      * is the same (#179): the one named [name], or, remembered by its position alone (null), the one

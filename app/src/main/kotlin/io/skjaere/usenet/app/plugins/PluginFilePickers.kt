@@ -13,7 +13,8 @@ import io.skjaere.usenet.plugin.PluginFilePicker
  * index into that list; none, or one outside it, picks nothing, and the attempt fails with the plugin's no-match
  * ([AttemptFailure.NoMatchingFile]). Every call runs guarded ([PluginCalls], L619): one that throws turns the version off
  * as an error, and the picker is then asked nothing more, so this play's attempts find nothing and fail with the no-match,
- * and none is checked whole.
+ * marked as the picker's failure, not the release's (the release that played the item before stays remembered), and none
+ * is checked whole.
  */
 object PluginFilePickers {
     /** The no-match's words where the plugin's give none: its noMatch threw, or is blank. */
@@ -27,8 +28,10 @@ object PluginFilePickers {
         @Volatile
         private var broken = false
 
-        override val noMatch: AttemptFailure =
-            AttemptFailure.NoMatchingFile((asked("noMatch") { picker.noMatch } as? String)?.takeIf(String::isNotBlank) ?: NO_MATCH)
+        private val label: String = (asked("noMatch") { picker.noMatch } as? String)?.takeIf(String::isNotBlank) ?: NO_MATCH
+
+        override val noMatch: AttemptFailure
+            get() = AttemptFailure.NoMatchingFile(label, pickerFailed = broken)
 
         override fun <F : ListedFile> pick(listing: FileListing<F>): F? {
             if (broken) return null

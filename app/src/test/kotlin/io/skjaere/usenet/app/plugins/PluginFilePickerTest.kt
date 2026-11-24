@@ -88,7 +88,9 @@ class PluginFilePickerTest {
         val adapted = PluginFilePickers.of(Picker({ asked++; throw IllegalStateException("the plugin's own words") }), version, calls)
         assertNull(adapted.pick(weekend))
         assertEquals(listOf("kestrel 3 pick IllegalStateException"), failures)
-        assertEquals(AttemptFailure.NoMatchingFile("No file for the race"), adapted.noMatch)
+        // Its words, but it looked for nothing: no release is at fault for it (Replay keeps the remembered one).
+        assertEquals(AttemptFailure.NoMatchingFile("No file for the race", pickerFailed = true), adapted.noMatchIn(weekend))
+        assertEquals("No file for the race", adapted.noMatch.text)
         // Its code isn't asked again for this play: every later release finds nothing, and isn't checked whole.
         assertNull(adapted.pick(weekend))
         assertFalse(adapted.takesWhole("Kestrel.Grand.Prix.2026.Race.1080p.WEB.h264-KESTREL"))
@@ -104,7 +106,7 @@ class PluginFilePickerTest {
         assertEquals(listOf("kestrel 3 takesWhole NotImplementedError"), failures)
         assertNull(adapted.pick(weekend), "the attempt fails with the no-match")
         assertTrue(picker.handed.isEmpty(), "its pick isn't asked")
-        assertEquals(AttemptFailure.NoMatchingFile("No file for the race"), adapted.noMatchIn(weekend))
+        assertEquals(AttemptFailure.NoMatchingFile("No file for the race", pickerFailed = true), adapted.noMatchIn(weekend))
     }
 
     @Test
@@ -115,7 +117,8 @@ class PluginFilePickerTest {
             override fun takesWhole(releaseName: String): Boolean = true
         }
         val adapted = PluginFilePickers.of(throwing, version, calls)
-        assertEquals(AttemptFailure.NoMatchingFile(PluginFilePickers.NO_MATCH), adapted.noMatch)
+        // Its code threw: it looks for nothing from now on, so no release is at fault.
+        assertEquals(AttemptFailure.NoMatchingFile(PluginFilePickers.NO_MATCH, pickerFailed = true), adapted.noMatch)
         assertEquals(listOf("kestrel 3 noMatch IllegalStateException"), failures)
         assertNull(adapted.pick(weekend), "a picker that threw isn't asked again")
         assertEquals(AttemptFailure.NoMatchingFile(PluginFilePickers.NO_MATCH), PluginFilePickers.of(Picker({ 1 }, noMatch = "  "), version, calls).noMatch)

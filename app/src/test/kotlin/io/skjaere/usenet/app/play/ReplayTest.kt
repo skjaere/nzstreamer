@@ -866,6 +866,8 @@ class ReplayTest {
             AttemptFailure.Elsewhere("Incomplete on the TV's providers"),
             // A reader that crashed may be the app's own fault (L319).
             AttemptFailure.Unreadable(UnreadableFile.ReaderCrashed, "MKV"),
+            // A plugin's picker that threw looked for nothing: the plugin's fault, not the release's.
+            AttemptFailure.NoMatchingFile("No file for the race", pickerFailed = true),
         ).forEach { failure -> assertFalse(Replay.broke(remembered, listOf(it to failure)), "$failure") }
         assertFalse(Replay.broke(remembered, emptyList()))
     }

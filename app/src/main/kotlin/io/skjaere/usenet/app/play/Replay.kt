@@ -108,7 +108,9 @@ internal object Replay {
         get() = when (this) {
             is AttemptFailure.MissingArticles -> !mayBeWhole
             AttemptFailure.Passworded, is AttemptFailure.NoPlayableAudio, is AttemptFailure.NoPlayableVideo, is AttemptFailure.Unsupported,
-            AttemptFailure.NoVideo, is AttemptFailure.NoMatchingEpisode, is AttemptFailure.NoMatchingFile, is AttemptFailure.NoRememberedFile -> true
+            AttemptFailure.NoVideo, is AttemptFailure.NoMatchingEpisode, is AttemptFailure.NoRememberedFile -> true
+            // A plugin's picker that threw looked for nothing: its fault, not the release's.
+            is AttemptFailure.NoMatchingFile -> !pickerFailed
             is AttemptFailure.Failed -> error is UsenetError.Corrupt
             // A file the player can't read is the release's; a reader that crashed may be the app's own fault (L319).
             is AttemptFailure.Unreadable -> kind != UnreadableFile.ReaderCrashed
