@@ -25,6 +25,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
+import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -35,6 +36,8 @@ import io.skjaere.usenet.app.CollectionRoute
 import io.skjaere.usenet.app.FakeTmdb
 import io.skjaere.usenet.app.HomeContentShown
 import io.skjaere.usenet.app.HomeRoute
+import io.skjaere.usenet.app.PluginsRoute
+import io.skjaere.usenet.app.SettingsRoute
 import io.skjaere.usenet.app.ShowRoute
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.plugins.FakePlugin.Companion.FAKE
@@ -59,6 +62,7 @@ import org.junit.Test
 import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 import java.time.LocalDate
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * A plugin's tab in a phone's bar (L582, L590, L618), the app's own shell and graph (AppNav) over the app's registry, an
@@ -411,6 +415,39 @@ class PluginTabsDeviceTest {
         compose.waitUntil(5_000) { !exists(hasText(PluginsPage.INTRO)) }
         back()
         waitFor(homeShown)
+    }
+
+    /**
+     * L581: should Settings › Plugins show over an entry of the plugin's slot (a way in not foreseen: here its settings page
+     * under a second Plugins page), Remove goes Home first, while the registry still lists the plugin, rather than wait
+     * for the slots' watch to find the slot no plugin holds.
+     */
+    @Test
+    fun removeOverAnEntryOfItsSlotGoesHomeFirst() {
+        showTheApp()
+        compose.runOnIdle {
+            nav.navigate(SettingsRoute)
+            nav.navigate(PluginsRoute())
+            nav.navigate(PluginSettings1)
+            nav.navigate(PluginsRoute(focus = FAKE))
+        }
+        waitFor(hasText(PluginsPage.INTRO))
+        assertTrue("its settings page under Plugins", compose.runOnIdle { runCatching { nav.getBackStackEntry(PluginSettings1::class) }.isSuccess })
+        val homeWhileListed = AtomicReference<Boolean?>(null)
+        compose.runOnIdle {
+            nav.addOnDestinationChangedListener { _, destination, _ ->
+                if (destination.hasRoute(HomeRoute::class)) homeWhileListed.compareAndSet(null, plugins.app.plugins.value.orEmpty().any { it.id == FAKE })
+            }
+        }
+
+        press("Remove")
+        waitFor(hasText("Remove fake?"))
+        compose.onAllNodes(button("Remove")).onLast().performClick()
+        compose.waitUntil(PLUGIN_WAIT_MS) { plugins.app.plugins.value.orEmpty().isEmpty() }
+        waitFor(homeShown)
+        assertEquals("Home first, the plugin still listed", true, homeWhileListed.get())
+        val slotEntries = compose.runOnIdle { PluginSlots.routeTypes.filter { type -> runCatching { nav.getBackStackEntry(type) }.isSuccess } }
+        assertEquals("no entry of a slot on the back stack", emptyList<Any>(), slotEntries)
     }
 
     /**
