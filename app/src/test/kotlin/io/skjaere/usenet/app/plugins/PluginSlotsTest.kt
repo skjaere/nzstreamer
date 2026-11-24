@@ -3,9 +3,11 @@ package io.skjaere.usenet.app.plugins
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Star
+import io.skjaere.usenet.app.CollectionRoute
 import io.skjaere.usenet.app.HomeRoute
 import io.skjaere.usenet.app.PlaybackRoute
 import io.skjaere.usenet.app.PluginsRoute
+import io.skjaere.usenet.app.SearchRoute
 import io.skjaere.usenet.app.SettingsRoute
 import io.skjaere.usenet.plugin.PluginSecrets
 import io.skjaere.usenet.plugin.PluginTab
@@ -45,10 +47,12 @@ class PluginSlotsTest {
 
     /**
      * The app's back stack as the bar and the rail move it: switchTab saves the current tab's history under its own
-     * screen and goes back to Home, then opens the tab, its history restored unless [restore] is false; [leaving] holds a
-     * page still drawn as it leaves (a transition).
+     * screen and goes back to Home, then opens the tab, its history restored unless [restore] is false. Home is a tab too:
+     * its own pages (a phone's Settings, which isn't a tab there) are its history, kept as Home is switched to from
+     * them, and restored as it is from another tab; on a [tv] Settings is a tab of its own. [leaving] holds a page still
+     * drawn as it leaves (a transition).
      */
-    private class FakeNav : SlotMoves {
+    private class FakeNav(tv: Boolean = false) : SlotMoves {
         val stack = mutableListOf<Any>(HomeRoute)
         val leaving = mutableListOf<Any>()
         val saved = mutableMapOf<KClass<*>, List<Any>>()
@@ -60,11 +64,19 @@ class PluginSlotsTest {
 
         override fun switchTab(route: Any, restore: Boolean) {
             moves += "switchTab ${route::class.simpleName}"
-            if (stack.size > 1) saved[stack[1]::class] = stack.drop(1)
+            val pages = stack.drop(1)
+            // The current tab's history: a tab's over Home, else Home's own pages, which stay where Home is switched to.
+            val tab = pages.firstOrNull()?.let { it::class }?.takeIf { it in tabs } ?: HomeRoute::class
+            if (tab == HomeRoute::class && route == HomeRoute) return
+            if (pages.isNotEmpty()) saved[tab] = pages
             stack.subList(1, stack.size).clear()
-            if (route == HomeRoute) return
             val restored = saved.remove(route::class).takeIf { restore }
-            stack.addAll(restored ?: listOf(route))
+            stack.addAll(restored ?: listOf(route).filter { it != HomeRoute })
+        }
+
+        override fun popTo(route: Any) {
+            moves += "popTo ${route::class.simpleName}"
+            stack.subList(stack.lastIndexOf(route) + 1, stack.size).clear()
         }
 
         override fun navigate(route: Any) {
@@ -76,6 +88,9 @@ class PluginSlotsTest {
             moves += "clear $slot"
             saved.remove(PluginSlots.of(slot).tab::class)
         }
+
+        /** The tabs over Home: the slots', the Collection's, Search's, and a TV's Settings. */
+        private val tabs = PluginSlots.all.map { it.tab::class } + listOfNotNull(CollectionRoute::class, SearchRoute::class, SettingsRoute::class.takeIf { tv })
     }
 
     private object NoSecrets : PluginSecrets {
@@ -268,7 +283,7 @@ class PluginSlotsTest {
         assertEquals(listOf<Any>(HomeRoute, SettingsRoute, PluginsRoute(focus = "skeleton")), phone.stack, "Home, then Settings, then Plugins")
         assertFalse(watch(phone, Swaps()).onStack(1))
 
-        val tv = FakeNav()
+        val tv = FakeNav(tv = true)
         // The Settings tab left on one of its pages: Plugins still opens over Settings itself, so Back goes there.
         tv.switchTab(SettingsRoute)
         tv.navigate(PlaybackRoute)
@@ -277,6 +292,30 @@ class PluginSlotsTest {
         assertEquals(listOf<Any>(HomeRoute, SettingsRoute, PluginsRoute(focus = "skeleton")), tv.stack, "the Settings tab, then Plugins")
         assertFalse(watch(tv, Swaps()).onStack(1))
         assertEquals(listOf(PluginTab1), tv.saved[PluginTab1::class], "the slot's history saved, for the swap point to clear")
+    }
+
+    /**
+     * L590, L581: a slot's page opened over Home's own pages (its card's Settings over Settings › Plugins, on a phone, where
+     * Settings isn't a tab), whose Open Plugins Home's tab alone can't leave, as Home keeps its own pages: Home's own screen
+     * first, so no entry of the slot is left on the current stack, and Back goes to Settings, then Home.
+     */
+    @Test
+    fun `Open Plugins from a slot's page over Home's own pages leaves no slot entry on a phone`() = runTest {
+        val phone = FakeNav()
+        phone.navigate(SettingsRoute)
+        phone.navigate(PluginsRoute())
+        phone.navigate(PluginSettings1)
+        phone.openPlugins("skeleton", tv = false)
+        assertEquals(listOf<Any>(HomeRoute, SettingsRoute, PluginsRoute(focus = "skeleton")), phone.stack, "Home, then Settings, then Plugins")
+        assertFalse(watch(phone, Swaps()).onStack(1))
+
+        // From the slot's tab, Home's own pages that tab was left with go too: Back from Plugins reaches Settings, then Home.
+        val left = FakeNav()
+        left.navigate(SettingsRoute)
+        left.navigate(PluginsRoute())
+        left.switchTab(PluginTab1)
+        left.openPlugins("skeleton", tv = false)
+        assertEquals(listOf<Any>(HomeRoute, SettingsRoute, PluginsRoute(focus = "skeleton")), left.stack, "Settings › Plugins once")
     }
 
     /** L581: should a slot entry still be on the current stack as Remove is pressed, Remove goes Home first, and never waits. */

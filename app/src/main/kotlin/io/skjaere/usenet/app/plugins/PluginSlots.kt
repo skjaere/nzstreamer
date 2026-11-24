@@ -22,6 +22,9 @@ interface SlotMoves {
     /** Opens [route] over the current screen. */
     fun navigate(route: Any)
 
+    /** Back to [route]'s entry on the current back stack: everything over it goes, its history kept nowhere. */
+    fun popTo(route: Any)
+
     /** Clears slot [slot]'s saved stack, so its tab opens at its own page again. */
     fun clear(slot: Int)
 }
@@ -29,14 +32,16 @@ interface SlotMoves {
 /**
  * Open Plugins from a plugin's slot (L590): the slot is left first, so no entry of it is on the current stack while
  * Plugins shows (L581), then Settings › Plugins with plugin [id]'s card in view (its first button focused on a TV). On a
- * phone, where Settings isn't a tab, Home, then Settings over it; on a TV the Settings tab, at its own page, so Back from
- * Plugins goes to Settings, as from its hub row.
+ * phone, where Settings isn't a tab, Home's own screen, then Settings over it: Home's tab keeps its own pages, among which
+ * a slot's page can be (its card's Settings, over Settings › Plugins), so they go, and Back from Plugins goes to Settings,
+ * then Home. On a TV the Settings tab, at its own page, so Back from Plugins goes to Settings, as from its hub row.
  */
 fun SlotMoves.openPlugins(id: String, tv: Boolean) {
     if (tv) {
         switchTab(SettingsRoute, restore = false)
     } else {
         switchTab(HomeRoute)
+        popTo(HomeRoute)
         navigate(SettingsRoute)
     }
     navigate(PluginsRoute(focus = id))

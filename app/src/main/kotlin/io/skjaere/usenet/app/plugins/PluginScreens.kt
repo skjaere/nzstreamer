@@ -240,6 +240,10 @@ class NavSlotMoves(private val nav: NavController) : SlotMoves {
 
     override fun navigate(route: Any) = nav.navigate(route)
 
+    override fun popTo(route: Any) {
+        nav.popBackStack(route, inclusive = false)
+    }
+
     override fun clear(slot: Int) {
         nav.clearBackStack(PluginSlots.of(slot).tab::class)
     }
