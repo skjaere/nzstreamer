@@ -500,6 +500,14 @@ class ReadmePluginsTest(unittest.TestCase):
     def test_privacy_names_github_for_plugins(self):
         self.assertIn("to GitHub when you use plugins", self.section("Privacy"))
 
+    def test_install_says_only_the_apps_releases_hold_its_apk(self):
+        # Plugin prereleases sit among the app's releases, each with its own <id>.apk and no NZStreamer.apk.
+        install = re.search(r"^## Install\n(.*?)(?=^### )", self.readme, re.M | re.S)
+        self.assertIsNotNone(install, "README has no ## Install")
+        self.assertNotIn("Each release has", install.group(1))
+        self.assertRegex(install.group(1), r"Each app release, tagged `v<version>`, has one APK, `NZStreamer\.apk`")
+        self.assertIn("plugin", install.group(1))
+
     def test_staying_up_to_date_keeps_obtainium_off_plugin_prereleases(self):
         update = self.section("Staying up to date")
         self.assertIn("Include prereleases", update)

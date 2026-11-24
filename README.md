@@ -135,8 +135,9 @@ public-domain film of the 1890s. `tools/screens` makes them.
 
 ## Install
 
-Each release has one APK, `NZStreamer.apk`, for phones, tablets and TVs. This address always gets the newest release's
-APK:
+Each app release, tagged `v<version>`, has one APK, `NZStreamer.apk`, for phones, tablets and TVs. A plugin's releases
+among them hold the plugin's own file, which NZStreamer installs itself (see Plugins). This address always gets the
+newest app release's APK:
 
 ```
 https://github.com/skjaere/nzstreamer/releases/latest/download/NZStreamer.apk
