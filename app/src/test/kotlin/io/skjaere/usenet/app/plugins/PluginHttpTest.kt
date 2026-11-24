@@ -1,12 +1,22 @@
 package io.skjaere.usenet.app.plugins
 
 import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockEngineConfig
+import io.ktor.client.engine.mock.respond
+import io.ktor.client.plugins.HttpTimeout
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
 import io.skjaere.usenet.debrid.ServiceHttp
 import io.skjaere.usenet.logging.LogBuffer
 import io.skjaere.usenet.plugin.AddressSafety
 import io.skjaere.usenet.plugin.PluginHttpException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -137,6 +147,40 @@ class PluginHttpTest {
         refused(PluginHttpException.Kind.Unreachable) { http().get("http://127.0.0.1:$closed/") }
         listOf("ftp://127.0.0.1/x", "not an address", "http://", "file:///kestrel.txt", "").forEach { url ->
             refused(PluginHttpException.Kind.InvalidAddress) { http().get(url) }
+        }
+    }
+
+    /**
+     * L631: the request's time bound (15 s in the app) is the whole request's, every redirect followed within it, not each
+     * hop's: three same-address redirects, each well inside the bound, that come to more than it run out of time. On the
+     * test's virtual time, through an engine of its own.
+     */
+    @Test
+    fun `the time bound covers the whole request, its redirects with it`() = runTest {
+        var hops = 0
+        val engine = MockEngine(
+            MockEngineConfig().apply {
+                dispatcher = StandardTestDispatcher(testScheduler)
+                addHandler { request ->
+                    delay(200)
+                    hops++
+                    if (hops <= 3) respond("", HttpStatusCode.Found, headersOf(HttpHeaders.Location, "/rounds/$hops")) else respond("done")
+                }
+            },
+        )
+        // As the app's service client: it follows no redirect itself.
+        val slow = HttpClient(engine) {
+            install(HttpTimeout)
+            followRedirects = false
+            expectSuccess = false
+        }
+        try {
+            val e = assertFailsWith<PluginHttpException> { PluginHttpImpl(version, { slow }, requestTimeoutMs = 500).get("http://kestrel.invalid/rounds") }
+            assertEquals(PluginHttpException.Kind.Timeout, e.kind)
+            assertEquals(500, testScheduler.currentTime, "out of time once the whole request took its bound")
+            assertEquals(2, hops, "two hops answered within it")
+        } finally {
+            slow.close()
         }
     }
 

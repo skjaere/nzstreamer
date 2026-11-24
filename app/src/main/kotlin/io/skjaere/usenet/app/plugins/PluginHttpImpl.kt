@@ -23,8 +23,8 @@ import java.net.URI
 
 /**
  * A plugin's GETs (L631) through the app's service client ([client], ServiceHttp's, which follows no redirect itself), with
- * its User-Agent and its timeouts: [connectTimeoutMs] to connect, and [requestTimeoutMs] for each request, its body
- * included. Its own redirect rule on top: a redirect is followed only to the same scheme, host and port as the address
+ * its User-Agent and its timeouts: [connectTimeoutMs] to connect, and [requestTimeoutMs] for the whole request, every
+ * redirect followed and the body included, as the API promises. Its own redirect rule on top: a redirect is followed only to the same scheme, host and port as the address
  * asked, [MAX_REDIRECTS] at most, the plugin's headers going along; any other is refused, so a key in a header never goes
  * to another address. A body is read no further than the request's maxBytes. Each request is one log line naming
  * [version], the host and the status, or the kind of failure: never a header's value, the path, the query or the body
@@ -38,21 +38,11 @@ class PluginHttpImpl(
 ) : PluginHttp {
     override suspend fun get(url: String, headers: Map<String, String>, maxBytes: Int): HttpAnswer {
         val asked = originOf(url) ?: throw failure(Kind.InvalidAddress, null)
-        var address = url.trim()
         try {
-            repeat(MAX_REDIRECTS + 1) { hop ->
-                val answer = withTimeoutOrNull(requestTimeoutMs) { once(address, headers, maxBytes.coerceAtLeast(0)) }
-                    ?: throw failure(Kind.Timeout, asked)
-                val next = answer.headers["location"]?.takeIf { answer.status in REDIRECTS }
-                if (next == null) {
-                    log.info("Plugin {} GET {}: {}", version, asked.host, answer.status)
-                    return answer
-                }
-                // Resolved against the hop that gave it, and followed only to the address asked.
-                val to = resolve(address, next)
-                if (to == null || originOf(to) != asked || hop == MAX_REDIRECTS) throw failure(Kind.RedirectRefused, asked)
-                address = to
-            }
+            val answer = withTimeoutOrNull(requestTimeoutMs) { follow(url.trim(), asked, headers, maxBytes.coerceAtLeast(0)) }
+                ?: throw failure(Kind.Timeout, asked)
+            log.info("Plugin {} GET {}: {}", version, asked.host, answer.status)
+            return answer
         } catch (e: PluginHttpException) {
             throw e
         } catch (e: CancellationException) {
@@ -63,6 +53,19 @@ class PluginHttpImpl(
             // A refused connection, a name that doesn't resolve, a broken TLS, a read cut short: only its kind is said,
             // as a client's own words can hold the address.
             throw failure(if (e.isTimeout()) Kind.Timeout else Kind.Unreachable, asked)
+        }
+    }
+
+    /** [address] asked, and each redirect it gives followed while it keeps to [asked]'s scheme, host and port: the answer. */
+    private suspend fun follow(address: String, asked: Origin, headers: Map<String, String>, maxBytes: Int): HttpAnswer {
+        var hop = address
+        repeat(MAX_REDIRECTS + 1) { followed ->
+            val answer = once(hop, headers, maxBytes)
+            val next = answer.headers["location"]?.takeIf { answer.status in REDIRECTS } ?: return answer
+            // Resolved against the hop that gave it, and followed only to the address asked.
+            val to = resolve(hop, next)
+            if (to == null || originOf(to) != asked || followed == MAX_REDIRECTS) throw failure(Kind.RedirectRefused, asked)
+            hop = to
         }
         throw failure(Kind.RedirectRefused, asked)
     }
