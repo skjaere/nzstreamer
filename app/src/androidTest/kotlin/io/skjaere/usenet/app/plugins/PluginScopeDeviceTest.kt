@@ -1,6 +1,5 @@
 package io.skjaere.usenet.app.plugins
 
-import android.os.Process
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.runtime.Composable
@@ -35,7 +34,6 @@ class PluginScopeDeviceTest {
 
     @Test
     fun anExceptionEscapingAPluginsScopeTurnsItsVersionOffAndNzStreamerGoesOn() = runBlocking<Unit> {
-        val pid = Process.myPid()
         val registry = plugins.app
         val kestrel = Kestrel()
         registry.installForTest(kestrel, KESTREL)
@@ -44,7 +42,7 @@ class PluginScopeDeviceTest {
 
         val refresh = kestrel.refresh(instance.host)
         registry.await(KESTREL, "off after an error") { it.status == PluginStatus.OffAfterError }
-        assertEquals("NZStreamer's process goes on", pid, Process.myPid())
+        // NZStreamer's process went on: this test runs in it, so had the failure ended it, the run would have ended here.
         var mainRuns = false
         InstrumentationRegistry.getInstrumentation().runOnMainSync { mainRuns = true }
         assertTrue("and its main thread, where the work failed", mainRuns)

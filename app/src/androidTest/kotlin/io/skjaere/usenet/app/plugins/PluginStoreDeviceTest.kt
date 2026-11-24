@@ -1,7 +1,6 @@
 package io.skjaere.usenet.app.plugins
 
 import android.os.Build
-import android.os.Process
 import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dalvik.system.PathClassLoader
@@ -39,7 +38,6 @@ class PluginStoreDeviceTest {
 
     @Test
     fun v1LoadsFromThePrivateStoreReadOnlyInThisProcess() = runBlocking<Unit> {
-        val pid = Process.myPid()
         // Installed through a registry no screen has asked yet: the stored file's first load is the next start's.
         val installer = plugins.registry().apply { start(asked = false) }
         val installed = installer.install(SkeletonBuild.V1, SkeletonBuild.V1.download(context))
@@ -69,7 +67,8 @@ class PluginStoreDeviceTest {
         assertEquals("one class loader made, at its start", 1, first.loader.classLoadersMade)
         assertEquals("a later start makes its own", 1, later.loader.classLoadersMade)
         assertFalse("the stored file stays read-only", apk.canWrite())
-        assertEquals("loaded in this process", pid, Process.myPid())
+        // Loaded in this process, by a loader of its own (above). The test runs in the app's process, so a load that
+        // restarted it would have ended this run: no assertion here could add to that.
         assertEquals("v1 is the highest version loaded", 1L, first.store.readRegistry().plugins.single().highestLoaded)
     }
 

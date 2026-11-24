@@ -1,6 +1,5 @@
 package io.skjaere.usenet.app.plugins
 
-import android.os.Process
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dalvik.system.PathClassLoader
 import io.skjaere.usenet.plugin.FileInfo
@@ -35,7 +34,6 @@ class PluginSwapDeviceTest {
 
     @Test
     fun v2TakesOverInThisProcessWhileV1sKeptInstanceStillAnswers() = runBlocking<Unit> {
-        val pid = Process.myPid()
         val registry = plugins.registry().apply { start(asked = false) }
         assertTrue("v1 installed", registry.install(SkeletonBuild.V1, SkeletonBuild.V1.download(context)) is InstallResult.Installed)
         registry.firstScreen()
@@ -57,7 +55,8 @@ class PluginSwapDeviceTest {
         assertNotEquals("under a new instance key", v1.key, v2.key)
         assertTrue("from a loader of its own", v2Loader is PathClassLoader && v2Loader !== v1Loader)
         assertTrue("whose parent is the app's loader", v2Loader.parent === appLoader)
-        assertEquals("in this same process", pid, Process.myPid())
+        // In this same process, by a loader of its own (above). The test runs in the app's process, so a swap that
+        // restarted it would have ended this run: no assertion here could add to that.
         assertFalse("v1's scope cancelled", v1.host.scope.isActive)
         assertFalse("v1's folder deleted", v1File.parentFile!!.exists())
         assertFalse("v2's file read-only", v2File.canWrite())
