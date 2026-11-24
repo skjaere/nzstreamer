@@ -49,6 +49,7 @@ internal class FakePlugin(
     private val tabError: (() -> Throwable)? = null,
     private val closeError: (() -> Throwable)? = null,
     private val onClose: () -> Unit = {},
+    private val onTab: () -> Unit = {},
 ) : NzPlugin {
     val calls = mutableListOf<String>()
 
@@ -58,6 +59,7 @@ internal class FakePlugin(
 
     override fun tab(): PluginTab {
         calls += "tab"
+        onTab()
         if (tabThrows) throw IllegalStateException("the fake's tab, with a secret in its words: hunter2")
         tabError?.let { throw it() }
         return PluginTab(label, Icons.Filled.Star)
@@ -160,6 +162,9 @@ internal class FakeLoading : PluginLoading {
     /** Versions whose load throws, as a loader would let a throwable it doesn't catch through: an Error of the plugin's. */
     val throwing = mutableMapOf<Pair<String, Long>, () -> Throwable>()
 
+    /** Runs as each version's code loads, once its file passed: where its class loader would be at work. */
+    var whileLoading: (id: String, versionCode: Long) -> Unit = { _, _ -> }
+
     /** Each load asked, by id and version, and each instance made. */
     val loads = mutableListOf<Pair<String, Long>>()
     val made = mutableListOf<NzPlugin>()
@@ -172,6 +177,7 @@ internal class FakeLoading : PluginLoading {
             is Verdict.Refused -> return LoadResult.Refused(verdict.refusal)
             is Verdict.Accepted -> verdict.facts
         }
+        whileLoading(expected.id, expected.versionCode)
         if (expected.id to expected.versionCode in failing) return LoadResult.Failed(LoadFailure.Linkage)
         throwing[expected.id to expected.versionCode]?.let { throw it() }
         return LoadResult.Loaded(plugin(expected.id, expected.versionCode).also { made += it }, facts)

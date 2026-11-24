@@ -364,6 +364,43 @@ class PluginCrashGuardTest {
     }
 
     @Test
+    fun `the registry keeps the load marker around a version's class load and its tab()`() = runTest {
+        val h = RegistryHarness(dir, this)
+        h.guard = PluginCrashGuard(File(h.files, "plugins"), now = { testScheduler.currentTime })
+        val marker = File(h.files, "plugins/loading")
+        val seen = mutableListOf<String>()
+        fun look(what: String) {
+            seen += "$what: " + (marker.takeIf { it.isFile }?.readText() ?: "no marker")
+        }
+        h.loading.whileLoading = { _, _ -> look("its classes load") }
+        h.loading.plugin = { _, _ -> FakePlugin(onTab = { look("its tab()") }) }
+        val registry = h.registry().apply { start(); firstActivity() }
+        h.install(registry, "skeleton", 1)
+        assertTrue(registry.running("skeleton") != null)
+        assertEquals(
+            listOf("its classes load", "its tab()").map { """$it: {"id":"skeleton","versionCode":1}""" },
+            seen,
+        )
+        assertFalse(marker.exists(), "gone once the load came back")
+    }
+
+    @Test
+    fun `two starts in a row that die as a version loads turn it off, with no crash to blame`() = runTest {
+        val h = RegistryHarness(dir, this)
+        TestProcess(h, this).apply { h.install(registry, "skeleton", 1); h.install(registry, "kestrel", 1); advanceTimeBy(60_000); end() }
+        // A death with no Java crash (a native one, a kill) as skeleton's code loads: the process ends, nothing is blamed.
+        h.loading.throwing["skeleton" to 1L] = { OutOfMemoryError("stands for a death the process can't report") }
+        repeat(2) { TestProcess(h, this).apply { advanceTimeBy(1_000); end(); advanceTimeBy(60_000) } }
+        h.loading.throwing.clear()
+        val next = TestProcess(h, this)
+        advanceUntilIdle()
+        assertEquals(PluginStatus.OffAfterCrash, next.registry.installed("skeleton").status)
+        assertTrue(next.registry.running("kestrel") != null)
+        assertFalse(File(h.files, "plugins/crash.json").exists(), "no crash was blamed")
+        next.end()
+    }
+
+    @Test
     fun `a load that came back without the plugin running ends its marker too`() {
         guard().apply {
             startCheck(listOf(skeleton1))
