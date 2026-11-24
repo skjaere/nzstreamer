@@ -569,7 +569,10 @@ val copyTestPlugins by tasks.registering(Sync::class) {
     }
     into(layout.buildDirectory.dir("test-plugins"))
 }
-tasks.named { it.startsWith("merge") && it.endsWith("AndroidTestAssets") }.configureEach { dependsOn(copyTestPlugins) }
+// Lint's androidTest model and analysis read the same folder, so they wait for it too.
+tasks.named {
+    (it.startsWith("merge") && it.endsWith("AndroidTestAssets")) || (it.contains("AndroidTest") && it.contains("lint", ignoreCase = true))
+}.configureEach { dependsOn(copyTestPlugins) }
 
 // checkMinApi: the usenet libraries are compiled for JVM 17 so D8 can dex them, but nothing
 // limits them to the JDK APIs Android has, and lint's NewApi does not read included builds'
