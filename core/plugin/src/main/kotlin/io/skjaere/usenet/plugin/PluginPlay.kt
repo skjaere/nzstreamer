@@ -68,7 +68,8 @@ class SearchOffer(val words: String, val note: String?)
 /**
  * Chooses the item's file in a release, as the host's own pickers choose an episode's. Called while the play waits for
  * its answer: quick, and without I/O. A throw from it fails the play with [noMatch] and turns the version off ("Turned
- * off after an error").
+ * off after an error"). A member a later minor adds to this interface has a body, which a picker built before it
+ * inherits.
  */
 interface PluginFilePicker {
     /** The index in [files] of the item's file, or null when none is: the play then fails with [noMatch]. */

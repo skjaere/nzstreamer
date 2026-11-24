@@ -22,6 +22,8 @@ android {
         // PluginApiTest reads plugin-api.txt, which the tests' classes don't carry: a change to it alone runs the test again
         // rather than reusing its result.
         it.inputs.file("plugin-api.txt").withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("pluginApiVersion")
+        // It reads the API's KDoc too, which no class file carries.
+        it.inputs.dir("src/main/kotlin").withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("apiSources")
     }
 }
 

@@ -55,8 +55,7 @@ fun main(args: Array<String>) {
                 "${dump.name} matches the classes.",
                 differences,
                 "The plugin API's dump ${dump.name} differs from the classes",
-                "A change made on purpose: write the dump again with the project's dumpPluginApi task, and keep L614's rules " +
-                    "(once a plugin is released, an addition raises plugin-api.txt's minor, a change or a removal its major).",
+                DUMP_ADVICE,
                 report,
             )
         }
@@ -65,6 +64,15 @@ fun main(args: Array<String>) {
 }
 
 private const val MIN_SDK = 26
+
+/**
+ * What check-dump says to do about a difference: L614's rule, and the two additions that are a minor only as the API's
+ * KDoc keeps them.
+ */
+internal const val DUMP_ADVICE = "A change made on purpose: write the dump again with the project's dumpPluginApi task, and keep L614's rules " +
+    "(once a plugin is released, an addition raises plugin-api.txt's minor, a change or a removal its major). A value added to an " +
+    "enum the host hands plugins is an addition only because their `when` keeps an else branch, as each enum's KDoc says; a " +
+    "member added to an interface a plugin implements (NzPlugin, PluginFilePicker) must have a body, or it is a change."
 
 private fun rules(
     id: String, apk: File, versionCode: Int, apiMajor: Int, apiMinor: Int, sharedJars: List<File>,

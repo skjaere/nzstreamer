@@ -95,6 +95,34 @@ class PluginApiTest {
         assertEquals(emptyList(), data.map { it.name })
     }
 
+    /**
+     * Two additions a later minor may make that would break a plugin built before it, unless the API says so from 1.0 on
+     * (L614): a value added to an enum the host hands plugins (an exhaustive `when` over it throws on a value it doesn't
+     * know), and a member added to an interface a plugin implements (an older plugin's class lacks it). Each one's KDoc
+     * says what keeps a plugin safe: an else branch, a body.
+     */
+    @Test
+    fun `each enum the host hands plugins says a minor may add a value, each interface a plugin implements a body`() {
+        val sources = File("src/main/kotlin/io/skjaere/usenet/plugin").listFiles().orEmpty().filter { it.extension == "kt" }.map { it.readText() }
+        val enums = sources.flatMap { text -> Regex("""enum class (\w+)""").findAll(text).map { it.groupValues[1] to kdocBefore(text, it.range.first) }.toList() }
+        assertEquals(setOf("AddressSafety", "State", "Kind"), enums.map { it.first }.toSet(), "the API's enums")
+        enums.forEach { (name, doc) ->
+            assertTrue(doc.contains("a later minor may add a value", ignoreCase = true) && "else branch" in doc, "$name's KDoc: '$doc'")
+        }
+        listOf("NzPlugin", "PluginFilePicker").forEach { name ->
+            val text = sources.single { "interface $name {" in it }
+            val doc = kdocBefore(text, text.indexOf("interface $name {"))
+            assertTrue("a later minor adds" in doc && "has a body" in doc, "$name's KDoc: '$doc'")
+        }
+    }
+
+    /** The KDoc right before [at] in [text], its lines joined; "" where none is. */
+    private fun kdocBefore(text: String, at: Int): String {
+        val end = text.lastIndexOf("*/", at)
+        if (end < 0 || text.substring(end + 2, at).isNotBlank()) return ""
+        return text.substring(text.lastIndexOf("/**", end) + 3, end).lines().joinToString(" ") { it.trim().removePrefix("*").trim() }.trim()
+    }
+
     /** Every class compiled into the API's package, nested ones too, from the folder or jar the test's class path has them in. */
     private fun apiClasses(): List<Class<*>> {
         val location = File((PluginApi::class.java.protectionDomain?.codeSource?.location ?: error("The API's classes have no location")).toURI())

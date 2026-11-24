@@ -24,6 +24,10 @@ class HttpAnswer(val status: Int, val headers: Map<String, String>, val body: By
 
 /** A request that got no answer, for the [kind] of reason. Its message names no address. */
 class PluginHttpException(val kind: Kind, message: String) : IOException(message) {
+    /**
+     * Why a request got no answer. A later minor may add a value a later NZStreamer throws with: a `when` over it keeps an
+     * else branch.
+     */
     enum class Kind {
         /** No answer in time. */
         Timeout,

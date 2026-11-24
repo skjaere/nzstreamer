@@ -19,6 +19,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
  * crash guard turns that version off at the next start ("Turned off after a crash"). A throw from [tab] or [close], or one
  * that escapes [PluginHost.scope], turns the version off at once ("Turned off after an error") and leaves NZStreamer
  * running.
+ *
+ * A member a later minor adds to this interface has a body, which a plugin built before it inherits: its class keeps
+ * working unchanged.
  */
 interface NzPlugin {
     /**

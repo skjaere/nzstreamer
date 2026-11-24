@@ -85,6 +85,14 @@ class ApiDumpTest {
         )
     }
 
+    /** check-dump's advice when the dump differs: L614's rule, and the two additions that are a minor only as the KDoc keeps them. */
+    @Test
+    fun `the check's advice names the additions that are a minor only with an else branch or a body`() {
+        assertTrue("addition raises plugin-api.txt's minor" in DUMP_ADVICE, DUMP_ADVICE)
+        assertTrue("enum" in DUMP_ADVICE && "else branch" in DUMP_ADVICE, DUMP_ADVICE)
+        assertTrue("interface a plugin implements" in DUMP_ADVICE && "a body" in DUMP_ADVICE, DUMP_ADVICE)
+    }
+
     @Test
     fun `the dump is sorted and stable`() {
         assertEquals(dump(), dump(classes.reversed()))

@@ -3,7 +3,9 @@ package io.skjaere.usenet.plugin
 /**
  * The plugin API's version, and the names of the meta-data a plugin's manifest carries, which its build writes (L584).
  * NZStreamer loads a plugin built against the same [MAJOR] as its own and a [MINOR] not above its own: a minor adds
- * members, never changes or removes one; a change or a removal raises the major (L614).
+ * members, never changes or removes one; a change or a removal raises the major (L614). Two additions are a minor only
+ * as the API's KDoc keeps them: a value of an enum the host hands plugins (a plugin's `when` over one keeps an else
+ * branch), and a member of an interface a plugin implements, [NzPlugin] and [PluginFilePicker] (it has a body).
  */
 object PluginApi {
     const val MAJOR = 1

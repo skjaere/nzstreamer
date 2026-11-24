@@ -39,6 +39,10 @@ class IndexerLine(
      */
     val text: String,
 ) {
+    /**
+     * Where the indexer is in the search. A later minor may add a value a later NZStreamer shows: a `when` over it keeps
+     * an else branch, which can show [text] as it is.
+     */
     enum class State {
         /** Asked, not yet answered. */
         Searching,

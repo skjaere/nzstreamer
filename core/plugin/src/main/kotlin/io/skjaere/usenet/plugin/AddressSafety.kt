@@ -1,6 +1,9 @@
 package io.skjaere.usenet.plugin
 
-/** How exposed an address leaves a key sent to it ([PluginHost.addressSafety]), as NZStreamer judges its indexers'. */
+/**
+ * How exposed an address leaves a key sent to it ([PluginHost.addressSafety]), as NZStreamer judges its indexers'. A
+ * later minor may add a value a later NZStreamer answers with: a `when` over it keeps an else branch.
+ */
 enum class AddressSafety {
     /** https: encrypted. */
     Encrypted,
