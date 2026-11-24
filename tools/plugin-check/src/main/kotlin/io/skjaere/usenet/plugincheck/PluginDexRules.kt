@@ -46,7 +46,10 @@ class SharedClasses(private val classes: Set<String>) {
  * - no class that declares Parcelable or Serializable among its own interfaces: after a process death the host restores
  *   saved state with its own class loader, which can't make a plugin's types. Only its own interfaces: every suspend
  *   lambda inherits Serializable from Kotlin's base classes, and every enum from java.lang.Enum;
- * - no R class, no lib/ entry and no res/ entry: plugins carry no resources (L580) and no native library.
+ * - no R class with resource ids (an R$<type> class, or fields of R's own), no reference to any R class, and no lib/ or
+ *   res/ entry: plugins carry no resources (L580) and no native library. The empty R class an app's build always makes,
+ *   with no resources and nothing naming it, passes: Android's build has no switch for it, and stripping it is a step
+ *   the plugin build doesn't take (L586).
  *
  * Each violation is reported once, with how many references it has.
  */
@@ -71,7 +74,12 @@ class PluginDexRules(id: String, private val shared: SharedClasses) {
         else -> "carries ${dotted(name)}, outside $packageName"
     }
 
-    private fun rClass(cls: DexClass): String? = "carries ${dotted(cls.name)}, an R class: plugins have no resources".takeIf { isR(cls.name) }
+    // Only an R class that holds ids: the empty R every app's build makes holds none.
+    private fun rClass(cls: DexClass): String? {
+        val simpleName = cls.name.substringAfterLast('/')
+        val holdsIds = simpleName.startsWith("R$") || simpleName == "R" && cls.fields.isNotEmpty()
+        return "carries ${dotted(cls.name)}, an R class: plugins have no resources".takeIf { holdsIds }
+    }
 
     private fun declaresSaved(cls: DexClass): String? = cls.interfaces.firstOrNull { it in SAVED }?.let {
         "${dotted(cls.name)} declares ${dotted(it)}: after a process death the host can't make a plugin's types again"
@@ -90,12 +98,14 @@ class PluginDexRules(id: String, private val shared: SharedClasses) {
             is Reference.Field -> "${dotted(reference.owner)}#${reference.name}"
         }
         return when {
-            owner.startsWith("[") || owner.startsWith(own) -> null
+            owner.startsWith("[") -> null
+            // Any R class, its own too: nothing of a plugin's reads a resource.
+            isR(owner) -> "$where: ${dotted(owner)}, an R class: plugins use no resources"
+            owner.startsWith(own) -> null
             owner == LOG -> "$where: $named, whose lines reach logcat unredacted: log through slf4j"
             reference is Reference.Field && owner == SYSTEM && reference.name in setOf("out", "err") ||
                 reference is Reference.Method && reference.name == "printStackTrace" && reference.descriptor == "()V" ->
                 "$where: $named, which reaches logcat unredacted: log through slf4j"
-            isR(owner) -> "$where: ${dotted(owner)}, an R class: plugins use no resources"
             owner in shared || owner.startsWith("android/") || owner.startsWith("java/") -> null
             owner.startsWith(NZSTREAMER) -> "$where: ${dotted(owner)}, NZStreamer's own outside the plugin API and the UI kit"
             else -> "$where: ${dotted(owner)}, which NZStreamer doesn't share with plugins"

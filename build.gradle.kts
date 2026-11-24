@@ -1,5 +1,11 @@
+import com.android.build.api.artifact.SingleArtifact
+import com.android.build.api.dsl.ApplicationExtension
+import com.android.build.api.variant.ApplicationAndroidComponentsExtension
+import org.gradle.api.configuration.BuildFeatures
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
+import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 import java.time.Duration
+import javax.inject.Inject
 
 plugins {
     alias(libs.plugins.android.application) apply false
@@ -133,4 +139,227 @@ listOf(":core:plugin", ":core:ui").forEach { path ->
             tasks.named("check") { dependsOn(checkPluginApi) }
         }
     }
+}
+
+// The plugin API's version, as core/plugin/plugin-api.txt holds it (L614), and the shared libraries plugins take from the
+// app at run time (L615), name=version in L615's order, from this catalog. A plugin's build stamps both in its manifest
+// (the convention below), the app carries the libraries as BuildConfig.PLUGIN_HOST_LIBS, and the host compares the two
+// before it loads a plugin (L584).
+val pluginApi: List<Int> = providers.fileContents(layout.projectDirectory.file("core/plugin/plugin-api.txt")).asText.orNull?.trim()
+    ?.let { Regex("""(0|[1-9]\d*)\.(0|[1-9]\d*)""").matchEntire(it) }?.groupValues?.drop(1)?.map { it.toInt() }
+    ?: throw GradleException("core/plugin/plugin-api.txt must hold the plugin API's version, MAJOR.MINOR")
+val pluginHostLibs: String = listOf<Pair<String, String?>>(
+    // libs.versions.kotlin is also the group of kotlin-compression-utils' version: its own value is asProvider()'s.
+    "kotlin-stdlib" to libs.versions.kotlin.asProvider().get(),
+    "kotlinx-coroutines" to libs.versions.coroutines.get(),
+    "kotlinx-serialization-json" to libs.kotlinx.serialization.json.get().version,
+    "compose-bom" to libs.versions.compose.bom.get(),
+    "lifecycle-viewmodel-compose" to libs.versions.lifecycle.get(),
+    "activity-compose" to libs.versions.activity.compose.get(),
+    "slf4j-api" to libs.versions.slf4j.get(),
+).joinToString(",") { (name, version) -> "$name=${requireNotNull(version) { "the catalog names no version of $name" }}" }
+extra["pluginApiMajor"] = pluginApi[0]
+extra["pluginApiMinor"] = pluginApi[1]
+extra["pluginHostLibs"] = pluginHostLibs
+
+// Gradle's own word on whether the configuration cache is asked for or on, as the app's beta reads it.
+abstract class PluginBuildFeatures @Inject constructor(val features: BuildFeatures)
+
+// The plugin convention (L586, L623, L624): every :plugins:<id> project, an Android application whose own build file names
+// its plugins and nothing else, is built here as NZStreamer loads it.
+// - app.nzstreamer.plugin.<id>, minSdk 26, targetSdk and compileSdk 36, Java 17, its version from plugins/<id>/version.txt
+//   (versionCode ((MAJOR * 100 + MINOR) * 100 + PATCH) * 100, as the app's).
+// - Its manifest's meta-data from placeholders: nzsPluginId, nzsApiMajor and nzsApiMinor (plugin-api.txt's two numbers,
+//   stored as integers, L584) and nzsLibs (the shared libraries above). The manifest names its entry class itself.
+// - L615's libraries, the plugin API and the UI kit compileOnly: they come from the app's class loader, so the APK carries
+//   the plugin's classes alone. Kotlin's standard library, which the Kotlin plugin adds by itself, is kept out of the
+//   APK's runtime classpath too (not the tests'). No stripping, and no R8 (it would rename what the host calls).
+// - Its resources' package id 0x7e: plugins carry none (L580), and a stray one could never take an id of the app's.
+// - Its release build signed with the beta key from the four beta* properties CI's release workflow gives as
+//   ORG_GRADLE_PROJECT_ variables, and only where GITHUB_ACTIONS is true. A plugin release build asked for anywhere else,
+//   or given -PbetaSigning, fails here, at configuration, naming no path: the beta key's copy on a workstation (W158) can
+//   never sign a plugin by accident. Asked for means a task that packages a release (assembleRelease, bundleRelease,
+//   packageRelease, installRelease, with a flavour or not) by the plugin's path, or by name alone, which Gradle runs in
+//   every project that has it. Anything else (assemble, build) packages a plugin's release unsigned outside CI.
+// - plugin-check's rules (L625) after every assemble, and for the debug builds in check.
+subprojects {
+    if (!path.startsWith(":plugins:")) return@subprojects
+    val pluginId = name
+    require(Regex("[a-z][a-z0-9]{0,30}").matches(pluginId) && pluginId != "true" && pluginId != "false") {
+        "A plugin's folder under plugins/ is its id: a lower-case letter, then up to 30 lower-case letters and digits, " +
+            "neither true nor false (L612)"
+    }
+    pluginManager.withPlugin("com.android.application") {
+        val version: String = providers.fileContents(layout.projectDirectory.file("version.txt")).asText.orNull?.trim()
+            ?: throw GradleException("plugins/$pluginId/version.txt is missing: it holds the plugin's version, MAJOR.MINOR.PATCH")
+        val versionCode: Int = Regex("""(0|[1-9]\d{0,3})\.(0|[1-9]\d?)\.(0|[1-9]\d?)""").matchEntire(version)
+            ?.destructured?.let { (major, minor, patch) -> ((major.toInt() * 100 + minor.toInt()) * 100 + patch.toInt()) * 100 }
+            ?.takeIf { version.substringBefore('.').toInt() < 2100 }
+            ?: throw GradleException(
+                "plugins/$pluginId/version.txt holds '$version': it must be MAJOR.MINOR.PATCH with MINOR and PATCH under 100 " +
+                    "and MAJOR under 2100",
+            )
+        val release = pluginReleaseKey(pluginId)
+
+        extensions.configure<ApplicationExtension> {
+            namespace = "app.nzstreamer.plugin.$pluginId"
+            compileSdk = 36
+            defaultConfig {
+                applicationId = "app.nzstreamer.plugin.$pluginId"
+                minSdk = 26
+                targetSdk = 36
+                this.versionCode = versionCode
+                versionName = version
+                manifestPlaceholders += mapOf(
+                    "nzsPluginId" to pluginId,
+                    "nzsApiMajor" to "${pluginApi[0]}",
+                    "nzsApiMinor" to "${pluginApi[1]}",
+                    "nzsLibs" to pluginHostLibs,
+                )
+            }
+            compileOptions {
+                sourceCompatibility = JavaVersion.VERSION_17
+                targetCompatibility = JavaVersion.VERSION_17
+            }
+            buildFeatures { compose = true }
+            androidResources { additionalParameters += listOf("--package-id", "0x7e", "--allow-reserved-package-id") }
+            release?.let { key ->
+                signingConfigs.create("pluginRelease") {
+                    storeFile = key.store
+                    storePassword = key.storePassword
+                    keyAlias = key.alias
+                    keyPassword = key.keyPassword
+                }
+            }
+            buildTypes.getByName("release") {
+                isMinifyEnabled = false
+                if (release != null) signingConfig = signingConfigs.getByName("pluginRelease")
+            }
+        }
+        // The Kotlin plugin applies after Android's, as each plugin's build file names them.
+        pluginManager.withPlugin("org.jetbrains.kotlin.android") {
+            extensions.configure<KotlinAndroidProjectExtension> { jvmToolchain(17) }
+        }
+
+        dependencies {
+            "compileOnly"(project(":core:plugin"))
+            "compileOnly"(project(":core:ui"))
+            "compileOnly"(platform(libs.compose.bom))
+            "compileOnly"(libs.compose.ui)
+            "compileOnly"(libs.compose.material3)
+            "compileOnly"(libs.compose.material.icons.core)
+            "compileOnly"(libs.kotlinx.coroutines.core)
+            "compileOnly"(libs.kotlinx.serialization.json)
+            "compileOnly"(libs.lifecycle.viewmodel.compose)
+            "compileOnly"(libs.activity.compose)
+            "compileOnly"(libs.slf4j.api)
+        }
+        configurations.configureEach {
+            val tests = name.endsWith("UnitTestRuntimeClasspath") || name.endsWith("AndroidTestRuntimeClasspath")
+            if (name.endsWith("RuntimeClasspath") && !tests) exclude(group = "org.jetbrains.kotlin")
+        }
+
+        // plugin-check's rules on each build's APK: its dex, entries, manifest and resources (L625).
+        val pluginCheckTool = configurations.create("pluginCheckTool") {
+            isCanBeConsumed = false
+            attributes { attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage.JAVA_RUNTIME)) }
+        }
+        dependencies { pluginCheckTool(project(":tools:plugin-check")) }
+        val android = extensions.getByType<ApplicationExtension>()
+        val androidComponents = extensions.getByType<ApplicationAndroidComponentsExtension>()
+        androidComponents.onVariants { variant ->
+            val capitalized = variant.name.replaceFirstChar { it.uppercase() }
+            // Locals: the argument provider must not capture the script (configuration cache).
+            val apkDir = variant.artifacts.get(SingleArtifact.APK)
+            val apkLoader = variant.artifacts.getBuiltArtifactsLoader()
+            val expectedCode = variant.outputs.single().versionCode
+            val apiMajor = variant.manifestPlaceholders.getting("nzsApiMajor")
+            val apiMinor = variant.manifestPlaceholders.getting("nzsApiMinor")
+            // The plugin API's and the UI kit's class jars, as this build compiles against them: the classes a plugin may name.
+            val sharedJars = configurations.getByName("${variant.name}CompileClasspath").incoming.artifactView {
+                attributes { attribute(Attribute.of("artifactType", String::class.java), "android-classes-jar") }
+                componentFilter { it is ProjectComponentIdentifier && it.projectPath in setOf(":core:plugin", ":core:ui") }
+            }.files
+            val sdkDir = androidComponents.sdkComponents.sdkDirectory
+            val buildTools = sdkDir.map { it.dir("build-tools/${android.buildToolsVersion}") }
+            val platform = sdkDir.map { it.dir("platforms/android-${android.compileSdk}") }
+            val report = layout.buildDirectory.file("reports/checkPluginRules$capitalized.txt")
+            val rules = tasks.register<JavaExec>("checkPluginRules$capitalized") {
+                group = "verification"
+                description = "Fails when the ${variant.name} APK breaks the rules every plugin keeps (plugin-check, L625)."
+                inputs.dir(apkDir).withPropertyName("apk")
+                inputs.files(sharedJars).withPropertyName("sharedJars")
+                inputs.file(platform.map { it.file("android.jar") }).withPropertyName("androidJar")
+                inputs.file(platform.map { it.file("data/api-versions.xml") }).withPropertyName("apiVersions")
+                inputs.property("id", pluginId)
+                inputs.property("versionCode", expectedCode)
+                inputs.property("apiMajor", apiMajor)
+                inputs.property("apiMinor", apiMinor)
+                outputs.file(report)
+                classpath = pluginCheckTool
+                mainClass = "io.skjaere.usenet.plugincheck.MainKt"
+                argumentProviders += object : CommandLineArgumentProvider {
+                    // Only the APK the folder's metadata lists: a file an earlier build left there is not this build's.
+                    override fun asArguments(): List<String> {
+                        val apk = apkLoader.load(apkDir.get())?.elements?.singleOrNull()?.outputFile
+                            ?: error("No single APK in the metadata of ${apkDir.get()}")
+                        return listOf(
+                            "rules", "--id", pluginId, "--apk", apk,
+                            "--version-code", "${expectedCode.get()}", "--api-major", apiMajor.get(), "--api-minor", apiMinor.get(),
+                            "--aapt2", buildTools.get().file("aapt2").asFile.path, "--dexdump", buildTools.get().file("dexdump").asFile.path,
+                            "--android-jar", platform.get().file("android.jar").asFile.path,
+                            "--api-versions", platform.get().file("data/api-versions.xml").asFile.path,
+                            "--report", report.get().asFile.path,
+                        ) + sharedJars.flatMap { listOf("--shared-jar", it.path) }
+                    }
+                }
+            }
+            tasks.named { it == "assemble$capitalized" }.configureEach { finalizedBy(rules) }
+            if (variant.debuggable) tasks.named("check") { dependsOn(rules) }
+        }
+    }
+}
+
+class PluginReleaseKey(val store: File, val storePassword: String, val alias: String, val keyPassword: String)
+
+/**
+ * The beta key for [pluginId]'s release build, or null when this build asks for none (the convention above). Asked for,
+ * it comes only from CI: GITHUB_ACTIONS true, no -PbetaSigning, the four beta* properties, and no configuration cache,
+ * which would store the passwords in its entry. Else the build fails here, at configuration. The messages name
+ * properties, never a path or a value.
+ */
+fun Project.pluginReleaseKey(pluginId: String): PluginReleaseKey? {
+    val packaging = Regex("""(assemble|bundle|package|install|sign)[A-Za-z0-9]*Release[A-Za-z0-9]*""")
+    val asked = gradle.startParameter.taskNames.any { request ->
+        packaging.matches(request.substringAfterLast(':')) &&
+            (':' !in request || request.substringBeforeLast(':').removePrefix(":") == path.removePrefix(":"))
+    }
+    if (!asked) return null
+    require(providers.gradleProperty("betaSigning").orNull == null) {
+        "A plugin's release build never takes -PbetaSigning: plugins are signed in CI's release workflow alone, with the " +
+            "key from its environment (L624)"
+    }
+    require(providers.environmentVariable("GITHUB_ACTIONS").orNull == "true") {
+        "A plugin's release build runs in CI's release workflow alone, where plugins are signed with the key from its " +
+            "environment (L624). Build $pluginId's debug build here, and ask for the app's release by its path (:app:assembleRelease)"
+    }
+    val names = listOf("betaStoreFile", "betaStorePassword", "betaKeyAlias", "betaKeyPassword")
+    val given = names.associateWith { name -> providers.gradleProperty(name).orNull?.takeIf { it.isNotBlank() } }
+    val missing = given.filterValues { it == null }.keys
+    require(missing.isEmpty()) {
+        val listed = missing.toList().let { if (it.size == 1) it.single() else it.dropLast(1).joinToString(", ") + " and " + it.last() }
+        "A plugin's release build needs the key's four properties from CI's environment: $listed " +
+            "${if (missing.size == 1) "is" else "are"} missing"
+    }
+    val configurationCache = objects.newInstance<PluginBuildFeatures>().features.configurationCache
+    require(!configurationCache.requested.getOrElse(false) && !configurationCache.active.get()) {
+        "A plugin's release build never uses the configuration cache, which would store the key's passwords: build it with " +
+            "--no-configuration-cache"
+    }
+    val store = File(given.getValue("betaStoreFile")!!.trim())
+    require(store.isAbsolute) { "betaStoreFile must be an absolute path" }
+    require(store.isFile) { "betaStoreFile names no file: give the absolute path of the key's store" }
+    return PluginReleaseKey(
+        store, given.getValue("betaStorePassword")!!, given.getValue("betaKeyAlias")!!, given.getValue("betaKeyPassword")!!,
+    )
 }

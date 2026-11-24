@@ -72,9 +72,13 @@ class PluginDexRulesTest {
     }
 
     @Test
-    fun `an R class, and a reference to one, are flagged`() {
+    fun `an R class with resource ids, and a reference to an R class, are flagged, not the empty R every app build makes`() {
         val flagged = violations()
-        assertTrue(flagged has "carries app.nzstreamer.plugin.kestrel.R, an R class: plugins have no resources")
+        assertTrue(flagged has "carries app.nzstreamer.plugin.kestrel.R\$drawable, an R class: plugins have no resources")
+        assertTrue(flagged.none { it.startsWith("carries app.nzstreamer.plugin.kestrel.R,") }, flagged.joinToString("\n"))
+        assertTrue(
+            flagged has "app.nzstreamer.plugin.kestrel.Pages.draw: app.nzstreamer.plugin.kestrel.R\$drawable, an R class: plugins use no resources",
+        )
         assertTrue(
             flagged has "app.nzstreamer.plugin.kestrel.Pages.draw: io.skjaere.usenet.ui.R\$font, an R class: plugins use no resources",
         )
@@ -106,6 +110,7 @@ class PluginDexRulesTest {
                     "plugin's types again",
                 "app.nzstreamer.plugin.kestrel.Pages.draw: android.util.Log#i(Ljava/lang/String;Ljava/lang/String;)I, whose lines " +
                     "reach logcat unredacted: log through slf4j (2 references)",
+                "app.nzstreamer.plugin.kestrel.Pages.draw: app.nzstreamer.plugin.kestrel.R\$drawable, an R class: plugins use no resources",
                 "app.nzstreamer.plugin.kestrel.Pages.draw: io.skjaere.usenet.app.AppContainer, NZStreamer's own outside the plugin " +
                     "API and the UI kit",
                 "app.nzstreamer.plugin.kestrel.Pages.draw: io.skjaere.usenet.ui.R\$font, an R class: plugins use no resources",
@@ -118,7 +123,7 @@ class PluginDexRulesTest {
                 "app.nzstreamer.plugin.kestrel.Saved declares android.os.Parcelable: after a process death the host can't make a " +
                     "plugin's types again",
                 "carries androidx.compose.runtime.ComposerKt, which NZStreamer gives every plugin: take its library compileOnly",
-                "carries app.nzstreamer.plugin.kestrel.R, an R class: plugins have no resources",
+                "carries app.nzstreamer.plugin.kestrel.R\$drawable, an R class: plugins have no resources",
                 "carries com.example.Other, outside app.nzstreamer.plugin.kestrel",
             ),
             violations(),
@@ -230,6 +235,7 @@ class PluginDexRulesTest {
             00b136: 2203 5700                              |0013: new-instance v3, Lokhttp3/OkHttpClient; // type@0057
             00b13a: 7010 5800 0300                         |0015: invoke-direct {v3}, Lokhttp3/OkHttpClient;.<init>:()V // method@0058
             00b140: 6004 5900                              |0018: sget v4, Lio/skjaere/usenet/ui/R${'$'}font;.sora:I // field@0059
+            00b142: 6004 5b00                              |0019: sget v4, Lapp/nzstreamer/plugin/kestrel/R${'$'}drawable;.cup:I // field@005b
             00b144: 6e20 5a00 1500                         |001a: invoke-virtual {v5, v1}, Ljava/io/PrintStream;.println:(Ljava/lang/Object;)V // method@005a
             00b14a: 0e00                                   |001d: return-void
                   catches       : (none)
@@ -296,8 +302,37 @@ class PluginDexRulesTest {
               Static fields     -
               Instance fields   -
               Direct methods    -
+                #0              : (in Lapp/nzstreamer/plugin/kestrel/R;)
+                  name          : '<init>'
+                  type          : '()V'
+                  access        : 0x10002 (PRIVATE CONSTRUCTOR)
+                  code          -
+                  registers     : 1
+                  ins           : 1
+                  outs          : 1
+                  insns size    : 4 16-bit code units
+            0000d0:                                        |[0000d0] app.nzstreamer.plugin.kestrel.R.<init>:()V
+            0000e0: 7010 0100 0000                         |0000: invoke-direct {v0}, Ljava/lang/Object;.<init>:()V // method@0001
+            0000e6: 0e00                                   |0003: return-void
+                  catches       : (none)
+
               Virtual methods   -
-              source_file_idx   : 106 (R.java)
+              source_file_idx   : -1 (unknown)
+
+            Class #9            -
+              Class descriptor  : 'Lapp/nzstreamer/plugin/kestrel/R${'$'}drawable;'
+              Access flags      : 0x0019 (PUBLIC STATIC FINAL)
+              Superclass        : 'Ljava/lang/Object;'
+              Interfaces        -
+              Static fields     -
+                #0              : (in Lapp/nzstreamer/plugin/kestrel/R${'$'}drawable;)
+                  name          : 'cup'
+                  type          : 'I'
+                  access        : 0x0019 (PUBLIC STATIC FINAL)
+              Instance fields   -
+              Direct methods    -
+              Virtual methods   -
+              source_file_idx   : -1 (unknown)
 
             Class #7            -
               Class descriptor  : 'Landroidx/compose/runtime/ComposerKt;'

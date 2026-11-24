@@ -234,6 +234,14 @@ val betaKey: BetaKey? = if (betaBuild == null) null else {
     }
 }
 
+// What every build knows of plugins (L583, L584, W157, W158), in every build type: the one signer a plugin may have, the
+// beta key's certificate digest as tools/beta-cert.sha256 publishes it, and the shared libraries plugins take from the app
+// (L615), name=version from the catalog as the root build lists them for the plugins' own stamps (BuildConfigPinTest).
+val pluginSigner: String = providers.fileContents(rootProject.layout.projectDirectory.file("tools/beta-cert.sha256")).asText.orNull?.trim()
+    ?.takeIf { Regex("[0-9a-f]{64}").matches(it) }
+    ?: throw GradleException("tools/beta-cert.sha256 must hold the beta key's certificate digest, 64 lower-case hex digits")
+val pluginHostLibs: String by rootProject.extra
+
 android {
     namespace = "io.skjaere.usenet.app"
     compileSdk = 36
@@ -247,6 +255,9 @@ android {
         versionName = appVersion
         // AndroidJUnitRunner, with the device tests' own defaults set before any test (src/androidTest's AppTestRunner).
         testInstrumentationRunner = "io.skjaere.usenet.app.AppTestRunner"
+        // The plugins' pin and shared libraries (above): every build type has them (W157).
+        buildConfigField("String", "PLUGIN_SIGNER", pluginSigner.asBuildConfigString())
+        buildConfigField("String", "PLUGIN_HOST_LIBS", pluginHostLibs.asBuildConfigString())
         // armeabi-v7a: many Android TV devices run a 32-bit userspace on 64-bit CPUs. The yEnc wrapper
         // declares C size_t as its pointer-width SizeT, so its JNA calls hold on 32-bit ABIs too.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
@@ -367,6 +378,10 @@ android {
         it.inputs.file("src/main/AndroidManifest.xml").withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("manifest")
         it.inputs.file("src/main/assets/privacy.txt").withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("privacyText")
         it.inputs.file(rootProject.file("version.txt")).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("versionFile")
+        // BuildConfigPinTest reads the beta key's certificate digest and the version catalog, which the plugins' pin and
+        // shared libraries come from: a change to either alone runs it again too.
+        it.inputs.file(rootProject.file("tools/beta-cert.sha256")).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("pluginSigner")
+        it.inputs.file(rootProject.file("gradle/libs.versions.toml")).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("versionCatalog")
         // CastStartSourcesTest reads the sources it bans Google's widgets in as text, comments and the device tests' included,
         // and every resource's XML (L108): a comment, a device test or a layout changed alone runs it again too.
         it.inputs.files(fileTree("src") { include("main/kotlin/**", "discover/kotlin/**", "androidTest/kotlin/**", "release/kotlin/**", "main/res/**/*.xml") })
@@ -417,6 +432,8 @@ android {
     sourceSets["androidTest"].assets.srcDir(rootProject.layout.buildDirectory.dir("stream-bench"))
     // The media the shared mock NNTP server was seeded with, which the gap tests post again on a server of their own (LocalNntp).
     sourceSets["androidTest"].assets.srcDir("src/androidTest/fixtures")
+    // The skeleton plugin's four builds (L623), copied there by copyTestPlugins below: the plugins the device tests install.
+    sourceSets["androidTest"].assets.srcDir(layout.buildDirectory.dir("test-plugins"))
 
     // Discover (TMDB's lists: trending, popular, ...) is in the debug, bench and beta builds only, never in the release (Play)
     // build: its screens in src/discover, their JVM tests in src/testDiscover (src/test is release's too), its lists in
@@ -526,6 +543,27 @@ dependencies {
     // The phone setup's screen tests save into settings of their own, in memory.
     androidTestImplementation(libs.datastore.core)
 }
+
+// The skeleton plugin's four debug builds (L623) as the device tests' assets: skeleton-v1.apk, skeleton-v2.apk,
+// skeleton-foreign.apk (v2 signed with a throwaway key) and skeleton-newer.apk (built against the next plugin API minor).
+// The tests install them as the Plugins page installs a download, and none of them is ever released. Copied before the
+// test APK's assets are merged; plugin-check's rules run on each as it is built.
+val testPluginApks: Configuration by configurations.creating {
+    isCanBeConsumed = false
+}
+
+dependencies {
+    testPluginApks(project(":plugins:skeleton", "testPluginApks"))
+}
+
+val copyTestPlugins by tasks.registering(Sync::class) {
+    from(testPluginApks) {
+        include("*.apk")
+        rename("""skeleton-(\w+)-debug\.apk""", "skeleton-$1.apk")
+    }
+    into(layout.buildDirectory.dir("test-plugins"))
+}
+tasks.named { it.startsWith("merge") && it.endsWith("AndroidTestAssets") }.configureEach { dependsOn(copyTestPlugins) }
 
 // checkMinApi: the usenet libraries are compiled for JVM 17 so D8 can dex them, but nothing
 // limits them to the JDK APIs Android has, and lint's NewApi does not read included builds'
