@@ -2,7 +2,7 @@
 // convention builds it as every plugin; this file adds what makes it a test fixture:
 // - four builds of its debug build: v1 (versionCode 1), v2 (2), foreign (v2, signed with a throwaway key this build makes,
 //   which nothing trusts), and newer (3, stamped with the next minor of the plugin API, so a host of this tree's API
-//   refuses it whatever that version is);
+//   refuses it whatever that version is), each listed for plugin-check's rules, which hold a real plugin to its sources;
 // - its release build and its lint off;
 // - the four APKs offered to the app's device tests (testPluginApks, which :app copies into their assets).
 import com.android.build.api.artifact.SingleArtifact
@@ -68,6 +68,15 @@ android {
         }
     }
 }
+
+// What plugin-check's rules hold each build to (the root's convention reads it for the skeleton alone): its versionCode, and
+// the plugin API minor it is stamped with, under the tree's major. A flavour above that sets another fails its rules.
+extra["pluginCheckExpectations"] = mapOf(
+    "v1" to (1 to pluginApiMinor),
+    "v2" to (2 to pluginApiMinor),
+    "foreign" to (2 to pluginApiMinor),
+    "newer" to (3 to pluginApiMinor + 1),
+)
 
 androidComponents {
     beforeVariants(selector().withBuildType("release")) { it.enable = false }

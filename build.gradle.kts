@@ -181,7 +181,10 @@ abstract class PluginBuildFeatures @Inject constructor(val features: BuildFeatur
 //   never sign a plugin by accident. Asked for means a task that packages a release (assembleRelease, bundleRelease,
 //   packageRelease, installRelease, with a flavour or not) by the plugin's path, or by name alone, which Gradle runs in
 //   every project that has it. Anything else (assemble, build) packages a plugin's release unsigned outside CI.
-// - plugin-check's rules (L625) after every assemble, and for the debug builds in check.
+// - plugin-check's rules (L625) after every assemble, and for the debug builds in check, holding the APK to what the
+//   sources say: version.txt's versionCode and plugin-api.txt's stamp, whatever the plugin's build file set. The
+//   skeleton's builds are test fixtures with versions and a stamp of their own (L623), which its build file lists for the
+//   rules as pluginCheckExpectations; no other plugin's is read.
 subprojects {
     if (!path.startsWith(":plugins:")) return@subprojects
     val pluginId = name
@@ -272,9 +275,16 @@ subprojects {
             // Locals: the argument provider must not capture the script (configuration cache).
             val apkDir = variant.artifacts.get(SingleArtifact.APK)
             val apkLoader = variant.artifacts.getBuiltArtifactsLoader()
-            val expectedCode = variant.outputs.single().versionCode
-            val apiMajor = variant.manifestPlaceholders.getting("nzsApiMajor")
-            val apiMinor = variant.manifestPlaceholders.getting("nzsApiMinor")
+            // What the APK must say, from the sources: a build file that changes its versionCode or its stamp fails here.
+            val fixture = if (path == ":plugins:skeleton") {
+                ((extra.properties["pluginCheckExpectations"] as? Map<*, *>)?.get(variant.flavorName) as? Pair<*, *>)
+                    ?: throw GradleException("The skeleton's build ${variant.flavorName} has no pluginCheckExpectations entry")
+            } else {
+                null
+            }
+            val expectedCode: Int = fixture?.first as? Int ?: versionCode
+            val apiMajor = "${pluginApi[0]}"
+            val apiMinor = "${fixture?.second as? Int ?: pluginApi[1]}"
             // The plugin API's and the UI kit's class jars, as this build compiles against them: the classes a plugin may name.
             val compileClasspath = configurations.getByName("${variant.name}CompileClasspath")
             val classesJar = Attribute.of("artifactType", String::class.java)
@@ -325,7 +335,7 @@ subprojects {
                             ?: error("No single APK in the metadata of ${apkDir.get()}")
                         return listOf(
                             "rules", "--id", pluginId, "--apk", apk,
-                            "--version-code", "${expectedCode.get()}", "--api-major", apiMajor.get(), "--api-minor", apiMinor.get(),
+                            "--version-code", "$expectedCode", "--api-major", apiMajor, "--api-minor", apiMinor,
                             "--aapt2", buildTools.get().file("aapt2").asFile.path, "--dexdump", buildTools.get().file("dexdump").asFile.path,
                             "--android-jar", platform.get().file("android.jar").asFile.path,
                             "--api-versions", platform.get().file("data/api-versions.xml").asFile.path,
