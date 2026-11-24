@@ -223,13 +223,13 @@ fun SettingsScreen(
     }
 }
 
-/** A row of the Settings hub, by the page it opens, with its [title]. */
 /**
  * The saved-state key on a TV's Settings entry of the hub row its screen comes back to where none of its rows opened what
  * covers it ([SettingsScreen]'s comesBackTo).
  */
 const val SETTINGS_COMES_BACK_TO = "settingsComesBackTo"
 
+/** A row of the Settings hub, by the page it opens, with its [title]. */
 enum class HubRow(val title: String) {
     PhoneSetup(PHONE_SETUP_TITLE),
     Phones(PHONES_TITLE),

@@ -69,10 +69,10 @@ import io.skjaere.usenet.app.settings.LogsScreen
 import io.skjaere.usenet.app.settings.MetadataScreen
 import io.skjaere.usenet.app.settings.PlaybackScreen
 import io.skjaere.usenet.app.settings.PluginsScreen
-import io.skjaere.usenet.app.settings.SETTINGS_COMES_BACK_TO
 import io.skjaere.usenet.app.settings.PrivacyScreen
 import io.skjaere.usenet.app.settings.ProviderScreen
 import io.skjaere.usenet.app.settings.ProvidersScreen
+import io.skjaere.usenet.app.settings.SETTINGS_COMES_BACK_TO
 import io.skjaere.usenet.app.settings.SettingsScreen
 import io.skjaere.usenet.app.settings.ThisDeviceScreen
 import io.skjaere.usenet.app.setup.PhoneSetupScreen
