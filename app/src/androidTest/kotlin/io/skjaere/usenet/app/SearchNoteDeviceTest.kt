@@ -68,12 +68,21 @@ class SearchNoteDeviceTest {
     private lateinit var saved: AppSettings
     private lateinit var recent: Set<String>
 
+    /**
+     * The recent searches by when each was searched, as the test began: a noted search kept would add its words, or, where
+     * they were searched before (an earlier class, a run stopped before its clean-up), search them again.
+     */
+    private lateinit var recentAt: Map<String, Long>
+
+    private fun recentNow(): Map<String, Long> = runBlocking { library.recentSearches.first().associate { it.key to it.searchedAt } }
+
     @Before
     fun setUp() = runBlocking<Unit> {
         assumeTrue("mock NNTP server not reachable at 10.0.2.2:1119", reachable(1119))
         assumeTrue("fake indexer not reachable at 10.0.2.2:8089 (mock-seed indexer)", reachable(8089))
         saved = settings.settings.first()
         recent = library.recentSearches.first().map { it.key }.toSet()
+        recentAt = recentNow()
         // Hidden, not deleted: deleting would remove their passwords from the secret store.
         settings.restore(saved.copy(providers = saved.providers.map { it.copy(deleted = true) }))
         val mock = settings.saveProvider(ProviderRecord("", "Mock", "10.0.2.2", 1119, useTls = false, connections = 4), "")
@@ -107,7 +116,7 @@ class SearchNoteDeviceTest {
         val bounds = { m: SemanticsMatcher -> compose.onAllNodes(m)[0].fetchSemanticsNode().boundsInRoot }
         assertTrue("the note under what was searched", bounds(note).top >= bounds(header).bottom)
         assertTrue("the note above the results", bounds(note).bottom <= bounds(group).top)
-        assertEquals("a noted search kept in the recent searches", recent, runBlocking { library.recentSearches.first().map { it.key }.toSet() })
+        assertEquals("a noted search kept in the recent searches", recentAt, recentNow())
 
         // Its releases: the note under the sorts, above the first release.
         compose.onAllNodes(group)[0].performClick()
@@ -143,7 +152,7 @@ class SearchNoteDeviceTest {
         waitFor(header, 60_000)
         waitFor(note)
         waitFor(group, 60_000)
-        assertEquals("a noted search kept in the recent searches", recent, runBlocking { library.recentSearches.first().map { it.key }.toSet() })
+        assertEquals("a noted search kept in the recent searches", recentAt, recentNow())
     }
 
     /**

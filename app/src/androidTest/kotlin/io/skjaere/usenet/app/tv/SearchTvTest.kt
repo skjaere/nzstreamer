@@ -78,11 +78,14 @@ class SearchTvTest {
     private val realResolves = VoiceSearch.resolves
     private lateinit var nav: NavHostController
     private lateinit var searchedBefore: Set<String>
+    private lateinit var searchedAt: Map<String, Long>
 
     @Before
     fun setUp() {
         fixture.open()
-        searchedBefore = runBlocking { compose.activity.container.library.recentSearches.first().map { it.key }.toSet() }
+        val recent = runBlocking { compose.activity.container.library.recentSearches.first() }
+        searchedBefore = recent.map { it.key }.toSet()
+        searchedAt = recent.associate { it.key to it.searchedAt }
         instrumentation.setInTouchMode(false)
         compose.runOnUiThread { compose.activity.enableEdgeToEdge() }
     }
@@ -295,7 +298,9 @@ class SearchTvTest {
         assertTrue("not under what was searched", bounds(note).top >= bounds(header).bottom)
         assertTrue("not above the results", bounds(note).bottom <= bounds(playsAGroup).top)
         val library = compose.activity.container.library
-        assertEquals("a noted search kept in the recent searches", searchedBefore, runBlocking { library.recentSearches.first().map { it.key }.toSet() })
+        // By when each was searched: a noted search kept would add its words, or, where they were searched before (an
+        // earlier case, a run stopped before its clean-up), search them again.
+        assertEquals("a noted search kept in the recent searches", searchedAt, runBlocking { library.recentSearches.first().associate { it.key to it.searchedAt } })
     }
 
     /** [test] with the fake indexer (10.0.2.2:8089) switched on, the fixture's being off; it goes again after, with its key. */
