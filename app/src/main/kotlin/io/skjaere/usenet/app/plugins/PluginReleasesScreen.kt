@@ -1,9 +1,12 @@
 package io.skjaere.usenet.app.plugins
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -13,6 +16,8 @@ import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.play.ItemPlay
 import io.skjaere.usenet.app.play.PlayOutcome
 import io.skjaere.usenet.app.play.PlayRequest
+import io.skjaere.usenet.app.play.pageOkGuard
+import io.skjaere.usenet.app.play.rememberPageOkGuard
 import io.skjaere.usenet.app.search.ChosenPlays
 import io.skjaere.usenet.app.search.ReleaseList
 import io.skjaere.usenet.app.search.alternativesTo
@@ -29,7 +34,8 @@ import kotlinx.coroutines.flow.first
  * its possible matches with their reasons, and its line of what it left out. A tap plays that release alone, chosen, as
  * the item's Play would ([ItemPlay.chosen]), where Play goes; one that fails is marked as the play sheet says, one that
  * launches closes the page ([onClose]), as a film's Choose release closes. A token no longer kept (a process death) closes
- * it at once. [onBack]: its bar's back arrow.
+ * it at once. On a TV an OK in its first moments is the one that opened it, and is ignored ([pageOkGuard]). [onBack]: its
+ * bar's back arrow.
  */
 @Composable
 fun PluginReleasesScreen(token: String, onBack: () -> Unit, onClose: () -> Unit) {
@@ -47,10 +53,15 @@ fun PluginReleasesScreen(token: String, onBack: () -> Unit, onClose: () -> Unit)
         vm.launched.first { it }
         close()
     }
-    ReleaseList(
-        list.accepted, list.target.subtitle.orEmpty(), onBack = onBack, failed = failed, possible = list.possible, heading = list.target.title,
-        onPlay = vm::play,
-    )
+    // On a TV the page takes no OK in its first moments: it opens with a release focused, at times from Play itself (only
+    // possible matches, L627), and the second press of a double OK, or a held one, is the press that opened it.
+    val okGuard = rememberPageOkGuard()
+    Box(Modifier.fillMaxSize().pageOkGuard(okGuard)) {
+        ReleaseList(
+            list.accepted, list.target.subtitle.orEmpty(), onBack = onBack, failed = failed, possible = list.possible, heading = list.target.title,
+            onPlay = vm::play,
+        )
+    }
 }
 
 /**

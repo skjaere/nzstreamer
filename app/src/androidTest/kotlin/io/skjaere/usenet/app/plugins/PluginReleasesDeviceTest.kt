@@ -1,5 +1,7 @@
 package io.skjaere.usenet.app.plugins
 
+import android.os.SystemClock
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +26,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.engineOnSavedProviders
 import io.skjaere.usenet.app.engineSetup
+import io.skjaere.usenet.app.play.OkGuard
 import io.skjaere.usenet.app.play.PlaySheetHost
 import io.skjaere.usenet.app.play.PlayState
 import io.skjaere.usenet.app.play.PlayerLaunch
@@ -71,8 +74,9 @@ import java.net.Socket
  * "Possible" in its rank's place and its reason, then the plugin's left-out line. Its Play with only possible matches
  * opens Choose release with them alone, under their own line; there (the mock NNTP server, 10.0.2.2:1119) MISLABEL, whose
  * E-AC-3 audio this device can't play, fails and is marked, and GOOD plays and closes the page. On a TV the first release
- * takes the first focus, or the first possible match when only those show. The slot's own screens and the play sheet's
- * host are the app's (pluginScreens, PlaySheetHost); no player opens: the launches are taken here.
+ * takes the first focus, or the first possible match when only those show, and an OK right after the page opens plays
+ * nothing. The slot's own screens and the play sheet's host are the app's (pluginScreens, PlaySheetHost); no player
+ * opens: the launches are taken here.
  *
  * The saved providers are hidden for the test and put back as they were; the test's own provider and indexer are deleted
  * with their secrets, and the releases remembered as tried put back. PluginStateRule takes the plugin out after.
@@ -211,6 +215,34 @@ class PluginReleasesDeviceTest {
         } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
             throw AssertionError("the first possible match never had the focus; it is on \"${remote.focused()}\"", e)
         }
+    }
+
+    /**
+     * On a TV, Play with only possible matches opens Choose release with the first of them focused: an OK that comes
+     * right after it opens, the second of a double press on Play or a held one (some TV remotes send those as separate
+     * presses), is the one that opened it, and plays nothing (Play never picks a possible match); a press after that
+     * plays it.
+     */
+    @Test
+    fun onATvAnOkRightAfterThePageOpensPlaysNothing() {
+        val remote = Remote(compose)
+        showTheSlot(tv = true)
+        leaveTouchMode(compose.activity)
+        val opened = SystemClock.uptimeMillis()
+        compose.runOnIdle { kestrel.nav!!.openReleases(kestrel.item, emptyList(), listOf(Offered(kestrel.good, "No date in the name")), null) }
+        waitFor(hasText("Nothing names this game for sure yet. Play never picks these; press OK on one if it's the right game."))
+        compose.waitUntil(5_000) { remote.isFocused(card(GOOD) and hasText("Possible")) }
+
+        // Stamped as pressed just after the page opened, as the second press of a double OK.
+        instrumentation.sendKeySync(KeyEvent(opened + 50, opened + 50, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 0))
+        instrumentation.sendKeySync(KeyEvent(opened + 50, opened + 60, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0))
+        compose.waitForIdle()
+        SystemClock.sleep(OkGuard.WINDOW_MS)
+        compose.waitForIdle()
+        assertEquals("an OK that opened the page played", PlayState.Idle, container.playback.state.value)
+
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        compose.waitUntil(10_000) { container.playback.state.value != PlayState.Idle }
     }
 
     /** Slot 1's screens, as the app's graph has them, with the play sheet's host over them as AppNav has it. */
