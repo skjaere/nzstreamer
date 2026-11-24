@@ -481,7 +481,7 @@ class AppContainer(private val context: Context) {
      * The installed plugins (L616, L619): their files read as the process starts ([UsenetApplication.onCreate]), their code
      * loaded only once MainActivity is first created, never in a process started for a service or a receiver alone.
      */
-    val plugins: PluginRegistry = PluginRegistry.of(context, data.secrets.named(), PluginRegistry.NO_GUARD, appScope)
+    val plugins: PluginRegistry = PluginRegistry.of(context, data.secrets.named(), appScope)
 
     /** Whether MainActivity is started: the lists' refresher asks TMDB only then (not while the player streams). */
     val foreground = MutableStateFlow(false)
@@ -999,7 +999,8 @@ class UsenetApplication : Application(), SingletonImageLoader.Factory {
         // Detailed in debug builds until the saved choice is read (AppContainer.start).
         AndroidLogConfig.detailed = BuildConfig.DEBUG
         container = AppContainer(this)
-        container.crashLog.install()
+        // A crash in a plugin's code turns that version off at the next start: the guard writes so before the log (L585).
+        container.crashLog.install(container.plugins.crashGuard::blame)
         // The plugins' files, read off the main thread; their code waits for the first screen (MainActivity).
         container.plugins.start()
         // Before any activity starts: the first one counts.

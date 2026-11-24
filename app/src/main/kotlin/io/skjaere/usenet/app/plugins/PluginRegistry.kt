@@ -10,6 +10,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -60,6 +61,10 @@ class PluginRegistry(
     private val forTest = mutableMapOf<String, NzPlugin>()
 
     private val shown = MutableStateFlow<List<InstalledPlugin>?>(null)
+    private val off = MutableStateFlow(false)
+
+    /** Whether this start loads no plugin: NZStreamer closed twice just after starting (L619), until Turn on again. */
+    val pluginsOff: StateFlow<Boolean> = off.asStateFlow()
 
     /** The installed plugins in slot order; null until the files are read (a slot then draws nothing, L590). */
     val plugins: StateFlow<List<InstalledPlugin>?> = shown.asStateFlow()
@@ -75,24 +80,76 @@ class PluginRegistry(
         }
     }
 
-    /** The first screen asks for the plugins: their code loads, once per process, as soon as their files are read. */
+    /**
+     * The first screen asks for the plugins: their code loads, once per process, as soon as their files are read. First
+     * the crash guard says what the last start left (L619): a version a crash blamed, or whose load died twice in a row,
+     * is off; after two early crashes in a row, none loads. A start that lasts [PluginCrashGuard.EARLY_MS] tells it so.
+     */
     fun firstActivity() {
         if (!asked.compareAndSet(false, true)) return
         scope.launch(io) {
             filesRead.await()
             lock.withLock {
-                records.sortedBy { it.slot }.filter { statuses[it.id] == null || statuses[it.id] == PluginStatus.Waiting }.forEach { record ->
-                    statuses[record.id] = try {
-                        begin(record)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        log.warn("Plugin {} {} couldn't start: {}", record.id, record.versionCode, e.javaClass.name)
-                        PluginStatus.CouldntStart(LoadFailure.Other)
-                    }
+                keepStartCheck()
+                if (off.value) {
+                    records.filter { it.id !in forTest }.forEach { statuses[it.id] = PluginStatus.PluginsOff }
                     publish()
+                    return@withLock
+                }
+                loadWaiting()
+                scope.launch(io) {
+                    delay(PluginCrashGuard.EARLY_MS)
+                    crashGuard.lasted()
                 }
             }
+        }
+    }
+
+    /** Turn on again, after two early crashes turned the plugins off (L619): every plugin loads at once, as its state allows. */
+    suspend fun turnPluginsOnAgain() {
+        filesRead.await()
+        lock.withLock {
+            if (!off.value) return@withLock
+            crashGuard.turnOnPlugins()
+            off.value = false
+            records.filter { statuses[it.id] == PluginStatus.PluginsOff }.forEach { statuses[it.id] = PluginStatus.Waiting }
+            if (asked.get()) loadWaiting() else publish()
+        }
+    }
+
+    /** The guard's start check, kept: the versions it found off are off in the registry's file before its records go. Under [lock]. */
+    private suspend fun keepStartCheck() {
+        val toLoad = records.filter { it.id !in forTest && (it.state == StoredState.On || it.state == StoredState.Refused) }
+        val check = crashGuard.startCheck(toLoad.map { it.id to it.versionCode })
+        val turnedOff = toLoad.mapNotNull { record ->
+            val version = record.id to record.versionCode
+            when (version) {
+                in check.crashed -> record.id to StoredState.Crashed
+                in check.errored -> record.id to StoredState.Errored
+                else -> null
+            }
+        }
+        turnedOff.forEach { (id, state) ->
+            log.warn("Plugin {} {} is off: {}", id, record(id)?.versionCode, state)
+            update(id) { it.copy(state = state) }
+        }
+        if (turnedOff.isNotEmpty()) persist()
+        crashGuard.recordsApplied()
+        off.value = check.pluginsOff
+    }
+
+    /** Each plugin not loaded yet, in slot order, each on its own: one that can't start says why. Under [lock]. */
+    private suspend fun loadWaiting() {
+        records.sortedBy { it.slot }.filter { statuses[it.id] == null || statuses[it.id] == PluginStatus.Waiting }.forEach { record ->
+            statuses[record.id] = try {
+                begin(record)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log.warn("Plugin {} {} couldn't start: {}", record.id, record.versionCode, e.javaClass.name)
+                PluginStatus.CouldntStart(LoadFailure.Other)
+            }
+            publish()
         }
     }
 
@@ -114,7 +171,10 @@ class PluginRegistry(
             }
             val expected = Expectation(id, request.sha256, request.versionCode, existing?.highestLoaded ?: 0, stored = false)
             val facts = when (val verdict = withContext(io) { loading.verify(download, expected) }) {
-                is Verdict.Refused -> return@withLock InstallResult.Refused(verdict.refusal).also { log.warn("Plugin {} {} refused: {}", id, request.versionCode, verdict.refusal) }
+                is Verdict.Refused -> {
+                    log.warn("Plugin {} {} refused: {}", id, request.versionCode, verdict.refusal)
+                    return@withLock InstallResult.Refused(verdict.refusal)
+                }
                 is Verdict.Accepted -> verdict.facts
             }
             val result = try {
@@ -200,6 +260,7 @@ class PluginRegistry(
         filesRead.await()
         lock.withLock {
             val record = record(id)?.takeIf { it.state == StoredState.Crashed || it.state == StoredState.Errored } ?: return@withLock
+            crashGuard.turnedOnAgain(id, record.versionCode)
             update(id) { it.copy(state = StoredState.On) }
             persist()
             statuses[id] = if (asked.get()) begin(record(id)!!) else PluginStatus.Waiting
@@ -245,7 +306,12 @@ class PluginRegistry(
     }
 
     /** A version's code as its kept state allows: off until Turn on again, or loaded. Under [lock]. */
-    private suspend fun begin(record: PluginRecord): PluginStatus = when (record.state) {
+    private suspend fun begin(record: PluginRecord): PluginStatus = when {
+        off.value && record.id !in forTest -> PluginStatus.PluginsOff
+        else -> beginOwn(record)
+    }
+
+    private suspend fun beginOwn(record: PluginRecord): PluginStatus = when (record.state) {
         StoredState.Crashed -> PluginStatus.OffAfterCrash
         StoredState.Errored -> PluginStatus.OffAfterError
         StoredState.Withdrawn -> PluginStatus.Withdrawn
@@ -278,21 +344,37 @@ class PluginRegistry(
         }
     }
 
-    /** [id]'s version [versionCode], checked, loaded and its instance made, off the main thread. Under [lock]. */
+    /**
+     * [id]'s version [versionCode], checked, loaded and its instance made, off the main thread, inside the crash guard's
+     * load marker: a death between its class load and its tab()'s answer counts against it at the next start. Under [lock].
+     */
     private suspend fun load(id: String, versionCode: Long, sha256: String, highestLoaded: Long): Outcome = withContext(io) {
         val version = PluginVersion(id, versionCode, keys.incrementAndGet())
-        val plugin = forTest[id] ?: when (val result = loadCode(id, versionCode, sha256, highestLoaded)) {
-            is LoadResult.Refused -> return@withContext Outcome.Refused(result.refusal).also { log.warn("Plugin {} refused: {}", version, result.refusal) }
-            is LoadResult.Failed -> return@withContext Outcome.Failed(result.failure).also { log.warn("Plugin {} couldn't start: {}", version, result.failure) }
-            is LoadResult.Loaded -> result.plugin
+        forTest[id]?.let { return@withContext instantiate(version, it) }
+        crashGuard.loading(id, versionCode)
+        var outcome: Outcome = Outcome.Failed(LoadFailure.Other)
+        try {
+            val plugin = when (val result = loadCode(id, versionCode, sha256, highestLoaded)) {
+                is LoadResult.Refused -> return@withContext Outcome.Refused(result.refusal).also { log.warn("Plugin {} refused: {}", version, result.refusal) }
+                is LoadResult.Failed -> return@withContext Outcome.Failed(result.failure).also { log.warn("Plugin {} couldn't start: {}", version, result.failure) }
+                is LoadResult.Loaded -> result.plugin
+            }
+            outcome = instantiate(version, plugin)
+            outcome
+        } finally {
+            crashGuard.loadDone(id, versionCode, running = outcome is Outcome.Running)
         }
+    }
+
+    /** [plugin]'s instance as [version]: its host, and the tab it gives, guarded. */
+    private fun instantiate(version: PluginVersion, plugin: NzPlugin): Outcome {
         val host = hosts.create(version) { e -> failed(version, "its scope", e) }
         val tab = calls.call(version, "tab", nothing = null) { plugin.tab() }
         if (tab == null) {
             letGo(version, plugin, host)
-            return@withContext Outcome.Errored
+            return Outcome.Errored
         }
-        Outcome.Running(PluginInstance(version, plugin, host, tab))
+        return Outcome.Running(PluginInstance(version, plugin, host, tab))
     }
 
     private fun loadCode(id: String, versionCode: Long, sha256: String, highestLoaded: Long): LoadResult = try {
@@ -305,6 +387,7 @@ class PluginRegistry(
     private fun letGo(instance: PluginInstance) = letGo(instance.version, instance.plugin, instance.host)
 
     private fun letGo(version: PluginVersion, plugin: NzPlugin, host: HostedPlugin) {
+        crashGuard.letGo(version.id, version.versionCode)
         host.cancel()
         calls.call(version, "close", nothing = Unit) { plugin.close() }
     }
@@ -403,25 +486,16 @@ class PluginRegistry(
 
         private val log = LoggerFactory.getLogger(PluginRegistry::class.java)
 
-        /** A guard that keeps no record: the registry then turns a version off for this process alone. */
-        val NO_GUARD: PluginGuard = object : PluginGuard {
-            override fun recordError(id: String, versionCode: Long) {
-            }
-        }
-
-        /** The app's registry: the plugins' files under its own storage, Android's reading of their archives, its secrets. */
-        fun of(context: Context, secrets: NamedSecrets, crashGuard: PluginGuard, scope: CoroutineScope): PluginRegistry {
+        /**
+         * The app's registry: the plugins' files under its own storage, Android's reading of their archives, its secrets,
+         * and the crash guard's files beside the plugins'.
+         */
+        fun of(context: Context, secrets: NamedSecrets, scope: CoroutineScope): PluginRegistry {
             val store = PluginStore(context.filesDir, context.cacheDir, secrets)
             val loader = PluginLoader(PluginVerifier(AndroidArchiveReader(context.packageManager)))
-            return PluginRegistry(store, loader, PluginHosts(store, secrets), crashGuard, scope)
+            return PluginRegistry(store, loader, PluginHosts(store, secrets), PluginCrashGuard(store.root), scope)
         }
     }
-}
-
-/** The crash guard as the registry tells it what happened to plugins' code (L585, L619). */
-interface PluginGuard {
-    /** Records, before this returns, that [id]'s version [versionCode] failed with an error: it is off at the next start too. */
-    fun recordError(id: String, versionCode: Long)
 }
 
 /** A plugin to install: its [id], the list's [name] for it, the [versionCode] the list gives and its file's [sha256]. */
@@ -484,6 +558,9 @@ sealed interface PluginStatus {
 
     /** Its file passed, but its code didn't load. */
     class CouldntStart(val failure: LoadFailure) : PluginStatus
+
+    /** No plugin loads: NZStreamer closed twice just after starting (L619), until Turn on again. */
+    data object PluginsOff : PluginStatus
 }
 
 /** A loaded instance: the plugin's entry, its own host and the [tab] it gave as it loaded. */

@@ -10,6 +10,7 @@ import io.skjaere.usenet.plugin.PluginApi
 import io.skjaere.usenet.plugin.PluginHost
 import io.skjaere.usenet.plugin.PluginNav
 import io.skjaere.usenet.plugin.PluginTab
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
@@ -70,13 +71,31 @@ internal class FakePlugin(
     }
 }
 
-/** The crash guard as the registry tells it what happened: the versions it recorded an error for. */
+/** The crash guard as the registry tells it what happened: the versions it recorded an error for. It keeps no file. */
 internal class FakeGuard : PluginGuard {
     val errors = mutableListOf<Pair<String, Long>>()
 
     override fun recordError(id: String, versionCode: Long) {
         synchronized(errors) { errors += id to versionCode }
     }
+
+    override fun blame(t: Throwable) {}
+
+    override fun loading(id: String, versionCode: Long) {}
+
+    override fun loadDone(id: String, versionCode: Long, running: Boolean) {}
+
+    override fun letGo(id: String, versionCode: Long) {}
+
+    override fun startCheck(toLoad: List<Pair<String, Long>>) = StartCheck(pluginsOff = false, crashed = emptySet(), errored = emptySet())
+
+    override fun recordsApplied() {}
+
+    override fun lasted() {}
+
+    override fun turnOnPlugins() {}
+
+    override fun turnedOnAgain(id: String, versionCode: Long) {}
 }
 
 /** The signer the test plugins' files have, and the one the fakes' verifier trusts. */
@@ -150,9 +169,9 @@ internal class RegistryHarness(private val dir: File, private val test: TestScop
     val store = PluginStore(files, cache, secrets)
     private val dispatcher = StandardTestDispatcher(test.testScheduler)
 
-    fun registry(): PluginRegistry = PluginRegistry(
-        // The test's own scope: what the registry launches is the test's work, run by advanceUntilIdle and waited for.
-        store, loading, PluginHosts(store, secrets, main = dispatcher), guard, test, io = dispatcher,
+    /** A registry over the files, its work in [scope]: by default the test's own, run by advanceUntilIdle and waited for. */
+    fun registry(scope: CoroutineScope = test): PluginRegistry = PluginRegistry(
+        store, loading, PluginHosts(store, secrets, main = dispatcher), guard, scope, io = dispatcher,
         now = { test.testScheduler.currentTime },
     )
 

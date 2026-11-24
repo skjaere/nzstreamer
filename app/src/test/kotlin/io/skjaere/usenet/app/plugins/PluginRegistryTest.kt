@@ -119,7 +119,9 @@ class PluginRegistryTest {
         h.install(registry, "skeleton", 1)
         advanceUntilIdle()
         assertEquals(PluginStatus.OffAfterError, registry.installed("skeleton").status)
-        assertEquals(PluginStatus.OffAfterError, h.registry().apply { start(); firstActivity() }.let { advanceUntilIdle(); it.installed("skeleton").status }, "off at the next start too")
+        val again = h.registry().apply { start(); firstActivity() }
+        advanceUntilIdle()
+        assertEquals(PluginStatus.OffAfterError, again.installed("skeleton").status, "off at the next start too")
 
         throwing = false
         registry.turnOnAgain("skeleton")

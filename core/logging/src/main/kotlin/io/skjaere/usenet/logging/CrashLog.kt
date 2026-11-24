@@ -18,12 +18,18 @@ class CrashLog(private val file: File, private val header: () -> String) {
     /**
      * Writes the log as an uncaught exception ends the process, then hands the exception on to the
      * handler there was before (Android's, which ends the process), whether or not the log could be
-     * written.
+     * written. [blame] runs first, on the crashing thread: the plugins' crash guard, which writes what
+     * a plugin's code had to do with it. Whatever it throws, Error or not, the log is still written.
      */
-    fun install() {
+    fun install(blame: (Throwable) -> Unit = {}) {
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, e ->
             try {
+                try {
+                    blame(e)
+                } catch (_: Throwable) {
+                    // The guard's record is lost; the log's still goes on.
+                }
                 record(thread, e)
             } catch (_: Exception) {
                 // Nothing more can be done for the log as the process ends.

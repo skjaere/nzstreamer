@@ -100,4 +100,37 @@ class CrashLogTest {
         val text = assertNotNull(crash.read())
         assertTrue("java.lang.RuntimeException: second crash" in text && "first crash" !in text, text)
     }
+
+    /** L585: the plugins' crash guard blames a plugin version on the crashing thread, before the record, which it must never stop. */
+    @Test
+    fun `the hook runs before the record, on the crashing thread`() = runBlocking<Unit> {
+        val file = File(dir, "last-crash.txt")
+        val seen = mutableListOf<String>()
+        val boom = IllegalStateException("boom")
+        CrashLog(file, header = "h").install { e -> seen += "${Thread.currentThread().name}: ${e === boom}, written ${file.exists()}" }
+        crashOn("worker-3", boom)
+        assertEquals(listOf("worker-3: true, written false"), seen)
+        assertNotNull(CrashLog(file, header = "h").read())
+        assertEquals(listOf("worker-3" to boom), handedOn.toList())
+    }
+
+    @Test
+    fun `a hook that throws an exception still lets the record be written and the crash handed on`() = runBlocking<Unit> {
+        val crash = CrashLog(File(dir, "last-crash.txt"), header = "h")
+        crash.install { throw IllegalArgumentException("the hook's own") }
+        val boom = RuntimeException("boom")
+        crashOn("worker-4", boom)
+        assertTrue("java.lang.RuntimeException: boom" in assertNotNull(crash.read()))
+        assertEquals(listOf("worker-4" to boom), handedOn.toList())
+    }
+
+    @Test
+    fun `a hook that throws an error still lets the record be written and the crash handed on`() = runBlocking<Unit> {
+        val crash = CrashLog(File(dir, "last-crash.txt"), header = "h")
+        crash.install { throw StackOverflowError("the hook's own") }
+        val boom = RuntimeException("boom")
+        crashOn("worker-5", boom)
+        assertTrue("java.lang.RuntimeException: boom" in assertNotNull(crash.read()))
+        assertEquals(listOf("worker-5" to boom), handedOn.toList())
+    }
 }
