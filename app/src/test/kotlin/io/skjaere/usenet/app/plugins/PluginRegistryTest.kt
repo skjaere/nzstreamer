@@ -95,6 +95,19 @@ class PluginRegistryTest {
     }
 
     @Test
+    fun `a plugin whose load throws an Error says it couldn't start, and the other one loads`() = runTest {
+        val h = harness()
+        val registry = h.registry().apply { start() }
+        h.install(registry, "skeleton", 1)
+        h.install(registry, "kestrel", 1)
+        h.loading.throwing["skeleton" to 1L] = { NotImplementedError("the fake's static initializer") }
+        registry.firstActivity()
+        advanceUntilIdle()
+        assertEquals("its code didn't load", assertIs<PluginStatus.CouldntStart>(registry.installed("skeleton").status).failure.reason)
+        assertNotNull(registry.running("kestrel"))
+    }
+
+    @Test
     fun `a stored file that no longer passes is refused at the start, with the page's reason`() = runTest {
         val h = harness()
         h.registry().apply { start(); firstActivity() }.let { h.install(it, "skeleton", 1) }

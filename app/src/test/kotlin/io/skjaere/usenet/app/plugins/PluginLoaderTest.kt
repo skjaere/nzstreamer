@@ -114,6 +114,15 @@ class PluginLoaderTest {
     }
 
     @Test
+    fun `an Error from the entry's static initializer or its constructor is a reason too, but the process's own goes up`() {
+        listOf("${FAKE}UnwrittenPlugin", "${FAKE}AssertingPlugin").forEach { entry ->
+            val failed = assertIs<LoadResult.Failed>(load(entry), entry)
+            assertEquals("its code didn't load", failed.failure.reason)
+        }
+        assertIs<OutOfMemoryError>(runCatching { load("${FAKE}HungryPlugin") }.exceptionOrNull())
+    }
+
+    @Test
     fun `an entry outside the plugin's package is refused before any class loads`() {
         listOf("io.skjaere.usenet.app.plugins.FakePlugin", "app.nzstreamer.plugin.other.GoodPlugin").forEach { entry ->
             assertEquals(Refusal.Entry, assertIs<LoadResult.Refused>(load(entry), entry).refusal)

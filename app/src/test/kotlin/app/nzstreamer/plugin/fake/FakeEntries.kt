@@ -39,6 +39,34 @@ class ThrowingPlugin : NzPlugin by GoodPlugin() {
     }
 }
 
+/**
+ * An entry whose static initializer isn't written yet: TODO() throws an Error, which Java hands on from a class's
+ * initialization as it is, inside no InvocationTargetException or ExceptionInInitializerError.
+ */
+class UnwrittenPlugin : NzPlugin by GoodPlugin() {
+    companion object {
+        init {
+            TODO("the fake's static initializer")
+        }
+    }
+}
+
+/** An entry whose constructor throws an Error. */
+class AssertingPlugin : NzPlugin by GoodPlugin() {
+    init {
+        throw AssertionError("the fake's constructor")
+    }
+}
+
+/** An entry whose static initializer runs out of memory: the process's own error, not the plugin's to answer for. */
+class HungryPlugin : NzPlugin by GoodPlugin() {
+    companion object {
+        init {
+            throw OutOfMemoryError("the fake's static initializer")
+        }
+    }
+}
+
 /** An entry that needs a class its file doesn't carry: Gone is left out of the jar. */
 class LinkagePlugin : NzPlugin by GoodPlugin() {
     private val gone = Gone()

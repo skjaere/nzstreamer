@@ -8,20 +8,25 @@ class PluginVersion(val id: String, val versionCode: Long, val key: Long) {
 
 /**
  * The host's calls into a plugin's code outside composition (L619): its tab(), close(), and later a play's releases() and
- * file picker. Each runs guarded: one that throws, an Exception or a LinkageError (a class the plugin needs that isn't
- * the one it was built against), is handed to [failed], which turns that version off "after an error", and the call
- * answers what it would had the plugin given nothing. NZStreamer goes on. An Error of the process's own (out of memory)
- * isn't the plugin's to catch, and goes on up. [call] doesn't suspend, so a CancellationException thrown in it is the
- * plugin's own throw, never a coroutine's cancellation: it counts as an error too.
+ * file picker. Each runs guarded: whatever it throws that is the plugin's ([isPluginsOwn]: an exception, a LinkageError, an
+ * Error such as the NotImplementedError Kotlin's TODO() throws) is handed to [failed], which turns that version off "after
+ * an error", and the call answers what it would had the plugin given nothing. NZStreamer goes on. [call] doesn't suspend,
+ * so a CancellationException thrown in it is the plugin's own throw, never a coroutine's cancellation: it counts as an
+ * error too.
  */
 class PluginCalls(private val failed: (version: PluginVersion, what: String, e: Throwable) -> Unit) {
     fun <T> call(version: PluginVersion, what: String, nothing: T, block: () -> T): T = try {
         block()
-    } catch (e: Exception) {
-        failed(version, what, e)
-        nothing
-    } catch (e: LinkageError) {
+    } catch (e: Throwable) {
+        if (!e.isPluginsOwn()) throw e
         failed(version, what, e)
         nothing
     }
 }
+
+/**
+ * Whether this, thrown by a plugin's code, is the plugin's to answer for: everything but the process's own failures, out
+ * of memory and the VM's internal errors, which go on up. A stack overflow is the plugin's: its own frames unwind, and the
+ * thread goes on.
+ */
+internal fun Throwable.isPluginsOwn(): Boolean = this !is VirtualMachineError || this is StackOverflowError

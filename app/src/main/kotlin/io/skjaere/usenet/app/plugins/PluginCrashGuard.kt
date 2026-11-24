@@ -17,13 +17,13 @@ interface PluginGuard {
     /** [id]'s version [versionCode] failed with an error: recorded before this returns, so it is off at the next start. */
     fun recordError(id: String, versionCode: Long)
 
-    /** A version's classes are about to load: the load marker. */
+    /** A version's classes are about to load: the load marker. From here on a crash with its frames blames it. */
     fun loading(id: String, versionCode: Long)
 
     /** Its load came back: [running] (its instance made and its tab() answered), or not. Not a death either way. */
     fun loadDone(id: String, versionCode: Long, running: Boolean)
 
-    /** A version's instance was let go: a crash no longer blames it. */
+    /** A version's instance was let go, its close() returned: a crash no longer blames it. */
     fun letGo(id: String, versionCode: Long)
 
     /** At a start, before any plugin loads: what the last start left, for the versions this one is to load ([toLoad]). */
@@ -54,7 +54,7 @@ class StartCheck(val pluginsOff: Boolean, val crashed: Set<Pair<String, Long>>, 
  * makes sure it is the plugin that stays off, not NZStreamer, at the next start. Its files are in [folder]
  * (filesDir/plugins), each written whole then renamed, and read tolerantly: one that doesn't read is no record, and none
  * of them ever throws at a start.
- * - crash.json: on the crashing thread, before the crash log, every loaded version whose package
+ * - crash.json: on the crashing thread, before the crash log, every version loaded or loading whose package
  *   (app.nzstreamer.plugin.<id>.) is in the throwable's frames, its causes' and its suppressed ones' (each once, at most
  *   64 deep), with when; and, for a process that loaded plugins, the guard's own crash time. An error a plugin's code threw
  *   outside composition is recorded there too.
@@ -71,7 +71,7 @@ class PluginCrashGuard(private val folder: File, private val now: () -> Long = S
     private val markerFile = File(folder, LOADING)
     private val startsFile = File(folder, STARTS)
 
-    /** The versions whose code runs in this process, by id: what a crash's frames are blamed by. */
+    /** The versions whose code runs or loads in this process, by id: what a crash's frames are blamed by. */
     private val running = ConcurrentHashMap<String, Long>()
 
     /** Whether this process is a start that loads plugins: only its crashes are timed for the safe start. */
@@ -105,11 +105,12 @@ class PluginCrashGuard(private val folder: File, private val now: () -> Long = S
     }
 
     override fun loading(id: String, versionCode: Long) {
+        running[id] = versionCode
         synchronized(files) { write(markerFile, Marker.serializer(), Marker(id, versionCode)) }
     }
 
     override fun loadDone(id: String, versionCode: Long, running: Boolean) {
-        if (running) this.running[id] = versionCode
+        if (!running) this.running.remove(id, versionCode)
         synchronized(files) {
             markerFile.delete()
             val starts = readStarts()

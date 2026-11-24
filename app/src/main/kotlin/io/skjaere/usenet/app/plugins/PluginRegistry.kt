@@ -138,14 +138,18 @@ class PluginRegistry(
         off.value = check.pluginsOff
     }
 
-    /** Each plugin not loaded yet, in slot order, each on its own: one that can't start says why. Under [lock]. */
+    /**
+     * Each plugin not loaded yet, in slot order, each on its own: one that can't start says why, whatever stopped it, and
+     * the others load. Only the process's own errors go on up. Under [lock].
+     */
     private suspend fun loadWaiting() {
         records.sortedBy { it.slot }.filter { statuses[it.id] == null || statuses[it.id] == PluginStatus.Waiting }.forEach { record ->
             statuses[record.id] = try {
                 begin(record)
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                if (!e.isPluginsOwn()) throw e
                 log.warn("Plugin {} {} couldn't start: {}", record.id, record.versionCode, e.javaClass.name)
                 PluginStatus.CouldntStart(LoadFailure.Other)
             }
@@ -346,24 +350,21 @@ class PluginRegistry(
 
     /**
      * [id]'s version [versionCode], checked, loaded and its instance made, off the main thread, inside the crash guard's
-     * load marker: a death between its class load and its tab()'s answer counts against it at the next start. Under [lock].
+     * load marker: a death between its class load and its tab()'s answer counts against it at the next start. The marker
+     * ends only once the load came back: what still escapes it (the process's own error) leaves it, as a death would.
+     * Under [lock].
      */
     private suspend fun load(id: String, versionCode: Long, sha256: String, highestLoaded: Long): Outcome = withContext(io) {
         val version = PluginVersion(id, versionCode, keys.incrementAndGet())
         forTest[id]?.let { return@withContext instantiate(version, it) }
         crashGuard.loading(id, versionCode)
-        var outcome: Outcome = Outcome.Failed(LoadFailure.Other)
-        try {
-            val plugin = when (val result = loadCode(id, versionCode, sha256, highestLoaded)) {
-                is LoadResult.Refused -> return@withContext Outcome.Refused(result.refusal).also { log.warn("Plugin {} refused: {}", version, result.refusal) }
-                is LoadResult.Failed -> return@withContext Outcome.Failed(result.failure).also { log.warn("Plugin {} couldn't start: {}", version, result.failure) }
-                is LoadResult.Loaded -> result.plugin
-            }
-            outcome = instantiate(version, plugin)
-            outcome
-        } finally {
-            crashGuard.loadDone(id, versionCode, running = outcome is Outcome.Running)
+        val outcome = when (val result = loadCode(id, versionCode, sha256, highestLoaded)) {
+            is LoadResult.Refused -> Outcome.Refused(result.refusal).also { log.warn("Plugin {} refused: {}", version, result.refusal) }
+            is LoadResult.Failed -> Outcome.Failed(result.failure).also { log.warn("Plugin {} couldn't start: {}", version, result.failure) }
+            is LoadResult.Loaded -> instantiate(version, result.plugin)
         }
+        crashGuard.loadDone(id, versionCode, running = outcome is Outcome.Running)
+        outcome
     }
 
     /** [plugin]'s instance as [version]: its host, and the tab it gives, guarded. */
@@ -377,9 +378,11 @@ class PluginRegistry(
         return Outcome.Running(PluginInstance(version, plugin, host, tab))
     }
 
+    // Whatever the plugin's code throws as it loads is a reason, an Error that got past the loader among it.
     private fun loadCode(id: String, versionCode: Long, sha256: String, highestLoaded: Long): LoadResult = try {
         loading.load(store.apk(id, versionCode), Expectation(id, sha256, versionCode, highestLoaded, stored = true))
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
+        if (!e.isPluginsOwn()) throw e
         LoadResult.Failed(LoadFailure.Other)
     }
 
@@ -387,9 +390,10 @@ class PluginRegistry(
     private fun letGo(instance: PluginInstance) = letGo(instance.version, instance.plugin, instance.host)
 
     private fun letGo(version: PluginVersion, plugin: NzPlugin, host: HostedPlugin) {
-        crashGuard.letGo(version.id, version.versionCode)
         host.cancel()
         calls.call(version, "close", nothing = Unit) { plugin.close() }
+        // Only now: a crash while its close() runs is still its version's.
+        crashGuard.letGo(version.id, version.versionCode)
     }
 
     /**

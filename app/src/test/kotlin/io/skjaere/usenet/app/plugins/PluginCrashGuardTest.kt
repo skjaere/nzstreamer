@@ -1,6 +1,7 @@
 package io.skjaere.usenet.app.plugins
 
 import io.skjaere.usenet.logging.CrashLog
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
@@ -19,6 +20,7 @@ import java.io.File
 import java.time.Duration
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
@@ -101,6 +103,47 @@ class PluginCrashGuardTest {
         guard.loadDone("kestrel", 5, running = false)
         guard.blame(throwableAt(pluginFrame("skeleton"), pluginFrame("kestrel")))
         assertEquals(emptySet(), guard().startCheck(listOf(skeleton1, kestrel)).crashed)
+    }
+
+    @Test
+    fun `a crash while a version loads blames it, as one once it runs`() {
+        val guard = guard()
+        guard.startCheck(listOf(skeleton1))
+        guard.recordsApplied()
+        guard.loading("skeleton", 1)
+        time += 1_000
+        guard.blame(throwableAt(pluginFrame("skeleton")))
+        assertEquals(setOf(skeleton1), guard().startCheck(listOf(skeleton1)).crashed)
+    }
+
+    @Test
+    fun `a load that the process's own error ends leaves its marker, as a death would`() = runTest {
+        val h = RegistryHarness(dir, this)
+        h.guard = PluginCrashGuard(File(h.files, "plugins"), now = { testScheduler.currentTime })
+        val ended = mutableListOf<Throwable>()
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler) + CoroutineExceptionHandler { _, e -> ended += e })
+        val registry = h.registry(scope).apply { start() }
+        h.install(registry, "skeleton", 1)
+        h.loading.throwing["skeleton" to 1L] = { OutOfMemoryError("no room") }
+        registry.firstActivity()
+        advanceUntilIdle()
+        assertIs<OutOfMemoryError>(ended.single())
+        assertTrue("skeleton" in File(h.files, "plugins/loading").readText(), "its marker stays, for the next start to count")
+        scope.cancel()
+    }
+
+    @Test
+    fun `a crash while an instance's close() runs still blames its version`() = runTest {
+        val h = RegistryHarness(dir, this)
+        val guard = PluginCrashGuard(File(h.files, "plugins"), now = { testScheduler.currentTime }).also { h.guard = it }
+        h.loading.plugin = { _, version -> FakePlugin(onClose = { if (version == 1L) guard.blame(throwableAt(pluginFrame("skeleton"))) }) }
+        val registry = h.registry().apply { start(); firstActivity() }
+        h.install(registry, "skeleton", 1)
+        advanceUntilIdle()
+        h.install(registry, "skeleton", 2)
+        assertTrue(registry.atSwapPoint("skeleton"))
+        val record = File(h.files, "plugins/crash.json").readText()
+        assertTrue(Regex(""""id":"skeleton","versionCode":1,""").containsMatchIn(record), "v1's close() was still its own code: $record")
     }
 
     @Test

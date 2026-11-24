@@ -38,11 +38,17 @@ internal class FakeSecrets : NamedSecrets {
     }
 }
 
-/** A plugin in the test's own classes: what the host asked of it, and what it throws. */
+/**
+ * A plugin in the test's own classes: what the host asked of it, and what it throws: an exception of its own, or the
+ * throwable [tabError] or [closeError] gives (an Error, as Kotlin's TODO() throws). [onClose] runs as close() is called.
+ */
 internal class FakePlugin(
     private val label: String = "Fake",
     private val tabThrows: Boolean = false,
     private val closeThrows: Boolean = false,
+    private val tabError: (() -> Throwable)? = null,
+    private val closeError: (() -> Throwable)? = null,
+    private val onClose: () -> Unit = {},
 ) : NzPlugin {
     val calls = mutableListOf<String>()
 
@@ -53,6 +59,7 @@ internal class FakePlugin(
     override fun tab(): PluginTab {
         calls += "tab"
         if (tabThrows) throw IllegalStateException("the fake's tab, with a secret in its words: hunter2")
+        tabError?.let { throw it() }
         return PluginTab(label, Icons.Filled.Star)
     }
 
@@ -67,7 +74,9 @@ internal class FakePlugin(
     override fun close() {
         calls += "close"
         scopeCancelledAtClose = host?.scope?.coroutineContext?.get(kotlinx.coroutines.Job)?.isCancelled
+        onClose()
         if (closeThrows) throw IllegalStateException("the fake's close")
+        closeError?.let { throw it() }
     }
 }
 
@@ -140,6 +149,9 @@ internal class FakeLoading : PluginLoading {
     var plugin: (id: String, versionCode: Long) -> NzPlugin = { _, _ -> FakePlugin() }
     val failing = mutableSetOf<Pair<String, Long>>()
 
+    /** Versions whose load throws, as a loader would let a throwable it doesn't catch through: an Error of the plugin's. */
+    val throwing = mutableMapOf<Pair<String, Long>, () -> Throwable>()
+
     /** Each load asked, by id and version, and each instance made. */
     val loads = mutableListOf<Pair<String, Long>>()
     val made = mutableListOf<NzPlugin>()
@@ -153,6 +165,7 @@ internal class FakeLoading : PluginLoading {
             is Verdict.Accepted -> verdict.facts
         }
         if (expected.id to expected.versionCode in failing) return LoadResult.Failed(LoadFailure.Linkage)
+        throwing[expected.id to expected.versionCode]?.let { throw it() }
         return LoadResult.Loaded(plugin(expected.id, expected.versionCode).also { made += it }, facts)
     }
 }

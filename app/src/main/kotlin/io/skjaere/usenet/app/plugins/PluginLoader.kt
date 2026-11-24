@@ -42,7 +42,7 @@ enum class LoadFailure {
     /** A class it needs is missing or isn't the one it was built against, or a static initializer threw (a LinkageError). */
     Linkage,
 
-    /** Anything else that stopped it. */
+    /** Anything else that stopped it: an Error its code threw among it, from a static initializer too. */
     Other,
     ;
 
@@ -56,7 +56,8 @@ enum class LoadFailure {
  * the app's, and ART can use what it compiles for it. Never createPackageContext, whose loader can't see Compose and which
  * gets the app killed as the plugin changes. The entry class is found without being initialized and must come from the
  * plugin's own loader: a name that resolves in the app through the parent never runs that class's static initializer.
- * Everything that can go wrong once the file passed, a LinkageError among it, is a reason, never a crash.
+ * Everything of the plugin's that can go wrong once the file passed, a LinkageError or another Error among it, is a
+ * reason, never a crash: only the process's own errors ([isPluginsOwn]) go on up.
  */
 class PluginLoader(
     private val verifier: PluginVerifier,
@@ -96,6 +97,10 @@ class PluginLoader(
         } catch (e: LinkageError) {
             LoadResult.Failed(LoadFailure.Linkage)
         } catch (e: Exception) {
+            LoadResult.Failed(LoadFailure.Other)
+        } catch (e: Error) {
+            // An Error from the entry's static initializer comes out as it is, inside nothing (TODO() in a companion).
+            if (!e.isPluginsOwn()) throw e
             LoadResult.Failed(LoadFailure.Other)
         }
     }
