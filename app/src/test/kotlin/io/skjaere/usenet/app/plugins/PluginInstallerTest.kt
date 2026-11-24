@@ -230,6 +230,36 @@ class PluginInstallerTest {
         assertNull(installer.installAgainVersion("harbor"), "not listed: Remove alone")
     }
 
+    /**
+     * L633, L581: Install again for a plugin refused at a start, where the list gives only a newer version. The Plugins page
+     * is never on a slot's stack, and nothing of the plugin runs, so the version it fetched takes over at once: the card
+     * says it is installed. A read had stored the same version to wait for its swap: Install again doesn't leave it waiting.
+     */
+    @Test
+    fun `Install again's newer version takes over at once, nothing of the plugin running`() = installerTest { s ->
+        s.listed(harbor(version("harbor", 1)))
+        s.installer.install("harbor")
+        advanceUntilIdle()
+        val stored = s.h.store.apk("harbor", 1)
+        stored.setWritable(true)
+        stored.writeText("harbor 1 and then some")
+        stored.setReadOnly()
+        s.nextProcess()
+        advanceUntilIdle()
+        assertIs<PluginStatus.Refused>(s.registry.installed("harbor").status)
+        s.read(harbor(version("harbor", 2)))
+        assertEquals(2L, s.registry.installed("harbor").waitingVersion, "the read stored it to wait for a swap point")
+
+        assertEquals(2L, s.installer.installAgainVersion("harbor")?.versionCode)
+        assertNotNull(s.installer.installAgain("harbor"))
+        advanceUntilIdle()
+        assertEquals(2L, s.registry.running("harbor")?.versionCode, "version 2 runs")
+        assertNull(s.registry.installed("harbor").waitingVersion)
+        assertEquals(1, assertIs<InstallState.Installed>(s.installer.states.value["harbor"]).slot)
+        assertFalse(s.h.store.apk("harbor", 1).exists(), "the refused version's file gone")
+        assertEquals(listOf(1L, 2L, 2L), s.downloads.asked.map { it.second }, "fetched by the read, then once by Install again")
+    }
+
     @Test
     fun `an update a read finds is stored, and takes over only at the swap point`() = installerTest { s ->
         s.listed(harbor(version("harbor", 1)))

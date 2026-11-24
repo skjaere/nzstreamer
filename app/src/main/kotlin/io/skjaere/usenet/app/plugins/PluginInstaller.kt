@@ -8,6 +8,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.time.Instant
@@ -33,6 +35,7 @@ import java.util.Locale
  *   while it downloads and checks keeps nothing, and Try again starts it over. At most two plugins installed (L618): a
  *   third isn't downloaded.
  * - Install again, for a plugin refused at a start: the installed version again, or the one offered, through every check.
+ *   The Plugins page is never on a slot's stack (L581), so a newer version it fetched takes over at once.
  * - After each read of the list ([PluginList.reads]): each installed plugin's update downloads and is checked in the app's
  *   scope, stored beside the running version, and takes over at the swap point (the registry's); a version the list
  *   withdraws is let go there and stays off until a fixed one comes, which installs as an update.
@@ -94,11 +97,14 @@ class PluginInstaller(
         }
     }
 
-    /** Install again, for an installed plugin refused at a start: [installAgainVersion] through every check. */
+    /**
+     * Install again, for an installed plugin refused at a start: [installAgainVersion] through every check. A newer version
+     * takes over at once, as at a swap point: the page it is pressed on is never on the plugin's slot's stack (L581).
+     */
     fun installAgain(id: String): Job? {
         val name = list.value.index?.plugins?.firstOrNull { it.id == id }?.name ?: return null
         val version = installAgainVersion(id) ?: return null
-        return start(id, shown = true) { fetch(id, name, version, update = true) }
+        return start(id, shown = true) { fetch(id, name, version, update = true, takesOver = true) }
     }
 
     /** Try again, after a failed install or Install again: the same again. */
@@ -211,9 +217,16 @@ class PluginInstaller(
      * Plugin [id]'s [version] as the list gives it, by the list's [name]: downloaded, then installed by the registry, whose
      * checks read it only once its SHA-256 was the list's; the download deleted after, whatever came of it. The card's
      * state at the end: installed, or why not; none for an update stored to wait for its swap. An [update] is for the
-     * plugin installed now, and installs nothing where it was removed meanwhile.
+     * plugin installed now, and installs nothing where it was removed meanwhile; one that [takesOver] doesn't wait for a
+     * swap point: the registry's swap runs at once, and to its end.
      */
-    private suspend fun Fetch.fetch(id: String, name: String, version: ListedVersion, update: Boolean = false): InstallState? {
+    private suspend fun Fetch.fetch(
+        id: String,
+        name: String,
+        version: ListedVersion,
+        update: Boolean = false,
+        takesOver: Boolean = false,
+    ): InstallState? {
         val file = when (val download = downloads().download(id, version) { downloaded(it, version.size) }) {
             is Download.Done -> download.file
             is Download.NoSpace -> {
@@ -229,7 +242,7 @@ class PluginInstaller(
             checking()
             return when (val result = registry.install(file, InstallRequest(id, name, version.versionCode, version.sha256, update))) {
                 is InstallResult.Installed -> InstallState.Installed(result.slot)
-                InstallResult.UpdateWaiting -> null
+                InstallResult.UpdateWaiting -> if (takesOver) tookOver(id) else null
                 is InstallResult.Refused -> InstallState.Failed(result.refusal.installLine)
                 // Two installed already, or that version already couldn't start: the card has its own line for either. An
                 // update of a plugin removed meanwhile: its card is back to Install.
@@ -240,6 +253,12 @@ class PluginInstaller(
         } finally {
             file.delete()
         }
+    }
+
+    /** [id]'s stored update, taking over now: installed where it runs after, else its card shows why not. */
+    private suspend fun tookOver(id: String): InstallState? {
+        withContext(NonCancellable) { registry.atSwapPoint(id) }
+        return installed(id)?.takeIf { it.status is PluginStatus.Running }?.let { InstallState.Installed(it.slot) }
     }
 
     private fun installed(id: String): InstalledPlugin? = registry.plugins.value?.firstOrNull { it.id == id }
