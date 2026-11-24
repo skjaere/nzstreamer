@@ -46,11 +46,20 @@ fun SlotMoves.openPlugins(id: String, tv: Boolean) {
         switchTab(SettingsRoute, restore = false)
         settingsComesBackTo(HubRow.Plugins.title)
     } else {
-        switchTab(HomeRoute)
-        popTo(HomeRoute)
+        home()
         navigate(SettingsRoute)
     }
     navigate(PluginsRoute(focus = id))
+}
+
+/**
+ * Home's own screen: Home's tab, then its own pages gone. Home's tab keeps its own pages (on a phone, Settings and what
+ * opens over it, a slot's settings page among them) and brings them back as it is switched to, so the tab alone doesn't
+ * leave a slot entry there.
+ */
+fun SlotMoves.home() {
+    switchTab(HomeRoute)
+    popTo(HomeRoute)
 }
 
 /** The route types of the entries on the current back stack, and of those still drawn as they leave ([SlotMoves.drawn]). */
@@ -74,11 +83,11 @@ internal fun SlotMoves.own(slot: Int, shown: List<KClass<*>> = shown()): Boolean
 
 /**
  * Remove pressed on Settings › Plugins (L581), which is never on a slot's stack: should an entry of [slot] still be on the
- * current stack (a way in not foreseen), Home first, which saves the slot's stack for its clear, so the removal never
- * waits for the slot to leave.
+ * current stack (a way in not foreseen), Home's own screen first ([home]), so the removal never waits for the slot to
+ * leave.
  */
 fun SlotMoves.beforeRemove(slot: Int) {
-    if (own(slot)) switchTab(HomeRoute)
+    if (own(slot)) home()
 }
 
 /**
@@ -128,11 +137,12 @@ class PluginSlotWatch(
             val n = slot.number
             val plugin = plugins.firstOrNull { it.slot == n }
             note(n, plugin)
-            // A slot no plugin holds has nothing to draw: Home, then its stack is cleared once it is off the screen. Only for
-            // an entry on the back stack: one still drawn as it leaves (as clearing a saved stack restores and pops it) is
-            // going already, and Home, itself a change, would be asked again at every change while it is drawn.
+            // A slot no plugin holds has nothing to draw: Home's own screen, then its stack is cleared once it is off the
+            // screen. Only for an entry on the back stack: one still drawn as it leaves (as clearing a saved stack restores
+            // and pops it) is going already, and Home, itself a change, would be asked again at every change while it is
+            // drawn; and Home's own screen, not its tab alone, which would bring back a slot entry among its pages.
             if (plugin == null && moves.own(n, look.stacked())) {
-                moves.switchTab(HomeRoute)
+                moves.home()
                 look.moved()
             }
             if (look.onStack(n)) continue

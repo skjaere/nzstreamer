@@ -448,7 +448,7 @@ class PluginSlotsTest {
         nav.moves += "remove"
         watch.check(emptyList())
         val moves = nav.moves.filterNot { it.startsWith("clear") && it != "clear 1" }
-        assertEquals(listOf("switchTab PluginTab1", "navigate PluginsRoute", "switchTab HomeRoute", "remove", "clear 1"), moves)
+        assertEquals(listOf("switchTab PluginTab1", "navigate PluginsRoute", "switchTab HomeRoute", "popTo HomeRoute", "remove", "clear 1"), moves)
         assertEquals(emptyList(), swaps.calls, "the removal waited for no swap point")
         assertNull(nav.saved[PluginTab1::class])
 
@@ -456,6 +456,34 @@ class PluginSlotsTest {
         val quiet = FakeNav()
         watch(quiet, Swaps()).beforeRemove(1)
         assertEquals(emptyList(), quiet.moves)
+    }
+
+    /**
+     * L581, L590 on a phone, where Settings isn't a tab: a slot entry among Home's own pages (its card's Settings over
+     * Settings › Plugins) isn't left by Home's tab alone, which keeps its own pages and brings them back as it is switched
+     * to. Remove's way Home, and Home for a slot no plugin holds, go to Home's own screen: once, and nothing of the slot
+     * stays on the current stack. Going Home again and again, each move itself a change, would never end.
+     */
+    @Test
+    fun `going Home leaves a slot entry among Home's own pages on a phone`() = runTest {
+        val nav = FakeNav()
+        nav.navigate(SettingsRoute)
+        nav.navigate(PluginsRoute())
+        nav.navigate(PluginSettings1)
+        nav.navigate(PluginsRoute(focus = "skeleton"))
+        val watch = watch(nav, Swaps())
+        watch.check(listOf(installed()))
+        watch.beforeRemove(1)
+        assertEquals(listOf<Any>(HomeRoute), nav.stack, "Remove: Home's own screen")
+
+        val restored = FakeNav()
+        restored.navigate(SettingsRoute)
+        restored.navigate(PluginsRoute())
+        restored.navigate(PluginSettings1)
+        val unbound = watch(restored, Swaps())
+        repeat(3) { unbound.check(emptyList()) }
+        assertEquals(listOf<Any>(HomeRoute), restored.stack, "a slot no plugin holds: Home's own screen")
+        assertEquals(1, restored.moves.count { it == "switchTab HomeRoute" }, "Home once: ${restored.moves}")
     }
 
     /** L590 (card 5 and frame 6): the placeholder's page title is the tab's label, its card says why, and what stays. */
