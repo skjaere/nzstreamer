@@ -1,6 +1,7 @@
 package io.skjaere.usenet.app.plugins
 
 import android.content.Context
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.annotation.VisibleForTesting
 import io.skjaere.usenet.app.BuildConfig
 import io.skjaere.usenet.plugin.NzPlugin
@@ -68,6 +69,12 @@ class PluginRegistry(
 
     /** The plugins installForTest put in slots: in memory alone, never written to the registry's file. Under [lock]. */
     private val forTest = mutableMapOf<String, NzPlugin>()
+
+    /**
+     * Each plugin's tab icon as the last instance that ran in this process gave it: kept while it is off after an error, so
+     * its card and tab keep it (L618, L638); never written, so a plugin off since the process started has none. Under [lock].
+     */
+    private val icons = mutableMapOf<String, ImageVector>()
 
     private val shown = MutableStateFlow<List<InstalledPlugin>?>(null)
     private val off = MutableStateFlow(false)
@@ -376,6 +383,7 @@ class PluginRegistry(
             records.removeAll { it.id == id }
             statuses.remove(id)
             forTest.remove(id)
+            icons.remove(id)
             persist()
             crashGuard.removed(id)
             withContext(io) { store.delete(id) }
@@ -559,10 +567,12 @@ class PluginRegistry(
 
     private fun publish() {
         shown.value = records.sortedBy { it.slot }.map { record ->
+            val status = statuses[record.id] ?: PluginStatus.Waiting
+            (status as? PluginStatus.Running)?.let { icons[record.id] = it.instance.tab.icon }
             InstalledPlugin(
                 record.id, record.name, record.slot, record.versionCode, record.versionName, record.label,
-                statuses[record.id] ?: PluginStatus.Waiting, record.pending?.versionCode, record.failedVersion, record.lastUpdate,
-                withdrawn = record.state == StoredState.Withdrawn,
+                status, record.pending?.versionCode, record.failedVersion, record.lastUpdate,
+                withdrawn = record.state == StoredState.Withdrawn, icon = icons[record.id],
             )
         }
     }
@@ -632,8 +642,9 @@ sealed interface InstallResult {
 /**
  * An installed plugin, as the app shows it: the tab's [label] as the plugin last gave it (null until it first loaded),
  * its [status] in this process, the version of an update waiting for the swap ([waitingVersion]), the last update that
- * couldn't start ([failedUpdate]) and the last that did ([lastUpdate]), and whether the list [withdrew][withdrawn] its
- * version: off at the swap point, if it still runs, until a fixed version is out (L621).
+ * couldn't start ([failedUpdate]) and the last that did ([lastUpdate]), whether the list [withdrew][withdrawn] its
+ * version: off at the swap point, if it still runs, until a fixed version is out (L621), and its tab's [icon] once a
+ * version of it ran in this process (null before: the core set's Build stands in).
  */
 class InstalledPlugin(
     val id: String,
@@ -647,6 +658,7 @@ class InstalledPlugin(
     val failedUpdate: FailedVersion?,
     val lastUpdate: LastUpdate?,
     val withdrawn: Boolean = false,
+    val icon: ImageVector? = null,
 ) {
     /** An update is stored beside the running version, waiting for the swap. */
     val updateWaiting: Boolean get() = waitingVersion != null

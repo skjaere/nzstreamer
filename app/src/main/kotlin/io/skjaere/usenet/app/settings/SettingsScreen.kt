@@ -35,6 +35,7 @@ import io.skjaere.usenet.app.link.PHONES_TITLE
 import io.skjaere.usenet.app.link.TVS_TITLE
 import io.skjaere.usenet.app.link.tvsLine
 import io.skjaere.usenet.app.link.phonesLine
+import io.skjaere.usenet.app.plugins.PluginCompat
 import io.skjaere.usenet.app.setup.PHONE_SETUP_TITLE
 import io.skjaere.usenet.app.ui.Footnote
 import io.skjaere.usenet.app.ui.GroupCard
@@ -103,6 +104,16 @@ class SettingsViewModel(container: AppContainer) : ViewModel() {
     val downloads = combine(container.downloads.state.map { items -> items.map { it.row } }.distinctUntilChanged(), settings.downloads) { rows, prefs ->
         DownloadSettings.hubLine(rows, prefs)
     }.distinctUntilChanged().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
+
+    private val compat = PluginCompat()
+
+    /**
+     * Settings › Plugins' line and warn dot (W157, L638), from the registry and the list as last read: the hub never reads
+     * the list itself, so GitHub hears nothing of a visit to Settings (L620).
+     */
+    val plugins = combine(container.plugins.plugins, container.plugins.pluginsOff, container.pluginList.state) { installed, off, list ->
+        pluginsHubLine(installed.orEmpty(), off, list.index, System.currentTimeMillis(), Build.VERSION.SDK_INT, compat)
+    }.distinctUntilChanged().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HubLine(""))
 }
 
 fun languageName(code: String): String = Locale.forLanguageTag(code).getDisplayLanguage(Locale.ENGLISH).ifEmpty { code }
@@ -124,20 +135,22 @@ fun qualityLabel(q: QualityPreference): String = when (q) {
  * after the TVs, where plays go too (null shows none). [onPrivacy]: Privacy, under About, on every device
  * (L138). [onTorrentIndexers]: Torrent indexers, after Indexers, while debrid shows (null shows none; L192), and
  * [onDebridServices] Debrid services between them (L196). [onDownloads]: Settings › Downloads, after Cache, where downloads
- * show (item 20; W108, L369): on a TV, or in the TV's layout, there is none whoever passes it (null shows none). The rows
- * and their order are [settingsHub]'s.
+ * show (item 20; W108, L369): on a TV, or in the TV's layout, there is none whoever passes it (null shows none).
+ * [onPlugins]: Settings › Plugins, first in App, in every build and on every device (W157). The rows and their order are
+ * [settingsHub]'s.
  */
 @Composable
 fun SettingsScreen(
     onBack: (() -> Unit)?, onProviders: () -> Unit, onIndexers: () -> Unit, onMetadata: () -> Unit, onPlayback: () -> Unit, onCache: () -> Unit,
     onLogs: () -> Unit, onThisDevice: () -> Unit = {}, onPhoneSetup: (() -> Unit)? = null, onPhones: (() -> Unit)? = null,
     onTvs: (() -> Unit)? = null, onCast: (() -> Unit)? = null, onPrivacy: () -> Unit = {}, onTorrentIndexers: (() -> Unit)? = null,
-    onDebridServices: (() -> Unit)? = null, onDownloads: (() -> Unit)? = null,
+    onDebridServices: (() -> Unit)? = null, onDownloads: (() -> Unit)? = null, onPlugins: () -> Unit = {},
 ) {
     val container = LocalContext.current.container
     val vm: SettingsViewModel = viewModel { SettingsViewModel(container) }
     val summary by vm.summary.collectAsStateWithLifecycle()
     val downloads by vm.downloads.collectAsStateWithLifecycle()
+    val plugins by vm.plugins.collectAsStateWithLifecycle()
     val downloadsShown = downloadsShown()
     val rows = remember { HashMap<String, FocusRequester>() }
     fun row(title: String): FocusRequester = rows.getOrPut(title) { FocusRequester() }
@@ -167,6 +180,7 @@ fun SettingsScreen(
         put(HubRow.ThisDevice, onThisDevice)
         onTvs?.let { put(HubRow.Tvs, it) }
         onCast?.let { put(HubRow.GoogleCast, it) }
+        put(HubRow.Plugins, onPlugins)
         put(HubRow.Logs, onLogs)
         put(HubRow.Privacy, onPrivacy)
     }
@@ -184,6 +198,7 @@ fun SettingsScreen(
         HubRow.ThisDevice -> thisDevice
         HubRow.Tvs -> summary.tvs
         HubRow.GoogleCast -> summary.cast
+        HubRow.Plugins -> plugins.text
         HubRow.Logs -> null
         HubRow.Privacy -> privacyRowLine(container.television)
     }
@@ -197,7 +212,8 @@ fun SettingsScreen(
             GroupCard(if (group.heading == null) Modifier.padding(top = 8.dp) else Modifier) {
                 group.rows.forEachIndexed { i, page ->
                     if (i > 0) InsetDivider()
-                    val warn = page == HubRow.TorrentIndexers && summary.torrentIndexers.warn || page == HubRow.DebridServices && summary.debridServices.warn
+                    val warn = page == HubRow.TorrentIndexers && summary.torrentIndexers.warn || page == HubRow.DebridServices && summary.debridServices.warn ||
+                        page == HubRow.Plugins && plugins.warn
                     NavRow(page.title, line(page), warn = warn, modifier = Modifier.focusRequester(row(page.title)), onClick = opens(page.title, pages.getValue(page)))
                 }
             }
@@ -221,6 +237,7 @@ enum class HubRow(val title: String) {
     ThisDevice("This device"),
     Tvs(TVS_TITLE),
     GoogleCast(GoogleCastPage.TITLE),
+    Plugins("Plugins"),
     Logs("Logs"),
     Privacy(PRIVACY_TITLE),
 }
@@ -236,7 +253,8 @@ const val HUB_FOOTNOTE = "Backup is still to come."
  * those its caller opens: a TV's Set up with your phone and Phones, first; a phone's TVs and Google Cast, last in
  * Playback, Google Cast never on a [television] (L110); Debrid services, then Torrent indexers, after Indexers on both
  * (DbPhoneSources, DbTvSources 1), only while debrid is [shown] (L192); a phone's or tablet's Downloads after Cache, both
- * this device's storage, never on a [television] (item 20; W108, L369). About, with Privacy, last, on every device.
+ * this device's storage, never on a [television] (item 20; W108, L369). App: Plugins, then Logs, in every build and on
+ * every device (W157). About, with Privacy, last, on every device.
  */
 fun settingsHub(television: Boolean, optional: Set<HubRow>, shown: Boolean): List<HubGroup> {
     fun has(row: HubRow) = row in optional && (row != HubRow.GoogleCast || GoogleCastPage.shows(television)) &&
@@ -248,7 +266,7 @@ fun settingsHub(television: Boolean, optional: Set<HubRow>, shown: Boolean): Lis
             "Playback",
             listOf(HubRow.Playback, HubRow.Cache) + listOf(HubRow.Downloads).filter(::has) + HubRow.ThisDevice + listOf(HubRow.Tvs, HubRow.GoogleCast).filter(::has),
         ),
-        HubGroup("App", listOf(HubRow.Logs)),
+        HubGroup("App", listOf(HubRow.Plugins, HubRow.Logs)),
         HubGroup("About", listOf(HubRow.Privacy)),
     )
 }

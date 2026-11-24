@@ -8,7 +8,8 @@ import kotlin.test.assertEquals
  * and Google Cast; on a TV, Set up with your phone and Phones come first, and never Google Cast, even if asked for (L110).
  * About, with Privacy, on both, its line saying what leaves the device it is on; under it the footnote. Debrid services
  * and Torrent indexers follow Indexers in Sources on both (DbPhoneSources, DbTvSources 1), only while debrid shows (L192).
- * Downloads follows Cache in Playback on a phone or tablet, never on a TV (item 20; W108, L369).
+ * Downloads follows Cache in Playback on a phone or tablet, never on a TV (item 20; W108, L369). Plugins comes first in
+ * App, before Logs, on both and in every build: this class runs in the debug and the release unit tests alike (W157, L638).
  */
 class SettingsScreenRowsTest {
     @Test
@@ -17,7 +18,7 @@ class SettingsScreenRowsTest {
             listOf(
                 HubGroup("Sources", listOf(HubRow.Providers, HubRow.Indexers, HubRow.DebridServices, HubRow.TorrentIndexers, HubRow.Metadata)),
                 HubGroup("Playback", listOf(HubRow.Playback, HubRow.Cache, HubRow.Downloads, HubRow.ThisDevice, HubRow.Tvs, HubRow.GoogleCast)),
-                HubGroup("App", listOf(HubRow.Logs)),
+                HubGroup("App", listOf(HubRow.Plugins, HubRow.Logs)),
                 HubGroup("About", listOf(HubRow.Privacy)),
             ),
             settingsHub(
@@ -34,7 +35,7 @@ class SettingsScreenRowsTest {
                 HubGroup(null, listOf(HubRow.PhoneSetup, HubRow.Phones)),
                 HubGroup("Sources", listOf(HubRow.Providers, HubRow.Indexers, HubRow.DebridServices, HubRow.TorrentIndexers, HubRow.Metadata)),
                 HubGroup("Playback", listOf(HubRow.Playback, HubRow.Cache, HubRow.ThisDevice)),
-                HubGroup("App", listOf(HubRow.Logs)),
+                HubGroup("App", listOf(HubRow.Plugins, HubRow.Logs)),
                 HubGroup("About", listOf(HubRow.Privacy)),
             ),
             settingsHub(
@@ -48,7 +49,10 @@ class SettingsScreenRowsTest {
     @Test
     fun `a row the caller can't open isn't there`() {
         val rows = settingsHub(television = false, optional = emptySet(), shown = true).flatMap { it.rows }
-        assertEquals(listOf(HubRow.Providers, HubRow.Indexers, HubRow.Metadata, HubRow.Playback, HubRow.Cache, HubRow.ThisDevice, HubRow.Logs, HubRow.Privacy), rows)
+        assertEquals(
+            listOf(HubRow.Providers, HubRow.Indexers, HubRow.Metadata, HubRow.Playback, HubRow.Cache, HubRow.ThisDevice, HubRow.Plugins, HubRow.Logs, HubRow.Privacy),
+            rows,
+        )
     }
 
     @Test
@@ -57,7 +61,7 @@ class SettingsScreenRowsTest {
             listOf(
                 "Set up with your phone", "Phones", "Usenet providers", "Indexers", "Debrid services", "Torrent indexers", "Metadata", "Quality and languages", "Cache",
                 "Downloads", "This device", "TVs",
-                "Google Cast", "Logs", "Privacy",
+                "Google Cast", "Plugins", "Logs", "Privacy",
             ),
             HubRow.entries.map { it.title },
         )
@@ -97,5 +101,17 @@ class SettingsScreenRowsTest {
             val sources = settingsHub(television, setOf(HubRow.DebridServices, HubRow.TorrentIndexers), shown = false).single { it.heading == "Sources" }
             assertEquals(listOf(HubRow.Providers, HubRow.Indexers, HubRow.Metadata), sources.rows)
         }
+    }
+
+    /** W157, L638: Plugins in every hub, whatever it opens, debrid shown or hidden, on a phone and a TV. */
+    @Test
+    fun `the Plugins row is first in App on every hub`() {
+        listOf(false, true).forEach { television ->
+            listOf(false, true).forEach { shown ->
+                val app = settingsHub(television, optional = emptySet(), shown = shown).single { it.heading == "App" }
+                assertEquals(listOf(HubRow.Plugins, HubRow.Logs), app.rows, "television $television, debrid shown $shown")
+            }
+        }
+        assertEquals("Plugins", HubRow.Plugins.title)
     }
 }

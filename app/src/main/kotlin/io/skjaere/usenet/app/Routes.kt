@@ -55,6 +55,11 @@ import kotlinx.serialization.Serializable
 /** Settings › Privacy (phones and TVs, L138): the policy, readable offline; also opened by Cast's Privacy links. */
 @Serializable data object PrivacyRoute
 /**
+ * Settings › Plugins (every build, phones and TVs, W157): [focus], the id of the plugin whose card opens in view, its first
+ * button focused on a TV, as a plugin's tab's Open Plugins asks (L590).
+ */
+@Serializable data class PluginsRoute(val focus: String? = null)
+/**
  * Add a TV (phones and tablets only, L36): pairing with a TV by matching numbers; [again], a Pair again's TV (its key id);
  * [choose], opened from Play on, so the TV it pairs is chosen.
  */

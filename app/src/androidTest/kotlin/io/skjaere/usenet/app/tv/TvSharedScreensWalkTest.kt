@@ -72,9 +72,14 @@ import io.skjaere.usenet.app.link.PhoneQuestion
 import io.skjaere.usenet.app.link.PhonesDeps
 import io.skjaere.usenet.app.link.PhonesScreen
 import io.skjaere.usenet.app.link.TvListener
+import io.skjaere.usenet.app.plugins.PluginIndex
+import io.skjaere.usenet.app.plugins.PluginListState
+import io.skjaere.usenet.app.plugins.PluginsPageFakes
 import io.skjaere.usenet.app.search.ReleaseList
 import io.skjaere.usenet.app.settings.IndexerTest
 import io.skjaere.usenet.app.settings.MaxBitrateSetting
+import io.skjaere.usenet.app.settings.PluginsPage
+import io.skjaere.usenet.app.settings.PluginsScreen
 import io.skjaere.usenet.app.settings.USER_AGENT_HELP
 import io.skjaere.usenet.app.setup.ADDRESS
 import io.skjaere.usenet.app.setup.PHONE_SETUP_DONE
@@ -706,6 +711,46 @@ class TvSharedScreensWalkTest {
     fun phonesNoneYet() {
         showLinkPage { PhonesScreen(onBack = {}, onPair = {}, deps = phonesDeps(listed = false)) }
         check("Phones, none yet") { openLinkPage() }
+    }
+
+    /**
+     * Settings › Plugins (W157) over states the test sets in place of the app's registry, list and installer: nothing is
+     * installed, read or downloaded. Its cards' Settings shown, as the plugin slots' pages give them.
+     */
+    private fun pluginsPage(screen: String, mustReach: List<String>, set: (PluginsPageFakes) -> Unit) {
+        val fakes = PluginsPageFakes(instrumentation.targetContext.container.television)
+        try {
+            set(fakes)
+            showLinkPage { PluginsScreen(focus = null, onBack = {}, onSettings = {}, onOpen = {}, deps = fakes.deps) }
+            check(screen, mustReach = mustReach) { openLinkPage() }
+        } finally {
+            fakes.close()
+        }
+    }
+
+    /** No plugin listed yet (the list's 404): its line, and Check again. */
+    @Test
+    fun pluginsNoneListed() {
+        pluginsPage("Plugins, none listed", mustReach = listOf(PluginsPage.CHECK_AGAIN)) { fakes ->
+            fakes.list.value = PluginListState(PluginIndex.EMPTY, readAt = PluginsPageFakes.NOW)
+        }
+    }
+
+    /** One installed, another the list offers: every card's buttons and Check again reached. */
+    @Test
+    fun pluginsOneInstalled() {
+        pluginsPage("Plugins, one installed", mustReach = listOf("Settings", "Remove", "Install", PluginsPage.CHECK_AGAIN)) { fakes ->
+            fakes.listing(PluginsPageFakes.listed("kestrel", "Kestrel"), PluginsPageFakes.listed("harbor", "Harbor Lights"))
+            fakes.installed.value = listOf(PluginsPageFakes.installed("kestrel", "Kestrel", "Sports"))
+        }
+    }
+
+    /** Offline: GitHub unreachable, the list kept from three days before, its line above the card. */
+    @Test
+    fun pluginsOffline() {
+        pluginsPage("Plugins, offline", mustReach = listOf("Install", PluginsPage.CHECK_AGAIN)) { fakes ->
+            fakes.listing(PluginsPageFakes.listed("kestrel", "Kestrel"), failed = true, readAt = PluginsPageFakes.NOW - 3 * 86_400_000L)
+        }
     }
 
     /** Pair a phone over a fake listener at an invented address, whose words a test sends as the listener would. */

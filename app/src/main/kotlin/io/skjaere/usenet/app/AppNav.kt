@@ -59,6 +59,7 @@ import io.skjaere.usenet.app.settings.IndexersScreen
 import io.skjaere.usenet.app.settings.LogsScreen
 import io.skjaere.usenet.app.settings.MetadataScreen
 import io.skjaere.usenet.app.settings.PlaybackScreen
+import io.skjaere.usenet.app.settings.PluginsScreen
 import io.skjaere.usenet.app.settings.PrivacyScreen
 import io.skjaere.usenet.app.settings.ProviderScreen
 import io.skjaere.usenet.app.settings.ProvidersScreen
@@ -104,6 +105,13 @@ fun tabsFor(formFactor: FormFactor, extras: AppExtras? = appExtras): List<Tab> {
         tabs.take(at + 1) + extra.tab + tabs.drop(at + 1)
     }
 }
+
+/**
+ * The tab plugin tabs follow on [formFactor] (L618), by its label, as Settings › Plugins says where a new one goes: the
+ * build's extra tab placed after Home, Discover, where the build has one, else Home.
+ */
+fun pluginTabsFollow(formFactor: FormFactor, extras: AppExtras? = appExtras): String =
+    extras?.tabs(formFactor)?.lastOrNull { it.after == HomeRoute::class }?.tab?.label ?: home.label
 
 /** Whether [destination] is [tab]'s own screen (not a page opened from it). */
 fun NavDestination?.isTab(tab: Tab): Boolean = this?.hierarchy?.any { it.hasRoute(tab.type) } == true
@@ -398,8 +406,12 @@ fun NavGraphBuilder.appGraph(
             onDebridServices = debrid.services?.let { open -> { screen.ifResumed { open() } } },
             // Settings › Downloads, where downloads show (L369): none elsewhere.
             onDownloads = downloads.settings?.let { open -> { screen.ifResumed { open() } } },
+            // Every build and every device (W157).
+            onPlugins = { screen.ifResumed { nav.navigate(PluginsRoute()) } },
         )
     }
+    // A card's Settings and Open <label> come with the plugin slots' pages (L582): none until then.
+    composable<PluginsRoute> { screen -> PluginsScreen(focus = screen.toRoute<PluginsRoute>().focus, onBack = back(screen)) }
     composable<PhonesRoute> { screen ->
         PhonesScreen(onBack = back(screen), onPair = { screen.ifResumed { nav.navigate(PairPhoneRoute) } })
     }

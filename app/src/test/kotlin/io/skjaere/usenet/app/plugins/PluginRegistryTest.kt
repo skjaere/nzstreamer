@@ -1,8 +1,11 @@
 package io.skjaere.usenet.app.plugins
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Star
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -356,5 +359,35 @@ class PluginRegistryTest {
         assertFalse(File(h.cache, "plugins/skeleton").exists())
         assertEquals(emptyMap(), h.secrets.values)
         assertEquals(emptyList(), h.registry().apply { start() }.let { advanceUntilIdle(); it.plugins.value })
+    }
+
+    /**
+     * L638, L618: a plugin's card and tab show its tab's icon once its version loaded in this process, and keep it while
+     * it is off after an error; one that never loaded here has none (the core set's Build stands in), nor one installed
+     * again after Remove until it loads.
+     */
+    @Test
+    fun `a plugin's tab icon is kept once it loaded in this process, and goes with Remove`() = runTest {
+        val h = harness()
+        val registry = h.registry().apply { start(); firstActivity() }
+        h.install(registry, "skeleton", 1)
+        advanceUntilIdle()
+        assertSame(Icons.Filled.Star, registry.installed("skeleton").icon)
+
+        val instance = assertNotNull(registry.running("skeleton"))
+        instance.host.scope.launch { throw IllegalStateException("the fake's refresh failed") }
+        advanceUntilIdle()
+        assertEquals(PluginStatus.OffAfterError, registry.installed("skeleton").status)
+        assertSame(Icons.Filled.Star, registry.installed("skeleton").icon, "it ran in this process")
+        val next = h.registry().apply { start(); firstActivity() }
+        advanceUntilIdle()
+        assertNull(next.installed("skeleton").icon, "off since this process started")
+
+        registry.remove("skeleton")
+        h.loading.failing += "skeleton" to 1L
+        h.install(registry, "skeleton", 1)
+        advanceUntilIdle()
+        assertIs<PluginStatus.CouldntStart>(registry.installed("skeleton").status)
+        assertNull(registry.installed("skeleton").icon, "installed again, it hasn't loaded")
     }
 }

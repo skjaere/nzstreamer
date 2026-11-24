@@ -13,20 +13,31 @@ import java.net.Socket
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 /**
  * The plugin list and its releases on this device's loopback address, in the test's own process, standing for GitHub
  * (L622): /index.json as the test last set it ([list]), and each release file the list names, the skeleton's builds from
- * the test APK's assets, at GitHub's paths on this server ([source]). The path of each request is kept ([requests]).
- * Just enough of HTTP for one GET at a time; never a real service.
+ * the test APK's assets, at GitHub's paths on this server ([source]). The path of each request is kept ([requests]). A
+ * download can be held half-way ([holdDownloads]), as a slow one is under way. Just enough of HTTP for a GET per
+ * connection, each answered on its own thread; never a real service.
  */
 class PluginListServer : AutoCloseable {
     /**
      * One version as the list gives it: [build]'s file, released as [tag] ("1.0.0"), listed as [versionCode] with
-     * [build]'s own unless given, its SHA-256 the file's unless [sha256] says otherwise.
+     * [build]'s own unless given, its SHA-256 the file's unless [sha256] says otherwise, its plugin API the one it was
+     * built against unless [api] says otherwise; its file not there at all where not [served].
      */
-    class Listed(val build: SkeletonBuild, val tag: String, val versionCode: Long = build.versionCode, val sha256: String? = null)
+    class Listed(
+        val build: SkeletonBuild,
+        val tag: String,
+        val versionCode: Long = build.versionCode,
+        val sha256: String? = null,
+        val api: String? = null,
+        val served: Boolean = true,
+    )
 
     private val server = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
     val port: Int = server.localPort
@@ -40,16 +51,37 @@ class PluginListServer : AutoCloseable {
     private val files = ConcurrentHashMap<String, ByteArray>()
     private var lists = 0L
 
+    @Volatile
+    private var held: CountDownLatch? = null
+
     init {
         thread(isDaemon = true, name = "plugin-list") {
             while (!server.isClosed) {
                 try {
-                    server.accept().use(::answer)
+                    val socket = server.accept()
+                    thread(isDaemon = true, name = "plugin-list-answer") {
+                        try {
+                            socket.use(::answer)
+                        } catch (e: IOException) {
+                            // The client went before its answer was sent: a download cancelled.
+                        }
+                    }
                 } catch (e: IOException) {
-                    // Closed, or the client went before its answer was sent.
+                    // Closed.
                 }
             }
         }
+    }
+
+    /** From now on, each release file is sent half-way, then held until [release]: a download the app shows under way. */
+    fun holdDownloads() {
+        held = CountDownLatch(1)
+    }
+
+    /** The files held half-way are sent to their end, and the next ones whole; once the server is closed, never. */
+    fun release() {
+        held?.countDown()
+        held = null
     }
 
     /**
@@ -62,14 +94,14 @@ class PluginListServer : AutoCloseable {
         val entries = buildJsonArray {
             versions.forEach { version ->
                 val bytes = version.build.bytes()
-                files[path(version.tag)] = bytes
+                if (version.served) files[path(version.tag)] = bytes else files.remove(path(version.tag))
                 add(
                     buildJsonObject {
                         put("url", "http://127.0.0.1:$port${path(version.tag)}")
                         put("sha256", version.sha256 ?: Sha256.of(bytes))
                         put("versionName", "${version.versionCode}")
                         put("versionCode", version.versionCode)
-                        put("api", "${PluginApi.MAJOR}.${PluginApi.MINOR + if (version.build == SkeletonBuild.Newer) 1 else 0}")
+                        put("api", version.api ?: "${PluginApi.MAJOR}.${PluginApi.MINOR + if (version.build == SkeletonBuild.Newer) 1 else 0}")
                         put("libs", buildJsonObject { libs.forEach { (name, value) -> put(name, value) } })
                         put("minSdk", 26)
                         put("size", bytes.size)
@@ -111,16 +143,33 @@ class PluginListServer : AutoCloseable {
         requests += path
         val body = if (path == "/index.json") index else files[path]
         val head = if (body == null) "HTTP/1.1 404 Not Found\r\nContent-Length: 0" else "HTTP/1.1 200 OK\r\nContent-Length: ${body.size}"
+        val hold = held.takeIf { path != "/index.json" && body != null }
         socket.getOutputStream().apply {
             write("$head\r\nConnection: close\r\n\r\n".toByteArray())
-            body?.let(::write)
+            if (body != null && hold != null) {
+                write(body, 0, body.size / 2)
+                flush()
+                // Never for ever: a test that forgot its release ends the download, not the run. Closed meanwhile, the
+                // server sends no more: the download fails, and nothing is installed after the test.
+                hold.await(HOLD_S, TimeUnit.SECONDS)
+                if (server.isClosed) return
+                write(body, body.size / 2, body.size - body.size / 2)
+            } else {
+                body?.let(::write)
+            }
             flush()
         }
     }
 
-    override fun close() = server.close()
+    override fun close() {
+        server.close()
+        release()
+    }
 
     private companion object {
         val GENERATED: Instant = Instant.parse("2026-11-24T10:00:00Z")
+
+        /** The longest a held file waits for its release. */
+        const val HOLD_S = 30L
     }
 }
