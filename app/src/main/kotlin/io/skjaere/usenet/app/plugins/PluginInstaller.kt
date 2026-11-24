@@ -166,35 +166,63 @@ class PluginInstaller(
     private suspend fun afterRead(index: PluginIndex) {
         val updates = registry.plugins.filterNotNull().first().mapNotNull { plugin ->
             val listed = index.plugins.firstOrNull { it.id == plugin.id } ?: return@mapNotNull null
-            if (plugin.versionCode in listed.withdrawn) registry.withdraw(plugin.id, plugin.versionCode)
-            var waiting = plugin.waitingVersion
-            if (waiting != null && waiting in listed.withdrawn) {
-                registry.withdraw(plugin.id, waiting)
-                waiting = null
-            }
-            val update = index.offer(plugin.id, maxOf(plugin.versionCode, waiting ?: 0), sdk, compat)?.offered ?: return@mapNotNull null
-            if (update.versionCode == plugin.failedUpdate?.versionCode) return@mapNotNull null
+            val update = follow(plugin, listed, index) ?: return@mapNotNull null
             start(plugin.id, shown = false) { fetch(plugin.id, listed.name, update, update = true) }
         }
         updates.joinAll()
     }
 
     /**
+     * [plugin] as [index] lists it ([listed]): its withdrawn version let go at the swap point (a waiting one dropped); and
+     * the update to fetch, the highest version offered above what it has or waits with, unless that one couldn't start.
+     */
+    private suspend fun follow(plugin: InstalledPlugin, listed: ListedPlugin, index: PluginIndex): ListedVersion? {
+        if (plugin.versionCode in listed.withdrawn) registry.withdraw(plugin.id, plugin.versionCode)
+        var waiting = plugin.waitingVersion
+        if (waiting != null && waiting in listed.withdrawn) {
+            registry.withdraw(plugin.id, waiting)
+            waiting = null
+        }
+        val update = index.offer(plugin.id, maxOf(plugin.versionCode, waiting ?: 0), sdk, compat)?.offered ?: return null
+        return update.takeIf { it.versionCode != plugin.failedUpdate?.versionCode }
+    }
+
+    /**
+     * An install the page started took its version from the list as the page showed it, maybe its copy while a read ran:
+     * a read that came back meanwhile, before [id] was installed, passed it over. Once installed, it follows the list as it
+     * stands now, as after a read (L621).
+     */
+    private suspend fun caughtUp(id: String) {
+        try {
+            val index = list.value.index ?: return
+            val plugin = installed(id) ?: return
+            val listed = index.plugins.firstOrNull { it.id == id } ?: return
+            val update = follow(plugin, listed, index) ?: return
+            with(Fetch(id, shown = false)) { fetch(id, listed.name, update, update = true) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.warn("Plugin {}: the list wasn't followed after its install: {}", id, e.javaClass.simpleName)
+        }
+    }
+
+    /**
      * [work] for [id] in the app's scope, unless one runs for it already; where [shown], the card follows it from
-     * Downloading, and a Cancel takes its state away.
+     * Downloading, a Cancel takes its state away, and once installed the plugin follows the list as it stands then.
      */
     private fun start(id: String, shown: Boolean, work: suspend Fetch.() -> InstallState?): Job? = synchronized(jobs) {
         if (jobs[id]?.isActive == true) return@synchronized null
         if (shown) show(id, InstallState.Downloading(0))
         val fetch = Fetch(id, shown)
         val job = scope.launch(start = CoroutineStart.LAZY) {
-            try {
-                val end = fetch.work()
-                if (shown) show(id, end)
+            val end = try {
+                fetch.work()
             } catch (e: CancellationException) {
                 if (shown) show(id, null)
                 throw e
             }
+            if (shown) show(id, end)
+            if (shown && end is InstallState.Installed) caughtUp(id)
         }
         jobs[id] = job
         job.invokeOnCompletion { synchronized(jobs) { if (jobs[id] === job) jobs.remove(id) } }

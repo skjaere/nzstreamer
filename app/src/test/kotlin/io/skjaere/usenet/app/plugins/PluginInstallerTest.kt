@@ -344,6 +344,28 @@ class PluginInstallerTest {
         assertFalse(s.registry.installed("harbor").withdrawn)
     }
 
+    /**
+     * Install pressed on the list's copy while the page's read runs: the read comes back first, withdrawing the version on
+     * its way and offering a fixed one, while the plugin isn't installed yet. Once installed, the version follows the list
+     * as it now stands: off at the swap point, and the fixed version stored to take over there.
+     */
+    @Test
+    fun `a version installed from the copy follows the read that came while it downloaded`() = installerTest { s ->
+        s.listed(harbor(version("harbor", 1)))
+        s.downloads.hold = CompletableDeferred()
+        assertNotNull(s.installer.install("harbor"))
+        runCurrent()
+        s.read(harbor(version("harbor", 1), version("harbor", 2), withdrawn = setOf(1)))
+        s.downloads.hold!!.complete(Unit)
+        s.downloads.hold = null
+        advanceUntilIdle()
+
+        assertTrue(s.registry.installed("harbor").withdrawn, "the version installed is withdrawn")
+        assertEquals(2L, s.registry.installed("harbor").waitingVersion, "the fixed version waits for the swap point")
+        assertTrue(s.registry.atSwapPoint("harbor"))
+        assertEquals(2L, s.registry.running("harbor")?.versionCode)
+    }
+
     @Test
     fun `a waiting update the list withdraws is dropped`() = installerTest { s ->
         s.listed(harbor(version("harbor", 1)))
