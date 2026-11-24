@@ -43,6 +43,9 @@ interface PluginGuard {
 
     /** Turn on again for one version: what this process recorded against it goes. */
     fun turnedOnAgain(id: String, versionCode: Long)
+
+    /** [id] was removed: everything kept of it goes (crashes and errors, deaths in its loads), so an install anew starts clean. */
+    fun removed(id: String)
 }
 
 /**
@@ -187,6 +190,20 @@ class PluginCrashGuard(private val folder: File, private val now: () -> Long = S
             val crash = read(crashFile, CrashRecord.serializer()) ?: return@synchronized
             val kept = crash.blamed.filter { it.id != id || it.versionCode != versionCode }
             if (kept.size != crash.blamed.size) write(crashFile, CrashRecord.serializer(), crash.copy(blamed = kept))
+        }
+    }
+
+    override fun removed(id: String) {
+        running.remove(id)
+        synchronized(files) {
+            read(crashFile, CrashRecord.serializer())?.let { crash ->
+                val kept = crash.blamed.filter { it.id != id }
+                if (kept.size != crash.blamed.size) write(crashFile, CrashRecord.serializer(), crash.copy(blamed = kept))
+            }
+            val starts = readStarts()
+            val others = starts.markers.filter { it.id != id }
+            if (others.size != starts.markers.size) write(startsFile, StartsRecord.serializer(), starts.copy(markers = others))
+            if (read(markerFile, Marker.serializer())?.id == id) markerFile.delete()
         }
     }
 

@@ -111,6 +111,8 @@ internal class FakeGuard : PluginGuard {
     }
 
     override fun turnedOnAgain(id: String, versionCode: Long) {}
+
+    override fun removed(id: String) {}
 }
 
 /** The signer the test plugins' files have, and the one the fakes' verifier trusts. */

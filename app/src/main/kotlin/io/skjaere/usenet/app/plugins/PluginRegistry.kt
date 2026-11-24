@@ -305,7 +305,11 @@ class PluginRegistry(
         }
     }
 
-    /** Removes [id]: its instance let go, its slot freed, its code, data, cache and secrets deleted. What it played stays. */
+    /**
+     * Removes [id]: its instance let go, its slot freed, its code, data, cache and secrets deleted, and what the crash guard
+     * kept of it (an error its close() threw as it went among it), so the same version installed again starts clean. What
+     * it played stays.
+     */
     suspend fun remove(id: String) {
         filesRead.await()
         lock.withLock {
@@ -316,6 +320,7 @@ class PluginRegistry(
             statuses.remove(id)
             forTest.remove(id)
             persist()
+            crashGuard.removed(id)
             withContext(io) { store.delete(id) }
             publish()
         }

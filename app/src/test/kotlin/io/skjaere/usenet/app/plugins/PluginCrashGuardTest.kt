@@ -22,6 +22,7 @@ import java.time.Duration
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -257,6 +258,55 @@ class PluginCrashGuardTest {
         assertFalse(File(h.files, "plugins/skeleton/code/2").exists())
         assertIs<InstallResult.NotAgain>(h.install(next.registry, "skeleton", 2))
         next.scope.cancel()
+    }
+
+    @Test
+    fun `remove ends what the crash guard kept of the plugin, so the same version installed again starts clean`() = runTest {
+        val h = RegistryHarness(dir, this)
+        h.guard = PluginCrashGuard(File(h.files, "plugins"), now = { testScheduler.currentTime })
+        h.loading.plugin = { _, _ -> FakePlugin(closeThrows = true) }
+        val registry = h.registry().apply { start(); firstActivity() }
+        h.install(registry, "skeleton", 1)
+        assertNotNull(registry.running("skeleton")).host.scope.launch { throw IllegalStateException("the plugin's refresh failed") }
+        advanceUntilIdle()
+        assertEquals(PluginStatus.OffAfterError, registry.installed("skeleton").status)
+
+        registry.remove("skeleton")
+        h.loading.plugin = { _, _ -> FakePlugin() }
+        assertIs<InstallResult.Installed>(h.install(registry, "skeleton", 1))
+        assertNotNull(registry.running("skeleton"))
+        val next = h.registry().apply { start(); firstActivity() }
+        advanceUntilIdle()
+        assertNotNull(next.running("skeleton"), "the new install never failed: on at the next start")
+    }
+
+    @Test
+    fun `a removed plugin's crashes, errors and deaths in its loads are gone from the guard's files`() {
+        val both = listOf(skeleton1, kestrel)
+        // Each kind of record of skeleton's, and of kestrel's, which stays: a death in its load, counted at the next start.
+        guard().apply { startCheck(both); recordsApplied(); loading("skeleton", 1) }
+        guard().apply {
+            startCheck(both)
+            recordsApplied()
+            loading("kestrel", 5)
+            loadDone("kestrel", 5, running = true)
+            recordError("skeleton", 1)
+            recordError("kestrel", 5)
+            loading("skeleton", 1)
+            time += 60_000
+            blame(throwableAt(pluginFrame("skeleton")))
+            removed("skeleton")
+        }
+        assertFalse(File(dir, "loading").exists(), "the load marker that named it")
+        guard().apply {
+            val check = startCheck(both)
+            assertEquals(emptySet(), check.crashed)
+            assertEquals(setOf(kestrel), check.errored)
+            recordsApplied()
+            // Installed anew, its first load dies.
+            loading("skeleton", 1)
+        }
+        assertEquals(emptySet(), guard().startCheck(both).crashed, "one death of the new install's: the old one's count is gone")
     }
 
     @Test
