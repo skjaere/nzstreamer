@@ -8,6 +8,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -69,6 +70,24 @@ class PluginCrashGuardTest {
         (if (cause == null) RuntimeException("boom") else RuntimeException("boom", cause)).apply {
             stackTrace = arrayOf(*frames, StackTraceElement("io.skjaere.usenet.app.MainActivity", "onCreate", "MainActivity.kt", 1))
         }
+
+    /**
+     * A process of the app over [h]'s files, on the test's virtual time: its registry started, its first screen asked
+     * unless not [asked], and its own scope, which [crash] or [end] ends, so nothing of it runs on (its 30 s timer
+     * included). What escapes its scope (a death the test stages) is dropped there.
+     */
+    private class TestProcess(h: RegistryHarness, test: TestScope, asked: Boolean = true) {
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(test.testScheduler) + CoroutineExceptionHandler { _, _ -> })
+        val guard = PluginCrashGuard(File(h.files, "plugins"), now = { test.testScheduler.currentTime }).also { h.guard = it }
+        val registry = h.registry(scope).apply { start(); if (asked) firstActivity() }
+
+        fun crash(e: Throwable) {
+            guard.blame(e)
+            scope.cancel()
+        }
+
+        fun end() = scope.cancel()
+    }
 
     /** A process that started, loaded [loaded] and crashed with [crash] [after] ms on: what the next start finds. */
     private fun crashedProcess(crash: Throwable, after: Long = 60_000, loaded: List<Pair<String, Long>> = listOf(skeleton1)): PluginCrashGuard {
@@ -400,6 +419,44 @@ class PluginCrashGuardTest {
         time += 60_000
         crashedProcess(throwableAt(), after = 5_000)
         assertFalse(guard().startCheck(listOf(skeleton1)).pluginsOff)
+    }
+
+    @Test
+    fun `the registry tells the guard a start lasted 30 s, so two early crashes with one between them leave plugins on`() = runTest {
+        val h = RegistryHarness(dir, this)
+        TestProcess(h, this).apply { h.install(registry, "skeleton", 1); advanceTimeBy(60_000); end() }
+        fun earlyCrash() = TestProcess(h, this).apply { advanceTimeBy(1_000); crash(throwableAt()); advanceTimeBy(60_000) }
+
+        earlyCrash()
+        // A start that lasts 31 s, with no crash, then is killed: Android ends a process in the background.
+        TestProcess(h, this).apply { advanceTimeBy(31_000); end() }
+        advanceTimeBy(60_000)
+        earlyCrash()
+        val next = TestProcess(h, this)
+        advanceUntilIdle()
+        assertFalse(next.registry.pluginsOff.value, "the two early crashes weren't in a row")
+        assertTrue(next.registry.running("skeleton") != null)
+        next.end()
+    }
+
+    @Test
+    fun `the registry's Turn on again keeps the plugins on at the next start too`() = runTest {
+        val h = RegistryHarness(dir, this)
+        TestProcess(h, this).apply { h.install(registry, "skeleton", 1); advanceTimeBy(60_000); end() }
+        repeat(2) { TestProcess(h, this).apply { advanceTimeBy(1_000); crash(throwableAt()); advanceTimeBy(60_000) } }
+        val safe = TestProcess(h, this)
+        advanceUntilIdle()
+        assertTrue(safe.registry.pluginsOff.value)
+        safe.registry.turnPluginsOnAgain()
+        assertTrue(safe.registry.running("skeleton") != null)
+        advanceTimeBy(60_000)
+        safe.end()
+
+        val next = TestProcess(h, this)
+        advanceUntilIdle()
+        assertFalse(next.registry.pluginsOff.value, "still on")
+        assertTrue(next.registry.running("skeleton") != null)
+        next.end()
     }
 
     @Test
