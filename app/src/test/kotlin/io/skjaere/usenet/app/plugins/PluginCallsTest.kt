@@ -174,4 +174,36 @@ class PluginCallsTest {
         assertIs<OutOfMemoryError>(runCatching { calls.calling(version, "big", nothing = Unit) { throw OutOfMemoryError("no room") } }.exceptionOrNull())
         assertEquals(2, failures.size)
     }
+
+    /**
+     * The caller cancelled (the play's Cancel, another Play) while the plugin's code ran, which turned the cancellation it
+     * met into an exception of its own (a catch-all around its host's search): the caller's cancellation goes on up, and
+     * the plugin is charged nothing.
+     */
+    @Test
+    fun `a cancelled caller's call that the plugin's code turns into its own exception charges nothing`() = runTest {
+        val failures = mutableListOf<String>()
+        val calls = PluginCalls { version, what, e -> failures += "${version.id} ${version.versionCode} $what ${e.javaClass.simpleName}" }
+        val version = PluginVersion("skeleton", 3, key = 7)
+        var ended: Throwable? = null
+        val play = launch {
+            try {
+                calls.calling(version, "releases", nothing = Unit) {
+                    try {
+                        awaitCancellation()
+                    } catch (e: Exception) {
+                        throw IllegalStateException("search failed", e)
+                    }
+                }
+            } catch (e: Throwable) {
+                ended = e
+                throw e
+            }
+        }
+        runCurrent()
+        play.cancel()
+        play.join()
+        assertIs<CancellationException>(ended, "the caller's cancellation, not the plugin's exception")
+        assertEquals(emptyList(), failures, "the plugin charged nothing")
+    }
 }

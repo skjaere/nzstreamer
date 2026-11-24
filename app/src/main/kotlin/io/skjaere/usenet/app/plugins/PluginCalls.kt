@@ -1,6 +1,5 @@
 package io.skjaere.usenet.app.plugins
 
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
@@ -29,14 +28,15 @@ class PluginCalls(private val failed: (version: PluginVersion, what: String, e: 
 
     /**
      * [call] for plugin code that suspends (a play's releases()). The caller's own cancellation goes on up, and is nobody's
-     * error; a CancellationException the plugin's code throws while its caller goes on (a timeout of its own) is the
+     * error, whatever the plugin's code made of it (a catch-all of its own around its host's search turns it into its own
+     * exception); a CancellationException the plugin's code throws while its caller goes on (a timeout of its own) is the
      * plugin's failure, as any other throw.
      */
     suspend fun <T> calling(version: PluginVersion, what: String, nothing: T, block: suspend () -> T): T = try {
         block()
     } catch (e: Throwable) {
-        if (e is CancellationException) currentCoroutineContext().ensureActive()
         if (!e.isPluginsOwn()) throw e
+        currentCoroutineContext().ensureActive()
         failed(version, what, e)
         nothing
     }
