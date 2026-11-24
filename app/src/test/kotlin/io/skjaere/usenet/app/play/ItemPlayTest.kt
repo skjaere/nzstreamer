@@ -221,12 +221,16 @@ class ItemPlayTest {
     }
 
     /** The remembered release failed and the plugin only offers others: Choose release opens with them too. */
+    /**
+     * The release that played it failing, with only offered ones left: Choose release opens with the possible matches alone
+     * (L627), never the release that just failed among them, whether the plugin accepted it again or offered it.
+     */
     @Test
-    fun `the remembered release failing with only offered ones left opens Choose release`() {
-        val offered = ItemFound(listOf(good), offered = listOf(other to "No date in the name"))
+    fun `the remembered release failing with only offered ones left opens Choose release with them alone`() {
+        val offered = ItemFound(listOf(good), offered = listOf(other to "No date in the name", good to "Team codes only"), leftOut = "2 left out")
         val (r, end) = run(stored = true, found = offered, outcomes = listOf(failed(remembered.title)))
         assertEquals(1, r.plays.size, "the remembered release alone")
-        assertEquals(listOf(offered), r.chose)
+        assertEquals(listOf(ItemFound(emptyList(), offered = listOf(other to "No date in the name"), leftOut = "2 left out")), r.chose)
         assertEquals(PlayState.Idle, end)
     }
 

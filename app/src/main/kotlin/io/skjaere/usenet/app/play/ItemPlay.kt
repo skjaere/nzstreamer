@@ -90,10 +90,12 @@ internal object ItemPlay {
         val candidates = retry?.leaveOut(playable) ?: playable
         if (candidates.isEmpty()) {
             // Only possible matches: Play never picks one. Some play here, so the user may (SpPhoneChoose 3); a play
-            // replaced meanwhile opens nothing.
-            if (found.offered.any { (item, _) -> item.ranked.playable }) {
+            // replaced meanwhile opens nothing. The release that just failed isn't among them to pick, accepted or offered.
+            val failedKeys = retry?.failed.orEmpty()
+            val open = found.copy(accepted = found.accepted.filterNot { it.key in failedKeys }, offered = found.offered.filterNot { (item, _) -> item.key in failedKeys })
+            if (open.offered.any { (item, _) -> item.ranked.playable }) {
                 currentCoroutineContext().ensureActive()
-                choose(found)
+                choose(open)
                 return PlayState.Idle
             }
             return failed ?: PlayState.NoRelease(
