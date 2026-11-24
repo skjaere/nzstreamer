@@ -6,9 +6,9 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.link.FinalKind
 import io.skjaere.usenet.link.LinkMessage
-import kotlinx.coroutines.async
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.produceIn
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -399,7 +399,8 @@ class LibraryRepositoryTest {
 
     /**
      * L594: a plugin's states over more keys than SQLite takes in one query (999 before Android 11), read in chunks as one
-     * list: the live ones alone, and again as one of them changes.
+     * list: the live ones alone, and again as one of them changes, the flow collected before the change, so a read that
+     * came once would never see it.
      */
     @Test
     fun statesOfManyKeysAreObservedInChunks() = runBlocking<Unit> {
@@ -413,10 +414,14 @@ class LibraryRepositoryTest {
         assertEquals(60_000L + 1_150, seen.single { it.key == keys[1_150] }.positionMs)
 
         val later = withTimeout(10_000) {
-            val changed = async { library.observeStates(asked).first { rows -> rows.any { it.key == keys[1_150] && it.positionMs == 3_000_000L } } }
+            val updates = library.observeStates(asked).produceIn(this)
+            assertEquals("its first list, before the change", 60_000L + 1_150, updates.receive().single { it.key == keys[1_150] }.positionMs)
             db.watchStates().upsert(listOf(db.watchStates().get(keys[1_150])!!.copy(positionMs = 3_000_000)))
-            changed.await()
+            val next = updates.receive()
+            updates.cancel()
+            next
         }
+        assertEquals("the change, in the next list", 3_000_000L, later.single { it.key == keys[1_150] }.positionMs)
         assertEquals(1_200, later.size)
         assertEquals(emptyList<WatchState>(), library.observeStates(emptyList()).first())
     }
