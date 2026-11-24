@@ -17,6 +17,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.ForcedSize
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
@@ -24,6 +25,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.requestFocus
@@ -290,11 +292,17 @@ class SearchTvTest {
         showTheApp()
         compose.runOnIdle { nav.switchTab(SearchRoute(query = QUERY, note = NOTE), restore = false) }
         val header = hasText("Releases for “$QUERY” on your indexers")
-        compose.waitUntil(20_000) { exists(header) && exists(playsAGroup) }
+        compose.waitUntil(20_000) { exists(playsAGroup) }
+        // The list back at its top: where the pane is shorter than a TV's (the TV shell on a phone, under its system bars),
+        // the focus going to the first release scrolls it down, taking what was searched and the note out of view.
+        val results = SemanticsMatcher.expectValue(SearchPaneKey, "results")
+        val list = SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange) and hasAnyAncestor(results)
+        compose.onNode(list).performScrollToIndex(0)
+        compose.waitUntil(5_000) { exists(header) }
         val note = hasText(NOTE) and hasText("⚠")
         compose.waitUntil(5_000) { exists(note) }
         val bounds = { m: SemanticsMatcher -> compose.onAllNodes(m)[0].fetchSemanticsNode().boundsInRoot }
-        assertTrue("not in the right pane", bounds(note).left >= bounds(SemanticsMatcher.expectValue(SearchPaneKey, "results")).left)
+        assertTrue("not in the right pane", bounds(note).left >= bounds(results).left)
         assertTrue("not under what was searched", bounds(note).top >= bounds(header).bottom)
         assertTrue("not above the results", bounds(note).bottom <= bounds(playsAGroup).top)
         val library = compose.activity.container.library
