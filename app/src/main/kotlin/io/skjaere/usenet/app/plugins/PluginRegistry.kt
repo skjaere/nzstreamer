@@ -520,15 +520,19 @@ class PluginRegistry(
         scope.launch(io) { lock.withLock { offAfterError(version) } }
     }
 
-    /** [version] off after an error, its instance let go, if it is still the one installed. Under [lock]. */
+    /**
+     * [version] off after an error, its instance let go, if it is still the one installed. A version the list withdrew
+     * stays withdrawn: off until a fixed one comes (L621), never one that Turn on again would load. Under [lock].
+     */
     private suspend fun offAfterError(version: PluginVersion) {
         val record = record(version.id)?.takeIf { it.versionCode == version.versionCode } ?: return
-        if (record.state != StoredState.Errored) {
+        val withdrawn = record.state == StoredState.Withdrawn
+        if (!withdrawn && record.state != StoredState.Errored) {
             update(version.id) { it.copy(state = StoredState.Errored) }
             persist()
         }
         runningInstance(version.id)?.takeIf { it.versionCode == version.versionCode }?.let(::letGo)
-        statuses[version.id] = PluginStatus.OffAfterError
+        statuses[version.id] = if (withdrawn) PluginStatus.Withdrawn else PluginStatus.OffAfterError
         publish()
     }
 

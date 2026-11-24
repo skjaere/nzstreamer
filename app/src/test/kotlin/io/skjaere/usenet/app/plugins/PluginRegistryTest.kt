@@ -298,6 +298,37 @@ class PluginRegistryTest {
         assertNull(registry.installed("skeleton").failedUpdate)
     }
 
+    /**
+     * L621: a version the list withdrew stays off until a fixed one comes. An error it throws as the swap point lets it go,
+     * or from its scope while it still runs, doesn't make it one "turned off after an error", which Turn on again loads.
+     */
+    @Test
+    fun `a withdrawn version that throws as it goes stays withdrawn, and Turn on again loads nothing`() = runTest {
+        val h = harness()
+        h.loading.plugin = { _, _ -> FakePlugin(closeThrows = true) }
+        val registry = h.registry().apply { start(); firstActivity() }
+        h.install(registry, "skeleton", 1)
+        h.install(registry, "kestrel", 1)
+        registry.withdraw("skeleton", 1)
+        registry.withdraw("kestrel", 1)
+        assertTrue(registry.atSwapPoint("skeleton"), "let go, its close() throwing")
+        advanceUntilIdle()
+        registry.running("kestrel")!!.host.scope.launch { throw IllegalStateException("the fake's refresh") }
+        advanceUntilIdle()
+        listOf("skeleton", "kestrel").forEach { id ->
+            assertEquals(PluginStatus.Withdrawn, registry.installed(id).status, id)
+            assertTrue(registry.installed(id).withdrawn, id)
+            val loads = h.loading.loads.size
+            registry.turnOnAgain(id)
+            assertEquals(loads, h.loading.loads.size, "$id: Turn on again loads nothing")
+            assertEquals(PluginStatus.Withdrawn, registry.installed(id).status, id)
+        }
+
+        val next = h.registry().apply { start(); firstActivity() }
+        advanceUntilIdle()
+        assertEquals(listOf(PluginStatus.Withdrawn, PluginStatus.Withdrawn), next.plugins.value!!.map { it.status }, "off at the next start")
+    }
+
     @Test
     fun `a version never goes down`() = runTest {
         val h = harness()
