@@ -258,6 +258,22 @@ class PluginIndexTest(unittest.TestCase):
                          [(v["versionCode"], v["api"]) for v in plugin["versions"]])
         self.assertEqual([1020100], plugin["withdrawn"])
 
+    def test_a_build_after_a_library_bump_keeps_the_one_before_it_listed(self):
+        # Kestrel 1.0.2 and 1.0.3 were built after a library bump that no released NZStreamer has yet, and an app accepts
+        # no library newer than its own (L584): 1.0.1, which those apps load, stays listed beside 1.0.3, and 1.0.0, built
+        # with the same libraries as 1.0.1, gives way to it.
+        bumped = dict(LIBS_MAP, **{"kotlinx-coroutines": "1.11.1"})
+        releases = (Releases().plugin("kestrel", "1.0.0").plugin("kestrel", "1.0.1").plugin("kestrel", "1.0.2", libs=bumped)
+                    .plugin("kestrel", "1.0.3", libs=bumped))
+        index, _ = self.built(releases)
+        plugin, = index["plugins"]
+        self.assertEqual([(1000300, "1.11.1"), (1000100, "1.11.0")],
+                         [(v["versionCode"], v["libs"]["kotlinx-coroutines"]) for v in plugin["versions"]])
+        # The same libraries named in another order are the same set.
+        reordered = dict(reversed(list(bumped.items())))
+        index, _ = self.built(Releases().plugin("kestrel", "1.0.2", libs=bumped).plugin("kestrel", "1.0.3", libs=reordered))
+        self.assertEqual([1000300], [v["versionCode"] for v in index["plugins"][0]["versions"]])
+
     def test_a_size_digest_signer_or_address_that_disagrees_fails_naming_the_release(self):
         tag = "plugin-kestrel-v1.0.0"
         cases = {
@@ -340,11 +356,18 @@ class PluginIndexTest(unittest.TestCase):
             many.plugin(f"kestrel{letters}", "1.0.0")
         done, out = self.build(many)
         self.assertFails(done, out, "51 plugins", "50")
+        # A plugin with more versions to list than the app reads keeps its newest 20, so the list is still written (and
+        # with it any withdrawal): the oldest serve only apps that weren't updated for as long.
         versions = Releases()
         for minor in range(21):
             versions.plugin("kestrel", f"1.{minor}.0", api=f"1.{minor}")
         done, out = self.build(versions)
-        self.assertFails(done, out, "kestrel", "21 versions", "20")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        for word in ("warning", "kestrel", "21 versions", "20"):
+            self.assertIn(word, done.stderr)
+        with open(out) as f:
+            listed = json.load(f)["plugins"][0]["versions"]
+        self.assertEqual([f"1.{minor}.0" for minor in range(20, 0, -1)], [v["versionName"] for v in listed])
         # Fifty plugins of six versions with long library lists pass the counts but not the 256 KiB the app reads.
         large = Releases()
         long_libs = {f"invented-library-{n:03d}": "1.0.0" for n in range(40)}

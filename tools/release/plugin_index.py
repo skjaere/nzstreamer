@@ -12,9 +12,11 @@
         prereleases tagged plugin-<id>-v<MAJOR.MINOR.PATCH>, each plugin.json checked against its tag and its APK asset
         (its address, its size, and GitHub's SHA-256 digest of it, which every asset must have) and its signer against
         the beta key's certificate digest. A release titled "Withdrawn: ..." puts its versionCode in its plugin's
-        withdrawn list and leaves its version out. Each plugin keeps the newest version of each plugin API, so an app
-        not updated yet still finds the last version it can load. The list holds L589's caps (50 plugins, 20 versions
-        each, 256 KiB) and the app's rules for its words, or none is written. Its time, generated, is now (or --now,
+        withdrawn list and leaves its version out. Each plugin keeps the newest version of each plugin API and set of
+        shared libraries: an app accepts no library newer than its own (L584), so a build made after a library bump,
+        before an NZStreamer with it is out, leaves listed the last version that the apps not updated yet can load. A
+        plugin with more than 20 such versions keeps its newest 20, with a warning. The list holds L589's other caps (50
+        plugins, 256 KiB) and the app's rules for its words, or none is written. Its time, generated, is now (or --now,
         UTC as 2026-12-01T10:00:00Z), never before --current's; where the plugins are the same as --current's, its time
         stays, so the file is the same byte for byte and the workflow writes nothing.
     plugin_index.py builds --list <file> --releases <address> --api-major <n>
@@ -337,14 +339,20 @@ def plugins_of(repo, signer):
     for pid, entry in sorted(by_id.items()):
         # Its words from its newest release, withdrawn or not.
         _, newest = max(entry["releases"], key=lambda item: item[0])
-        per_api = {}
+        # The newest of each plugin API and set of libraries: a newer build of the same API can need libraries the
+        # apps out there don't have yet, and must not hide the one they load.
+        newest_of = {}
         for version in entry["versions"]:
-            kept = per_api.get(version["api"])
+            key = (version["api"], json.dumps(version["libs"], sort_keys=True))
+            kept = newest_of.get(key)
             if kept is None or version["versionCode"] > kept["versionCode"]:
-                per_api[version["api"]] = version
-        versions = sorted(per_api.values(), key=lambda version: version["versionCode"], reverse=True)
+                newest_of[key] = version
+        versions = sorted(newest_of.values(), key=lambda version: version["versionCode"], reverse=True)
         if len(versions) > MAX_VERSIONS:
-            raise Bad(f"{pid} would list {len(versions)} versions: the app reads {MAX_VERSIONS} at most")
+            # Failing here would stop the list being written, withdrawals with it: the oldest go instead.
+            print(f"plugin_index: warning: {pid} has {len(versions)} versions to list, and the app reads "
+                  f"{MAX_VERSIONS} at most: the oldest {len(versions) - MAX_VERSIONS} are left out", file=sys.stderr)
+            versions = versions[:MAX_VERSIONS]
         plugins.append({
             "id": pid, "package": f"app.nzstreamer.plugin.{pid}", "name": newest["name"], "summary": newest["summary"],
             "source": f"https://github.com/{repo}/tree/main/plugins/{pid}", "withdrawn": sorted(entry["withdrawn"]),
