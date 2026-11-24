@@ -30,7 +30,8 @@ import java.time.format.DateTimeParseException
  * while a plugin is installed ([resumed]), so a failing GitHub is asked once a day at most. Never a job, an alarm or a
  * timer: with no plugin installed and the page never opened, the app never contacts GitHub. A Retry-After holds every read,
  * a day at most, so a withdrawal still arrives within one. One read at a time; the copy is read from its file at each
- * trigger, so what a test deleted is gone. Each read GitHub answered is handed on ([reads]) for the updates it brings.
+ * trigger, so what a test deleted is gone, unless the file couldn't be written: then the copy this process last made times
+ * the reads. Each read GitHub answered is handed on ([reads]) for the updates it brings.
  */
 class PluginList(
     private val source: () -> PluginSource,
@@ -62,6 +63,10 @@ class PluginList(
     private var lastSource: PluginSource? = null
     private var lastReading: IndexReading? = null
 
+    // The copy the last read couldn't write (a full store), until a write works: the reads are timed by it, else each
+    // resume would find the file's old times and ask GitHub again. Under [lock].
+    private var unsaved: ListCopy? = null
+
     /** The Plugins page opened: a read, unless the list was read in the last 5 minutes. */
     fun pageOpened(): Job = launch(Trigger.Page)
 
@@ -78,7 +83,7 @@ class PluginList(
 
     /** Under [lock]. */
     private suspend fun read(trigger: Trigger) {
-        val copy = cache.read()
+        val copy = copy()
         val source = source()
         val time = now()
         val due = due(trigger, copy, time)
@@ -91,13 +96,23 @@ class PluginList(
             publish(copy, source, checking = false)
             throw e
         }
-        try {
+        unsaved = try {
             cache.write(after)
+            null
         } catch (e: IOException) {
             log.warn("Plugin list: its copy wasn't written: {}", e.javaClass.simpleName)
+            after
         }
         publish(after, source, checking = false)
         if (answered) shown.value.index?.let(handed::tryEmit)
+    }
+
+    /** The copy from its file, or the one this process couldn't write where it was attempted later. Under [lock]. */
+    private fun copy(): ListCopy {
+        val saved = cache.read()
+        val kept = unsaved ?: return saved
+        val savedAt = saved.attemptedAt ?: return kept
+        return if ((kept.attemptedAt ?: Long.MIN_VALUE) >= savedAt) kept else saved
     }
 
     /** One read of the list at [source], sending the copy's ETag while it has a body to keep. */

@@ -30,10 +30,10 @@ class PluginListScheduleTest {
     private var installed = false
     private val reader = FakeReader()
 
-    private fun TestScope.list() = PluginList(
+    private fun TestScope.list(cache: PluginListCache = PluginListCache(File(dir, "list.json"))) = PluginList(
         source = { PluginSource.GITHUB },
         reader = { reader },
-        cache = PluginListCache(File(dir, "list.json")),
+        cache = cache,
         installed = { installed },
         scope = backgroundScope,
         io = StandardTestDispatcher(testScheduler),
@@ -156,6 +156,37 @@ class PluginListScheduleTest {
         pass(Duration.ofHours(1))
         list.pageOpened().join()
         assertEquals(2, reader.reads, "a wait more than a day ahead isn't one GitHub asked for")
+    }
+
+    /**
+     * A full store: list.json can't be written. The reads are still timed by the attempts this process made, so a resume
+     * asks GitHub once a day at most, as the privacy text says, and GitHub's Retry-After still holds.
+     */
+    @Test
+    fun `a copy that can't be written still times the reads, and keeps GitHub's wait`() = runTest {
+        File(dir, "full").writeText("")
+        val list = list(PluginListCache(File(File(dir, "full"), "list.json")))
+        installed = true
+        list.resumed().join()
+        assertEquals(1, reader.reads)
+        pass(Duration.ofMinutes(1))
+        list.pageOpened().join()
+        listOf(Duration.ofMinutes(10), Duration.ofHours(6), Duration.ofHours(17)).forEach { gap ->
+            pass(gap)
+            list.resumed().join()
+        }
+        assertEquals(1, reader.reads, "one read in the day, though its time was never written")
+        pass(Duration.ofHours(1))
+        reader.answer = ListAnswer.Busy(429, retryAfter = Duration.ofHours(2))
+        list.resumed().join()
+        assertEquals(2, reader.reads, "a day on")
+        pass(Duration.ofHours(1))
+        list.pageOpened().join()
+        list.checkAgain().join()
+        assertEquals(2, reader.reads, "GitHub's wait holds")
+        pass(Duration.ofHours(1))
+        list.pageOpened().join()
+        assertEquals(3, reader.reads, "the wait over")
     }
 
     @Test
