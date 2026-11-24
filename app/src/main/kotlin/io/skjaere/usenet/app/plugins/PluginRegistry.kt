@@ -376,7 +376,7 @@ class PluginRegistry(
     /**
      * Removes [id]: its instance let go, its slot freed, its code, data, cache and secrets deleted, and what the crash guard
      * kept of it (an error its close() threw as it went among it), so the same version installed again starts clean. What
-     * it played stays.
+     * it played stays. Should a deletion fail, the plugin is gone all the same, and the next start's sweep deletes the rest.
      */
     suspend fun remove(id: String) {
         filesRead.await()
@@ -390,7 +390,15 @@ class PluginRegistry(
             icons.remove(id)
             persist()
             crashGuard.removed(id)
-            withContext(io) { store.delete(id) }
+            try {
+                withContext(io) { store.delete(id) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // A full disk, say: the entry is gone, so the next start's sweep takes what is left. Its kind alone: the
+                // store's own words can name a file.
+                log.warn("Plugin {} removed, but not all of it deleted: {}", id, e.javaClass.simpleName)
+            }
             publish()
         }
     }

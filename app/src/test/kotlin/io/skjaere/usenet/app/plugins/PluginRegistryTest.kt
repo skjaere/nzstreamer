@@ -2,6 +2,7 @@ package io.skjaere.usenet.app.plugins
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
+import io.skjaere.usenet.logging.LogBuffer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -397,6 +398,34 @@ class PluginRegistryTest {
      * it is off after an error; one that never loaded here has none (the core set's Build stands in), nor one installed
      * again after Remove until it loads.
      */
+    /**
+     * Remove with the secret store failing as it writes (a full disk): the plugin is gone all the same, from the registry
+     * and as the app shows it, so its card and tab go; its keys go at the next start's sweep. The store's message, which
+     * can name a file, isn't logged: the failure's kind alone.
+     */
+    @Test
+    fun `a Remove whose keys can't be deleted takes the plugin away, and logs no path`() = runTest {
+        val h = harness()
+        val registry = h.registry().apply { start(); firstActivity() }
+        h.install(registry, "skeleton", 1)
+        h.secrets.put("plugin:skeleton:key", "the plugin's")
+        h.secrets.removeAllFails = java.io.IOException("files/datastore/secrets.json.tmp (No space left on device)")
+        val from = LogBuffer.snapshot().lastOrNull()?.seq ?: 0L
+
+        registry.remove("skeleton")
+        assertEquals(emptyList(), registry.plugins.value!!.map { it.id }, "gone as the app shows it")
+        assertEquals(emptyList(), h.store.readRegistry().plugins.map { it.id })
+        assertFalse(File(h.files, "plugins/skeleton").exists(), "its code and data deleted")
+        val logged = LogBuffer.snapshot().filter { it.seq > from }.joinToString("\n") { it.message }
+        assertTrue("IOException" in logged, logged)
+        assertFalse("datastore" in logged, logged)
+
+        h.secrets.removeAllFails = null
+        h.registry().apply { start() }
+        advanceUntilIdle()
+        assertEquals(emptyMap(), h.secrets.values.toMap(), "its keys swept at the next start")
+    }
+
     @Test
     fun `a plugin's tab icon is kept once it loaded in this process, and goes with Remove`() = runTest {
         val h = harness()

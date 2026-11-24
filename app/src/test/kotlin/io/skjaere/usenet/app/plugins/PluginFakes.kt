@@ -18,9 +18,10 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import java.io.File
 
-/** The app's one secret store as a map, by full name. */
+/** The app's one secret store as a map, by full name; where [removeAllFails] is set, removeAll throws it, as a full disk would. */
 internal class FakeSecrets : NamedSecrets {
     val values = mutableMapOf<String, String>()
+    var removeAllFails: Exception? = null
     private val changes = MutableStateFlow(0)
 
     override suspend fun get(name: String): String? = values[name]
@@ -33,6 +34,7 @@ internal class FakeSecrets : NamedSecrets {
     override fun has(name: String): Flow<Boolean> = changes.map { name in values }
 
     override suspend fun removeAll(prefix: String, keep: (String) -> Boolean) {
+        removeAllFails?.let { throw it }
         values.keys.removeAll { it.startsWith(prefix) && !keep(it) }
         changes.value++
     }
