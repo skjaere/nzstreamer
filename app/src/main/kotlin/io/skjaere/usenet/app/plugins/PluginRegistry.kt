@@ -157,9 +157,13 @@ class PluginRegistry(
             log.warn("Plugin {} {} is off: {}", id, record(id)?.versionCode, state)
             update(id) { it.copy(state = state) }
         }
-        if (turnedOff.isNotEmpty() || failedUpdates.isNotEmpty()) persist()
-        failedUpdates.forEach { (id, versionCode) -> withContext(io) { store.deleteVersion(id, versionCode) } }
-        crashGuard.recordsApplied()
+        val saved = if (turnedOff.isNotEmpty() || failedUpdates.isNotEmpty()) persist() else true
+        // Only once the registry's file holds what the guard found do its records go, and a failed update's file: a write
+        // that failed (a full disk) leaves both for the next start to apply.
+        if (saved) {
+            failedUpdates.forEach { (id, versionCode) -> withContext(io) { store.deleteVersion(id, versionCode) } }
+            crashGuard.recordsApplied()
+        }
         off.value = check.pluginsOff
         startChecked = true
     }
@@ -482,13 +486,16 @@ class PluginRegistry(
         if (i >= 0) records[i] = change(records[i])
     }
 
-    /** The registry's file, whole; a test's plugins never in it. A write that fails is logged: the registry goes on in memory. */
-    private suspend fun persist() {
-        try {
-            withContext(io) { store.writeRegistry(RegistryFile(records.filter { it.id !in forTest })) }
-        } catch (e: IOException) {
-            log.warn("Plugins: the registry wasn't written: {}", e.javaClass.simpleName)
-        }
+    /**
+     * The registry's file, whole; a test's plugins never in it. A write that fails is logged: the registry goes on in
+     * memory. True where it was written.
+     */
+    private suspend fun persist(): Boolean = try {
+        withContext(io) { store.writeRegistry(RegistryFile(records.filter { it.id !in forTest })) }
+        true
+    } catch (e: IOException) {
+        log.warn("Plugins: the registry wasn't written: {}", e.javaClass.simpleName)
+        false
     }
 
     private fun publish() {

@@ -310,6 +310,41 @@ class PluginCrashGuardTest {
     }
 
     @Test
+    fun `a crash's record stays until the registry saved the version off, for the next start to apply`() = runTest {
+        val h = RegistryHarness(dir, this)
+
+        /** A new process, its first screen [asked] at once or later. */
+        class Process(asked: Boolean = true) {
+            val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+            val guard = PluginCrashGuard(File(h.files, "plugins"), now = { testScheduler.currentTime }).also { h.guard = it }
+            val registry = h.registry(scope).apply { start(); if (asked) firstActivity() }
+        }
+
+        val first = Process()
+        h.install(first.registry, "skeleton", 1)
+        advanceTimeBy(60_000)
+        first.guard.blame(throwableAt(pluginFrame("skeleton")))
+        first.scope.cancel()
+
+        // The next start can't write the registry, as on a full disk: once its files are read (and swept), the registry's
+        // .tmp is a folder with something in it.
+        val unsaved = Process(asked = false)
+        advanceUntilIdle()
+        val inTheWay = File(h.files, "plugins/registry.json.tmp")
+        File(inTheWay, "in-the-way").apply { parentFile!!.mkdirs(); writeText("x") }
+        unsaved.registry.firstActivity()
+        advanceUntilIdle()
+        assertEquals(PluginStatus.OffAfterCrash, unsaved.registry.installed("skeleton").status)
+        unsaved.scope.cancel()
+
+        inTheWay.deleteRecursively()
+        val next = Process()
+        advanceUntilIdle()
+        assertEquals(PluginStatus.OffAfterCrash, next.registry.installed("skeleton").status, "the crash still turns it off")
+        next.scope.cancel()
+    }
+
+    @Test
     fun `a load that came back without the plugin running ends its marker too`() {
         guard().apply {
             startCheck(listOf(skeleton1))
