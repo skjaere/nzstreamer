@@ -39,6 +39,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -145,13 +146,15 @@ internal fun stepSpoken(label: String, status: StepStatus?): String = when (stat
  * services, when it failed as the debrid service is off (null while debrid is hidden). A TV's sheet for a phone's play it
  * can't start yet opens the page for what it lacks: [onAddService] and [onAddTorrentIndexer] too, also null while debrid
  * is hidden. On a phone, a play started on a TV ([tv], L37) shows in its place, the same sheet fed by the TV
- * ([TvPlaySheet]).
+ * ([TvPlaySheet]). A plugin's item whose Play found only possible matches opens its Choose release with them
+ * ([onReleases], the list's token, L627), as the sheet's Search opens a page; the sheet has closed by then.
  */
 @Composable
 fun PlaySheetHost(
     coordinator: PlaybackCoordinator,
     onSearch: (SearchRoute) -> Unit,
     onProviders: () -> Unit,
+    onReleases: (token: String) -> Unit = {},
     onPhoneSetup: () -> Unit = {},
     onAddProvider: () -> Unit = {},
     onAddIndexer: () -> Unit = {},
@@ -160,6 +163,8 @@ fun PlaySheetHost(
     onAddService: (() -> Unit)? = null,
     onAddTorrentIndexer: (() -> Unit)? = null,
 ) {
+    val openReleases by rememberUpdatedState(onReleases)
+    LaunchedEffect(coordinator) { coordinator.chooseReleases.collect { openReleases(it) } }
     if (tv != null) {
         val onTv by tv.now.collectAsStateWithLifecycle()
         onTv?.let { now ->

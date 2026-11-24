@@ -64,17 +64,22 @@ import kotlin.reflect.KClass
  * - not running (after a crash or an error, withdrawn, refused, couldn't start, plugins off): the host's placeholder;
  * - no plugin in the slot: nothing, while the slots' watch ([PluginSlotWatch]) takes it Home.
  * The page or the placeholder tells a TV's rail what the content shows changed as it first shows, so the shell puts the
- * focus in. And the host's Choose release for a plugin's item, which closes itself until its page comes (L628).
+ * focus in. And the host's Choose release for a plugin's item (L628), over the page that opened it, or wherever an item's
+ * Play with only possible matches opened it; it closes as a release it plays launches, or at once where its token went
+ * with a process death.
  */
 fun NavGraphBuilder.pluginScreens(nav: NavController, registry: PluginRegistry) {
     slot<PluginTab1, PluginPage1, PluginSettings1>(PluginSlots.of(1), nav, registry)
     slot<PluginTab2, PluginPage2, PluginSettings2>(PluginSlots.of(2), nav, registry)
     slot<PluginTab3, PluginPage3, PluginSettings3>(PluginSlots.of(3), nav, registry)
     slot<PluginTab4, PluginPage4, PluginSettings4>(PluginSlots.of(4), nav, registry)
-    // Its releases come with Choose release's page (L628): until then it knows no token, so it closes at once, as one whose
-    // token went with a process death does.
     composable<PluginReleasesRoute> { screen ->
-        LaunchedEffect(screen.id) { if (nav.currentBackStackEntry?.id == screen.id) nav.popBackStack() }
+        PluginReleasesScreen(
+            screen.toRoute<PluginReleasesRoute>().token,
+            onBack = { screen.ifResumed { nav.popBackStack() } },
+            // Once, and only while it is the screen shown: a launch may come as it is already going.
+            onClose = { if (nav.currentBackStackEntry?.id == screen.id) nav.popBackStack() },
+        )
     }
 }
 
@@ -110,7 +115,7 @@ private fun SlotContent(
     val status = plugin.status
     if (status is PluginStatus.Running) {
         key(status.instance.key) {
-            val pluginNav = remember { PluginNavImpl(nav, slot, entry) }
+            val pluginNav = remember { PluginNavImpl(nav, slot, entry, status.instance.host.chooser) }
             draw(status.instance, pluginNav)
             val rail = LocalRailFocus.current
             LaunchedEffect(Unit) { rail?.contentChanged() }

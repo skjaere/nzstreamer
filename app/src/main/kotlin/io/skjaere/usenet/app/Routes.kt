@@ -17,6 +17,9 @@ import kotlinx.serialization.Serializable
  * suggestions carries the title ([pickType] "Tv" or "Movie", [pickTmdbId], [pickName]), so it is
  * searched by the title's ids again. A search of the words for a known title (the no-release
  * sheet's, for an episode) carries its original [language], which its untagged releases speak.
+ * A search a plugin opened ([io.skjaere.usenet.plugin.PluginNav.openSearch], or its item's no-release sheet) may carry
+ * the plugin's [note], one line in the warning colour above the results while its words show (L629); such a search isn't
+ * kept in the recent searches.
  */
 @Serializable data class SearchRoute(
     val query: String? = null,
@@ -24,6 +27,7 @@ import kotlinx.serialization.Serializable
     val pickTmdbId: Int? = null,
     val pickName: String? = null,
     val language: String? = null,
+    val note: String? = null,
 )
 @Serializable data object SettingsRoute
 @Serializable data object ProvidersRoute
@@ -74,12 +78,15 @@ fun SearchRoute.request(): SearchRequest? {
     val text = query ?: return null
     val type = TitleType.entries.firstOrNull { it.name == pickType }
     val pick = if (type != null && pickTmdbId != null && pickName != null) SearchPick(type, pickTmdbId, pickName) else null
-    return SearchRequest(text, pick?.suggestion(), language = language)
+    return SearchRequest(text, pick?.suggestion(), language = language, note = note)
 }
 
-/** The Search tab running [query], by the TMDB title it is for ([pick]) when there is one, else ranked in its [language] when known. */
-fun searchRoute(query: String, pick: SearchPick?, language: String? = null): SearchRoute =
-    SearchRoute(query, pick?.type?.name, pick?.tmdbId, pick?.name, language)
+/**
+ * The Search tab running [query], by the TMDB title it is for ([pick]) when there is one, else ranked in its [language] when
+ * known; a plugin's [note] above its results.
+ */
+fun searchRoute(query: String, pick: SearchPick?, language: String? = null, note: String? = null): SearchRoute =
+    SearchRoute(query, pick?.type?.name, pick?.tmdbId, pick?.name, language, note)
 
 /** The page [this] recent title opened, which it opens again; null for a search, which the Search tab runs again ([route]). */
 fun RecentSearch.page(): Any? = openedTitle?.let { if (it.type == TitleType.Tv) ShowRoute(it.tmdbId) else MovieRoute(it.tmdbId) }
@@ -91,7 +98,7 @@ fun RecentSearch.route(): SearchRoute = searchRoute(query, pick)
 fun PlayState.Failed.searchRoute(): SearchRoute? = search?.let { searchRoute(it, searchPick) }
 
 /**
- * What the no-release sheet's Search opens: its search, by the TMDB title it is for or in the show's language; null when
- * it offers none (a plugin's item, L627).
+ * What the no-release sheet's Search opens: its search, by the TMDB title it is for or in the show's language, a plugin's
+ * item's with the plugin's note (L629); null when it offers none (a plugin's item with no search, L627).
  */
-fun PlayState.NoRelease.searchRoute(): SearchRoute? = nameQuery?.let { searchRoute(it, searchPick, searchLanguage) }
+fun PlayState.NoRelease.searchRoute(): SearchRoute? = nameQuery?.let { searchRoute(it, searchPick, searchLanguage, searchNote) }

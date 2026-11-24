@@ -100,6 +100,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -772,7 +774,8 @@ sealed interface PlayState {
 
     /**
      * The finder found nothing playable; [stages] explain what each search did. For a plugin's item (L627), the plugin's
-     * lines and note, nothing hidden, and no [nameQuery]: the sheet then offers no Search.
+     * lines and note, nothing hidden, and the item's own search words as [nameQuery] with the plugin's [searchNote] (L629),
+     * or none: the sheet then offers no Search.
      */
     data class NoRelease(
         val title: String,
@@ -791,6 +794,8 @@ sealed interface PlayState {
          * name, which is its address unless the user named it. None where the play wasn't a search's.
          */
         val remoteStages: List<Pair<String, String>> = emptyList(),
+        /** The plugin's note over the search its Search opens (L629): one line in the warning colour above the results. */
+        val searchNote: String? = null,
     ) : PlayState
 
     data class Running(
@@ -972,6 +977,15 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
      * the place. Set as each play starts.
      */
     val castGoesOn: StateFlow<String?> = _castGoesOn.asStateFlow()
+
+    private val _choose = Channel<String>(Channel.CONFLATED)
+
+    /**
+     * A plugin's item whose Play found only possible matches (L627): the token of the Choose release that opens with them
+     * ([io.skjaere.usenet.app.plugins.PluginReleases], L628), which the play sheet's host opens as its Search opens a page.
+     * Kept until a screen takes it, the latest alone.
+     */
+    val chooseReleases: Flow<String> = _choose.receiveAsFlow()
 
     /** The failure of the cast play [replaceJob] just began, whose service Android wouldn't start (L85, L97): its job shows it at once. */
     private var notStarted: PlayState.Failed? = null
@@ -1186,8 +1200,10 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
 
     /**
      * Play on a plugin's item ([ItemPlay], L627): the release that played it before, alone, while its NZB is stored; else,
-     * or when that fails, the releases the plugin accepts ([releases], asked at most once), in its order. [origin]: this
-     * device's, or a cast's. Items have no downloads (W161), so no download plays in its place.
+     * or when that fails, the releases the plugin accepts ([releases], asked at most once), in its order. Only possible
+     * matches: the sheet closes, a cast's start stops on its device as Cancel stops it, and Choose release opens with them
+     * ([chooseReleases]). [origin]: this device's, or a cast's. Items have no downloads (W161), so no download plays in its
+     * place.
      */
     fun playItem(item: ItemTarget, releases: suspend () -> ItemFound, origin: PlayOrigin = PlayOrigin.Here) {
         replaceJob(origin, item.title, item.subtitle, item.watch) { playItem(item, releases, it) }
@@ -1198,6 +1214,11 @@ class PlaybackCoordinator(private val container: AppContainer, private val scope
                 play = { request, retry -> runPipeline(request, retry) },
                 searching = { line -> _state.value = PlayState.Searching(item.title, item.subtitle, line) },
                 releases = releases,
+                choose = { found ->
+                    if (origin.cast != null) container.castLauncher()?.stop()
+                    container.displayHold.clear("the play opened Choose release")
+                    _choose.trySend(container.pluginReleases.open(item, found))
+                },
             )?.let { _state.value = it }
         }
     }

@@ -91,8 +91,12 @@ sealed interface ReleaseListMode {
     }
 }
 
-/** "7 releases from 3 indexers": how many releases [group] holds, and how many indexers listed them. */
-internal fun releasesFrom(group: ResultGroup): String {
-    val indexers = (group.playable + group.hidden).map { it.item.indexerId }.distinct().size
-    return "${group.size} release${if (group.size == 1) "" else "s"} from $indexers indexer${if (indexers == 1) "" else "s"}"
+/**
+ * "7 releases from 3 indexers": how many releases [group] holds, a plugin's [possible] matches with them (L628), and how
+ * many indexers listed them.
+ */
+internal fun releasesFrom(group: ResultGroup, possible: ResultGroup? = null): String {
+    val all = listOfNotNull(group, possible).flatMap { it.playable + it.hidden }
+    val indexers = all.map { it.item.indexerId }.distinct().size
+    return "${all.size} release${if (all.size == 1) "" else "s"} from $indexers indexer${if (indexers == 1) "" else "s"}"
 }

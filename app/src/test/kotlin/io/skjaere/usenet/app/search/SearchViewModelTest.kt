@@ -893,10 +893,65 @@ class SearchViewModelTest {
         assertEquals(setOf(usenet.title, cached.title, uncached.title, unchecked.title), after.listed())
     }
 
+    /**
+     * L629: a search a plugin opened with a note ("Indexer results can show scores.") shows the note with its results,
+     * and isn't kept in the recent searches; Try again keeps both.
+     */
+    @Test
+    fun `a search opened with a note shows it with its results and isn't remembered`() = runTest {
+        val f = fixture()
+        val vm = f.vm(SearchRequest("quiet marsh", note = NOTE))
+        advanceTimeBy(1_000)
+        runCurrent()
+        val shown = assertNotNull(vm.results.value)
+        assertTrue(shown.done)
+        assertEquals(NOTE, shown.note)
+        assertEquals(listOf("Quiet.Marsh.2021.1080p.WEB-DL.H.264-GRP"), shown.names())
+        assertEquals(emptyList(), f.history.entries.value, "a noted search remembered")
+
+        vm.retry()
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(NOTE, assertNotNull(vm.results.value).note)
+        assertEquals(listOf(Asked(SearchQuery.Text("quiet marsh"), fresh = false), Asked(SearchQuery.Text("quiet marsh"), fresh = true)), f.asked)
+        assertEquals(emptyList(), f.history.entries.value)
+    }
+
+    /** L629: the note stays with its words, searched again as typed too; new words clear it, for good. */
+    @Test
+    fun `new words clear the note, its own words keep it`() = runTest {
+        val f = fixture()
+        val vm = f.vm(SearchRequest("quiet marsh", note = NOTE))
+        advanceTimeBy(1_000)
+        runCurrent()
+        vm.onQueryChange("Quiet Marsh ")
+        vm.searchIndexers()
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(NOTE, assertNotNull(vm.results.value).note, "its own words, searched again")
+        assertEquals(emptyList(), f.history.entries.value)
+
+        vm.onQueryChange("glasswater")
+        vm.searchIndexers()
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertNull(assertNotNull(vm.results.value).note, "new words")
+        assertEquals(listOf("glasswater"), f.history.entries.value.map { it.query })
+
+        vm.onQueryChange("quiet marsh")
+        vm.searchIndexers()
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertNull(assertNotNull(vm.results.value).note, "the words again, once new words cleared it")
+        assertEquals(listOf("quiet marsh", "glasswater"), f.history.entries.value.map { it.query })
+    }
+
     /** Every release a search's results hold, playable or hidden. */
     private fun SearchResults.listed(): Set<String> = grouped.sections.flatMap { s -> s.groups.flatMap { g -> (g.playable + g.hidden).map { it.item.title } } }.toSet()
 
     private companion object {
+        /** A plugin's note over a search it opened. */
+        const val NOTE = "Indexer results can show scores."
         const val DTS = "Lantern.Field.2008.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-FERRY"
         const val ORCHID = "Lantern.Field.2008.1080p.BluRay.DD5.1.x264-ORCHID"
         const val CAPS = """<?xml version="1.0" encoding="UTF-8"?><caps><server version="1.0" title="Words"/><limits max="100" default="100"/>""" +

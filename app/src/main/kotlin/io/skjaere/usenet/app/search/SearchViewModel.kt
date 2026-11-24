@@ -129,10 +129,25 @@ data class TitleInfo(
  * One search: the text, and the title picked from the suggestions, with its details once they were looked up.
  * A search of the words for a title known without a pick (the no-release sheet's, for an episode) has its
  * original [language] (ISO 639-1), which its untagged releases speak. A [fallback] is the preview's own, run
- * after a pause in typing when TMDB had no titles for the words: it shows in the preview, under the field.
+ * after a pause in typing when TMDB had no titles for the words: it shows in the preview, under the field. A search a
+ * plugin opened may have the plugin's [note] (L629), shown above its results.
  */
-data class SearchRequest(val text: String, val pick: TitleSuggestion? = null, val title: TitleInfo? = null, val language: String? = null, val fallback: Boolean = false) {
+data class SearchRequest(
+    val text: String,
+    val pick: TitleSuggestion? = null,
+    val title: TitleInfo? = null,
+    val language: String? = null,
+    val fallback: Boolean = false,
+    val note: String? = null,
+) {
     val parsed: ParsedQuery = QueryParser.parse(text)
+
+    /**
+     * Whether this search is kept in the recent searches as it runs: one sent on purpose, or the preview's own once the
+     * user settled on its words ([kept]); never one with a plugin's [note] (L629), which, run again from Home, would lack
+     * its warning.
+     */
+    fun remembered(kept: String?): Boolean = note == null && (!fallback || text == kept)
 
     /** [base] for ranking this search's releases: in its [language] when it has one (a picked title's details say theirs). */
     fun rankingContext(base: RankingContext): RankingContext = language?.let { base.copy(originalLanguage = it) } ?: base
@@ -145,7 +160,7 @@ data class SearchRequest(val text: String, val pick: TitleSuggestion? = null, va
      * ranked for the Cast device [rankedFor] names (null: this device, L127).
      */
     fun results(info: TitleInfo?, statuses: List<IndexerStatus>, grouped: GroupedResults, done: Boolean, rankedFor: String? = null) =
-        SearchResults(text, parsed, info, statuses, grouped, done, pick, language, fallback, rankedFor)
+        SearchResults(text, parsed, info, statuses, grouped, done, pick, language, fallback, rankedFor, note)
 
     /**
      * What shows from the moment this search starts until its first snapshot: the [previous] search's
@@ -200,9 +215,14 @@ data class SearchResults(
     val fallback: Boolean = false,
     /** The Cast device the releases are ranked for, as a release list's "Ranked for" line names it (L127); null for this device. */
     val rankedFor: String? = null,
+    /** A plugin's note (L629): one line in the warning colour above the results, and over a release list opened from them. */
+    val note: String? = null,
 ) {
-    /** What "Try again" searches: the same text and picked title, not looked up again once it was; the preview's again in the preview. */
-    val retry: SearchRequest get() = SearchRequest(query, pick, title, language, fallback)
+    /**
+     * What "Try again" searches: the same text and picked title, not looked up again once it was; the preview's again in the
+     * preview; with its note.
+     */
+    val retry: SearchRequest get() = SearchRequest(query, pick, title, language, fallback, note)
 
     /** "Search without the episode": the whole show, still by the picked title; a pasted release name by its title. */
     val withoutEpisode: SearchRequest
@@ -364,6 +384,12 @@ class SearchViewModel(private val deps: SearchDeps, initial: SearchRequest?) : V
     private val grouper = ResultGrouper()
     private val chosen = ChosenPlays(viewModelScope)
 
+    /**
+     * A plugin's note and the words it came with (L629): the note stays with its words, searched again however (Try again,
+     * typed again, the preview's own), and new words searched clear it for good.
+     */
+    private var noted: Pair<String, String>? = null
+
     /** What the release list open marks of the releases chosen on it that failed to start. */
     val chosenFailed: StateFlow<Map<String, String>> = chosen.failed
 
@@ -413,7 +439,8 @@ class SearchViewModel(private val deps: SearchDeps, initial: SearchRequest?) : V
             kept = query.value.trim()
             return
         }
-        viewModelScope.launch { deps.history.add(shown.query, null) }
+        // A plugin's noted words are never kept (L629).
+        if (shown.note == null) viewModelScope.launch { deps.history.add(shown.query, null) }
     }
 
     /**
@@ -551,15 +578,19 @@ class SearchViewModel(private val deps: SearchDeps, initial: SearchRequest?) : V
         }
     }
 
-    private fun run(request: SearchRequest, fresh: Boolean = false) {
+    private fun run(asked: SearchRequest, fresh: Boolean = false) {
+        // A plugin's note goes with its words, and with them alone (L629).
+        val request = asked.takeIf { it.note != null } ?: asked.copy(note = noted?.takeIf { it.first.equals(asked.text.trim(), ignoreCase = true) }?.second)
+        noted = request.note?.let { request.text.trim() to it }
         job?.cancel()
         if (!request.fallback) {
             // A search sent on purpose: the preview's own isn't wanted after it.
             pause?.cancel()
             editing.value = false
         }
-        // The preview's own search is remembered once the user settles on it (keep), not at each pause in typing.
-        val remembered = !request.fallback || request.text == kept
+        // The preview's own search is remembered once the user settles on it (keep), not at each pause in typing; a
+        // plugin's noted search never is.
+        val remembered = request.remembered(kept)
         if (request.fallback) kept = null
         results.value = request.starting(results.value)
         job = viewModelScope.launch {

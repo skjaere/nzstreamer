@@ -50,6 +50,7 @@ import io.skjaere.usenet.app.link.TvsScreen
 import io.skjaere.usenet.app.link.PhonesScreen
 import io.skjaere.usenet.app.play.PlaySheetHost
 import io.skjaere.usenet.app.plugins.NavSlotMoves
+import io.skjaere.usenet.app.plugins.PluginReleasesRoute
 import io.skjaere.usenet.app.plugins.PluginSlotWatch
 import io.skjaere.usenet.app.plugins.PluginSlots
 import io.skjaere.usenet.app.plugins.beforeRemove
@@ -211,6 +212,8 @@ fun AppNav(
             container.playback,
             onSearch = { route -> nav.switchTab(route, restore = false) },
             onProviders = { nav.navigate(ProvidersRoute) { launchSingleTop = true } },
+            // A plugin's item whose Play found only possible matches: its Choose release, over whatever shows (L627).
+            onReleases = { token -> nav.navigate(PluginReleasesRoute(token)) },
             // A phone's Play this TV can't start yet (PtTvNotReady): set up here, from the sofa.
             onPhoneSetup = { nav.navigate(PhoneSetupRoute) { launchSingleTop = true } },
             onAddProvider = { nav.navigate(ProviderRoute()) { launchSingleTop = true } },

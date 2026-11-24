@@ -94,6 +94,7 @@ import io.skjaere.usenet.app.plugins.PluginInstaller
 import io.skjaere.usenet.app.plugins.PluginList
 import io.skjaere.usenet.app.plugins.PluginPlayService
 import io.skjaere.usenet.app.plugins.PluginRegistry
+import io.skjaere.usenet.app.plugins.PluginReleases
 import io.skjaere.usenet.app.plugins.PluginSearchService
 import io.skjaere.usenet.app.plugins.PluginWatchService
 import io.skjaere.usenet.app.plugins.named
@@ -491,11 +492,17 @@ class AppContainer(private val context: Context) {
     val pluginSearch = PluginSearchService({ checkedSearch }, { indexerConfigs() }, { rankingContext() })
 
     /**
+     * The lists of the host's Choose release pages for plugins' items (L628), by the tokens their routes carry: a plugin's
+     * openReleases leaves one, and so does an item's Play that found only possible matches (L627).
+     */
+    val pluginReleases = PluginReleases()
+
+    /**
      * Plugins' items played (L627): where Play goes ([playRouter]), as a release chosen by hand is, on the main thread as the
      * app's own Play buttons start their plays, whichever thread the plugin asked from; their releases mapped back through
-     * [pluginSearch]'s tables.
+     * [pluginSearch]'s tables, and their Choose release kept in [pluginReleases].
      */
-    val pluginPlay = PluginPlayService(pluginSearch::ranked) { item, releases ->
+    val pluginPlay = PluginPlayService(pluginSearch::ranked, pluginReleases) { item, releases ->
         appScope.launch(Dispatchers.Main.immediate) { playRouter.playItem(item, releases) }
     }
 

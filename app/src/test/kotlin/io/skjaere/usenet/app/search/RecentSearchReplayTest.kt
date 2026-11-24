@@ -21,7 +21,9 @@ import io.skjaere.usenet.releases.StaticDeviceCapabilities
 import io.skjaere.usenet.search.ResultGrouper
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /** #122: a recent search picked from TMDB's suggestions replays by the title's id, and progress goes to the TMDB episode. */
 class RecentSearchReplayTest {
@@ -47,6 +49,22 @@ class RecentSearchReplayTest {
         assertEquals(SearchRequest("Harbor Lights S02E05", TitleSuggestion(MediaType.Tv, 900002, "Harbor Lights", null, null, null, null)), picked.request())
         val movie = RecentSearch("copper crown", "Copper Crown", 10, 10, pick = SearchPick(TitleType.Movie, 900010, "Copper Crown"))
         assertEquals(SearchRequest("Copper Crown", TitleSuggestion(MediaType.Movie, 900010, "Copper Crown", null, null, null, null)), movie.request())
+    }
+
+    /**
+     * L629: a search a plugin opened with a note ("Indexer results can show scores.") isn't kept in the recent searches:
+     * run again from Home, it would lack its warning. Searches with no note are kept as before, the preview's own once the
+     * user settled on it.
+     */
+    @Test
+    fun `a search opened with a note isn't kept in the recent searches`() {
+        val note = "Indexer results can show scores."
+        assertFalse(SearchRequest("Lantern Bay Copper Crown", note = note).remembered(kept = null))
+        assertFalse(SearchRequest("Lantern Bay Copper Crown", note = note, fallback = true).remembered(kept = "Lantern Bay Copper Crown"))
+        assertTrue(SearchRequest("Lantern Bay Copper Crown").remembered(kept = null))
+        assertTrue(picked.request().remembered(kept = null))
+        assertFalse(SearchRequest("quiet marsh", fallback = true).remembered(kept = null), "a pause in typing")
+        assertTrue(SearchRequest("quiet marsh", fallback = true).remembered(kept = "quiet marsh"), "the preview's, settled on")
     }
 
     @Test

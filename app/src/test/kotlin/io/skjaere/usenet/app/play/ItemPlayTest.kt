@@ -6,6 +6,8 @@ import io.skjaere.usenet.app.plugins.PluginHosts
 import io.skjaere.usenet.app.plugins.PluginPlayService
 import io.skjaere.usenet.app.plugins.PluginStore
 import io.skjaere.usenet.app.plugins.PluginVersion
+import io.skjaere.usenet.app.SearchRoute
+import io.skjaere.usenet.app.request
 import io.skjaere.usenet.app.searchRoute
 import io.skjaere.usenet.core.FilePicker
 import io.skjaere.usenet.data.RememberedRelease
@@ -17,6 +19,7 @@ import io.skjaere.usenet.plugin.ItemReleases
 import io.skjaere.usenet.plugin.Offered
 import io.skjaere.usenet.plugin.PlayItem
 import io.skjaere.usenet.plugin.ReleaseHandle
+import io.skjaere.usenet.plugin.SearchOffer
 import io.skjaere.usenet.releases.RankedRelease
 import io.skjaere.usenet.releases.ReleaseFacts
 import io.skjaere.usenet.releases.ReleaseParser
@@ -29,15 +32,17 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
  * L627: Play on a plugin's item, as a film's Play. The release that played the item before goes alone while its NZB is
- * stored; else, or once it fails, the plugin's releases(), the ones it accepted in its order. Nothing accepted: the host's
- * no-release sheet with the plugin's lines and note, never "Show the n found". A releases() that throws is nothing found,
- * and turns its version off; NZStreamer goes on. What plays is kept under item:<plugin>:<key>. The plugin, its items and
- * releases are invented.
+ * stored; else, or once it fails, the plugin's releases(), the ones it accepted in its order. Nothing accepted but some
+ * offered: Play plays none of them, the sheet closes and Choose release opens with them alone (L628). Nothing accepted
+ * or offered: the host's no-release sheet with the plugin's lines and note, its Search with the item's words and note
+ * (L629), never "Show the n found". A releases() that throws is nothing found, and turns its version off; NZStreamer goes
+ * on. What plays is kept under item:<plugin>:<key>. The plugin, its items and releases are invented.
  */
 class ItemPlayTest {
     private val race = ItemTarget("kestrel", "gp-kestrel:race", "Grand Prix of Kestrel · Race", "Round 20")
@@ -64,11 +69,15 @@ class ItemPlayTest {
     private val third = ranked("a", "gp-race-hdtv", "Kestrel.Grand.Prix.2026.Race.HDTV.x264-QUAY")
     private val locked = ranked("b", "gp-race-locked", "Kestrel.Grand.Prix.2026.Race.2160p.WEB.h265-LOCK", playable = false)
 
-    /** What one run asked for: the requests played (with their retries), the plugin's releases() asked, the sheet's lines. */
+    /**
+     * What one run asked for: the requests played (with their retries), the plugin's releases() asked, the sheet's lines,
+     * and what Choose release opened with.
+     */
     private class Run {
         val plays = mutableListOf<Pair<PlayRequest, Retry?>>()
         var asked = 0
         val lines = mutableListOf<String>()
+        val chose = mutableListOf<ItemFound>()
     }
 
     private fun run(
@@ -86,6 +95,7 @@ class ItemPlayTest {
                 play = { request, retry -> r.plays += request to retry; left.removeAt(0) },
                 searching = { r.lines += it },
                 releases = { r.asked++; found },
+                choose = { r.chose += it },
             )
         }
         return r to end
@@ -174,17 +184,73 @@ class ItemPlayTest {
         assertEquals(listOf("Indexer A" to "6 results, none for this race", "Indexer B" to "No results"), none.stages)
         assertEquals("Releases often appear a few hours after a race ends. Try Play again later.", none.note)
         assertEquals(emptyList(), none.hidden, "never Show the n found: their names can carry what the plugin hides")
-        assertNull(none.nameQuery, "no Search on the sheet yet")
+        assertNull(none.nameQuery, "no Search: the item offers none")
+        assertNull(none.searchNote)
         assertNull(none.searchRoute())
         assertEquals(emptyList(), none.remoteStages)
+        assertEquals(emptyList(), r.chose)
     }
 
+    /** SpPhoneNothing: Search “<words>” with the item's own words, opening Search with its note above the results. */
     @Test
-    fun `releases only offered read as nothing found, until Choose release opens with them`() {
-        val offered = ItemFound(emptyList(), offered = listOf(other to "No date in the name"), leftOut = "2 left out: a name with a score")
+    fun `the no-release sheet's Search carries the item's words and its note`() {
+        val note = "Indexer results can show scores."
+        val game = ItemTarget("kestrel", "ev-000731:main", "Quarrydown FC vs. Ellerholt United", "KCL", searchWords = "Quarrydown Ellerholt", searchNote = note)
+        val (_, end) = run(stored = false, remembered = null, found = ItemFound(emptyList(), lines = listOf("Indexer A" to "6 results, none for this game")), target = game)
+        val none = assertIs<PlayState.NoRelease>(end)
+        assertEquals("Quarrydown Ellerholt", none.nameQuery)
+        assertEquals(note, none.searchNote)
+        assertEquals(emptyList(), none.hidden)
+        val route = assertNotNull(none.searchRoute())
+        assertEquals(SearchRoute(query = "Quarrydown Ellerholt", note = note), route)
+        val request = assertNotNull(route.request())
+        assertEquals("Quarrydown Ellerholt" to note, request.text to request.note)
+        // A Search with no note: the words alone.
+        val plain = run(stored = false, remembered = null, found = ItemFound.NOTHING, target = game.copy(searchNote = null)).second
+        assertEquals(SearchRoute(query = "Quarrydown Ellerholt"), assertIs<PlayState.NoRelease>(plain).searchRoute())
+    }
+
+    /** SpPhoneChoose 3: nothing names the item for sure, some might; Play opens Choose release with them alone. */
+    @Test
+    fun `releases only offered open Choose release with them, and Play plays none`() {
+        val offered = ItemFound(listOf(locked), offered = listOf(other to "No date in the name", third to "Team codes only"), leftOut = "2 left out: a name with a score")
         val (r, end) = run(stored = false, remembered = null, found = offered)
         assertEquals(emptyList(), r.plays)
+        assertEquals(listOf(offered), r.chose, "Choose release opens with what the plugin found")
+        assertEquals(PlayState.Idle, end, "the sheet closes")
+    }
+
+    /** The remembered release failed and the plugin only offers others: Choose release opens with them too. */
+    @Test
+    fun `the remembered release failing with only offered ones left opens Choose release`() {
+        val offered = ItemFound(listOf(good), offered = listOf(other to "No date in the name"))
+        val (r, end) = run(stored = true, found = offered, outcomes = listOf(failed(remembered.title)))
+        assertEquals(1, r.plays.size, "the remembered release alone")
+        assertEquals(listOf(offered), r.chose)
+        assertEquals(PlayState.Idle, end)
+    }
+
+    /** Offered ones this device plays none of: nothing a tap could play, so the no-release sheet, as nothing found. */
+    @Test
+    fun `releases only offered that don't play here are nothing found`() {
+        val unplayable = ranked("b", "gp-race-iso", "Kestrel.Grand.Prix.2026.Race.COMPLETE.BLURAY-QUAY", playable = false)
+        val (r, end) = run(stored = false, remembered = null, found = ItemFound(emptyList(), offered = listOf(unplayable to "A disc image")))
+        assertEquals(emptyList(), r.chose)
         assertIs<PlayState.NoRelease>(end)
+    }
+
+    /** A release picked from the item's Choose release: tried alone, chosen, as the item's, the list's others for the pre-check. */
+    @Test
+    fun `a release chosen from the item's list plays alone, as the item's`() {
+        val picked = race.copy(picker = FilePicker.Episode(1, 1))
+        val request = ItemPlay.chosen(picked, third, alternatives = listOf(other, good))
+        assertEquals(listOf(third), request.candidates)
+        assertEquals(true, request.chosen)
+        assertEquals(false, request.rememberedFirst)
+        assertEquals(listOf(other, good), request.alternatives)
+        assertEquals(watch, request.watch)
+        assertEquals(FilePicker.Episode(1, 1), request.picker)
+        assertEquals(race.title to race.subtitle, request.title to request.subtitle)
     }
 
     /** L619: a releases() that throws counts as nothing found, and turns the version off; NZStreamer goes on. */
@@ -233,6 +299,21 @@ class ItemPlayTest {
         assertEquals(listOf("Indexer A" to "6 results, none for this race"), found.lines)
         assertEquals("Try Play again later.", found.note)
         assertTrue(asked.all { it == "kestrel" }, "only its own table: $asked")
+    }
+
+    /** The item's own word for Choose release's lines and its Search's words and note go with it, as the host plays it. */
+    @Test
+    fun `the item's noun and its search's words and note reach the play`() {
+        val routed = mutableListOf<ItemTarget>()
+        val service = PluginPlayService(ranked = { _, _ -> emptyList() }) { target, _ -> routed += target }
+        val play = service.of(PluginVersion("kestrel", 3, key = 11), PluginCalls { _, _, e -> throw AssertionError("no error", e) })
+        val offer = SearchOffer("Quarrydown Ellerholt", "Indexer results can show scores.")
+        play.play(PlayItem("ev-000731:main", "Quarrydown FC vs. Ellerholt United", "KCL", 105, noun = "game", search = offer)) { ItemReleases(emptyList()) }
+        val target = routed.single()
+        assertEquals("game", target.noun)
+        assertEquals("Quarrydown Ellerholt" to "Indexer results can show scores.", target.searchWords to target.searchNote)
+        play.play(PlayItem("ev-000731:main", "Quarrydown FC vs. Ellerholt United", "KCL", 105, noun = "Game!")) { ItemReleases(emptyList()) }
+        assertEquals(Triple(null, null, null), routed.last().let { Triple(it.noun, it.searchWords, it.searchNote) }, "a noun outside its rule is none")
     }
 
     /** A host made with the app's play service plays its items through it, its errors charged to its own version. */

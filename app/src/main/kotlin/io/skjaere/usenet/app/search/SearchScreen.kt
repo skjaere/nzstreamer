@@ -312,7 +312,7 @@ fun SearchScreen(
             ForPickedTitle(r.title) {
                 ReleaseList(
                     group, r.title?.name ?: r.grouped.sections.firstOrNull { group in it.groups }?.title.orEmpty(), onBack = ::closeReleases,
-                    failed = chosenFailed, listModifier = listModifier, rankedFor = r.rankedFor,
+                    failed = chosenFailed, listModifier = listModifier, rankedFor = r.rankedFor, note = r.note,
                 ) { item ->
                     vm.playChosen(item) { onPlay(chosenRequest(r, group, item)) }
                 }
@@ -442,6 +442,8 @@ fun SearchScreen(
                         modifier = Modifier.padding(horizontal = 20.dp).padding(top = 4.dp, bottom = 12.dp),
                     )
                 }
+                // A plugin's noted words typed again: its note goes with them (L629).
+                f.note?.let { noteLine(it) }
                 releases(f, settle = vm::keep)
             }
             suggestionsList(
@@ -457,9 +459,9 @@ fun SearchScreen(
         }
         r == null || editing -> start()
         else -> {
-            // A search of the words sent on purpose (Search indexers, a recent search): what it is, and TMDB's
-            // titles for the words on top, each opening its page.
-            if (r.byWords) wordsHeader(r.query, strip, ::focusOf, onOpen = { s -> openTitle(s, s.stripKey) })
+            // A search of the words sent on purpose (Search indexers, a recent search, a plugin's): what it is, a plugin's
+            // note under it (L629), and TMDB's titles for the words on top, each opening its page.
+            if (r.byWords) wordsHeader(r.query, r.note, strip, ::focusOf, onOpen = { s -> openTitle(s, s.stripKey) }) else r.note?.let { noteLine(it) }
             releases(r)
         }
     }
@@ -845,16 +847,28 @@ private fun LazyListScope.suggestionsList(
 
 /**
  * What a search of the words is ("Releases for … on your indexers"; not a section header, whose capitals would change
- * the words typed), and TMDB's [titles] for them, a small strip on top of the releases.
+ * the words typed), a plugin's [note] under it (L629), and TMDB's [titles] for them, a small strip on top of the releases.
  */
-private fun LazyListScope.wordsHeader(query: String, titles: List<TitleSuggestion>, focusOf: (String) -> FocusRequester, onOpen: (TitleSuggestion) -> Unit) {
+private fun LazyListScope.wordsHeader(
+    query: String,
+    note: String?,
+    titles: List<TitleSuggestion>,
+    focusOf: (String) -> FocusRequester,
+    onOpen: (TitleSuggestion) -> Unit,
+) {
     item(key = "words") {
         Text(
             "Releases for “$query” on your indexers", style = AppType.bodyStrong, color = colors.text,
-            modifier = Modifier.padding(horizontal = 20.dp).padding(top = 4.dp, bottom = 12.dp),
+            modifier = Modifier.padding(horizontal = 20.dp).padding(top = 4.dp, bottom = if (note == null) 12.dp else 6.dp),
         )
     }
+    note?.let { noteLine(it) }
     if (titles.isNotEmpty()) item(key = "strip") { TitlesStrip(titles, focusOf, onOpen) }
+}
+
+/** A plugin's note over the search it opened (L629; SpPhoneSearchWarning), above the indexers' lines. */
+private fun LazyListScope.noteLine(note: String) {
+    item(key = "note") { SearchNoteLine(note, Modifier.padding(horizontal = 20.dp).padding(bottom = 12.dp)) }
 }
 
 /**

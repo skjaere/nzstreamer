@@ -30,9 +30,9 @@ import java.io.File
 /**
  * Makes the [PluginHost] each loaded instance of a plugin gets (L613, L635): its id, its own folders and secrets, a scope
  * of its own on the main thread, the user's indexers searched through [search] under the plugin's name (L630), its items
- * played through the app's play ([play], L627) and their watch state kept under its id ([watch], L594), GETs through the
- * app's service client ([http], L631), and an address judged as an indexer's (L593). Without [search], [play], [watch] or
- * [http] (a test's registry) that service answers nothing.
+ * played through the app's play ([play], L627), and listed on the host's Choose release (L628), their watch state kept
+ * under its id ([watch], L594), GETs through the app's service client ([http], L631), and an address judged as an
+ * indexer's (L593). Without [search], [play], [watch] or [http] (a test's registry) that service answers nothing.
  */
 class PluginHosts(
     private val store: PluginStore,
@@ -48,17 +48,21 @@ class PluginHosts(
      * outside composition and the throwable, an exception that escapes its scope ("its scope") among them, which the scope's
      * handler keeps from closing NZStreamer, and a play's releases() or picker that threw (L619).
      */
-    fun create(version: PluginVersion, name: String = version.id, failed: (what: String, e: Throwable) -> Unit): HostedPlugin = HostedPlugin(
-        id = version.id,
-        dataDir = store.dataDir(version.id).apply { mkdirs() },
-        cacheDir = store.cacheDir(version.id).apply { mkdirs() },
-        secrets = Secrets(version.id, secrets),
-        scope = CoroutineScope(SupervisorJob() + main + CoroutineExceptionHandler { _, e -> failed(SCOPE, e) }),
-        search = search?.of(version.id, name) ?: NoSearch,
-        http = http?.let { PluginHttpImpl(version, it) } ?: NoHttp,
-        play = play?.of(version, PluginCalls { _, what, e -> failed(what, e) }) ?: NoPlay,
-        watch = watch?.of(version.id) ?: NoWatch,
-    )
+    fun create(version: PluginVersion, name: String = version.id, failed: (what: String, e: Throwable) -> Unit): HostedPlugin {
+        val calls = PluginCalls { _, what, e -> failed(what, e) }
+        return HostedPlugin(
+            id = version.id,
+            dataDir = store.dataDir(version.id).apply { mkdirs() },
+            cacheDir = store.cacheDir(version.id).apply { mkdirs() },
+            secrets = Secrets(version.id, secrets),
+            scope = CoroutineScope(SupervisorJob() + main + CoroutineExceptionHandler { _, e -> failed(SCOPE, e) }),
+            search = search?.of(version.id, name) ?: NoSearch,
+            http = http?.let { PluginHttpImpl(version, it) } ?: NoHttp,
+            play = play?.of(version, calls) ?: NoPlay,
+            watch = watch?.of(version.id) ?: NoWatch,
+            chooser = play?.chooser(version, calls) ?: PluginChooser.NONE,
+        )
+    }
 
     private companion object {
         /** What failed, as the log names an exception that escaped the instance's scope. */
@@ -68,7 +72,8 @@ class PluginHosts(
 
 /**
  * One instance's host. Its [scope] is a SupervisorJob's, so one coroutine's failure cancels none of the others; [cancel]
- * ends it as the instance is let go, before the plugin's close().
+ * ends it as the instance is let go, before the plugin's close(). [chooser]: the host's own side of its pages' Choose
+ * release ([io.skjaere.usenet.plugin.PluginNav.openReleases], L628), for the slot's navigation; no part of the API.
  */
 class HostedPlugin internal constructor(
     override val id: String,
@@ -80,6 +85,7 @@ class HostedPlugin internal constructor(
     override val http: PluginHttp = NoHttp,
     override val play: PluginPlay = NoPlay,
     override val watch: PluginWatch = NoWatch,
+    internal val chooser: PluginChooser = PluginChooser.NONE,
 ) : PluginHost {
     /** As the app judges an indexer's address, from the address alone ([UrlSecurity]). */
     override fun addressSafety(url: String): AddressSafety = when (UrlSecurity.of(url)) {

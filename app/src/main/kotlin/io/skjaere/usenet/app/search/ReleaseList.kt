@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,11 +39,15 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -61,9 +67,12 @@ import io.skjaere.usenet.app.ui.FormFactor
 import io.skjaere.usenet.app.ui.HiddenLine
 import io.skjaere.usenet.app.ui.InfoChip
 import io.skjaere.usenet.app.ui.LocalFormFactor
+import io.skjaere.usenet.app.ui.SectionHeader
 import io.skjaere.usenet.app.ui.TopBar
 import io.skjaere.usenet.app.ui.colors
 import io.skjaere.usenet.app.ui.focusOutline
+import io.skjaere.usenet.app.ui.rememberInitialFocus
+import io.skjaere.usenet.app.ui.tryFocus
 import io.skjaere.usenet.core.formatSize
 import io.skjaere.usenet.data.KnownMissing
 import io.skjaere.usenet.search.RankedItem
@@ -74,7 +83,63 @@ import kotlinx.coroutines.flow.catch
 import java.time.LocalDate
 import java.time.ZoneId
 
-private enum class Sort(val label: String) { Best("Best match"), Size("Size"), Age("Age") }
+/** The list's orders: as ranked, largest first, newest first. */
+internal enum class ReleaseSort(val label: String) {
+    Best("Best match"),
+    Size("Size"),
+    Age("Age"),
+    ;
+
+    /** [items] in this order. */
+    fun of(items: List<RankedItem>): List<RankedItem> = when (this) {
+        Best -> items
+        Size -> items.sortedByDescending { it.item.sizeBytes }
+        Age -> items.sortedByDescending { it.item.postedAt }
+    }
+}
+
+/**
+ * The releases the list shows in [sort]'s order: [group]'s playable ones, then a plugin's [possible] matches', each
+ * section ordered on its own, so the possible matches stay under the others (L628). With none, the list as it always was.
+ */
+internal fun releaseSections(group: ResultGroup, possible: ResultGroup?, sort: ReleaseSort): Pair<List<RankedItem>, List<RankedItem>> =
+    sort.of(group.playable) to sort.of(possible?.playable.orEmpty())
+
+/**
+ * The list's bar: [heading] (a plugin's item's title) or [group]'s label, over [title] and how many releases it shows from
+ * how many indexers, a plugin's [possible] matches counted; with no [title], the count alone.
+ */
+internal fun releaseListBar(group: ResultGroup, title: String, heading: String? = null, possible: ResultGroup? = null): Pair<String, String> =
+    (heading ?: group.label) to listOf(title, releasesFrom(group, possible)).filter(String::isNotBlank).joinToString(" · ")
+
+/**
+ * A plugin's possible matches on its item's Choose release (L628; SpPhoneChoose, SpTvChoose): [group]'s releases, each
+ * with "Possible" in its rank's place and its reason ([reasons], by [RankedItem.key]) under its name, below the heading
+ * and a line naming the item by its [noun]; [leftOut], the plugin's one line of what it left out, ends the list.
+ */
+class PossibleMatches(val group: ResultGroup, val reasons: Map<String, String>, val noun: String?, val leftOut: String?) {
+    /**
+     * The line under the heading, naming the item by its noun ("Tap one if it's the right game."), or "the right release"
+     * with none; [only] while nothing else is listed ("Nothing names this game for sure yet. …"); on a [tv] "Press OK on
+     * one" in place of "Tap one".
+     */
+    fun line(only: Boolean, tv: Boolean): String {
+        val pick = if (tv) "press OK on one" else "tap one"
+        val right = "it's the right ${noun ?: "release"}"
+        return if (only) {
+            "Nothing names ${noun?.let { "this $it" } ?: "it"} for sure yet. Play never picks these; $pick if $right."
+        } else {
+            "Play never picks these. ${pick.replaceFirstChar(Char::uppercase)} if $right."
+        }
+    }
+
+    companion object {
+        const val HEADING = "Possible matches"
+
+        /** What a possible match reads in its rank's place. */
+        const val RANK = "Possible"
+    }
+}
 
 /** What the list's watch of the releases found missing is called, as the engine's lock lines name who holds it. */
 private val RELEASE_LIST_MARKS = CoroutineName("release list marks")
@@ -101,6 +166,12 @@ private val RELEASE_LIST_MARKS = CoroutineName("release list marks")
  * once ([ReleaseListMode.Download.onDownload]) rather than playing it ([onPlay], a play's). Choose file there is the
  * mode's ([ReleaseListMode.Download.fileChoice], L403): on a pack's card that fits, greyed "Needs Wi-Fi" on mobile data;
  * [onChooseFile] is a play's. One marked [failed] there is a pack whose Choose file couldn't list its files.
+ *
+ * A plugin's item's list (L628) has its title as the bar's [heading] and its [possible] matches under the releases, each
+ * order sorting both sections on its own ([releaseSections]); with nothing else listed, the possible matches alone under
+ * their own line. On a TV its first release takes the first focus, else its first possible match. Search's list of a
+ * search a plugin opened has the plugin's [note] under its sorts, where the "Ranked for" line goes (L629). Movie and
+ * episode lists pass neither.
  */
 @Composable
 fun ReleaseList(
@@ -112,6 +183,9 @@ fun ReleaseList(
     listModifier: Modifier = Modifier,
     rankedFor: String? = null,
     mode: ReleaseListMode = ReleaseListMode.Play,
+    possible: PossibleMatches? = null,
+    heading: String? = null,
+    note: String? = null,
     onPlay: (RankedItem) -> Unit = {},
 ) {
     val download = mode as? ReleaseListMode.Download
@@ -121,7 +195,7 @@ fun ReleaseList(
     // saved state outlives a list the page doesn't save (a chooser's, once the process has gone), and another group's list
     // shown there later must open as any list does, not in this one's order and at its place (RFO-1). Search, whose picked
     // titles' groups are keyed alike, puts its list under the title's key too ([ForPickedTitle]).
-    val (order, rows) = key(group.key) { rememberSaveable { mutableStateOf(Sort.Best) } to rememberLazyListState() }
+    val (order, rows) = key(group.key) { rememberSaveable { mutableStateOf(ReleaseSort.Best) } to rememberLazyListState() }
     var sort by order
     // A press of an order, the order already chosen too, starts the list at its first release (W105, L321). Asked for
     // once the rows are in that order: the rows are keyed, and a measure of the old order between the press and the
@@ -132,6 +206,7 @@ fun ReleaseList(
         rows.requestScrollToItem(0)
     }
     var showHidden by remember { mutableStateOf(false) }
+    val tv = LocalFormFactor.current == FormFactor.Tv
     val container = LocalContext.current.container
     val missing = container.missingReleases
     val playOn by container.playOn.target.collectAsStateWithLifecycle()
@@ -143,16 +218,17 @@ fun ReleaseList(
     LaunchedEffect(Unit) { rail?.contentChanged() }
     // Watched, not read once: the list stays up under the play sheet, and Search's while the player plays. Named for the
     // engine's lock lines: what is known depends on the providers the engine has checked, under its lock (#273).
-    val known by remember(group) {
-        missing.known((group.playable + group.hidden).map { it.key })
+    val known by remember(group, possible) {
+        missing.known((group.playable + group.hidden + possible?.group?.let { it.playable + it.hidden }.orEmpty()).map { it.key })
             // Unread, nothing is marked: each is tried as a play tries it.
             .catch { emit(emptyMap()) }
     }.collectAsState(emptyMap(), context = RELEASE_LIST_MARKS)
     // A torrent a play would skip, as every account it plays from failed it before, is marked as the failure says (L174):
     // "✕ No longer cached". Read as the list shows; one this list's own play fails is marked by [failed].
-    val serviceMarks by produceState(emptyMap<String, String>(), group, accounts) {
+    val serviceMarks by produceState(emptyMap<String, String>(), group, possible, accounts) {
         value = try {
-            container.serviceMisses.marks(group.playable.filter { it.item.infoHash != null }.map { it.playCandidate })
+            val tapped = group.playable + possible?.group?.playable.orEmpty()
+            container.serviceMisses.marks(tapped.filter { it.item.infoHash != null }.map { it.playCandidate })
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -160,14 +236,25 @@ fun ReleaseList(
             emptyMap()
         }
     }
-    val sorted = when (sort) {
-        Sort.Best -> group.playable
-        Sort.Size -> group.playable.sortedByDescending { it.item.sizeBytes }
-        Sort.Age -> group.playable.sortedByDescending { it.item.postedAt }
+    val (sorted, possibleSorted) = releaseSections(group, possible?.group, sort)
+    // A plugin's list on a TV: its first release takes the first focus, Best match, else its first possible match.
+    val first = remember { FocusRequester() }
+    val firstKey = (sorted.firstOrNull() ?: possibleSorted.firstOrNull())?.key?.takeIf { tv && possible != null }
+    if (firstKey != null) {
+        val initial = rememberInitialFocus()
+        LaunchedEffect(group.key) {
+            initial.awaitTurn()
+            repeat(FIRST_FOCUS_FRAMES) {
+                if (first.tryFocus()) return@LaunchedEffect
+                withFrameNanos {}
+            }
+        }
     }
+    fun Modifier.firstFocus(item: RankedItem): Modifier = if (item.key == firstKey) focusRequester(first) else this
     Column(Modifier.fillMaxSize()) {
         if (download == null) {
-            TopBar(group.label, onBack, subtitle = "$title · ${releasesFrom(group)}") {
+            val (barTitle, subtitle) = releaseListBar(group, title, heading, possible?.group)
+            TopBar(barTitle, onBack, subtitle = subtitle) {
                 // A release played from a list plays here with a TV chosen (W11): the list greys the TVs, the face says this phone (W59).
                 CastButton(playOn, { container.playOn.openSheet(SheetPlace.PhoneOnly) }, place = SheetPlace.PhoneOnly)
             }
@@ -177,7 +264,7 @@ fun ReleaseList(
             TopBar(barTitle, onBack, subtitle = subtitle)
         }
         Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Sort.entries.forEach { s ->
+            ReleaseSort.entries.forEach { s ->
                 val selected = s == sort
                 Text(
                     s.label, style = if (selected) AppType.bodyStrong.copy(fontSize = AppType.secondary.fontSize) else AppType.secondary,
@@ -190,7 +277,12 @@ fun ReleaseList(
                 )
             }
         }
-        if (download != null) DownloadLine(download.lines(group)) else rankedFor?.let { RankedForLine(it) }
+        if (download != null) {
+            DownloadLine(download.lines(group))
+        } else {
+            rankedFor?.let { RankedForLine(it) }
+            note?.let { SearchNoteLine(it, Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 6.dp)) }
+        }
         LazyColumn(listModifier.fillMaxSize(), state = rows, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)) {
             itemsIndexed(sorted, key = { _, it -> it.key }) { i, item ->
                 val wontFit = download?.wontFit(item)
@@ -204,7 +296,7 @@ fun ReleaseList(
                     }
                 }
                 ReleaseCard(
-                    item, if (sort == Sort.Best) (if (i == 0) "Best match" else "#${i + 1}") else null, known[item.key], wontFit ?: failed[item.key] ?: serviceMarks[item.key],
+                    item, if (sort == ReleaseSort.Best) (if (i == 0) "Best match" else "#${i + 1}") else null, known[item.key], wontFit ?: failed[item.key] ?: serviceMarks[item.key],
                     onChooseFile = when {
                         download == null -> onChooseFile?.takeIf { item.offersFileChoice }?.let { choose -> { choose(item) } }
                         offer != null -> download.onChooseFile?.let { choose -> { choose(item) } }
@@ -220,6 +312,7 @@ fun ReleaseList(
                         wontFit != null -> null
                         else -> save
                     },
+                    modifier = Modifier.firstFocus(item),
                 )
             }
             if (group.hidden.isNotEmpty()) item {
@@ -228,9 +321,71 @@ fun ReleaseList(
                     if (showHidden) group.hidden.forEach { ReleaseCard(it, "Hidden", known[it.key], failure = null, tag = sourceTag(it, accounts), onClick = null) }
                 }
             }
+            if (possible != null) {
+                possibleMatches(possible, possibleSorted, only = group.size == 0, tv = tv, withReasons = accounts.isNotEmpty()) { item, hidden ->
+                    // "Possible" in the rank's place and the plugin's reason under its name; tapped as the others.
+                    ReleaseCard(
+                        item, if (hidden) "Hidden" else PossibleMatches.RANK, known[item.key], if (hidden) null else failed[item.key] ?: serviceMarks[item.key],
+                        tag = sourceTag(item, accounts), note = possible.reasons[item.key], onClick = if (hidden) null else ({ onPlay(item) }),
+                        modifier = Modifier.firstFocus(item),
+                    )
+                }
+            }
         }
     }
 }
+
+/**
+ * A plugin's [possible] matches under the list's releases (L628): the heading and its line ([PossibleMatches.line], [only]
+ * while nothing else is listed), its playable ones in the list's order ([sorted]), those that don't play here under a
+ * hidden line of their own (its commonest reasons [withReasons], as the list's), then the plugin's left-out line, which
+ * ends the list. [card] draws one, playable or hidden. Keyed apart from the releases above them.
+ */
+private fun LazyListScope.possibleMatches(
+    possible: PossibleMatches,
+    sorted: List<RankedItem>,
+    only: Boolean,
+    tv: Boolean,
+    withReasons: Boolean,
+    card: @Composable (RankedItem, hidden: Boolean) -> Unit,
+) {
+    val group = possible.group
+    if (group.size > 0) {
+        item(key = "possible:heading") {
+            Column {
+                // A heading for TalkBack's moves between headings, its words read with it.
+                SectionHeader(PossibleMatches.HEADING, Modifier.semantics(mergeDescendants = true) { heading() }, top = if (only) 8.dp else 18.dp)
+                Text(possible.line(only, tv), style = AppType.small, color = colors.muted, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 4.dp))
+            }
+        }
+        items(sorted, key = { "possible:${it.key}" }) { card(it, false) }
+        if (group.hidden.isNotEmpty()) item(key = "possible:hidden") {
+            var shown by remember { mutableStateOf(false) }
+            Column {
+                HiddenLine(hiddenLine(group.hidden, withReasons = withReasons), shown) { shown = !shown }
+                if (shown) group.hidden.forEach { card(it, true) }
+            }
+        }
+    }
+    possible.leftOut?.let { line ->
+        item(key = "possible:left-out") { Text(line, style = AppType.secondary, color = colors.muted, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) }
+    }
+}
+
+/**
+ * A plugin's note over a search it opened (L629; SpPhoneSearchWarning): ⚠ and the note in the warning colour, read once
+ * by TalkBack. Under Search's "Releases for …" line, and under a release list's sorts.
+ */
+@Composable
+internal fun SearchNoteLine(note: String, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth().semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("⚠", style = AppType.secondary, color = colors.warn)
+        Text(note, style = AppType.secondary, color = colors.warn, modifier = Modifier.weight(1f))
+    }
+}
+
+/** How many frames a plugin's list on a TV waits for its first release to be laid out before focusing it. */
+private const val FIRST_FOCUS_FRAMES = 10
 
 /** "Ranked for Kitchen display" under the sorts (L127; CsPhoneRanked): Google's filled Cast icon, 18 dp in the accent. */
 @Composable
@@ -278,8 +433,9 @@ private fun DownloadLine(lines: List<String>) {
  * ("No longer cached"), or in download mode that it won't fit. [onChooseFile]: its menu's Choose file, opened from its ⋮
  * or by a long press (a remote's long OK), greyed with [chooseFileNote] under it where it can't open now. [tag]: where it
  * plays from, after its rank (L201; none while no debrid service is on). [note]: a line under its name (a season pack's
- * share of the episode, in download mode). [clickLabel]: what a tap does, as TalkBack says it. With no [onClick] it is
- * greyed, and not marked Best match's way even when it ranks first.
+ * share of the episode, in download mode; a plugin's possible match's reason). [clickLabel]: what a tap does, as TalkBack
+ * says it. With no [onClick] it is greyed, and not marked Best match's way even when it ranks first. [modifier]: before
+ * its focus, a TV's first focus.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -288,6 +444,7 @@ private fun ReleaseCard(
     rank: String?,
     known: KnownMissing?,
     failure: String?,
+    modifier: Modifier = Modifier,
     onChooseFile: (() -> Unit)? = null,
     chooseFileNote: String? = null,
     tag: SourceTag? = null,
@@ -302,7 +459,7 @@ private fun ReleaseCard(
     val bestBorder = if (LocalFormFactor.current == FormFactor.Tv) colors.outline else colors.accent
     val shape = RoundedCornerShape(16.dp)
     Column(
-        Modifier.padding(horizontal = 16.dp, vertical = 5.dp).fillMaxWidth().clip(shape)
+        modifier.padding(horizontal = 16.dp, vertical = 5.dp).fillMaxWidth().clip(shape)
             .background(if (onClick == null) colors.surfaceDim else colors.surface)
             // The focus's ring over Best match's border, not under it.
             .then(if (onClick != null) Modifier.focusOutline(shape) else Modifier)

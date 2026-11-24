@@ -278,6 +278,26 @@ class SearchTvTest {
         assertEquals("glasswater", query())
     }
 
+    /**
+     * L629 on a TV (SpPhoneSearchWarning's line, in TV sizes): a search a plugin opened with a note shows ⚠ and the note in
+     * the right pane, under what was searched and above the results, and isn't kept in the recent searches.
+     */
+    @Test
+    fun aNotedSearchShowsItsNoteUnderWhatWasSearched() = withFakeIndexer {
+        showTheApp()
+        compose.runOnIdle { nav.switchTab(SearchRoute(query = QUERY, note = NOTE), restore = false) }
+        val header = hasText("Releases for “$QUERY” on your indexers")
+        compose.waitUntil(20_000) { exists(header) && exists(playsAGroup) }
+        val note = hasText(NOTE) and hasText("⚠")
+        compose.waitUntil(5_000) { exists(note) }
+        val bounds = { m: SemanticsMatcher -> compose.onAllNodes(m)[0].fetchSemanticsNode().boundsInRoot }
+        assertTrue("not in the right pane", bounds(note).left >= bounds(SemanticsMatcher.expectValue(SearchPaneKey, "results")).left)
+        assertTrue("not under what was searched", bounds(note).top >= bounds(header).bottom)
+        assertTrue("not above the results", bounds(note).bottom <= bounds(playsAGroup).top)
+        val library = compose.activity.container.library
+        assertEquals("a noted search kept in the recent searches", searchedBefore, runBlocking { library.recentSearches.first().map { it.key }.toSet() })
+    }
+
     /** [test] with the fake indexer (10.0.2.2:8089) switched on, the fixture's being off; it goes again after, with its key. */
     private fun withFakeIndexer(test: () -> Unit) {
         val reachable = runCatching { Socket().use { it.connect(InetSocketAddress("10.0.2.2", 8089), 2_000) } }.isSuccess
@@ -316,5 +336,8 @@ class SearchTvTest {
         const val SETTLE_MS = 700L
         const val FAKE_INDEXER = "search-tv-test"
         const val QUERY = "harbor lights"
+
+        /** A plugin's note over a search it opened. */
+        const val NOTE = "Indexer results can show scores."
     }
 }

@@ -5,11 +5,16 @@ import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.search.RankedItem
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /**
  * A plugin's item to play (L627): plugin [pluginId]'s [key] for it, under which the host keeps its progress and the
  * release that played it, item:<plugin id>:<key> ([WatchKey.item]); its [title], stored with them, and [subtitle], on the
  * sheet and in the player; [picker], the plugin's file picker made the host's, else the largest video, as for a film.
+ * [noun]: the plugin's word for it in Choose release's lines ("the right game", L628), none where it gave none that keeps
+ * to its rule. [searchWords] and [searchNote]: what the no-release sheet's Search searches, and the plugin's note above
+ * the results (L629); no words, no Search.
  */
 data class ItemTarget(
     val pluginId: String,
@@ -17,6 +22,9 @@ data class ItemTarget(
     val title: String,
     val subtitle: String?,
     val picker: FilePicker = FilePicker.Largest,
+    val noun: String? = null,
+    val searchWords: String? = null,
+    val searchNote: String? = null,
 ) {
     val watchKey: String get() = WatchKey.item(pluginId, key)
 
@@ -45,9 +53,10 @@ data class ItemFound(
 /**
  * Play on a plugin's item, as a film's Play ([MoviePlay]): the release that played it before goes alone while its NZB is
  * still stored (no search, no grab, as Resume on Home does); otherwise, or when that fails, the releases the plugin
- * accepts, in its order, those the host doesn't play here left out as a film's search leaves them. Nothing to play: the
- * no-release sheet with the plugin's lines and note, and nothing hidden to show, as names the plugin passed over can carry
- * what it keeps from the user.
+ * accepts, in its order, those the host doesn't play here left out as a film's search leaves them. None of those, but
+ * possible matches that play here: Play plays none of them, and Choose release opens with them alone (L627, L628). Nothing
+ * to play at all: the no-release sheet with the plugin's lines and note, its Search when the item has one (L629), and
+ * nothing hidden to show, as names the plugin passed over can carry what it keeps from the user.
  */
 internal object ItemPlay {
     /** [release] alone, the file that played in it, as Resume on Home plays it. */
@@ -58,8 +67,9 @@ internal object ItemPlay {
 
     /**
      * Plays [target]: [play] runs a request through the pipeline (null once the player starts, else the failure);
-     * [searching] puts the sheet's line up as the plugin is asked; [releases], the plugin's, asked at most once. Returns
-     * what the sheet shows at the end, or null once the player starts.
+     * [searching] puts the sheet's line up as the plugin is asked; [releases], the plugin's, asked at most once; [choose]
+     * opens Choose release with what it found, when it only offered releases. Returns what the sheet shows at the end
+     * (Idle, closed, once Choose release opens), or null once the player starts.
      */
     suspend fun run(
         target: ItemTarget,
@@ -68,6 +78,7 @@ internal object ItemPlay {
         play: suspend (PlayRequest, Retry?) -> PlayState.Failed?,
         searching: (line: String) -> Unit,
         releases: suspend () -> ItemFound,
+        choose: suspend (ItemFound) -> Unit,
     ): PlayState? {
         val alone = remembered?.takeIf { stored }
         val failed = alone?.let { play(remembered(target, it), null) ?: return null }
@@ -77,9 +88,17 @@ internal object ItemPlay {
         val found = releases()
         val (playable, hidden) = found.accepted.partition { it.ranked.playable }
         val candidates = retry?.leaveOut(playable) ?: playable
-        // Only offered: read as nothing found until Choose release opens with them.
         if (candidates.isEmpty()) {
-            return failed ?: PlayState.NoRelease(target.title, target.subtitle, found.lines, found.note, nameQuery = null, hidden = emptyList())
+            // Only possible matches: Play never picks one. Some play here, so the user may (SpPhoneChoose 3); a play
+            // replaced meanwhile opens nothing.
+            if (found.offered.any { (item, _) -> item.ranked.playable }) {
+                currentCoroutineContext().ensureActive()
+                choose(found)
+                return PlayState.Idle
+            }
+            return failed ?: PlayState.NoRelease(
+                target.title, target.subtitle, found.lines, found.note, nameQuery = target.searchWords, hidden = emptyList(), searchNote = target.searchNote,
+            )
         }
         // In the plugin's order: the release that played it before isn't put first.
         val request = PlayRequest(
@@ -87,6 +106,15 @@ internal object ItemPlay {
         )
         return play(request, retry)
     }
+
+    /**
+     * A release picked on the item's Choose release ([io.skjaere.usenet.app.plugins.PluginReleasesScreen], L628): tried alone,
+     * chosen, whatever is known of it, as the item's, its picker the plugin's; the list's releases Play would pick
+     * ([alternatives]) for the pre-check's Play a compatible release (L152).
+     */
+    fun chosen(target: ItemTarget, item: RankedItem, alternatives: List<RankedItem>): PlayRequest = PlayRequest(
+        target.title, target.subtitle, listOf(item), target.picker, target.watch, rememberedFirst = false, chosen = true, alternatives = alternatives,
+    )
 
     private const val SEARCHING = "Searching your indexers…"
 }
