@@ -218,9 +218,12 @@ internal class RegistryHarness(private val dir: File, private val test: TestScop
     val store = PluginStore(files, cache, secrets)
     private val dispatcher = StandardTestDispatcher(test.testScheduler)
 
-    /** A registry over the files, its work in [scope]: by default the test's own, run by advanceUntilIdle and waited for. */
-    fun registry(scope: CoroutineScope = test): PluginRegistry = PluginRegistry(
-        store, loading, PluginHosts(store, secrets, main = dispatcher), guard, scope, io = dispatcher,
+    /**
+     * A registry over the files, its work in [scope]: by default the test's own, run by advanceUntilIdle and waited for.
+     * Its plugins' items play through [play] where it is given.
+     */
+    fun registry(scope: CoroutineScope = test, play: PluginPlayService? = null): PluginRegistry = PluginRegistry(
+        store, loading, PluginHosts(store, secrets, main = dispatcher, play = play), guard, scope, io = dispatcher,
         now = { test.testScheduler.currentTime },
     )
 

@@ -2,7 +2,14 @@ package io.skjaere.usenet.app.plugins
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
+import io.skjaere.usenet.app.play.ItemTarget
+import io.skjaere.usenet.core.FileListing
+import io.skjaere.usenet.core.ListedFile
 import io.skjaere.usenet.logging.LogBuffer
+import io.skjaere.usenet.plugin.FileInfo
+import io.skjaere.usenet.plugin.ItemReleases
+import io.skjaere.usenet.plugin.PlayItem
+import io.skjaere.usenet.plugin.PluginFilePicker
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -467,5 +474,46 @@ class PluginRegistryTest {
         advanceUntilIdle()
         assertIs<PluginStatus.CouldntStart>(registry.installed("skeleton").status)
         assertNull(registry.installed("skeleton").icon, "installed again, it hasn't loaded")
+    }
+
+    /**
+     * L635: a play keeps the guarded picker of the instance that started it, past that instance's end. Should it throw
+     * once Turn on again has made a new instance of the same version, that new instance runs on, and no error is recorded
+     * against its version: the instance that threw was let go already.
+     */
+    @Test
+    fun `a let-go instance's picker that throws turns no newer instance of its version off`() = runTest {
+        val h = harness()
+        val targets = mutableListOf<ItemTarget>()
+        val registry = h.registry(play = PluginPlayService(ranked = { _, _ -> emptyList() }) { target, _ -> targets += target })
+        registry.start()
+        registry.firstActivity()
+        h.install(registry, "kestrel", 1)
+        val first = registry.running("kestrel")!!
+        val torn = object : PluginFilePicker {
+            override val noMatch = "No file for the final"
+            override fun pick(files: List<FileInfo>): Int = error("its state went with close()")
+            override fun takesWhole(releaseName: String) = false
+        }
+        first.host.play.play(PlayItem("cc-2019:final", "Copper Crown · Final", null, null, picker = torn)) { ItemReleases(emptyList()) }
+        first.host.scope.launch { throw IllegalStateException("the fake's refresh") }
+        advanceUntilIdle()
+        assertEquals(PluginStatus.OffAfterError, registry.installed("kestrel").status)
+        registry.turnOnAgain("kestrel")
+        val second = assertNotNull(registry.running("kestrel"))
+        val recorded = (h.guard as FakeGuard).errors.toList()
+
+        assertNull(targets.single().picker.pick(OneFile), "the old picker finds nothing")
+        advanceUntilIdle()
+        assertSame(second, registry.running("kestrel"), "the new instance runs on")
+        assertEquals(recorded, (h.guard as FakeGuard).errors, "no error recorded against its version")
+    }
+
+    private object OneFile : FileListing<OneFile.File> {
+        data class File(override val index: Int, override val path: String, override val size: Long) : ListedFile
+
+        override val id = "nzb-final"
+        override val title = "Copper.Crown.2019.Final.1080p.WEB.h264-KESTREL"
+        override val files = listOf(File(0, "Copper.Crown.2019.Final.mkv", 3_000_000_000))
     }
 }

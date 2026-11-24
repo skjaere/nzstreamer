@@ -63,6 +63,12 @@ class PluginRegistry(
     private val keys = AtomicLong()
     private val calls = PluginCalls(::failed)
 
+    /**
+     * The instances let go, by key: what of theirs a play or a Choose release kept past their end (L635) may still throw,
+     * but that is no longer anyone's to answer for, least of all a newer instance of the same version.
+     */
+    private val gone: MutableSet<Long> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
     // Under [lock].
     private val records = mutableListOf<PluginRecord>()
     private val statuses = mutableMapOf<String, PluginStatus>()
@@ -531,7 +537,8 @@ class PluginRegistry(
     private fun letGo(version: PluginVersion, plugin: NzPlugin, host: HostedPlugin) {
         host.cancel()
         calls.call(version, "close", nothing = Unit) { plugin.close() }
-        // Only now: a crash while its close() runs is still its version's.
+        // Only now: a crash or an error while its close() runs is still its version's.
+        gone += version.key
         crashGuard.letGo(version.id, version.versionCode)
     }
 
@@ -541,6 +548,10 @@ class PluginRegistry(
      * version turned off "after an error".
      */
     private fun failed(version: PluginVersion, what: String, e: Throwable) {
+        if (version.key in gone) {
+            log.info("Plugin {}'s instance already let go threw in {}: {}", version, what, e.javaClass.name)
+            return
+        }
         log.warn("Plugin {} turned off after an error in {}: {}", version, what, e.javaClass.name)
         try {
             crashGuard.recordError(version.id, version.versionCode)
@@ -551,17 +562,19 @@ class PluginRegistry(
     }
 
     /**
-     * [version] off after an error, its instance let go, if it is still the one installed. A version the list withdrew
-     * stays withdrawn: off until a fixed one comes (L621), never one that Turn on again would load. Under [lock].
+     * [version] off after an error, its instance let go, if it is still the one that runs: never another instance of the
+     * same version (Turn on again's, made since). A version the list withdrew stays withdrawn: off until a fixed one comes
+     * (L621), never one that Turn on again would load. Under [lock].
      */
     private suspend fun offAfterError(version: PluginVersion) {
         val record = record(version.id)?.takeIf { it.versionCode == version.versionCode } ?: return
+        if (runningInstance(version.id)?.key.let { it != null && it != version.key }) return
         val withdrawn = record.state == StoredState.Withdrawn
         if (!withdrawn && record.state != StoredState.Errored) {
             update(version.id) { it.copy(state = StoredState.Errored) }
             persist()
         }
-        val running = runningInstance(version.id)?.takeIf { it.versionCode == version.versionCode }
+        val running = runningInstance(version.id)?.takeIf { it.key == version.key }
         // Listed off before it is let go, so its slot draws none of its pages after its close().
         statuses[version.id] = if (withdrawn) PluginStatus.Withdrawn else PluginStatus.OffAfterError
         publish()
