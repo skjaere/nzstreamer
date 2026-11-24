@@ -5,10 +5,14 @@ import org.w3c.dom.Element
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /** The app is called NZStreamer wherever the user sees its name: the launcher, a shared log, a share's subject. */
 class AppNameTest {
     private val main = File("src/main")
+
+    /** What the app shows, writes and speaks: its own sources and resources, and the UI kit's (:core:ui), which it draws with. */
+    private val words = listOf(main, File("../core/ui/src/main"))
 
     private fun parse(file: File): Element =
         DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }.newDocumentBuilder().parse(file).documentElement
@@ -24,11 +28,14 @@ class AppNameTest {
 
     /** The placeholder name, in any spelling ("Usenet Streamer", "usenet-streamer"), is nowhere in what the app shows or writes. */
     @Test
-    fun `the old name is gone from the app's sources and resources`() {
+    fun `the old name is gone from the app's and the UI kit's sources and resources`() {
         val old = Regex("""usenet[ -]?streamer""", RegexOption.IGNORE_CASE)
-        val found = main.walk().filter { it.isFile && it.extension in setOf("kt", "xml") }
-            .flatMap { file -> file.readLines().mapIndexedNotNull { index, line -> "${file.relativeTo(main).path}:${index + 1}".takeIf { old in line } } }
-            .toList()
+        words.forEach { assertTrue(it.isDirectory, "${it.path} isn't there to read") }
+        val found = words.flatMap { root ->
+            root.walk().filter { it.isFile && it.extension in setOf("kt", "xml") }
+                .flatMap { file -> file.readLines().mapIndexedNotNull { index, line -> "${root.path}/${file.relativeTo(root).path}:${index + 1}".takeIf { old in line } } }
+                .toList()
+        }
         assertEquals(emptyList(), found)
     }
 

@@ -378,6 +378,9 @@ android {
         it.inputs.file("src/main/AndroidManifest.xml").withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("manifest")
         it.inputs.file("src/main/assets/privacy.txt").withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("privacyText")
         it.inputs.file(rootProject.file("version.txt")).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("versionFile")
+        // AppNameTest reads the UI kit's sources and resources too, whose words the app shows and speaks: a change to them
+        // alone runs it again.
+        it.inputs.dir(rootProject.file("core/ui/src/main")).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("kitMainSources")
         // BuildConfigPinTest reads the beta key's certificate digest and the version catalog, which the plugins' pin and
         // shared libraries come from: a change to either alone runs it again too.
         it.inputs.file(rootProject.file("tools/beta-cert.sha256")).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("pluginSigner")
