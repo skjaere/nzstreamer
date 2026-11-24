@@ -18,15 +18,16 @@ import java.net.Socket
  * The mock's two halves for a plugin's searches and plays, as the user would set them up: the shared fake indexer
  * (10.0.2.2:8089, its Copper Crown releases) as the one indexer on, named [indexerName]; and, where a test plays, the mock
  * NNTP server (10.0.2.2:1119) as the one provider, the engine on it. [restore] puts back every watch row [forget] was
- * told of as it was before the test, and after a [setUp] the settings, the engine and the releases remembered as tried. The saved providers
- * are hidden for the test, not deleted, as deleting would remove their passwords; the test's own provider and indexer are
- * deleted with their secrets.
+ * told of as it was before the test, and after a [setUp] the settings and the releases remembered as tried, and the engine
+ * where a play's setUp moved it. The saved providers are hidden for the test, not deleted, as deleting would remove their
+ * passwords; the test's own provider and indexer are deleted with their secrets.
  */
 class PluginMockSetup(private val indexerId: String, private val indexerName: String) {
     private val container = InstrumentationRegistry.getInstrumentation().targetContext.container
     private val settings = container.settings
     private val library = container.library
     private var saved: AppSettings? = null
+    private var played = false
     private var tried: List<TriedRelease> = emptyList()
     private val rows = mutableMapOf<String, WatchState?>()
 
@@ -40,6 +41,7 @@ class PluginMockSetup(private val indexerId: String, private val indexerName: St
     suspend fun setUp(plays: Boolean) {
         val before = settings.settings.first()
         saved = before
+        played = plays
         tried = library.triedReleaseEntries()
         if (plays) {
             settings.restore(before.copy(providers = before.providers.map { it.copy(deleted = true) }))
@@ -65,7 +67,9 @@ class PluginMockSetup(private val indexerId: String, private val indexerName: St
         if (before.indexers.none { it.id == indexerId } && settings.indexer(indexerId) != null) settings.deleteIndexer(indexerId)
         settings.restore(before)
         library.restoreTriedReleases(tried)
-        engineOnSavedProviders()
+        // Only a play's setUp moved the providers, so only its putting back has a provider sync to wait for. After a
+        // search's, the engine stays where the test found it, which an earlier class may have left on the mock alone.
+        if (played) engineOnSavedProviders()
     }
 
     /** [key]'s row back to [was]: none (a tombstone, as a row taken back is kept) where it had none. */

@@ -31,9 +31,11 @@ import io.skjaere.usenet.app.AppNav
 import io.skjaere.usenet.app.FakeTmdb
 import io.skjaere.usenet.app.HomeContentShown
 import io.skjaere.usenet.app.HomeRoute
+import io.skjaere.usenet.app.MOCK_PROVIDER
 import io.skjaere.usenet.app.PlayerActivity
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.home.MARK_WATCHED
+import io.skjaere.usenet.app.mockOnEngine
 import io.skjaere.usenet.app.play.PlayState
 import io.skjaere.usenet.app.play.PlaybackCoordinator
 import io.skjaere.usenet.app.play.PlayerLaunch
@@ -226,6 +228,21 @@ class PluginPagesDeviceTest {
         assertTrue("the bar's Search tab chosen", compose.onNode(barTab("Search")).fetchSemanticsNode().config.getOrNull(SemanticsProperties.Selected) == true)
         val slotEntries = compose.runOnIdle { PluginSlots.routeTypes.filter { type -> runCatching { nav.getBackStackEntry(type) }.isSuccess } }
         assertEquals("no entry of a slot on the back stack", emptyList<Any>(), slotEntries)
+    }
+
+    /**
+     * A search's setUp moves no provider, so it is put back with the engine where the test found it, waiting for no provider
+     * sync: here on the mock alone, as an earlier class leaves it (mockOnEngine), which no sync would move.
+     */
+    @Test
+    fun aSearchsSetUpIsPutBackWithTheEngineWhereItWas() {
+        mock.assumeUp(plays = false)
+        runBlocking {
+            mockOnEngine()
+            mock.setUp(plays = false)
+            mock.restore()
+        }
+        assertEquals(listOf(MOCK_PROVIDER.id), container.engine.configuredProviders.value)
     }
 
     /**
