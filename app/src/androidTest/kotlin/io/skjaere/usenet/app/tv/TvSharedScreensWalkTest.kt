@@ -72,9 +72,17 @@ import io.skjaere.usenet.app.link.PhoneQuestion
 import io.skjaere.usenet.app.link.PhonesDeps
 import io.skjaere.usenet.app.link.PhonesScreen
 import io.skjaere.usenet.app.link.TvListener
+import io.skjaere.usenet.app.plugins.FakePlugin
+import io.skjaere.usenet.app.plugins.FakePluginRule
 import io.skjaere.usenet.app.plugins.PluginIndex
 import io.skjaere.usenet.app.plugins.PluginListState
+import io.skjaere.usenet.app.plugins.PluginPlaceholder
+import io.skjaere.usenet.app.plugins.PluginStateRule
+import io.skjaere.usenet.app.plugins.PluginStatus
+import io.skjaere.usenet.app.plugins.PluginTab1
 import io.skjaere.usenet.app.plugins.PluginsPageFakes
+import io.skjaere.usenet.app.plugins.await
+import io.skjaere.usenet.app.search.PossibleMatches
 import io.skjaere.usenet.app.search.ReleaseList
 import io.skjaere.usenet.app.settings.IndexerTest
 import io.skjaere.usenet.app.settings.MaxBitrateSetting
@@ -120,6 +128,7 @@ import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -130,12 +139,18 @@ import java.net.Socket
  * and focusable element stays inside the TV's safe area (48 dp from the sides, 27 dp from the top
  * and bottom) all the way down; at 2x no text is cut off. One test per screen, each with all its
  * problems in one report. A text field is reached at its gate, which OK opens: the arrows never
- * put the focus in the field itself.
+ * put the focus in the field itself. A plugin's placeholder is walked in an in-process fake's slot of the app's own
+ * registry ([FakePluginRule]), which PluginStateRule takes out after, as it does from every plugin class.
  */
 @RunWith(AndroidJUnit4::class)
 class TvSharedScreensWalkTest {
+    private val plugins = PluginStateRule()
+    private val fakes = FakePluginRule(plugins)
+    private val compose = createAndroidComposeRule<ComponentActivity>()
+
+    /** The plugins' rule and its fakes' (none unless a case puts one in) around the compose rule. */
     @get:Rule
-    val compose = createAndroidComposeRule<ComponentActivity>()
+    val rules: RuleChain = RuleChain.outerRule(plugins).around(fakes).around(compose)
 
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val remote = Remote(compose)
@@ -753,6 +768,27 @@ class TvSharedScreensWalkTest {
         }
     }
 
+    /**
+     * A plugin's tab whose version is off after an error (L590; SpTvListStates 5): the host's placeholder beside the rail,
+     * its title, its card's words and Open Plugins, in an in-process fake's slot of the app's own registry.
+     */
+    @Test
+    fun pluginPlaceholder() {
+        val fake = FakePlugin()
+        fake.failIn(fakes.install(fake).host)
+        runBlocking { plugins.app.await(fake.id, "off after an error") { it.status == PluginStatus.OffAfterError } }
+        showTheApp()
+        check("A plugin's placeholder", mustReach = listOf(PluginPlaceholder.OPEN_PLUGINS)) {
+            compose.runOnIdle {
+                nav.switchTab(HomeRoute)
+                nav.switchTab(PluginTab1, restore = false)
+            }
+            compose.waitForIdle()
+            Thread.sleep(LOAD_MS)
+            compose.waitForIdle()
+        }
+    }
+
     /** Pair a phone over a fake listener at an invented address, whose words a test sends as the listener would. */
     private class FakePairing(phones: Int, listener: TvListener) {
         @Volatile var page: PairPageListener? = null
@@ -841,6 +877,18 @@ class TvSharedScreensWalkTest {
         check("Season packs", required = { !it.startsWith("More for ") }) { openReleaseList() }
     }
 
+    /**
+     * A plugin's Choose release for an item (L628; SpTvChoose): the releases it accepted, then Possible matches, their line
+     * naming the item by its noun and each its reason, then its left-out line; the possible matches reached too.
+     */
+    @Test
+    fun choosePossibleMatches() {
+        val possible = releases(POSSIBLE)
+        val reasons = (possible.playable + possible.hidden).associate { it.key to "No date in the name" }
+        showReleaseList(releases(ACCEPTED), possible = PossibleMatches(possible, reasons, "session", LEFT_OUT), heading = "Grand Prix of Kestrel · Race")
+        check("Choose release with possible matches", mustReach = listOf(PossibleMatches.RANK)) { openReleaseList() }
+    }
+
     /** A long OK on a season pack's row opens its menu, whose Choose file the remote reaches and picks; nothing plays meanwhile. */
     @Test
     fun aLongOkOnASeasonPacksRowOffersChooseFile() {
@@ -875,12 +923,14 @@ class TvSharedScreensWalkTest {
 
     /**
      * [group] as a release list, on a page of its own over Home, in the TV shell; [onChooseFile] as Choose release passes it,
-     * and [onPlay] hears a release played.
+     * and [onPlay] hears a release played. A plugin's item's list has its [possible] matches and its [heading].
      */
     private fun showReleaseList(
         group: ResultGroup,
         onChooseFile: ((io.skjaere.usenet.search.RankedItem) -> Unit)? = null,
         onPlay: (io.skjaere.usenet.search.RankedItem) -> Unit = {},
+        possible: PossibleMatches? = null,
+        heading: String? = null,
     ) {
         val context = instrumentation.targetContext.container
         compose.setTvContent({ scale }) {
@@ -889,7 +939,9 @@ class TvSharedScreensWalkTest {
             TvShell(nav, tabsFor(FormFactor.Tv), context.playback) {
                 NavHost(nav, startDestination = HomeRoute) {
                     composable<HomeRoute> {}
-                    composable<ShowRoute> { ReleaseList(group, "Harbor Lights", onBack = {}, onChooseFile = onChooseFile, onPlay = onPlay) }
+                    composable<ShowRoute> {
+                        ReleaseList(group, "Harbor Lights", onBack = {}, onChooseFile = onChooseFile, possible = possible, heading = heading, onPlay = onPlay)
+                    }
                 }
             }
         }
@@ -923,6 +975,16 @@ class TvSharedScreensWalkTest {
             "Harbor.Lights.S02.720p.WEB-DL.DDP5.1.H.264-NZST" to 9_500_000_000L,
             "Harbor.Lights.S02.1080p.HDTV.x264-NZST" to 16_000_000_000L,
         )
+        /** A plugin's item's releases: those it accepted, and its possible matches, with invented names. */
+        val ACCEPTED = listOf(
+            "Kestrel.Grand.Prix.2026.Race.1080p.WEB.h264-WREN" to 4_100_000_000L,
+            "Kestrel.Grand.Prix.2026.Race.720p.WEB.h264-DRIFTWOOD" to 1_900_000_000L,
+        )
+        val POSSIBLE = listOf(
+            "Kestrel.Grand.Prix.Race.1080p.HDTV.x264-QUAY" to 3_300_000_000L,
+            "Kestrel.Grand.Prix.Race.720p.HDTV.x264-TIDE" to 1_500_000_000L,
+        )
+        const val LEFT_OUT = "3 left out: a name with a score, other sessions. Their names aren't shown."
         const val LOAD_MS = 400L
         /** FakeDiscover's invented names, each with its page's number. */
         val DISCOVER_NAME = Regex("""\D+ \d+""")
