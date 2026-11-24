@@ -215,8 +215,10 @@ class PluginSearchService(
         private const val BAD_ANSWER = "Bad answer"
 
         /**
-         * Each indexer's name for a plugin, by id: the one the user typed unless it names its address (Settings names one
-         * saved without a name after its host), else "Indexer <n>" by its place in Settings ([asked]'s order).
+         * Each indexer's name for a plugin, by id: the one the user typed unless it names an address, else "Indexer <n>" by
+         * its place in Settings ([asked]'s order). Settings names one saved without a name after its host, and an edit of
+         * its address alone keeps that name, now another host's: a name that reads as a host or an address is never given,
+         * whosever it is.
          */
         fun names(asked: List<IndexerConfig>): Map<String, String> =
             asked.withIndex().associate { (place, indexer) -> indexer.id to (indexer.typedName() ?: "Indexer ${place + 1}") }
@@ -225,8 +227,17 @@ class PluginSearchService(
             val typed = name.trim().takeIf { it.isNotEmpty() } ?: return null
             val host = runCatching { URI(baseUrl.trim()).host }.getOrNull()?.lowercase()?.removePrefix("[")?.removeSuffix("]")
             val words = typed.lowercase()
-            return typed.takeUnless { "://" in words || !host.isNullOrEmpty() && host in words }
+            return typed.takeUnless { "://" in words || !host.isNullOrEmpty() && host in words || readsAsAddress(words) }
         }
+
+        /** A host name with a dot in it, an IP address, or localhost, with or without a port: no words, an address. */
+        private fun readsAsAddress(name: String): Boolean = ADDRESS.any { it.matches(name) }
+
+        private val ADDRESS = listOf(
+            Regex("[a-z0-9-]+(\\.[a-z0-9-]+)+\\.?(:\\d{1,5})?"),
+            Regex("\\[?[0-9a-f]*:[0-9a-f:.]*]?(:\\d{1,5})?"),
+            Regex("localhost(:\\d{1,5})?"),
+        )
 
         private fun line(name: String, status: IndexerStatus?, error: NewznabError?): IndexerLine = when (val state = status?.state) {
             null, IndexerStatus.State.Searching -> IndexerLine(name, IndexerLine.State.Searching, 0, SEARCHING)

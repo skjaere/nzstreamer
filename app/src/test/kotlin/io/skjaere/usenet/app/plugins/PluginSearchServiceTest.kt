@@ -236,6 +236,20 @@ class PluginSearchServiceTest {
     }
 
     /**
+     * A name that reads as an address is never given, whosever it was: Settings names an indexer saved with no name after
+     * its host, and an edit of its address alone keeps that name, now another host's. Names with words in them are kept.
+     */
+    @Test
+    fun `a name that reads as a host or an address is never given`() = runTest {
+        val addresses = listOf("api.oldindexer.invalid", "OLD.Indexer.invalid", "nzb.lantern.invalid:5076", "192.0.2.10", "192.0.2.10:8080", "[2001:db8::1]", "2001:db8::1", "localhost", "localhost:5076")
+        val typed = listOf("Quarry", "Kestrel Feed", "NZB-Lantern", "Lantern (fast)", "Indexer.One backup")
+        val indexers = (addresses + typed).mapIndexed { i, name -> IndexerConfig("i$i", name, "https://moved-$i.invalid/api", "k") }
+        val fake = FakeSearch { words, asked -> asked.map { results(it, words) } }
+        val last = service(fake, indexers).of("kestrel", "Kestrel").search("Copper Crown", runtimeMinutes = null).last()
+        assertEquals(addresses.indices.map { "Indexer ${it + 1}" } + typed, last.indexers.map { it.name })
+    }
+
+    /**
      * L630's soft cap, on the test's clock: ten searches a minute that ask an indexer anew, failed ones too; an answer from
      * the cache never counts. The eleventh is answered at once, every indexer paused, and asks nothing; the pause is
      * logged once a minute, by the plugin's id alone. Another plugin's searches are its own.
