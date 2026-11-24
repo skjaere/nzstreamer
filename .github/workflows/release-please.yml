@@ -36,19 +36,27 @@ jobs:
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
 
       # The plugins this run released, as a JSON list of {id, tag} ([] with none): each path under plugins/ in the
-      # action's paths_released, with its tag from that path's <path>--tag_name output. A matrix job can read only a job's
-      # outputs, declared above once, so the list is built here from all of the step's outputs.
-      # tools/release/test_release_config.py runs this filter over samples of them.
+      # action's paths_released, tagged plugin-<id>-v<version> from that plugin's version.txt in the commit released,
+      # which release-please wrote in the release pull request this push merged. Only paths_released comes in: the
+      # action's other outputs carry the release notes and the release pull request's body, which in one environment
+      # variable can pass Linux's 128 KiB for one and fail this job, the app's apk job with it. A version that doesn't
+      # read leaves its plugin with no tag, so its release-plugin.yml fails, not this job. A matrix job can read only a
+      # job's outputs, declared above once, so the list is built here. tools/release/test_release_config.py runs this
+      # script over samples.
       - id: plugins
         shell: bash
         env:
-          OUTPUTS: ${{ toJSON(steps.release.outputs) }}
+          PATHS: ${{ steps.release.outputs.paths_released }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          plugins=$(jq -c '
-            . as $outputs
-            | ($outputs.paths_released // "[]" | fromjson)
-            | map(select(startswith("plugins/")) | {id: ltrimstr("plugins/"), tag: $outputs[. + "--tag_name"]})
-          ' <<<"$OUTPUTS")
+          plugins='[]'
+          ids=$(jq -r '(. // []) | .[] | select(startswith("plugins/")) | ltrimstr("plugins/")' <<<"${PATHS:-[]}")
+          for id in $ids; do
+            file="repos/$GITHUB_REPOSITORY/contents/plugins/$id/version.txt?ref=$GITHUB_SHA"
+            version=$(gh api -H "Accept: application/vnd.github.raw" "$file" | tr -d '[:space:]') || version=""
+            plugins=$(jq -c --arg id "$id" --arg version "$version" \
+              '. + [{id: $id, tag: (if $version == "" then null else "plugin-\($id)-v\($version)" end)}]' <<<"$plugins")
+          done
           echo "plugins=$plugins" >>"$GITHUB_OUTPUT"
 
   # The release's APK. The signing secrets are the release-signing environment's; secrets: inherit passes them on, and

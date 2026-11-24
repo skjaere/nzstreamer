@@ -3,14 +3,14 @@
 and its plugins, read as text.
 
 Run: python3 -I -B -m unittest discover -s tools/release -p 'test_*.py'. Nothing here runs a workflow or calls GitHub:
-the workflows are read as the files they are, and release-please.yml's jq filter runs over invented samples of the
-release-please action's outputs (jq, which GitHub's runners have).
+the workflows are read as the files they are, and release-please.yml's plugins step runs over invented samples of the
+release-please action's paths_released, with a fake gh for GitHub's API (and jq, which GitHub's runners have).
 
 - release-please-config.json: every package but the root's is a plugin's folder, plugins/<id>, released as component
   plugin-<id> with the component in its tag (plugin-<id>-v1.2.3), and its path in the root's exclude-paths, so a commit
   that touches a plugin alone never bumps the app. With no plugin package (none is released before Sports A), it passes.
 - release-please.yml: the apk job still follows the root's release alone; the plugins output lists each released plugin
-  and its tag, and the plugins job runs release-plugin.yml once for each.
+  and its tag, built from paths_released alone, and the plugins job runs release-plugin.yml once for each.
 - release-plugin.yml: no test runs while the key is in the runner, the signed build makes the APK alone, and the release
   is published as a prerelease that is never Latest, checked after.
 - plugin-index.yml and CI's step "Published plugins against this build".
@@ -134,6 +134,18 @@ def uses(text):
     return re.findall(r"^\s*(?:- )?uses: (.+?)\s*$", text, re.M)
 
 
+# Answers gh api for a plugin's version.txt from $FAKE_VERSIONS (JSON, by id), as GitHub's contents API gives a file raw;
+# a 404 for an id in $FAKE_FAILS or one it doesn't know. Logs each call.
+FAKE_GH = r"""#!/bin/bash
+printf '%s\n' "gh $*" >> "$FAKE_LOG"
+[[ $1 == api && $2 == -H && $3 == "Accept: application/vnd.github.raw" ]] || exit 98
+[[ $4 =~ ^repos/$GITHUB_REPOSITORY/contents/plugins/([a-z0-9]+)/version\.txt\?ref=$GITHUB_SHA$ ]] || exit 97
+id=${BASH_REMATCH[1]}
+[[ " $FAKE_FAILS " != *" $id "* ]] || { echo "HTTP 404: Not Found" >&2; exit 1; }
+jq -je --arg id "$id" '.[$id]' <<<"$FAKE_VERSIONS" 2>/dev/null || { echo "HTTP 404: Not Found" >&2; exit 1; }
+"""
+
+
 # release-please's configuration, by the rules above.
 
 def config_problems(config, manifest, root):
@@ -244,10 +256,31 @@ class ReleasePleaseWorkflowTest(unittest.TestCase):
         self.assertEqual(1, len(found), "release-please's job has one step with id plugins")
         return found[0]
 
-    def jq_filter(self):
-        match = re.search(r"jq -c '(.*?)' <<<\"\$OUTPUTS\"", run(self.plugins_step()), re.S)
-        self.assertIsNotNone(match, "the plugins step runs jq -c '<filter>' <<<\"$OUTPUTS\"")
-        return match.group(1)
+    def run_plugins_step(self, paths, versions, fails=()):
+        """The plugins step's script as the runner runs it (bash -eo pipefail), its env given: paths_released as PATHS,
+        and a fake gh answering each plugin's version.txt at the commit from versions (not for an id in fails). Its
+        outputs and the gh calls it made."""
+        folder = tempfile.mkdtemp(prefix="release-please-step-")
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        os.makedirs(os.path.join(folder, "bin"))
+        script, output, log = (os.path.join(folder, name) for name in ("step.sh", "output", "gh.log"))
+        with open(script, "w") as f:
+            f.write(run(self.plugins_step()) + "\n")
+        gh = os.path.join(folder, "bin", "gh")
+        with open(gh, "w") as f:
+            f.write(FAKE_GH)
+        os.chmod(gh, 0o755)
+        open(output, "w").close()
+        env = {"PATH": os.path.join(folder, "bin") + os.pathsep + os.environ["PATH"], "PATHS": paths, "GH_TOKEN": "token",
+               "GITHUB_REPOSITORY": "skjaere/nzstreamer", "GITHUB_SHA": "c0ffee", "GITHUB_OUTPUT": output,
+               "FAKE_LOG": log, "FAKE_VERSIONS": json.dumps(versions), "FAKE_FAILS": " ".join(fails)}
+        done = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", script], env=env, capture_output=True,
+                              text=True, timeout=60)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        with open(output) as f:
+            lines = f.read().splitlines()
+        calls = read(log).splitlines() if os.path.exists(log) else []
+        return lines, calls
 
     def test_the_apk_job_still_follows_the_apps_release_alone(self):
         apk = self.jobs["apk"]
@@ -255,13 +288,19 @@ class ReleasePleaseWorkflowTest(unittest.TestCase):
         self.assertEqual("./.github/workflows/release-apk.yml", key(apk, "uses", 4))
         self.assertEqual("${{ needs.release-please.outputs.tag_name }}", key(apk, "tag", 6))
 
-    def test_the_plugins_output_is_built_from_the_actions_outputs(self):
+    def test_the_plugins_output_is_built_from_the_paths_released_alone(self):
         job = self.jobs["release-please"]
         self.assertEqual("${{ steps.plugins.outputs.plugins }}", key(job, "plugins", 6))
         ids = [key(step, "id", 8) for step in steps(job)]
         self.assertLess(ids.index("release"), ids.index("plugins"))
         step = self.plugins_step()
-        self.assertEqual("${{ toJSON(steps.release.outputs) }}", key(step, "OUTPUTS", 10))
+        # The action's other outputs carry release notes and the release pull request's body: in one environment
+        # variable they can pass Linux's 128 KiB for one, and fail the job, the app's apk job with it.
+        self.assertEqual("${{ steps.release.outputs.paths_released }}", key(step, "PATHS", 10))
+        self.assertEqual("${{ github.token }}", key(step, "GH_TOKEN", 10))
+        self.assertNotIn("toJSON(steps.release.outputs)", self.text)
+        env = [line.strip() for line in step if re.fullmatch(r" {10}[A-Z_]+: .*", line)]
+        self.assertEqual(2, len(env), env)
         self.assertIn('echo "plugins=$plugins" >>"$GITHUB_OUTPUT"', run(step))
         self.assertEqual("bash", key(step, "shell", 8))
 
@@ -277,35 +316,32 @@ class ReleasePleaseWorkflowTest(unittest.TestCase):
         self.assertEqual("inherit", key(job, "secrets", 4))
         self.assertEqual("write", key(job, "contents", 6))
 
-    def test_the_jq_filter_over_the_actions_outputs(self):
+    def test_the_plugins_step_over_the_paths_released(self):
         self.assertIsNotNone(shutil.which("jq"), "jq is needed, as GitHub's runners have it")
-        two = {
-            "releases_created": "true", "release_created": "true", "tag_name": "v0.2.0", "version": "0.2.0",
-            "paths_released": json.dumps([".", "plugins/kestrel", "plugins/quillmere"]),
-            "plugins/kestrel--release_created": "true", "plugins/kestrel--tag_name": "plugin-kestrel-v1.0.0",
-            "plugins/kestrel--version": "1.0.0", "plugins/quillmere--release_created": "true",
-            "plugins/quillmere--tag_name": "plugin-quillmere-v0.3.0", "prs_created": "false",
-        }
-        plugins_alone = {key: value for key, value in two.items() if key.startswith("plugins/")}
-        plugins_alone.update(releases_created="true", paths_released=json.dumps(["plugins/quillmere"]))
+        versions = {"kestrel": "1.0.0\n", "quillmere": "0.3.0\n"}
         cases = {
-            "two plugins with the app": (two, [{"id": "kestrel", "tag": "plugin-kestrel-v1.0.0"},
-                                               {"id": "quillmere", "tag": "plugin-quillmere-v0.3.0"}]),
-            "a plugin alone": (plugins_alone, [{"id": "quillmere", "tag": "plugin-quillmere-v0.3.0"}]),
-            "the app alone": ({"releases_created": "true", "release_created": "true", "tag_name": "v0.2.0",
-                               "paths_released": json.dumps(["."])}, []),
-            "no release": ({"releases_created": "false", "paths_released": "[]", "prs_created": "true"}, []),
-            "no paths_released at all": ({"prs_created": "true"}, []),
+            "two plugins with the app": (json.dumps([".", "plugins/kestrel", "plugins/quillmere"]),
+                                         [{"id": "kestrel", "tag": "plugin-kestrel-v1.0.0"},
+                                          {"id": "quillmere", "tag": "plugin-quillmere-v0.3.0"}]),
+            "a plugin alone": (json.dumps(["plugins/quillmere"]), [{"id": "quillmere", "tag": "plugin-quillmere-v0.3.0"}]),
+            "the app alone": (json.dumps(["."]), []),
+            "no release": ("[]", []),
+            "no paths_released at all": ("", []),
         }
-        jq_filter = self.jq_filter()
-        for case, (outputs, expected) in cases.items():
+        for case, (paths, expected) in cases.items():
             with self.subTest(case):
-                done = subprocess.run(["jq", "-c", jq_filter], input=json.dumps(outputs), capture_output=True, text=True,
-                                      timeout=60)
-                self.assertEqual(0, done.returncode, done.stderr)
-                self.assertEqual(expected, json.loads(done.stdout))
-                # One line: it goes into $GITHUB_OUTPUT as plugins=<list>.
-                self.assertEqual(1, len(done.stdout.strip().splitlines()))
+                lines, calls = self.run_plugins_step(paths, versions)
+                self.assertEqual(1, len(lines), lines)
+                self.assertTrue(lines[0].startswith("plugins="), lines)
+                self.assertEqual(expected, json.loads(lines[0][len("plugins="):]))
+                # Each version from the commit released, its raw file, one call a plugin.
+                self.assertEqual([f"gh api -H Accept: application/vnd.github.raw repos/skjaere/nzstreamer/contents/plugins/"
+                                  f"{plugin['id']}/version.txt?ref=c0ffee" for plugin in expected], calls)
+        # A version that can't be read leaves the plugin listed with no tag: its release-plugin.yml then fails loudly,
+        # and this job, which the app's apk job needs, doesn't.
+        lines, _ = self.run_plugins_step(json.dumps([".", "plugins/kestrel", "plugins/quillmere"]), versions, fails=("kestrel",))
+        self.assertEqual([{"id": "kestrel", "tag": None}, {"id": "quillmere", "tag": "plugin-quillmere-v0.3.0"}],
+                         json.loads(lines[0][len("plugins="):]))
 
 
 class ReleasePluginWorkflowTest(unittest.TestCase):
