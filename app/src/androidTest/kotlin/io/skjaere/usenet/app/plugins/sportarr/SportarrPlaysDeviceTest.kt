@@ -91,6 +91,9 @@ class SportarrPlaysDeviceTest {
     private val realFetch = PlaybackCoordinator.fetchNzb
     private val grabs = AtomicInteger()
     private var tmdb: FakeTmdb? = null
+
+    /** The sports indexer's counter, where a test put it in front of it. */
+    private var counting: IndexerCounter? = null
     private lateinit var nav: NavHostController
 
     @Before
@@ -107,6 +110,7 @@ class SportarrPlaysDeviceTest {
 
     @After
     fun restore() {
+        counting?.close()
         container.playback.cancel()
         PlaybackCoordinator.fetchNzb = realFetch
         try {
@@ -232,10 +236,12 @@ class SportarrPlaysDeviceTest {
     /**
      * Home's Up next names a session by the title its play stores ("Grand Prix of Kestrel · Race"), with no canary value on
      * Home; Resume plays its release again from the NZB the play kept, with the fake Sportarr answering a page in place of
-     * Sportarr: nothing of Sportarr's and no indexer is asked.
+     * Sportarr: nothing of Sportarr's is asked, no indexer searched (the sports indexer behind a counter) and no NZB fetched.
      */
     @Test
     fun homesUpNextResumesASessionWithSportarrOff() {
+        val counter = IndexerCounter().also { counting = it }
+        runBlocking { container.settings.saveIndexer(SportarrDevice.INDEXER_ID, SportarrDevice.INDEXER_NAME, counter.url, SPORTS_INDEXER_KEY) }
         val race = library.event(KESTREL_RACE)
         sportarr.forget(race.part())
         openPage(WEEKEND, "$FORMULA_1:r20")
@@ -245,6 +251,7 @@ class SportarrPlaysDeviceTest {
         compose.onNode(row).performScrollTo().performClick()
         val launch = launchOf(race.part())
         assertEquals("Grand Prix of Kestrel · Race", launch.watch.title)
+        assertTrue("the play's searches through the counter", counter.searches.get() > 0)
         // The launch taken here: no player opens. Kept as the player keeps a play stopped part-way.
         container.playback.cancel()
         runBlocking {
@@ -262,10 +269,12 @@ class SportarrPlaysDeviceTest {
         sportarr.switch("html")
         val asked = sportarr.counts().getValue("routes").jsonObject.mapValues { it.value.jsonPrimitive.int }
         val grabsBefore = grabs.get()
+        val searchesBefore = counter.searches.get()
         compose.onNode(resume).performClick()
         val again = launchOf(race.part())
         assertEquals("the same release, from its kept NZB", launch.release.nzbId, again.release.nzbId)
-        assertEquals("no indexer asked", grabsBefore, grabs.get())
+        assertEquals("no NZB fetched", grabsBefore, grabs.get())
+        assertEquals("no indexer searched", searchesBefore, counter.searches.get())
         assertEquals("nothing asked of Sportarr", asked, sportarr.counts().getValue("routes").jsonObject.mapValues { it.value.jsonPrimitive.int })
         container.playback.cancel()
     }
@@ -378,6 +387,9 @@ class SportarrPlaysDeviceTest {
         const val FORMULA_1 = 7
         const val VELLMAR_PRACTICE_1 = 1611
         const val KESTREL_RACE = 1605
+
+        /** The sports indexer's key, as the device tests save it. */
+        const val SPORTS_INDEXER_KEY = "fake-indexer-key"
         const val CARD = 1901
         const val BASKETBALL = 1501
         const val GENERIC = 2201
