@@ -46,8 +46,9 @@ object Tokens {
         for (i in text.indices) {
             val c = text[i]
             when {
-                c.isLetterOrDigit() || isMark(c) -> written.append(c)
+                // Before the letters: the modifier letter apostrophe is a letter to Unicode, yet is an apostrophe as the others are.
                 c in APOSTROPHES && written.isNotEmpty() && text.getOrNull(i + 1)?.isLetter() == true -> Unit
+                (c.isLetterOrDigit() && c !in APOSTROPHES) || isMark(c) -> written.append(c)
                 c == '&' || c == '@' -> {
                     flush()
                     tokens += Token(c.toString(), if (c == '&') "and" else "@", sep.toString())

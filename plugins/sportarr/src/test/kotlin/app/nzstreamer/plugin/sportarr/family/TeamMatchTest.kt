@@ -293,6 +293,7 @@ class TeamMatchTest {
             "Lantern.Bay.FC.Under.21.vs.Copper.Crown.United.Under.21.2026.11.21.720p.WEB.h264-ORCHID",
             "Lantern.Bay.FC.Youth.vs.Copper.Crown.United.Youth.2026.11.21.720p.WEB.h264-ORCHID",
             "Lantern.Bay.FC.Reserves.vs.Copper.Crown.United.Reserves.2026.11.21.720p.WEB.h264-ORCHID",
+            "Lantern Bay FC Women\u02BCs vs Copper Crown United Women\u02BCs 2026 11 21 720p",
         )
         assertEquals("", wrong(both.byId(1001), siblings.map { it to otherGame }, matcher))
         val women = both.byId(1102)
