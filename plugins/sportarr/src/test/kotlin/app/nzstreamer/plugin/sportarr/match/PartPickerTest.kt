@@ -112,6 +112,23 @@ class PartPickerTest {
     }
 
     @Test
+    fun `the largest of several files that carry the part's words, wherever it is listed`() {
+        val card = list.titled("UFC 999: Quessel vs. Halde")
+        val twoCopies = listOf(
+            video("UFC.999.Main.Card.720p.WEB.h264-ORCHID.mkv", 1_500_000_000),
+            video("UFC.999.Main.Card.1080p.WEB.h264-ORCHID.mkv", 6_000_000_000),
+            video("UFC.999.Main.Card.Short.mkv", 300_000_000),
+        )
+        assertEquals(1, picker(card, "main-card").pick(twoCopies))
+        val races = listOf(
+            video("Formula1.2026.Round20.Kestrel.Race.Short.mkv", 500_000_000),
+            video("Formula1.2026.Round20.Kestrel.Race.720p.mkv", 2_000_000_000),
+            video("Formula1.2026.Round20.Kestrel.Race.1080p.mkv", 6_000_000_000),
+        )
+        assertEquals(2, picker(session("Race")).pick(races))
+    }
+
+    @Test
     fun `the only video, samples aside, whatever it is named`() {
         val card = list.titled("UFC 999: Quessel vs. Halde")
         val obfuscated = listOf(
