@@ -11,10 +11,12 @@ import app.nzstreamer.plugin.sportarr.model.SportsEvent
  */
 class Matchers(sports: Sports) {
     private val teamGames = TeamMatch(sports)
+    private val motorsport = Motorsport(sports)
 
     /** [event]'s family's matcher; null for a family whose rules the plugin doesn't have yet. */
     fun of(event: SportsEvent): FamilyMatcher? = when (event.family) {
         Family.TeamGame -> teamGames
-        Family.Motorsport, Family.FightCard, Family.Generic -> null
+        Family.Motorsport -> motorsport
+        Family.FightCard, Family.Generic -> null
     }
 }

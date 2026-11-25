@@ -76,6 +76,24 @@ internal object Words {
     /** A cricket match's day. */
     const val ONE_DAY = "One day of the match"
 
+    /** The series, the year and the session, a running number (2026x20) in place of the place. */
+    const val RUNNING_NUMBER = "Only a running number, no place"
+
+    /** The series, the year and the session, and neither the place nor the round. */
+    const val NO_PLACE = "No place or round in the name"
+
+    /** The session's word in another language than English. */
+    const val NOT_IN_ENGLISH = "Session not named in English"
+
+    /** An endurance race, which has no runtime to check a release by. */
+    const val ENDURANCE = "Endurance race: you pick"
+
+    /** A testing session. */
+    const val TESTING = "Testing: you pick"
+
+    /** A round with several races, and a name that says none's number. */
+    const val NO_RACE_NUMBER = "No race number in the name"
+
     // The kinds a release is left out as, in the left-out line (L647).
 
     /** Another event's release: "other games", "other sessions", "other cards". */
