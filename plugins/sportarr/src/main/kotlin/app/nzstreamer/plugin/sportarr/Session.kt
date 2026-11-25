@@ -9,6 +9,7 @@ import app.nzstreamer.plugin.sportarr.source.Refresh
 import app.nzstreamer.plugin.sportarr.source.SportarrClient
 import app.nzstreamer.plugin.sportarr.ui.KeptView
 import app.nzstreamer.plugin.sportarr.ui.ListModel
+import app.nzstreamer.plugin.sportarr.ui.ListPlace
 import app.nzstreamer.plugin.sportarr.ui.PageModel
 import app.nzstreamer.plugin.sportarr.ui.Plays
 import app.nzstreamer.plugin.sportarr.ui.SetupModel
@@ -34,6 +35,12 @@ internal class Session(private val host: PluginHost) {
 
     /** Whether an address and a key are saved, as that changes: the tab is the setup until both are. */
     val setUp: Flow<Boolean> = combine(host.secrets.has(Connection.URL), host.secrets.has(Connection.KEY)) { url, key -> url && key }
+
+    /**
+     * Whether the list comes back where it was left: from a page or the settings it opened, or its activity made again;
+     * else, each time the tab opens, Recent (L645). In memory, as long as the plugin runs.
+     */
+    val listPlace = ListPlace()
 
     /** The setup form's model on a [tv] or a phone, [restored] where its page's activity was made again; a Save reads the list. */
     fun setup(tv: Boolean, restored: SetupModel.Restored?): SetupModel =

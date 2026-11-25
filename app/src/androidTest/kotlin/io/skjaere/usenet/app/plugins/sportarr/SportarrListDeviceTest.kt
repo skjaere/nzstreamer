@@ -191,6 +191,32 @@ class SportarrListDeviceTest {
         scrollTo(row(library.event(GAME).title))
     }
 
+    /**
+     * L645: the side opens on Recent each time the tab opens. Upcoming is kept on the way back from a page the list opened,
+     * and not after Home and the tab again.
+     */
+    @Test
+    fun theSideOpensOnRecentEachTimeTheTabOpens() {
+        sportarr.install()
+        openSports()
+        listShown()
+        compose.onNode(sideTab(UPCOMING)).performClick()
+        waitFor(sideTab(UPCOMING) and isSelected())
+
+        // A row's page, and Back: the list as it was left.
+        val first = anyRow.also { waitFor(it) }
+        compose.onAllNodes(first)[0].performClick()
+        compose.waitUntil(PLUGIN_WAIT_MS) { !exists(sideTab(UPCOMING)) }
+        compose.runOnIdle { nav.popBackStack() }
+        waitFor(sideTab(UPCOMING) and isSelected())
+
+        compose.onNode(barTab("Home")).performClick()
+        waitFor(hasText("Search your indexers") and hasClickAction())
+        compose.onNode(barTab(SPORTS)).performClick()
+        waitFor(sideTab(RECENT) and isSelected())
+        assertFalse("Upcoming kept across the tabs", exists(sideTab(UPCOMING) and isSelected()))
+    }
+
     /** Five rows a league a day, "+N more" opening the day in place, Show fewer closing it. */
     @Test
     fun moreOpensTheLeaguesDayAndShowFewerClosesIt() {
@@ -486,6 +512,10 @@ class SportarrListDeviceTest {
     /** An event's or weekend's row in a day, by its title: its start's time beside it, which Up next's rows don't have. */
     private fun row(title: String, substring: Boolean = false) = hasText(title, substring = substring) and
         SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button) and
+        SemanticsMatcher("with its time") { node -> node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { TIME.matches(it.text) } }
+
+    /** Any event's or weekend's row in a day. */
+    private val anyRow = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button) and
         SemanticsMatcher("with its time") { node -> node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { TIME.matches(it.text) } }
 
     private fun button(words: String) = hasText(words) and hasClickAction()
