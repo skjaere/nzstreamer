@@ -1,19 +1,31 @@
 package io.skjaere.usenet.app.plugins.sportarr
 
+import android.app.Activity
 import android.content.Context
 import android.os.SystemClock
+import android.view.ViewGroup
+import androidx.activity.ComponentActivity
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.ComposeTestRule
+import androidx.lifecycle.Lifecycle
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
+import io.skjaere.usenet.app.PlayerActivity
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.everyStep
+import io.skjaere.usenet.app.play.PlayState
+import io.skjaere.usenet.app.play.PlayerLaunch
 import io.skjaere.usenet.app.plugins.InstallRequest
 import io.skjaere.usenet.app.plugins.InstallResult
 import io.skjaere.usenet.app.plugins.InstalledPlugin
 import io.skjaere.usenet.app.plugins.PluginDevSecrets
+import io.skjaere.usenet.app.plugins.PluginListServer
 import io.skjaere.usenet.app.plugins.PluginMockSetup
 import io.skjaere.usenet.app.plugins.PluginStateRule
 import io.skjaere.usenet.app.plugins.PluginStatus
@@ -21,16 +33,23 @@ import io.skjaere.usenet.app.plugins.PluginStore
 import io.skjaere.usenet.app.plugins.Sha256
 import io.skjaere.usenet.app.plugins.await
 import io.skjaere.usenet.data.ItemMark
+import io.skjaere.usenet.data.LibraryRepository
 import io.skjaere.usenet.data.RememberedRelease
 import io.skjaere.usenet.data.WatchKey
 import io.skjaere.usenet.data.WatchKind
 import io.skjaere.usenet.data.WatchState
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import java.io.File
@@ -55,12 +74,20 @@ const val SPORTARR_ENTRY = "app.nzstreamer.plugin.sportarr.SportarrPlugin"
 /**
  * The Sportarr plugin's debug build in the test APK's assets (L657): sportarr.apk, version 0.1.0 (versionCode 10000, its
  * version.txt's by the plugin convention), signed as the app under test is, so a debug run trusts it through the test
- * signer (L622).
+ * signer (L622). Its name and summary are its listing.json's, as the release's list gives them.
  */
 object SportarrBuild {
     const val ASSET = "sportarr.apk"
     const val NAME = "Sportarr"
+    const val SUMMARY = "The leagues, teams and sessions you follow in your own Sportarr, in a Sports tab."
+    const val VERSION_NAME = "0.1.0"
     const val VERSION_CODE = 10_000L
+
+    /** The build as a plugin list offers it: its id, its listing's name and summary, its version as built. */
+    val listing = PluginListServer.Asset(ASSET, SPORTARR, NAME, SUMMARY, VERSION_NAME, VERSION_CODE)
+
+    /** The build's file as the test APK's assets hold it. */
+    fun bytes(): ByteArray = InstrumentationRegistry.getInstrumentation().context.assets.open(ASSET).use { it.readBytes() }
 
     /** The build as a download leaves it in cacheDir/plugins/.download: a writable file nothing has checked yet. */
     fun download(context: Context): File {
@@ -118,10 +145,11 @@ data class FakeClock(val anchor: LocalDate, val now: Instant)
  * registry and running ([install]), the fake Sportarr's address and key in its secrets ([connect]); the sports indexer as
  * the one indexer on and, for a play, the mock as the one provider ([indexers]); the fake held for the test ([hold], its
  * lease, as the debrid fake's: the phones share it); its switches set by [switch] and its clock read ([clock]); the
- * catalogue at the fake's anchor ([catalogue]); and watch rows of the plugin's parts written for a test ([progress],
- * [watched]). [restore] puts back what the test changed, whatever failed: the switches off, the indexer and the provider
- * as they were, the watch rows as they were, the fake given back. The plugin itself, its files and its secrets go with
- * the rule. [assumeUp] skips a test whose fakes aren't up.
+ * catalogue at the fake's anchor ([catalogue]); watch rows of the plugin's parts written for a test ([progress],
+ * [watched]); and a part's play, its launch taken from the coordinator ([launchOf]) and played in the player
+ * ([playAndKeep]). [restore] puts back what the test changed, whatever failed: the switches off, the indexer and the
+ * provider as they were, the watch rows as they were, the fake given back. The plugin itself, its files and its secrets
+ * go with the rule. [assumeUp] skips a test whose fakes aren't up.
  */
 class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
     private val container = plugins.context.container
@@ -267,6 +295,74 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
     /** [part]'s watch row as the library has it now. */
     fun state(part: String): WatchState? = runBlocking { rows.state(WatchKey.item(SPORTARR, part)).first() }
 
+    /**
+     * The coordinator's next launch for [part], taken here so no player opens on its own (the test's activity isn't
+     * MainActivity, which would open it); a failure as soon as the host's sheet shows one.
+     */
+    fun launchOf(part: String): PlayerLaunch = runBlocking {
+        val key = WatchKey.item(SPORTARR, part)
+        withTimeout(LAUNCH_WAIT_MS) {
+            merge(
+                container.playback.launches.filter { it.watchKey == key },
+                container.playback.state.filter { it is PlayState.Failed || it is PlayState.NoRelease }.map { throw AssertionError("didn't start: $it") },
+            ).first()
+        }
+    }
+
+    /**
+     * [launch] in the player (PlayerActivity, streaming from the mock), started from the test's activity [from] as the
+     * app starts one, over the app's own screens, which come back as it closes: stopped three quarters in, past Up next's
+     * minute and before watched, and closed. Then the row it saved for [part] as it closed, checked: a plugin's item, by
+     * the launch's title, where it stopped, with the release and the file that played. Never through ActivityScenario,
+     * whose launch clears the test's own task and the test's activity with it.
+     */
+    @androidx.annotation.OptIn(UnstableApi::class)
+    fun playAndKeep(part: String, launch: PlayerLaunch, from: Activity): WatchState {
+        val pressedAt = System.currentTimeMillis() - 60_000
+        onMain { from.startActivity(PlayerActivity.intent(from, launch)) }
+        val player = poll("the player in front") {
+            onMain { ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).filterIsInstance<PlayerActivity>().firstOrNull() }
+        }
+        val stoppedAt = try {
+            val duration = poll("the player to be ready") {
+                onMain { player.player?.takeIf { it.playbackState == Player.STATE_READY }?.duration?.takeIf { it > 0 } }
+            }
+            val target = duration * 3 / 4
+            assertTrue("the sample clip runs $duration ms: too short to be in progress", target >= LibraryRepository.MIN_RESUME_MS)
+            onMain {
+                player.player!!.seekTo(target)
+                player.player!!.pause()
+            }
+            poll("the player at ${target / 1000} s") { onMain { player.player?.currentPosition?.takeIf { abs(it - target) < 2_000 } } }
+        } finally {
+            if (!onMain { player.isDestroyed || player.isFinishing }) onMain { player.finish() }
+            poll("the player to close") { onMain { player.isDestroyed.takeIf { it } } }
+        }
+        val saved = poll("the player's save as it closed") { state(part)?.takeIf { it.lastPlayedAt >= pressedAt } }
+        assertEquals("kept as a plugin's item", WatchKind.Item, saved.kind)
+        assertEquals("by its title", launch.watch.title, saved.title)
+        assertTrue("where it stopped (${saved.positionMs} ms, $stoppedAt ms)", abs(saved.positionMs - stoppedAt) < 5_000)
+        assertFalse("in progress, not watched", saved.watched)
+        assertEquals("the release that played it", launch.release.nzbId, saved.release?.nzbId)
+        assertEquals("its file", launch.release.fileName, saved.release?.fileName)
+        return saved
+    }
+
+    private fun <T> onMain(block: () -> T): T {
+        var result: Result<T>? = null
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { result = runCatching(block) }
+        return result!!.getOrThrow()
+    }
+
+    private fun <T : Any> poll(what: String, timeoutMs: Long = PLAY_WAIT_MS, probe: () -> T?): T {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (true) {
+            probe()?.let { return it }
+            if (SystemClock.elapsedRealtime() > deadline) throw AssertionError("timed out waiting for $what")
+            Thread.sleep(100)
+        }
+    }
+
     /** The plugin's own folder for its files (L645): list.json and view.json. */
     val dataDir: File get() = File(File(plugins.root, SPORTARR), "data")
 
@@ -339,6 +435,12 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
         /** How long a test waits for another's turn at the fake. */
         private const val HOLD_WAIT_MS = 12 * 60_000L
 
+        /** A play's searches of the sports indexer, its stages one after the other, and the NZB's fetch. */
+        private const val LAUNCH_WAIT_MS = 90_000L
+
+        /** The player's opening of a release on the mock, a seek in it, and its save as it closes. */
+        private const val PLAY_WAIT_MS = 60_000L
+
         /** When the run's searching actions began, for [paceSearches]: the host's cap counts a minute's. */
         private val SEARCHES = ArrayDeque<Long>()
         private const val CAP_WINDOW_MS = 60_000L
@@ -385,6 +487,51 @@ internal class HoldKeeper(private val everyMs: Long, private val renew: () -> Un
         thread.join(waitMs)
     }
 }
+
+/**
+ * Waits for the test's activity to be back in front after the player closed, and says whether its content is gone.
+ * PlayerActivity's landscape lock turns a phone's screen, which can make the test's activity again as the screen turns
+ * back, without the content the test set. Settled is one [activity] resumed in [orientation], the one it had before the
+ * play, for a moment. A TV's screen doesn't turn.
+ */
+fun settledAfterThePlayer(activity: () -> ComponentActivity, orientation: Int): Boolean {
+    val instrumentation = InstrumentationRegistry.getInstrumentation()
+    val deadline = SystemClock.elapsedRealtime() + SETTLE_WAIT_MS
+    var seen: ComponentActivity? = null
+    var since = SystemClock.elapsedRealtime()
+    while (true) {
+        // Between one making and the next there is no activity to read, or only a destroyed one.
+        var saw = "no activity"
+        val now = try {
+            activity()
+        } catch (e: Exception) {
+            saw = "no activity: $e"
+            null
+        }
+        var resumed = false
+        var empty = false
+        now?.let { a ->
+            instrumentation.runOnMainSync {
+                resumed = !a.isDestroyed && a.lifecycle.currentState == Lifecycle.State.RESUMED && a.resources.configuration.orientation == orientation
+                empty = a.findViewById<ViewGroup>(android.R.id.content).childCount == 0
+                saw = "${a.lifecycle.currentState}, orientation ${a.resources.configuration.orientation} (before $orientation), destroyed ${a.isDestroyed}, " +
+                    "content ${if (empty) "gone" else "there"}, ${if (a === seen) "the same" else "another"} activity"
+            }
+        }
+        if (!resumed || now !== seen) {
+            seen = now
+            since = SystemClock.elapsedRealtime()
+        } else if (SystemClock.elapsedRealtime() - since >= SETTLED_MS) {
+            return empty
+        }
+        check(SystemClock.elapsedRealtime() < deadline) { "the test's activity never settled in front after the player: last $saw" }
+        Thread.sleep(100)
+    }
+}
+
+/** How long the test's activity may take to come back after the player, and how long it stays the same to settle. */
+private const val SETTLE_WAIT_MS = 30_000L
+private const val SETTLED_MS = 1_500L
 
 /**
  * Every text and description on [compose]'s screens, its sheets and menus too, that holds a canary value of the fake
