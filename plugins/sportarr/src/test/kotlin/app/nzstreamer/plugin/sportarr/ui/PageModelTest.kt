@@ -495,6 +495,19 @@ class PageModelTest {
     }
 
     @Test
+    fun `on a weekend's page, a later play of any of its sessions ends the line one of them left`() {
+        // Practice 3's Choose release found nothing at noon on Saturday; that evening the qualifying plays from the top button.
+        val noon = at("2026-11-21T12:00")
+        val kept = "No release at 12:00. Releases often appear a few hours after a session ends."
+        val nothing = mapOf("ev-000023:full" to noon)
+        val before = PageScreens.of(ListState.Ready(WEEKEND), Pages.WEEKEND, "2:r20", emptyMap(), nothing, null, at("2026-11-21T17:00"), LONDON, tv = false)
+        assertEquals(kept, assertIs<EventScreen>(before).kept)
+        val played = mapOf("ev-000024:full" to WatchInfo(1_102_000, 3_032_000, false, at("2026-11-21T19:30")))
+        val after = PageScreens.of(ListState.Ready(WEEKEND), Pages.WEEKEND, "2:r20", played, nothing, null, at("2026-11-21T20:00"), LONDON, tv = false)
+        assertNull(assertIs<EventScreen>(after).kept, "a release of the weekend played since")
+    }
+
+    @Test
     fun `Choose release no indexer answered shows the indexers' words for a moment, and keeps no line`() = runBlocking<Unit> {
         val paused = object : PluginSearch {
             override fun search(words: String, runtimeMinutes: Int?, fresh: Boolean): Flow<Found> =

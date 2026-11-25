@@ -339,14 +339,15 @@ internal object PageScreens {
 
     /**
      * The line the page keeps after Play or Choose release last found nothing for one of [items] ([nothing]), until a
-     * release of that part plays after it (the host's last play of it): the latest such, with when, and the event's noun.
+     * release of the page plays after it (the host's last play of any of its parts: a weekend that played on is past it):
+     * the latest such, with when, and the event's noun.
      */
-    private fun kept(items: List<Item>, watch: Map<String, WatchInfo>, nothing: Map<String, Instant>, zone: ZoneId): String? =
-        items.mapNotNull { item ->
-            val at = nothing[item.part.key] ?: return@mapNotNull null
-            val played = watch[item.part.key]?.lastPlayedAt
-            (item to at).takeIf { played == null || played.isBefore(at) }
-        }.maxByOrNull { it.second }?.let { (item, at) -> Words.NoRelease.kept(Times.time(at, zone), Nouns.event(item.event)) }
+    private fun kept(items: List<Item>, watch: Map<String, WatchInfo>, nothing: Map<String, Instant>, zone: ZoneId): String? {
+        val played = items.mapNotNull { watch[it.part.key]?.lastPlayedAt }.maxOrNull()
+        return items.mapNotNull { item -> nothing[item.part.key]?.let { item to it } }
+            .filter { (_, at) -> played == null || played.isBefore(at) }
+            .maxByOrNull { it.second }?.let { (item, at) -> Words.NoRelease.kept(Times.time(at, zone), Nouns.event(item.event)) }
+    }
 
     private fun progress(info: WatchInfo): Float? = if (info.durationMs > 0) (info.positionMs.toFloat() / info.durationMs).coerceIn(0f, 1f) else null
 }
