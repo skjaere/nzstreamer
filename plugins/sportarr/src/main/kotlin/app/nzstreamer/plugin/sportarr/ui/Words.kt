@@ -56,6 +56,26 @@ internal object Words {
     /** The play's failure when a release holds no file for the part: "No file for the Main Card in this release". */
     fun noFile(label: String): String = "No file for the $label in this release"
 
+    // Why a release is a possible match rather than Play's (L648-L651), 60 characters at most, the host's rule.
+
+    /** Both teams, no date, and they meet once in the list. */
+    const val NO_DATE = "No date in the name"
+
+    /** Two upper-case codes in place of the teams' names. */
+    const val TEAM_CODES = "Team codes only"
+
+    /** One team, the date and the league. */
+    const val ONE_TEAM = "Only one team named"
+
+    /** A double header's name with no game number. */
+    const val NO_GAME_NUMBER = "No game number"
+
+    /** A week number where the game's round is unknown. */
+    const val WEEK_NO_DATE = "A week number, no date"
+
+    /** A cricket match's day. */
+    const val ONE_DAY = "One day of the match"
+
     // The kinds a release is left out as, in the left-out line (L647).
 
     /** Another event's release: "other games", "other sessions", "other cards". */

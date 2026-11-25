@@ -116,7 +116,11 @@ data class Sports(
 }
 
 /** A league that counts (L642): Sportarr's id, its name and sport, and its other names, which motorsport reads (L649). */
-data class League(val id: Int, val name: String, val sport: String?, val alternateName: String?)
+data class League(val id: Int, val name: String, val sport: String?, val alternateName: String?) {
+    /** Its other names one by one: Sportarr's [alternateName] holds several, split at commas, pipes or slashes. */
+    val alternateNames: List<String>
+        get() = alternateName.orEmpty().split(',', '|', '/').map(String::trim).filter(String::isNotEmpty)
+}
 
 /** What the list shows as one row: an event alone, or a motorsport weekend's sessions. */
 sealed interface Listed {
