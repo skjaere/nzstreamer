@@ -279,9 +279,10 @@ private class Reader(private val name: String, private val context: NameContext)
         val packs = find(Words.packs).map { it.first }
         val parts = find(if (context.show) Words.showParts else Words.parts).map { it.first }
         val sessionWords = find(Words.sessions)
-        // "Race 2" is a session and a race's number at once.
+        // "Race 2" is a session and a race's number at once; "Test Day 2" a testing session and a test match's day.
         sessionWords.forEach { (entry, number, at) ->
             if (entry.kind == SessionKind.Race && number != null) numbered[at] = Numbered(NumberWord.Race, number)
+            if (entry.kind == SessionKind.Testing && number != null && all[at + 1].word == DAY) numbered[at + 1] = Numbered(NumberWord.Day, number)
         }
         readNumbered()
         val cardNumbers = readCardNumbers()
@@ -682,6 +683,7 @@ private class Reader(private val name: String, private val context: NameContext)
         val YEARS = 1900..2099
         val PLAIN_JOINS = setOf(".", "_")
         val DAY_MONTH_JOINS = setOf(".", "_", "/")
+        const val DAY = "day"
 
         /** A colon, an en dash and an em dash: a score's joins, never a date's. */
         const val NEVER_IN_DATES = ":\u2013\u2014"

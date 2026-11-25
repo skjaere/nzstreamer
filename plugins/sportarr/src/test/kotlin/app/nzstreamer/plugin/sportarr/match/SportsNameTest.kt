@@ -284,6 +284,8 @@ class SportsNameTest {
             Row("Kestrel.Cup.2026.Lantern.Bay.FC.vs.Copper.Crown.United.Leg.2.1080p.WEB.h264-WREN", "leg 2"),
             Row("Formula1.2026.Round20.Kestrel.Race.2.1080p.WEB.h264-WREN", "round 20, race 2"),
             Row("Kestrel.vs.Saltmere.2026.Day.3.1080p.WEB.h264-WREN", "day 3"),
+            // A test match's day is a day, as motorsport's test day is a session.
+            Row("Kestrel.vs.Saltmere.2026.1st.Test.Day.3.1080p.WEB.h264-WREN", "day 3"),
             Row("Velmora.Monday.Brawl.2026.11.23.Part.1.720p.WEB.h264-WREN", "part 1"),
             Row("Kestrel.Endurance.Series.2026.6.Hours.of.Oskelund.Session.2.1080p.WEB.h264-WREN", "session 2"),
             Row("Velmora.Iron.Crown.Night.2.2026.1080p.WEB.h264-KESTREL", "night 2"),

@@ -369,6 +369,8 @@ class TeamMatchTest {
         val event = match.byId(1801)
         val day = "Kestrel.Cup.2026.11.21.Saltmere.City.vs.Lowmarsh.Rovers.Day.2.1080p.WEB.h264-KESTREL"
         assertEquals(offered("One day of the match"), judge(event, day, matcher))
+        val testDay = "Kestrel.Cup.2026.11.22.Saltmere.City.vs.Lowmarsh.Rovers.1st.Test.Day.2.1080p.WEB.h264-KESTREL"
+        assertEquals(offered("One day of the match"), judge(event, testDay, matcher), "a test match's day")
         assertEquals(accepted, judge(event, "Kestrel.Cup.2026.11.21.Saltmere.City.vs.Lowmarsh.Rovers.1080p.WEB.h264-KESTREL", matcher))
         val soccer = "Premier.League.2026.11.21.Lantern.Bay.FC.vs.Copper.Crown.United.Day.2.1080p.WEB.h264-KESTREL"
         assertEquals(accepted, judge(lbf, soccer), "a day of another sport's game is the game")
