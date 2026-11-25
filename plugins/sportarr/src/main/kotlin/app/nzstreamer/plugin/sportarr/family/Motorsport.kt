@@ -22,6 +22,7 @@ import app.nzstreamer.plugin.sportarr.source.Families
 import app.nzstreamer.plugin.sportarr.ui.Words
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
+import app.nzstreamer.plugin.sportarr.match.Words as NameWords
 
 /**
  * Motorsport sessions (L649), each practice, qualifying, sprint and race its own event in Sportarr. A release name is a
@@ -71,7 +72,8 @@ class Motorsport(private val sports: Sports) : FamilyMatcher {
         val session = event.session ?: return OTHER_SESSION
         val words = name.identity.map { it.word }
         val ours = seriesOf(event.league).folded.flatMap { occurrences(words, it) }
-        if (ours.isEmpty() || anotherSeries(event.league, words, ours) || anotherNumber(event.league, words)) return OTHER_SESSION
+        val another = anotherSeries(event.league, words, ours) || anotherNumber(event.league, words) || anotherClass(event.league, words, ours)
+        if (ours.isEmpty() || another) return OTHER_SESSION
         if (!seasonYear(name, event)) return OTHER_SESSION
         val round = event.roundNumber
         val rounds = name.numbered(NumberWord.Round)
@@ -136,6 +138,21 @@ class Motorsport(private val sports: Sports) : FamilyMatcher {
         (0..words.size - form.size).any { at ->
             form.indices.all { it == form.lastIndex || words[at + it] == form[it] } &&
                 numbered(words[at + form.lastIndex])?.let { (l, n) -> l == letters && n.length <= 2 && n.trimStart('0') != number.trimStart('0') } == true
+        }
+    }
+
+    /**
+     * A class run beside [league]'s series, under its banner: outside the series' own forms ([ours]), a word of two or more
+     * letters and a one- or two-digit number whose letters begin a word of the series' forms ("Moto2" or "Moto3" in a
+     * MotoGP name), a word a number follows aside ("Round19", "Race2").
+     */
+    private fun anotherClass(league: League, words: List<String>, ours: List<IntRange>): Boolean {
+        val formWords = seriesOf(league).folded.flatten().toSet()
+        return words.withIndex().any { (at, word) ->
+            if (word in formWords || ours.any { at in it }) return@any false
+            val (letters, number) = numbered(word) ?: return@any false
+            val numberWord = letters in NameWords.numberWords || NameWords.sessions.startingWith(letters).isNotEmpty()
+            letters.length >= 2 && number.length <= 2 && !numberWord && formWords.any { it.startsWith(letters) }
         }
     }
 

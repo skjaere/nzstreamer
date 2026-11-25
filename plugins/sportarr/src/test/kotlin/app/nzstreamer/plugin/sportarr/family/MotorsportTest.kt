@@ -254,6 +254,16 @@ class MotorsportTest {
         assertEquals("", wrong(race, rows.map { it to otherSession }))
         assertEquals(accepted, judge(list.byId(1615), "Formula1.2026.Vellmar.Grand.Prix.Race.1080p.WEB.h264-WREN"))
 
+        // A class run beside the series, under its banner: the series' word with another number glued on.
+        val oskelund = list.byId(1704)
+        val classes = listOf(
+            "MotoGP.2026.Round19.Oskelund.Moto2.Race.1080p.WEB.h264-WREN" to otherSession,
+            "MotoGP.2026.Oskelund.Moto3.Race.720p.WEB.h264-WREN" to otherSession,
+            "MotoGP.2026.Round19.Oskelund.Race.1080p.WEB.h264-WREN" to accepted,
+            "MotoGP.2026.Rd19.Oskelund.Race2.1080p.WEB.h264-WREN" to accepted,
+        )
+        assertEquals("", wrong(oskelund, classes))
+
         // A followed series whose name holds this one's form.
         val academy = KeptLeague(10, "F1 Academy", "Motorsport")
         val both = sports(
