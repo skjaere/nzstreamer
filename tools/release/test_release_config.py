@@ -299,11 +299,13 @@ class ReleaseConfigTest(unittest.TestCase):
     def test_the_commit_search_reaches_back_to_the_apps_last_release(self):
         # Past the app's last release, its oldest changes would be left out of its notes. While a package has no release
         # yet (Sportarr's, until its first), release-please reads that many commits on every run, whatever it finds.
+        # This runs in CI too, whose checkout carries the full history and tags: CI turns red once the commits since the
+        # app's last release reach commit-search-depth, and the fix then is to release the app or raise the depth.
         tag = "v" + self.manifest["."]
         done = subprocess.run(["git", "-C", ROOT, "rev-list", "--count", f"{tag}..HEAD"], capture_output=True, text=True,
                               timeout=60)
         if done.returncode != 0:
-            self.skipTest(f"no {tag} in this checkout (CI's is shallow)")
+            self.skipTest(f"no {tag} in this checkout")
         since = int(done.stdout)
         depth = self.config.get("commit-search-depth", RELEASE_PLEASES_COMMIT_SEARCH)
         self.assertLess(since, depth, f"{since} commits since {tag}, but release-please reads the newest {depth} alone")
