@@ -96,7 +96,7 @@ class SportarrLoadDeviceTest {
     @Test
     fun itInstallsFromTheAssetsThroughTheAppsRegistryAndLoadsInThisProcess() {
         val listed = installed()
-        assertEquals("its version, 0.1.0's code", SportarrBuild.VERSION_CODE, listed.versionCode)
+        assertEquals("its version, as built", SportarrBuild.versionCode, listed.versionCode)
         assertEquals("its name, as the list gives it", SportarrBuild.NAME, listed.name)
         val instance = (listed.status as PluginStatus.Running).instance
         val entry = instance.plugin.javaClass

@@ -65,14 +65,15 @@ import java.util.Locale
 /**
  * The real Sportarr plugin end to end on a real TV (tv36; L657), by remote, as SportarrEndToEndDeviceTest takes it on a
  * phone: its debug build, sportarr.apk, offered by a plugin list of the test's own on this device's loopback address
- * ([PluginListServer]) with its SHA-256, versionCode 10000, versionName 0.1.0 and its listing's name and summary.
- * Settings › Plugins by the rail: its name, summary and "Version 0.1.0 · <size>", Install focused; Install to its end,
- * Open Sports focused; Open Sports, the setup's first focus on the address, the rail with Sports after Discover; the
- * address and key typed, Test against the fake Sportarr, Save focused, Save; the list, All focused; Down to a game's row,
- * OK, its page with Play focused; (mock) Play, a release the plugin accepts from the sports indexer, played in the player
- * through the mock and stopped part-way; Home by the rail, its Up next card for the game focused first; and Remove on its
- * card in Settings › Plugins, its question with Cancel first: the rail without Sports, the plugin's files and both its
- * secrets gone, the game's watch row kept, the card's Install focused. Something is focused after every step.
+ * ([PluginListServer]) with its SHA-256, its version as built (0.1.0, versionCode 10000, until its first release) and
+ * its listing's name and summary. Settings › Plugins by the rail: its name, summary and "Version <its version> ·
+ * <size>", Install focused; Install to its end, Open Sports focused; Open Sports, the setup's first focus on the
+ * address, the rail with Sports after Discover; the address and key typed, Test against the fake Sportarr, Save
+ * focused, Save; the list, All focused; Down to a game's row, OK, its page with Play focused; (mock) Play, a release
+ * the plugin accepts from the sports indexer, played in the player through the mock and stopped part-way; Home by the
+ * rail, its Up next card for the game focused first; and Remove on its card in Settings › Plugins, its question with
+ * Cancel first: the rail without Sports, the plugin's files and both its secrets gone, the game's watch row kept, the
+ * card's Install focused. Something is focused after every step.
  *
  * The settings, the watch row and the fake's switches the test changes are put back as they were; PluginStateRule takes
  * the plugin out whatever the outcome. TMDB is a strict fake: what Home asks of other titles is refused, never sent.
@@ -145,7 +146,7 @@ class SportarrEndToEndTvTest {
         val accepted = library.found(GAME, CatalogueEvent.FULL, "accept").map { it.first }.filter { it.whole }.map { it.name }
         sportarr.forget(game.part())
         val size = SportarrBuild.bytes().size
-        server.list(Listed(SportarrBuild.listing, SportarrBuild.VERSION_NAME))
+        server.list(Listed(SportarrBuild.listing, SportarrBuild.versionName))
         showTheApp()
         val activity = compose.activity
 
@@ -154,7 +155,7 @@ class SportarrEndToEndTvTest {
         remote.waitForFocus("Install", PLUGIN_WAIT_MS)
         assertTrue("its name", exists(hasText(SportarrBuild.NAME)))
         assertTrue("its summary", exists(hasText(SportarrBuild.SUMMARY)))
-        assertTrue("its version and size", exists(hasText("Version ${SportarrBuild.VERSION_NAME} · ${megabytes(size)} MB")))
+        assertTrue("its version and size", exists(hasText("Version ${SportarrBuild.versionName} · ${megabytes(size)} MB")))
 
         // Install to its end: Open Sports focused, nothing of the debug build's own Sportarr stored.
         check(!PluginDevSecrets.seeding) { "The runner left the plugins' dev seeding on: an install would store local.properties' values" }
@@ -162,7 +163,7 @@ class SportarrEndToEndTvTest {
         remote.waitForFocus("Open $SPORTS", PLUGIN_WAIT_MS)
         assertTrue(exists(hasText("Installed. $SPORTS is now a tab after ${pluginTabsFollow(FormFactor.Tv)}.")))
         val installed = listed("running") { it.status is PluginStatus.Running }
-        assertEquals("the listed version", SportarrBuild.VERSION_CODE to SportarrBuild.VERSION_NAME, installed.versionCode to installed.versionName)
+        assertEquals("the listed version", SportarrBuild.versionCode to SportarrBuild.versionName, installed.versionCode to installed.versionName)
         assertSame("the same activity", activity, compose.activity)
         assertFalse("an address or a key stored by the install", stored("url") || stored("key"))
 
@@ -245,7 +246,7 @@ class SportarrEndToEndTvTest {
             assertTrue("the hub's row", INSTALLED_ROW in remote.pressUntil(KeyEvent.KEYCODE_DPAD_DOWN, "Plugins"))
         }
         remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
-        waitFor(hasText("Version ${SportarrBuild.VERSION_NAME} · updates by itself"))
+        waitFor(hasText("Version ${SportarrBuild.versionName} · updates by itself"))
         // Its card's Settings, never the rail's item of the same name.
         waitForFocusOn(button("Settings"), "its card's Settings")
 

@@ -21,6 +21,7 @@ import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.everyStep
 import io.skjaere.usenet.app.play.PlayState
 import io.skjaere.usenet.app.play.PlayerLaunch
+import io.skjaere.usenet.app.plugins.AndroidArchiveReader
 import io.skjaere.usenet.app.plugins.InstallRequest
 import io.skjaere.usenet.app.plugins.InstallResult
 import io.skjaere.usenet.app.plugins.InstalledPlugin
@@ -72,19 +73,36 @@ const val SPORTARR = "sportarr"
 const val SPORTARR_ENTRY = "app.nzstreamer.plugin.sportarr.SportarrPlugin"
 
 /**
- * The Sportarr plugin's debug build in the test APK's assets (L657): sportarr.apk, version 0.1.0 (versionCode 10000, its
- * version.txt's by the plugin convention), signed as the app under test is, so a debug run trusts it through the test
- * signer (L622). Its name and summary are its listing.json's, as the release's list gives them.
+ * The Sportarr plugin's debug build in the test APK's assets (L657): sportarr.apk, signed as the app under test is, so
+ * a debug run trusts it through the test signer (L622). Its name and summary are its listing.json's, as the release's
+ * list gives them; its version is the build's own, as Android reads it from the file ([versionName], [versionCode]).
  */
 object SportarrBuild {
     const val ASSET = "sportarr.apk"
     const val NAME = "Sportarr"
     const val SUMMARY = "The leagues, teams and sessions you follow in your own Sportarr, in a Sports tab."
-    const val VERSION_NAME = "0.1.0"
-    const val VERSION_CODE = 10_000L
+
+    /**
+     * The build's version as Android reads it from the file: version.txt's by the plugin convention, 0.1.0 and
+     * versionCode 10000 until the plugin's first release. Never written here: release-please's release pull request
+     * writes version.txt (L658), and a number held here would refuse every install after it.
+     */
+    private val built: Pair<String, Long> by lazy {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val file = File(context.cacheDir, "sportarr-version.apk")
+        try {
+            file.writeBytes(bytes())
+            val facts = checkNotNull(AndroidArchiveReader(context.packageManager).read(file)) { "$ASSET doesn't read as an APK" }
+            checkNotNull(facts.versionName) { "$ASSET has no versionName" } to facts.versionCode
+        } finally {
+            file.delete()
+        }
+    }
+    val versionName: String get() = built.first
+    val versionCode: Long get() = built.second
 
     /** The build as a plugin list offers it: its id, its listing's name and summary, its version as built. */
-    val listing = PluginListServer.Asset(ASSET, SPORTARR, NAME, SUMMARY, VERSION_NAME, VERSION_CODE)
+    val listing: PluginListServer.Asset get() = PluginListServer.Asset(ASSET, SPORTARR, NAME, SUMMARY, versionName, versionCode)
 
     /** The build's file as the test APK's assets hold it. */
     fun bytes(): ByteArray = InstrumentationRegistry.getInstrumentation().context.assets.open(ASSET).use { it.readBytes() }
@@ -98,7 +116,7 @@ object SportarrBuild {
     }
 
     /** What the plugin list would say of this build: its id, name and version, and its file's [sha256]. */
-    fun request(sha256: String) = InstallRequest(SPORTARR, NAME, VERSION_CODE, sha256)
+    fun request(sha256: String) = InstallRequest(SPORTARR, NAME, versionCode, sha256)
 
     private const val DOWNLOADS = ".download"
 }

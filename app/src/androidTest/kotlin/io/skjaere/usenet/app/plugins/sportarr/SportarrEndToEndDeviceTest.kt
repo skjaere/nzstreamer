@@ -27,7 +27,6 @@ import io.skjaere.usenet.app.FakeTmdb
 import io.skjaere.usenet.app.HomeContentShown
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.pluginTabsFollow
-import io.skjaere.usenet.app.plugins.AndroidArchiveReader
 import io.skjaere.usenet.app.plugins.InstalledPlugin
 import io.skjaere.usenet.app.plugins.PLUGIN_WAIT_MS
 import io.skjaere.usenet.app.plugins.PluginDevSecrets
@@ -61,14 +60,15 @@ import java.util.Locale
 /**
  * The real Sportarr plugin end to end on a phone (L657): its debug build, sportarr.apk, offered by a plugin list of the
  * test's own on this device's loopback address ([PluginListServer], read through PluginSource's test source as GitHub's
- * would be) with its SHA-256, versionCode 10000, versionName 0.1.0 and its listing's name and summary, as its release
- * would list it. Settings › Plugins shows its name, summary and "Version 0.1.0 · <size>"; Install, through the app's own
- * list, installer and registry, in the app's own shell and graph (AppNav), with nothing made again and nothing of the
- * debug build's own Sportarr settings stored; "Installed. Sports is now a tab after Discover."; Open Sports, the setup's
- * first screen; Test against the fake Sportarr and Save; the list; (mock) a game's page from its row and its Play, a
- * release the plugin accepts from the sports indexer, played in the player through the mock and stopped part-way; Home's
- * Up next with it; and Remove in Settings › Plugins: the tab, the plugin's files and both its secrets gone, the game's
- * watch row kept, Home's Up next with it still. And M-size: sportarr.apk's size, through the instrumentation's status.
+ * would be) with its SHA-256, its version as built (0.1.0, versionCode 10000, until its first release) and its
+ * listing's name and summary, as its release would list it. Settings › Plugins shows its name, summary and "Version
+ * <its version> · <size>"; Install, through the app's own list, installer and registry, in the app's own shell and
+ * graph (AppNav), with nothing made again and nothing of the debug build's own Sportarr settings stored; "Installed.
+ * Sports is now a tab after Discover."; Open Sports, the setup's first screen; Test against the fake Sportarr and Save;
+ * the list; (mock) a game's page from its row and its Play, a release the plugin accepts from the sports indexer,
+ * played in the player through the mock and stopped part-way; Home's Up next with it; and Remove in Settings › Plugins:
+ * the tab, the plugin's files and both its secrets gone, the game's watch row kept, Home's Up next with it still. And
+ * M-size: sportarr.apk's size, through the instrumentation's status.
  *
  * The settings, the watch row and the fake's switches the test changes are put back as they were; PluginStateRule takes
  * the plugin out whatever the outcome. TMDB is a strict fake: what Home asks of other titles is refused, never sent.
@@ -136,8 +136,8 @@ class SportarrEndToEndDeviceTest {
         val accepted = library.found(GAME, CatalogueEvent.FULL, "accept").map { it.first }.filter { it.whole }.map { it.name }
         sportarr.forget(game.part())
         val size = SportarrBuild.bytes().size
-        theListedBuildIsTheAssetsOwn()
-        server.list(Listed(SportarrBuild.listing, SportarrBuild.VERSION_NAME))
+        theBuildsCodeIsItsVersionsByTheConvention()
+        server.list(Listed(SportarrBuild.listing, SportarrBuild.versionName))
         showTheApp()
         val activity = compose.activity
         val app = context.container
@@ -146,15 +146,15 @@ class SportarrEndToEndDeviceTest {
         openPlugins()
         waitFor(hasText(SportarrBuild.SUMMARY))
         assertTrue("its name", exists(hasText(SportarrBuild.NAME)))
-        assertTrue("its version and size", exists(hasText("Version ${SportarrBuild.VERSION_NAME} · ${megabytes(size)} MB")))
+        assertTrue("its version and size", exists(hasText("Version ${SportarrBuild.versionName} · ${megabytes(size)} MB")))
 
         // Install, to its end: its tab, with nothing made again and nothing of the debug build's own Sportarr stored.
         check(!PluginDevSecrets.seeding) { "The runner left the plugins' dev seeding on: an install would store local.properties' values" }
         press("Install")
         waitFor(hasText("Installed. $SPORTS is now a tab after ${pluginTabsFollow(FormFactor.Phone)}."))
         val installed = listed("running") { it.status is PluginStatus.Running }
-        assertEquals("the listed version", SportarrBuild.VERSION_CODE to SportarrBuild.VERSION_NAME, installed.versionCode to installed.versionName)
-        assertTrue("its file from its release's address", server.path(SportarrBuild.VERSION_NAME, SPORTARR) in server.requests)
+        assertEquals("the listed version", SportarrBuild.versionCode to SportarrBuild.versionName, installed.versionCode to installed.versionName)
+        assertTrue("its file from its release's address", server.path(SportarrBuild.versionName, SPORTARR) in server.requests)
         assertSame("the same activity", activity, compose.activity)
         assertSame("the same app", app, context.container)
         assertFalse("an address or a key stored by the install", stored("url") || stored("key"))
@@ -195,7 +195,7 @@ class SportarrEndToEndDeviceTest {
 
         // Remove in Settings › Plugins: the tab, its files and both its secrets gone, the game's watch row kept.
         openPlugins()
-        waitFor(hasText("Version ${SportarrBuild.VERSION_NAME} · updates by itself"))
+        waitFor(hasText("Version ${SportarrBuild.versionName} · updates by itself"))
         press("Remove")
         waitFor(hasText(PluginsPage.removeQuestion(SportarrBuild.NAME)))
         compose.onAllNodes(hasText("Remove") and hasClickAction()).onLast().performClick()
@@ -227,17 +227,13 @@ class SportarrEndToEndDeviceTest {
         assertTrue("sportarr.apk in the assets", size > 0)
     }
 
-    /** What the list says of the build is what the build is: its versionName and versionCode as Android reads them. */
-    private fun theListedBuildIsTheAssetsOwn() {
-        val file = File(context.cacheDir, "sportarr-end-to-end.apk")
-        try {
-            file.writeBytes(SportarrBuild.bytes())
-            val facts = AndroidArchiveReader(context.packageManager).read(file) ?: throw AssertionError("sportarr.apk doesn't read as an APK")
-            assertEquals("the build's versionName", SportarrBuild.VERSION_NAME, facts.versionName)
-            assertEquals("the build's versionCode", SportarrBuild.VERSION_CODE, facts.versionCode)
-        } finally {
-            file.delete()
-        }
+    /**
+     * The list offers the build's own version, read from the file: its versionCode is its versionName's by the plugin
+     * convention, ((MAJOR * 100 + MINOR) * 100 + PATCH) * 100, as the release's workflow builds it from version.txt.
+     */
+    private fun theBuildsCodeIsItsVersionsByTheConvention() {
+        val (major, minor, patch) = SportarrBuild.versionName.split('.').map(String::toLong)
+        assertEquals("the build's versionCode, by its versionName ${SportarrBuild.versionName}", ((major * 100 + minor) * 100 + patch) * 100, SportarrBuild.versionCode)
     }
 
     /** The list's size in MB with one decimal, as the Plugins page's card gives it. */
