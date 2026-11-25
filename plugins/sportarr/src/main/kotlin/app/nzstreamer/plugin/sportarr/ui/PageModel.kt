@@ -413,11 +413,16 @@ internal class PageModel(
             }
     }
 
-    /** Plays [part] (its key), handing it to the host. */
-    fun play(part: String) {
-        val (sports, event, found) = find(part) ?: return
+    /**
+     * Plays [part] (its key), handing it to the host; true when it did. Not while Choose release searches: its list would
+     * open over the player, and both would ask the indexers.
+     */
+    fun play(part: String): Boolean {
+        if (searching.value != null) return false
+        val (sports, event, found) = find(part) ?: return false
         unanswered.value = null
         plays.play(sports, event, found)
+        return true
     }
 
     /**

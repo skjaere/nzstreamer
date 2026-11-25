@@ -454,6 +454,30 @@ class PageModelTest {
     }
 
     @Test
+    fun `while Choose release searches, Play and a part's row play nothing`() = runBlocking<Unit> {
+        val gate = CompletableDeferred<Unit>()
+        val play = RecordingPlay()
+        val plays = Plays(play, MutableWatch(), GatedSearch(gate), this, { MONDAY }, EmptyCoroutineContext)
+        val model = PageModel(MutableStateFlow(ListState.Ready(WEEKEND)), MutableWatch(), plays, Pages.WEEKEND, "2:r20", tv = false, { MONDAY }, { LONDON }, EmptyCoroutineContext)
+        val running = launch { model.run() }
+        model.next { true }
+
+        val choosing = launch { model.choose("ev-000025:full", RecordingNav()) }
+        model.next { screen -> (screen as EventScreen).parts.any { it.searching } }
+        model.play("ev-000025:full")
+        model.play("ev-000021:full")
+        repeat(10) { kotlinx.coroutines.yield() }
+        assertEquals(emptyList(), play.items, "nothing handed to the host while Choose release searches")
+
+        gate.complete(Unit)
+        choosing.join()
+        model.play("ev-000025:full")
+        withTimeout(WAIT) { while (play.items.isEmpty()) kotlinx.coroutines.yield() }
+        assertEquals("ev-000025:full", play.items.single().key, "once it is done, Play plays")
+        running.cancelAndJoin()
+    }
+
+    @Test
     fun `Play finding nothing leaves the page's line until a release of it plays`() = runBlocking<Unit> {
         val play = RecordingPlay()
         val watch = MutableWatch()

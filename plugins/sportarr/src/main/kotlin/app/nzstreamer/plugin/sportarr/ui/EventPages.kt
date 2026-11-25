@@ -125,8 +125,7 @@ internal fun EventPage(session: Session, play: PluginPlay, nav: PluginNav, page:
  */
 internal class PageActions(private val model: PageModel, private val nav: PluginNav, private val scope: CoroutineScope, val focus: ReturnFocus) {
     fun play(part: String, from: String) {
-        focus.leaving(from)
-        model.play(part)
+        if (model.play(part)) focus.leaving(from)
     }
 
     fun choose(part: String, from: String) {
