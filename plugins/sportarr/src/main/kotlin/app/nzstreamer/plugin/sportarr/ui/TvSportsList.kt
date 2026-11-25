@@ -86,7 +86,7 @@ internal fun TvSportsList(screen: ListScreen, model: ListModel, actions: ListAct
     val initial = rememberInitialFocus()
     val rail = LocalRail.current
     val list = rememberLazyListState()
-    val memory = remember { TvListMemory() }
+    val memory = remember(focus) { TvListFocus({ key -> focus.requester(key).tryFocus() }, { withFrameNanos {} }) }
     val latest by rememberUpdatedState(screen)
 
     /** The element [key]: the focus can be put on it, and the list keeps whether it has it. */
@@ -96,30 +96,10 @@ internal fun TvSportsList(screen: ListScreen, model: ListModel, actions: ListAct
 
     suspend fun bringIntoView(key: String) = ListKeys.bringIntoView(list, latest, key, sportsLine = false)
 
-    /** The focus on [key], in view first, asked a frame at a time until it takes, as an element may come a frame late. */
-    suspend fun place(key: String): Boolean {
-        bringIntoView(key)
-        repeat(FOCUS_FRAMES) {
-            withFrameNanos {}
-            if (memory.focused == key) return true
-            focus.requester(key).tryFocus()
-        }
-        return memory.focused == key
-    }
-
     // Back on what opened a page; else the state's first focus, once the rail lets the list take one, and again when the
     // state changes under a focus the list put (the blank cards' Recent as the list comes), never under the user's.
     val first = firstFocus(screen)
-    LaunchedEffect(first) {
-        if (focus.restore(::bringIntoView)) {
-            memory.placed = null
-            return@LaunchedEffect
-        }
-        initial.awaitTurn()
-        val now = memory.focused
-        if (now != null && now != memory.placed) return@LaunchedEffect
-        if (place(first)) memory.placed = first
-    }
+    LaunchedEffect(first) { memory.settle(first, { focus.restore(::bringIntoView) }, initial::awaitTurn, ::bringIntoView) }
     // What the list shows changed (the list came, a card took its place): the shell checks the focus is somewhere.
     LaunchedEffect(kind(screen)) { rail?.contentChanged() }
     // "+3 more" opened by OK: the focus on the league's sixth row, the first of those it brought.
@@ -128,7 +108,7 @@ internal fun TvSportsList(screen: ListScreen, model: ListModel, actions: ListAct
         val league = screen.days.flatMap { it.leagues }.firstOrNull { it.key == opening }
         if (league != null && league.more != Words.SportsList.SHOW_FEWER) return@LaunchedEffect
         memory.opening = null
-        league?.rows?.getOrNull(Days.SHOWN)?.let { place(ListKeys.row(it.key)) }
+        league?.rows?.getOrNull(Days.SHOWN)?.let { memory.place(ListKeys.row(it.key), ::bringIntoView, own = false) }
     }
 
     /**
@@ -193,14 +173,54 @@ internal fun TvSportsList(screen: ListScreen, model: ListModel, actions: ListAct
 }
 
 /**
- * What the TV's list keeps of its focus while it shows: the element focused now ([focused]), the one the list itself put
- * the focus on ([placed]), and a league's day being opened by "+3 more" ([opening]).
+ * Where the TV list's focus goes as its states come (L590, L660), by its elements' keys ([ListKeys]): the element focused
+ * now ([focused], as its focus events say), the one the list itself put the focus on ([placed]), and a league's day being
+ * opened by "+3 more" ([opening]). [request] asks an element for the focus; [frame] waits for the next frame.
  */
 @Stable
-private class TvListMemory {
+internal class TvListFocus(private val request: (String) -> Unit, private val frame: suspend () -> Unit) {
     var focused: String? = null
     var placed: String? = null
     var opening: String? = null
+
+    /**
+     * The focus on [key], in view first ([bringIntoView]), asked a frame at a time until it takes, as an element may come
+     * a frame late. As the list's [own] first focus, counted as the list's from the moment it is asked: a state that comes
+     * before the frame that confirms it (the list, while the blank cards' Recent took the focus) cancels this and moves
+     * on from it, rather than taking it for the user's.
+     */
+    suspend fun place(key: String, bringIntoView: suspend (String) -> Unit, own: Boolean = true): Boolean {
+        if (own) placed = key
+        bringIntoView(key)
+        repeat(FOCUS_FRAMES) {
+            frame()
+            if (focused == key) return true
+            request(key)
+        }
+        return focused == key
+    }
+
+    /** Whether the list has put the focus anywhere yet, or brought it back: before, a focus elsewhere is no one's choice. */
+    private var settled = false
+
+    /**
+     * A state's first focus: back on what opened a page ([restore]); else, once the screen may take one ([awaitTurn]),
+     * [first], unless the user took the focus off where the list put it. Before the list has put it anywhere, a focus
+     * elsewhere is where the shell's settling left it as the content showed (the list's rows kept from before), not the
+     * user's, and [first] takes it.
+     */
+    suspend fun settle(first: String, restore: suspend () -> Boolean, awaitTurn: suspend () -> Unit, bringIntoView: suspend (String) -> Unit) {
+        if (restore()) {
+            placed = null
+            settled = true
+            return
+        }
+        awaitTurn()
+        val now = focused
+        if (settled && now != null && now != placed) return
+        settled = true
+        place(first, bringIntoView)
+    }
 }
 
 /** The state's first focus: Recent while loading; the notice's or the card's button; else the sport chip picked. */

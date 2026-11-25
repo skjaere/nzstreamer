@@ -117,13 +117,15 @@ class SportarrTvPagesTest {
         remote.pressUntil(KeyEvent.KEYCODE_DPAD_DOWN, SPORTS, max = 6)
         remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
         waitFor(hasText("TODAY"), LIST_WAIT_MS)
-        // The title line: the list's own first focus is SportarrTvTest's to check.
-        compose.waitUntil(FOCUS_WAIT_MS) { remote.focused() in setOf(ALL, "Recent", "Upcoming") }
+        // The list's first focus, All, moved on from the blank cards' Recent as the list comes (L590).
+        try {
+            compose.waitUntil(FOCUS_WAIT_MS) { remote.focused() == ALL }
+        } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
+            throw AssertionError("the list's first focus isn't on All; it is on \"${remote.focused()}\"", e)
+        }
         if (upcoming) {
-            // Upcoming sits between Recent and All.
-            if (remote.focused() == "Recent") remote.press(KeyEvent.KEYCODE_DPAD_RIGHT)
-            if (remote.focused() == ALL) remote.press(KeyEvent.KEYCODE_DPAD_LEFT)
-            assertEquals("Upcoming", remote.focused())
+            // Upcoming sits just before All.
+            assertEquals("Upcoming", remote.press(KeyEvent.KEYCODE_DPAD_LEFT))
             remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
             waitFor(hasText("Upcoming") and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab) and isSelected())
         }
