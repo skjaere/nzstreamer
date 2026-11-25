@@ -2,6 +2,8 @@ package app.nzstreamer.plugin.sportarr
 
 import androidx.compose.runtime.Composable
 import app.nzstreamer.plugin.sportarr.ui.CupIcon
+import app.nzstreamer.plugin.sportarr.ui.EventPage
+import app.nzstreamer.plugin.sportarr.ui.Pages
 import app.nzstreamer.plugin.sportarr.ui.SetupPage
 import app.nzstreamer.plugin.sportarr.ui.SportsTab
 import app.nzstreamer.plugin.sportarr.ui.Words
@@ -16,7 +18,7 @@ import io.skjaere.usenet.plugin.PluginTab
  * one per version it loads, each with a host of its own, whose pages share one [Session].
  *
  * The tab is the setup until a Save, then the list; the settings page is the same form. The list's rows open an event's
- * or a weekend's page by its key (L652); until those pages are drawn, any page draws the tab's.
+ * or a weekend's page by its key (L652); a page the plugin doesn't know, or one without its key, draws the tab's.
  */
 class SportarrPlugin : NzPlugin {
     /** This instance's session, made as its first page draws (on the main thread, as every page is). */
@@ -28,7 +30,11 @@ class SportarrPlugin : NzPlugin {
 
     @Composable
     override fun Page(page: String, arg: String?, host: PluginHost, nav: PluginNav) {
-        SportsTab(session(host), nav)
+        val session = session(host)
+        when {
+            arg != null && (page == Pages.EVENT || page == Pages.WEEKEND) -> EventPage(session, host.play, nav, page, arg)
+            else -> SportsTab(session, nav)
+        }
     }
 
     /** From the tab's ⋮ and from Settings › Plugins: back where it was opened from by the arrow, Back, or after a Save (L652). */

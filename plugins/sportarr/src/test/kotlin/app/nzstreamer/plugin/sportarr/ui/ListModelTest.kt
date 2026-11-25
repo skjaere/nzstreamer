@@ -51,6 +51,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -571,6 +572,8 @@ class ListModelTest {
             assertTrue(sportarr.http.requests.all { "/api/leagues" in it.url }, "the list's routes alone: ${sportarr.http.requests.map { it.url }}")
 
             model.play(screen.upNext.single())
+            // The item is made off the main thread, then handed to the host's play.
+            withTimeout(WAIT) { while (host.played.isEmpty()) yield() }
             val played = host.played.single()
             assertEquals("ev-000001:full", played.key)
             assertEquals("Lantern Bay FC vs Copper Crown United", played.title)
@@ -611,7 +614,7 @@ class ListModelTest {
 
     /** A model over [state], its view kept in the test's folder, the library's watch states. */
     private fun model(state: MutableStateFlow<ListState>, restored: ListModel.Restored? = null, clock: () -> Instant = { NOW }) =
-        ListModel(state, MapWatch(WATCH), KeptView(dir, EmptyCoroutineContext), tv = false, clock, { LONDON }, { _, _, _ -> }, restored, EmptyCoroutineContext)
+        ListModel(state, MapWatch(WATCH), KeptView(dir, EmptyCoroutineContext), tv = false, clock, { LONDON }, { _, _ -> }, restored, EmptyCoroutineContext)
 
     /** The model's next screen that [holds], or a failure after [WAIT]. */
     private suspend fun ListModel.next(holds: (ListScreen) -> Boolean): ListScreen = withTimeout(WAIT) { screen.first { it != null && holds(it) }!! }

@@ -96,6 +96,24 @@ class RefreshTest {
     }
 
     @Test
+    fun `an event's page shown before the list has the kept list at once, and reads only when none is kept`() = runTest {
+        refresh().shown().join()
+        assertEquals(oneRead, sportarr.http.requests.size)
+        advanceTimeBy(2.hours)
+
+        // The process made again with an event's page on top: list.json, two hours old, and no read for it.
+        val again = refresh()
+        again.pageShown().join()
+        assertEquals(oneRead, sportarr.http.requests.size, "a page reads nothing while a list is kept, however old")
+        assertEquals(setOf(1, 2, 3), assertIs<ListState.Ready>(again.state.value).sports.events.map { it.id }.toSet())
+
+        // Nothing kept: the page would have nothing to show, so it reads as the tab would.
+        File(dir, "list.json").delete()
+        refresh().pageShown().join()
+        assertEquals(2 * oneRead, sportarr.http.requests.size)
+    }
+
+    @Test
     fun `Refresh and Try again read at once, whatever the list's age`() = runTest {
         val refresh = refresh()
         refresh.shown().join()

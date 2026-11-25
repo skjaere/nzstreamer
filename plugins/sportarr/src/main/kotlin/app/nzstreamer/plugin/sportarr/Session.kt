@@ -1,9 +1,5 @@
 package app.nzstreamer.plugin.sportarr
 
-import app.nzstreamer.plugin.sportarr.family.Matchers
-import app.nzstreamer.plugin.sportarr.match.Nouns
-import app.nzstreamer.plugin.sportarr.match.PartPicker
-import app.nzstreamer.plugin.sportarr.match.Runner
 import app.nzstreamer.plugin.sportarr.model.Item
 import app.nzstreamer.plugin.sportarr.model.Sports
 import app.nzstreamer.plugin.sportarr.source.Connection
@@ -13,8 +9,9 @@ import app.nzstreamer.plugin.sportarr.source.Refresh
 import app.nzstreamer.plugin.sportarr.source.SportarrClient
 import app.nzstreamer.plugin.sportarr.ui.KeptView
 import app.nzstreamer.plugin.sportarr.ui.ListModel
+import app.nzstreamer.plugin.sportarr.ui.PageModel
+import app.nzstreamer.plugin.sportarr.ui.Plays
 import app.nzstreamer.plugin.sportarr.ui.SetupModel
-import io.skjaere.usenet.plugin.PlayItem
 import io.skjaere.usenet.plugin.PluginHost
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -49,23 +46,15 @@ internal class Session(private val host: PluginHost) {
     fun list(tv: Boolean, restored: ListModel.Restored?): ListModel =
         ListModel(refresh.state, host.watch, KeptView(host.dataDir), tv, Instant::now, ZoneId::systemDefault, ::play, restored)
 
-    /** Finds a part's releases, for a play alone. */
-    private val runner = Runner(host.search)
+    /** How the pages and Up next play a part, and the lines Play and Choose release leave when they find nothing. */
+    val plays = Plays(host.play, host.watch, host.search, host.scope, Instant::now)
 
-    /**
-     * Plays [item] of [sports] from the list's Up next, named [title] as the row names it, through NZStreamer's play: the
-     * release that played it before, else the releases the runner finds, which the host asks for only as it plays. The
-     * event pages build their plays with more (Search indexers' words on the no-release sheet); Up next's rows play a
-     * part begun or the next one, which the host has played or will search for.
-     */
-    fun play(item: Item, sports: Sports, title: String) {
-        val event = item.event
-        val part = item.part
-        val matcher = Matchers(sports).of(event)
-        val played = PlayItem(
-            key = part.key, title = title, subtitle = event.league.name, runtimeMinutes = part.runtimeMinutes, noun = Nouns.item(event, part),
-            picker = PartPicker.of(matcher, event, part),
-        )
-        host.play.play(played) { runner.releases(matcher, event, part) }
+    /** An event's or a weekend's page ([page], [key]) on a [tv] or a phone, over the list the tab shows. */
+    fun page(page: String, key: String, tv: Boolean): PageModel =
+        PageModel(refresh.state, host.watch, plays, page, key, tv, Instant::now, ZoneId::systemDefault)
+
+    /** Plays [item] of [sports] from the list's Up next, as its page would. */
+    fun play(item: Item, sports: Sports) {
+        plays.play(sports, item.event, item.part)
     }
 }

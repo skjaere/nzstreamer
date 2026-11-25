@@ -353,7 +353,7 @@ internal object ListScreens {
  * The list's model on a phone or a [tv]: the refresh's [state] as a [ListScreen], with the host's [watch] states of every
  * part listed, the view's choices kept in view.json ([kept], L645), the side and the days opened kept with the page
  * ([Restored]), and the time from [clock] in [zone]'s days. It searches nothing: a tap on Up next hands its part to
- * [onPlay], with the list and the row's title, and the host searches only as it plays.
+ * [onPlay], with the list, and the host searches only as it plays.
  *
  * [run] does its work while the list shows: it reads view.json once, follows the state, the watch states and the view,
  * builds each screen on [work], off the main thread (L641), and writes the choices as they change. The time moves on by
@@ -367,7 +367,7 @@ internal class ListModel(
     private val tv: Boolean,
     private val clock: () -> Instant,
     private val zone: () -> ZoneId,
-    private val onPlay: (Item, Sports, String) -> Unit,
+    private val onPlay: (Item, Sports) -> Unit,
     restored: Restored?,
     private val work: CoroutineContext = Dispatchers.Default,
 ) {
@@ -442,7 +442,7 @@ internal class ListModel(
 
     /** Plays Up next's [row]: its part, with the list it was shown from. */
     fun play(row: StripRow) {
-        sports?.let { onPlay(row.item, it, row.title) }
+        sports?.let { onPlay(row.item, it) }
     }
 
     /** What the page keeps for this model's successor. */

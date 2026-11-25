@@ -287,6 +287,10 @@ internal object Words {
         const val FOOTNOTE =
             "Play finds the best release on your indexers that names both teams and the date; the one that played before goes first. Details from your Sportarr."
 
+        /** Undrawn: the footnote of a one-part page that isn't a team game's, a boxing matchup's or a weekly show's. */
+        const val EVENT_FOOTNOTE =
+            "Play finds the best release on your indexers that names this event and its date; the one that played before goes first. Details from your Sportarr."
+
         /** Undrawn: Choose release while it searches, which takes no second press. */
         const val SEARCHING = "Searching your indexers…"
 
@@ -310,6 +314,9 @@ internal object Words {
 
         /** SpTvWeekend 1: the left pane's line on a TV. */
         const val TV_FOOTNOTE = "Press OK on a session to play the best release, or ⋮ to choose one yourself."
+
+        /** Undrawn: under the sessions before the first starts, as a card's page says it (SpPhoneCard 3); on a TV it holds the focus. */
+        const val NOT_STARTED = "The sessions play once each has started. Releases often appear a few hours after the end."
     }
 
     /** A fight card's page and its parts (L644). */
@@ -344,6 +351,9 @@ internal object Words {
         /** Undrawn: the page's footnote. */
         const val FOOTNOTE =
             "NZStreamer can't tell this sport's releases apart for sure, so you pick one; the one you played goes first next time. Details from your Sportarr."
+
+        /** Undrawn: in the buttons' place before the start, the game's line without Play (SpPhoneGame 3); on a TV it holds the focus. */
+        const val NOT_STARTED = "Choose release and Search indexers show once it has started. Releases often appear a few hours after the end."
     }
 
     /**

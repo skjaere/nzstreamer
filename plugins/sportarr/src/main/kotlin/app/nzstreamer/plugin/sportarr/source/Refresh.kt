@@ -18,7 +18,7 @@ import kotlin.coroutines.CoroutineContext
 /**
  * When the list is read, and the state the tab draws (L641). A read starts:
  * - as the tab's page shows ([shown]) with no list, or one read more than 15 minutes ago (or, by a clock put back since,
- *   after now);
+ *   after now); as an event's page shows ([pageShown]) with no list;
  * - on the ⋮'s Refresh and on Try again ([refresh]);
  * - after a Save that changed the address or the key ([saved]).
  *
@@ -51,14 +51,23 @@ class Refresh(
     private var running: Job? = null
 
     /** As the tab's page shows: the kept list at once, and a read when there is none or it is over 15 minutes old. */
-    fun shown(): Job = scope.launch {
+    fun shown(): Job = show(readStale = true)
+
+    /**
+     * As an event's or a weekend's page shows, which may be before the list did (a process made again with that page on
+     * top): the kept list at once, and a read only when there is none, as the page would have nothing to show. A list's
+     * age is the tab's to judge, as it shows.
+     */
+    fun pageShown(): Job = show(readStale = false)
+
+    private fun show(readStale: Boolean): Job = scope.launch {
         val sports = load()
         if (connection.saved() == null) {
             current.value = ListState.NotSetUp
             return@launch
         }
         if (sports != null && (current.value == ListState.Loading || current.value == ListState.NotSetUp)) current.value = settled(sports)
-        if (sports == null || stale(sports.readAt)) start(afresh = false).join()
+        if (sports == null || (readStale && stale(sports.readAt))) start(afresh = false).join()
     }
 
     /**

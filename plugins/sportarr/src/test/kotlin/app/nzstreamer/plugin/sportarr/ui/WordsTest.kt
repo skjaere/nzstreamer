@@ -222,10 +222,15 @@ class WordsTest {
             Shown(GAME, null, "Searching your indexers…"),
             Shown(GAME, null, "This event is no longer in your Sportarr's list."),
             Shown(GAME, null, "Back"),
+            Shown(
+                GAME, null,
+                "Play finds the best release on your indexers that names this event and its date; the one that played before goes first. Details from your Sportarr.",
+            ),
 
             Shown(WEEKEND, "SpPhoneWeekend", "Race"),
             Shown(WEEKEND, "SpPhoneWeekend", "Tap a session to play the best release, or ⋮ to choose one yourself. Details from your Sportarr."),
             Shown(WEEKEND, "SpTvWeekend", "Press OK on a session to play the best release, or ⋮ to choose one yourself."),
+            Shown(WEEKEND, null, "The sessions play once each has started. Releases often appear a few hours after the end."),
 
             Shown(CARD, "SpPhoneCard", "Early Prelims"),
             Shown(CARD, "SpPhoneCard", "Prelims"),
@@ -237,6 +242,7 @@ class WordsTest {
             Shown(CARD, null, "Press OK on a part to play the best release, or ⋮ to choose one yourself."),
 
             Shown(GENERIC, null, "NZStreamer can't tell this sport's releases apart for sure, so you pick one; the one you played goes first next time. Details from your Sportarr."),
+            Shown(GENERIC, null, "Choose release and Search indexers show once it has started. Releases often appear a few hours after the end."),
 
             Shown(CHOOSE, "SpPhoneChoose", "game"),
             Shown(CHOOSE, "SpTvChoose", "session"),
