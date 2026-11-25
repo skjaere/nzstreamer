@@ -17,7 +17,8 @@ import kotlin.coroutines.CoroutineContext
 
 /**
  * When the list is read, and the state the tab draws (L641). A read starts:
- * - as the tab's page shows ([shown]) with no list, or one read more than 15 minutes ago;
+ * - as the tab's page shows ([shown]) with no list, or one read more than 15 minutes ago (or, by a clock put back since,
+ *   after now);
  * - on the ⋮'s Refresh and on Try again ([refresh]);
  * - after a Save that changed the address or the key ([saved]).
  *
@@ -57,7 +58,16 @@ class Refresh(
             return@launch
         }
         if (sports != null && (current.value == ListState.Loading || current.value == ListState.NotSetUp)) current.value = settled(sports)
-        if (sports == null || Duration.between(sports.readAt, clock()) > STALE) start(afresh = false).join()
+        if (sports == null || stale(sports.readAt)) start(afresh = false).join()
+    }
+
+    /**
+     * Whether a list read at [readAt] is read again as the tab shows: over 15 minutes old, or read in the future, as on a
+     * device whose clock ran ahead then and was put right since, whose list would otherwise wait for that time to come.
+     */
+    private fun stale(readAt: Instant): Boolean {
+        val now = clock()
+        return readAt.isAfter(now) || Duration.between(readAt, now) > STALE
     }
 
     /** The ⋮'s Refresh, and Try again: a read now, or the one running. */

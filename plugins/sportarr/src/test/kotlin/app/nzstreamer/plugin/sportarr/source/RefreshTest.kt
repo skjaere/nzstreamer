@@ -257,6 +257,18 @@ class RefreshTest {
     }
 
     @Test
+    fun `a list read while the clock ran ahead is read again as the tab shows, once the clock is put right`() = runTest {
+        val kept = KeptList(dir, EmptyCoroutineContext)
+        // Read on a box whose clock said 37 days later; the clock was put right since.
+        val ahead = SportsList(START.plus(Duration.ofDays(37)), listOf(KeptLeague(1, "Premier League", "Soccer")), listOf(event(9, START, 1)), cut = false)
+        kept.write(ahead)
+        val refresh = refresh(kept = kept)
+        refresh.shown().join()
+        assertEquals(oneRead, sportarr.http.requests.size)
+        assertEquals(START, assertIs<ListState.Ready>(refresh.state.value).readAt)
+    }
+
+    @Test
     fun `nothing switched on in Sportarr is NothingFollowed`() = runTest {
         sportarr.leagues = listOf(league(1, monitored = false))
         val refresh = refresh()
