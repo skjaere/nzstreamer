@@ -107,6 +107,14 @@ class SharedRulesTest {
     }
 
     @Test
+    fun `a league's own crossed numbers are no score`() {
+        val tour = KeptLeague(15, "Kestrel 3x3 Tour", "Basketball")
+        val game = sports(tour to listOf(on(tour, 1601, at("2026-11-21T15:00"), "Lantern Bay Herons vs Saltmere Gulls"))).byId(1601)
+        assertEquals(Verdict.Accept(), judge(game, "Kestrel.3x3.Tour.2026.11.21.Lantern.Bay.Herons.vs.Saltmere.Gulls.1080p.WEB.h264-WREN"))
+        assertEquals(left(RejectKind.Score), judge(game, "Kestrel.3x3.Tour.2026.11.21.Lantern.Bay.Herons.21x18.Saltmere.Gulls.1080p.WEB.h264-WREN"))
+    }
+
+    @Test
     fun `a result word of the event's own title is no result`() {
         val named = sports(VELMORA to listOf(on(VELMORA, 2006, at("2026-11-14T23:00"), "Velmora Iron Crown: Victory Night"))).byId(2006)
         val name = "Velmora.Iron.Crown.Victory.Night.2026.11.14.1080p.WEB.h264-KESTREL"

@@ -320,12 +320,14 @@ private class Reader(private val name: String, private val context: NameContext)
      * Masks each number of the event's own phrases where it stands in the identity beside the word it has beside it there
      * ("500" after "Kestrel" for "Kestrel 500"), or anywhere when the phrase is that number alone. Beside the word after it
      * alone, a number that closes a year-first date stays the date's day: a title's "07 - Game 1" doesn't take the day of
-     * "2026.12.07.Game.1". The event's own years stay years.
+     * "2026.12.07.Game.1". The event's own years stay years. Two numbers crossed by an x are masked as a number is: a
+     * league's "3x3" or a relay's "4x100" is no score.
      */
     private fun maskOwnNumbers() {
         phrases.forEach { phrase ->
             phrase.forEachIndexed { k, word ->
-                if (!word.all { it in '0'..'9' } || (word.length == 4 && word.toInt() in context.years)) return@forEachIndexed
+                val number = word.all { it in '0'..'9' }
+                if (!(number || crossed(word)) || (number && word.length == 4 && word.toInt() in context.years)) return@forEachIndexed
                 for (j in 0 until tailStart) {
                     if (all[j].word != word) continue
                     val before = k > 0 && j > 0 && all[j - 1].word == phrase[k - 1]

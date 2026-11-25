@@ -671,6 +671,11 @@ class SportsNameTest {
             Row("KCL.2026.13.21.Brisk.vs.Loam.1080p.WEB.h264-WREN", "none", KCL_21),
             // A title's year opens its date: the month and day after it are the date's, no score.
             Row("Velmora.Iron.Crown.2026.11.21.1080p.WEB.h264-KESTREL", "none", CROWN_2026),
+            // A league's or title's own "3x3" or "4x100" is no score where it stands as theirs; another one there still is.
+            Row("Kestrel.3x3.Tour.2026.11.21.Lantern.Bay.Herons.vs.Saltmere.Gulls.1080p.WEB.h264-WREN", "none", NameContext(league = "Kestrel 3x3 Tour")),
+            Row("Kestrel.3x3.Tour.2026.11.21.Lantern.Bay.Herons.vs.Saltmere.Gulls.1080p.WEB.h264-WREN", "score"),
+            Row("Kestrel.3x3.Tour.2026.11.21.Lantern.Bay.Herons.21x18.Saltmere.Gulls.1080p.WEB.h264-WREN", "score", NameContext(league = "Kestrel 3x3 Tour")),
+            Row("Kestrel.Mens.4x100.Relay.2026.11.21.1080p.WEB.h264-WREN", "none", NameContext(title = "Kestrel · Men's 4x100 Relay")),
             // A side's own number is a side's word.
             Row(
                 "Kestrel.Club.03.vs.Kestrel.Club.07.2.1.1080p.WEB.h264-WREN",
