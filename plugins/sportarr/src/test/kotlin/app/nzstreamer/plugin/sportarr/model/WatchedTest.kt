@@ -125,6 +125,36 @@ class WatchedTest {
     }
 
     @Test
+    fun `a weekend caught up on by Mark watched comes before a card played days ago`() {
+        // Saturday afternoon: two games half watched, the Friday and Saturday practices marked watched from the weekend's
+        // page without a play, qualifying under way; a fight night's prelims played three days ago.
+        val saturday = sports(
+            FORMULA_1 to kestrelWeekend(),
+            UFC to listOf(on(UFC, 32, at("2026-11-14T23:00"), "UFC Fight Night: Brisk vs. Loam", parts = listOf("Prelims", "Main Card"))),
+            PREMIER to listOf(
+                on(PREMIER, 41, at("2026-11-21T13:00"), "Gildenford FC vs Marrowby United"),
+                on(PREMIER, 42, at("2026-11-21T13:00"), "Lantern Bay FC vs Copper Crown United"),
+            ),
+        )
+        val sessions = saturday.weekend("2:r20")!!.sessions.map { it.headline.key }
+        val watch = mapOf(
+            "ev-000041:full" to played(2_000_000, at("2026-11-21T15:30")),
+            "ev-000042:full" to played(3_000_000, at("2026-11-21T16:00")),
+            sessions[0] to watched(), sessions[1] to watched(), sessions[2] to watched(),
+            "ev-000032:prelims" to watched(at("2026-11-18T21:00")),
+        )
+        assertEquals(
+            listOf("ev-000042:full", "ev-000041:full", sessions[3]),
+            Watched.upNext(saturday.listed, watch, at("2026-11-21T16:30")).map { it.item.part.key },
+        )
+        // With nothing more in progress, the card comes after the weekend.
+        assertEquals(
+            listOf(sessions[3], "ev-000032:main-card"),
+            Watched.upNext(saturday.listed, watch - "ev-000041:full" - "ev-000042:full", at("2026-11-21T16:30")).map { it.item.part.key },
+        )
+    }
+
+    @Test
     fun `a card goes on to the next part after the last one watched`() {
         val prelimsOnly = mapOf(cardPart("prelims") to watched())
         assertEquals(listOf(cardPart("main-card")), Watched.upNext(sports.listed, prelimsOnly, SUNDAY).map { it.item.part.key })

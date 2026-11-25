@@ -48,7 +48,7 @@ object Watched {
      * - first, parts in progress, the last played first;
      * - then, for a card or weekend the user started (a part watched, none in progress), the next part: the first one
      *   after the last watched that has started and isn't watched, as a show's page goes on to the next episode, so a
-     *   practice skipped never comes back;
+     *   practice skipped never comes back; the one the user moved on last first ([moved]);
      * - nothing of a watched card or weekend, its parts in progress included.
      */
     fun upNext(rows: List<Listed>, watch: Map<String, WatchInfo>, now: Instant): List<UpNext> {
@@ -57,7 +57,7 @@ object Watched {
             .sortedWith(compareByDescending<UpNext> { it.info?.lastPlayedAt ?: Instant.MIN }.thenBy { it.item.part.key })
         val started = playing.map { it.listed.key }.toSet()
         val next = open.filter { it.key !in started && it.items.size > 1 }
-            .mapNotNull { row -> next(row, watch, now)?.let { UpNext(row, it, null) to lastPlayed(row, watch) } }
+            .mapNotNull { row -> next(row, watch, now)?.let { UpNext(row, it, null) to moved(row, watch) } }
             .sortedWith(compareByDescending<Pair<UpNext, Instant>> { it.second }.thenBy { it.first.item.part.key })
             .map { it.first }
         return (playing + next).take(ROWS)
@@ -71,9 +71,16 @@ object Watched {
         return items.drop(last + 1).firstOrNull { !it.event.start.isAfter(now) && !part(it.part, watch) }
     }
 
-    /** When anything of [row] was last played or marked, for the order of the next parts; the earliest when unknown. */
-    private fun lastPlayed(row: Listed, watch: Map<String, WatchInfo>): Instant =
-        row.items.mapNotNull { watch[it.part.key]?.lastPlayedAt }.maxOrNull() ?: Instant.MIN
+    /**
+     * When the user last moved on in [row], for the order of the next parts: its last play, or the start of the latest part
+     * watched where that is later. The host gives a part only marked watched no time, but it can't have been marked
+     * before it started, so a weekend caught up on by Mark watched isn't put behind a card played days before.
+     */
+    private fun moved(row: Listed, watch: Map<String, WatchInfo>): Instant {
+        val played = row.items.mapNotNull { watch[it.part.key]?.lastPlayedAt }.maxOrNull()
+        val watchedStart = row.items.filter { part(it.part, watch) }.maxOfOrNull { it.event.start }
+        return listOfNotNull(played, watchedStart).maxOrNull() ?: Instant.MIN
+    }
 
     /** Up next's rows at most. */
     const val ROWS = 3
