@@ -83,8 +83,10 @@ internal object ListKeys {
     const val CARD = "card"
 
     fun side(side: Side) = "side:${side.name}"
-    fun sport(sport: String?) = "sport:${sport ?: "*"}"
-    fun league(league: LeagueChoice?) = "league:${league?.id ?: "*"}"
+    fun sport(sport: String?) = "$SPORT${sport ?: "*"}"
+    fun league(league: LeagueChoice?) = "$LEAGUE${league?.id ?: "*"}"
+    const val SPORT = "sport:"
+    const val LEAGUE = "league:"
     fun next(partKey: String) = "next:$partKey"
     fun row(key: String) = "$ROW$key"
     const val ROW = "row:"

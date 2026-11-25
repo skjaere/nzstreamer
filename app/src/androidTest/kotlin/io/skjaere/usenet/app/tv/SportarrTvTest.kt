@@ -7,6 +7,10 @@ import android.view.FrameMetrics
 import android.view.KeyEvent
 import android.view.Window
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -106,12 +110,25 @@ class SportarrTvTest {
 
     private val library get() = sportarr.catalogue
 
+    /**
+     * The app's screens: a new [generation] makes them again from nothing, as after the app's start, while the plugin and
+     * its list run on.
+     */
+    private var generation by mutableIntStateOf(0)
+
     /** The app as a TV shows it, then its Sports tab by the rail: Left to the rail, Down to Sports, OK. */
     private fun openSports() {
         compose.setTvContent {
-            nav = rememberNavController()
-            AppNav(nav = nav)
+            key(generation) {
+                nav = rememberNavController()
+                AppNav(nav = nav)
+            }
         }
+        toSportsByTheRail()
+    }
+
+    /** From Home's first focus to the Sports tab by the rail: Left to the rail, Down to Sports, OK. */
+    private fun toSportsByTheRail() {
         remote.waitForHomeFocus()
         waitFor(railItem(SPORTS))
         remote.press(KeyEvent.KEYCODE_DPAD_LEFT)
@@ -337,6 +354,26 @@ class SportarrTvTest {
         assertTrue("All still picked", exists(chip(ALL) and isSelected()))
     }
 
+    /**
+     * A sport kept from before (view.json) past the chips the title line shows: with the app's screens made again, as after
+     * its start, the list's first focus goes to that chip, brought into view, and it shows picked.
+     */
+    @Test
+    fun aKeptSportFarAlongTheChipsTakesTheFirstFocusInView() {
+        sportarr.install()
+        openSports()
+        listFocused()
+        assertEquals(SKIING, remote.pressUntil(KeyEvent.KEYCODE_DPAD_RIGHT, SKIING, max = 12))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        waitFor(chip(SKIING) and isSelected())
+
+        compose.runOnIdle { generation++ }
+        toSportsByTheRail()
+        waitFor(hasText(library.event(SKI_EVENT).title), LIST_WAIT_MS)
+        waitForFocusOn(chip(SKIING), "the kept sport's chip")
+        assertTrue("shown picked", exists(chip(SKIING) and isSelected()))
+    }
+
     /** While the first read runs, the blank cards: the focus on Recent; then the list, the focus moved on to All. */
     @Test
     fun loadingFocusesRecentThenAll() {
@@ -502,6 +539,10 @@ class SportarrTvTest {
         const val UPCOMING = "Upcoming"
         const val TODAY = "TODAY"
         const val ALL = "All"
+        const val SKIING = "Skiing"
+
+        /** The library's one skiing event, the last sport's. */
+        const val SKI_EVENT = 2201
         const val MORE = "More"
         const val SHOW_WATCHED = "Show watched"
         const val REFRESH = "Refresh"

@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -90,6 +91,8 @@ internal fun TvSportsList(screen: ListScreen, model: ListModel, actions: ListAct
     val initial = rememberInitialFocus()
     val rail = LocalRail.current
     val list = rememberLazyListState()
+    val sportsLine = rememberLazyListState()
+    val leaguesLine = rememberLazyListState()
     val memory = remember(focus) { TvListFocus({ key -> focus.requester(key).tryFocus() }, { withFrameNanos {} }) }
     val latest by rememberUpdatedState(screen)
 
@@ -98,7 +101,20 @@ internal fun TvSportsList(screen: ListScreen, model: ListModel, actions: ListAct
         if (it.isFocused) memory.focused = key else if (memory.focused == key) memory.focused = null
     }
 
-    suspend fun bringIntoView(key: String) = ListKeys.bringIntoView(list, latest, key, sportsLine = false)
+    suspend fun bringIntoView(key: String) {
+        ListKeys.bringIntoView(list, latest, key, sportsLine = false)
+        // A chip past its line's end isn't composed, so can't take the focus, until its line scrolls to it: a sport kept
+        // from before (view.json) as the tab opens afresh, its line at All.
+        val (line, index) = when {
+            key.startsWith(ListKeys.SPORT) -> sportsLine to latest.sports.indexOfFirst { ListKeys.sport(it.sport) == key }
+            key.startsWith(ListKeys.LEAGUE) -> leaguesLine to latest.leagues.indexOfFirst { ListKeys.league(it.league) == key }
+            else -> return
+        }
+        if (index < 0) return
+        // The line laid out first, so what it shows is known.
+        withFrameNanos {}
+        if (line.layoutInfo.visibleItemsInfo.none { it.index == index }) line.scrollToItem(index)
+    }
 
     // Where the row that opened a page stood, for the way back once it has gone (a game watched on its page).
     var leftAt by rememberSaveable { mutableStateOf<String?>(null) }
@@ -140,10 +156,10 @@ internal fun TvSportsList(screen: ListScreen, model: ListModel, actions: ListAct
         LazyColumn(
             Modifier.fillMaxHeight().tvFullWidth().tvFocusMemory(), state = list, contentPadding = PaddingValues(bottom = 16.dp),
         ) {
-            item(key = ListKeys.TOP) { TvTop(screen, model, actions, focus, ::element) }
+            item(key = ListKeys.TOP) { TvTop(screen, model, actions, focus, ::element, sportsLine) }
             if (screen.leagues.isNotEmpty()) {
                 item(key = ListKeys.LEAGUES) {
-                    TvChips(screen.leagues, { ListKeys.league(it.league) }, { it.label }, { it.selected }, ::element, Modifier.padding(top = 8.dp), 16.dp) {
+                    TvChips(screen.leagues, { ListKeys.league(it.league) }, { it.label }, { it.selected }, ::element, Modifier.padding(top = 8.dp), 16.dp, leaguesLine) {
                         model.league(it.league)
                     }
                 }
@@ -266,9 +282,9 @@ private fun kind(screen: ListScreen): String = when {
     else -> "list"
 }
 
-/** "Sports", Recent | Upcoming, the sport chips and the ⋮, on one line, focusable from the first frame. */
+/** "Sports", Recent | Upcoming, the sport chips (their [line]) and the ⋮, on one line, focusable from the first frame. */
 @Composable
-private fun TvTop(screen: ListScreen, model: ListModel, actions: ListActions, focus: ReturnFocus, element: (String) -> Modifier) {
+private fun TvTop(screen: ListScreen, model: ListModel, actions: ListActions, focus: ReturnFocus, element: (String) -> Modifier, line: LazyListState) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -284,7 +300,7 @@ private fun TvTop(screen: ListScreen, model: ListModel, actions: ListActions, fo
         }
         if (screen.sports.isNotEmpty()) {
             Box(Modifier.weight(1f)) {
-                TvChips(screen.sports, { ListKeys.sport(it.sport) }, { it.label }, { it.selected }, element, Modifier, CHIP_ROOM) { model.sport(it.sport) }
+                TvChips(screen.sports, { ListKeys.sport(it.sport) }, { it.label }, { it.selected }, element, Modifier, CHIP_ROOM, line) { model.sport(it.sport) }
             }
         } else {
             Spacer(Modifier.weight(1f))
@@ -295,7 +311,7 @@ private fun TvTop(screen: ListScreen, model: ListModel, actions: ListActions, fo
 
 /**
  * A line of the kit's TV chips, sideways, [inset] at its ends, scrolling only as far as the focused one needs, room left
- * for it to grow.
+ * for it to grow; its [state] the list's, which scrolls it to a chip the focus is put on.
  */
 @Composable
 private fun <T> TvChips(
@@ -306,11 +322,12 @@ private fun <T> TvChips(
     element: (String) -> Modifier,
     modifier: Modifier,
     inset: Dp,
+    state: LazyListState,
     onPick: (T) -> Unit,
 ) {
     EdgeScrolling(room = CHIP_ROOM) {
         LazyRow(
-            modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = inset),
+            modifier.fillMaxWidth(), state = state, contentPadding = PaddingValues(horizontal = inset),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(chips, key = key) { chip ->
