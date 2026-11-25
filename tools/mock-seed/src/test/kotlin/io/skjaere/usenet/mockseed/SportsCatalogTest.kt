@@ -130,6 +130,11 @@ class SportsCatalogTest {
         assertEquals("None", kcl.monitorType)
         assertEquals(1, kcl.events.count { it.monitored })
         assertTrue(kcl.events.size > 1 && kcl.teamless)
+        // Scope None with nothing monitored: the route's answer, so what it stores still lists.
+        assertTrue(
+            leagues.any { it.monitored && it.monitorType == "None" && it.events.isNotEmpty() && it.events.none { event -> event.monitored } },
+            "a league switched on, scope None, events stored and none monitored",
+        )
         // Keep every game: a monitored game, one with a file alone, and one with neither, stored but not on the page.
         val kept = league("Kestrel Premier Division")
         assertEquals(true, kept.keepAllEvents)
@@ -141,9 +146,10 @@ class SportsCatalogTest {
         val premier = league("Premier League")
         assertEquals("Future", premier.monitorType)
         assertTrue(premier.events.any { !it.monitored && it.listed } && premier.events.any { it.monitored })
-        // No monitorType or Keep every game sent at all; the route's answer stands.
+        // No monitorType or Keep every game sent at all; the route's answer stands, a session switched off by hand with it.
         assertNull(league("Kestrel Endurance Series").monitorType)
         assertNull(league("Kestrel Endurance Series").keepAllEvents)
+        assertTrue(league("Kestrel Endurance Series").events.any { !it.monitored && it.listed } && league("Kestrel Endurance Series").events.any { it.monitored })
         // Stored, not on the league's page: sessions not chosen, a game of a team not followed.
         assertTrue(league("MotoGP").events.any { !it.listed } && league("NBA").events.any { !it.listed })
         // Fighting leagues list every stored event, whatever their scope.

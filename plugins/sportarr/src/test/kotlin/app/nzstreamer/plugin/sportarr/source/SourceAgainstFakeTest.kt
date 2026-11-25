@@ -106,12 +106,13 @@ class SourceAgainstFakeTest {
         // Keep every game: the followed team's games and a game with its file; not a game with neither.
         assertTrue(1101 in read && 1102 in read && 1103 in read)
         assertTrue(1104 !in read && 1105 !in read)
-        // Scope None with a monitored card: that card alone.
+        // Scope None with a monitored card: that card alone. Scope None with nothing monitored: the route's answer.
         assertEquals(listOf(1302), list.events.filter { it.leagueId == 4 }.map { it.id })
+        assertEquals(listOf(2101), list.events.filter { it.leagueId == 12 }.map { it.id })
         // The route's answer elsewhere: the sessions chosen, the teams followed.
         assertEquals(setOf(1703, 1704, 1712, 1713), list.events.filter { it.leagueId == 8 }.map { it.id }.toSet())
         assertTrue(1503 !in read)
-        // No monitorType or Keep every game sent: the route's answer as it is.
+        // No monitorType or Keep every game sent: the route's answer as it is, the session switched off by hand too.
         assertEquals(setOf(1801, 1802), list.events.filter { it.leagueId == 9 }.map { it.id }.toSet())
         assertTrue(setOf("UFC 999: Quessel vs. Halde", "Velmora Monday Brawl", "Halde vs. Brisk", "Kestrel · Men's Downhill", "Grand Prix of Kestrel").all { it in titles(list) })
         assertEquals(57, list.events.size)
