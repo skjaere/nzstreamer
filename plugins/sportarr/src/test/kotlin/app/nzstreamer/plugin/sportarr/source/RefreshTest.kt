@@ -184,6 +184,31 @@ class RefreshTest {
     }
 
     @Test
+    fun `Loading while a first Save's read runs, and while Try again reads with no list kept`() = runTest {
+        val secrets = MapSecrets()
+        val refresh = refresh(secrets)
+        refresh.shown().join()
+        assertEquals(ListState.NotSetUp, refresh.state.value)
+        sportarr.latency = { delay(1_000) }
+        val saved = refresh.saved(Connection(secrets).save("http://127.0.0.1:1867", KEY))
+        runCurrent()
+        assertEquals(ListState.Loading, refresh.state.value, "the setup gives way to the loading frame")
+        saved.join()
+        assertIs<ListState.Ready>(refresh.state.value)
+
+        val unreachable = refresh(kept = KeptList(File(dir, "other"), EmptyCoroutineContext))
+        sportarr.leaguesAnswer = { noAnswer(io.skjaere.usenet.plugin.PluginHttpException.Kind.Unreachable) }
+        unreachable.shown().join()
+        assertEquals(ListState.Unreachable(null, Failure.NoAnswer), unreachable.state.value)
+        sportarr.leaguesAnswer = null
+        val tryAgain = unreachable.refresh()
+        runCurrent()
+        assertEquals(ListState.Loading, unreachable.state.value, "Try again with nothing kept shows it reading")
+        tryAgain.join()
+        assertIs<ListState.Ready>(unreachable.state.value)
+    }
+
+    @Test
     fun `a 401 on a page keeps the old list whole, Refused`() = runTest {
         val kept = KeptList(dir, EmptyCoroutineContext)
         val refresh = refresh(kept = kept)
