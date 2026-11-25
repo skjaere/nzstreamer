@@ -341,6 +341,28 @@ class SetupModelTest {
     }
 
     @Test
+    fun `a key pasted with a line break is tested as Save keeps it, trimmed`() = runTest {
+        // As the host's client does: a header value holding a control character is refused before anything is sent, and
+        // the plugin reads that as no answer.
+        val http = RecordingHttp { request ->
+            if (request.headers.values.any { value -> value.any { it < ' ' } }) noAnswer(Kind.Unreachable)
+            when {
+                request.url.endsWith("/api/system/status") -> answer(200, status("4.1.12"))
+                request.url.endsWith("/api/leagues") -> answer(200, "[]")
+                else -> answer(404)
+            }
+        }
+        val secrets = MapSecrets()
+        val model = filled(model(http, secrets), key = " $KEY\r\n")
+
+        model.test()
+        assertEquals(AnswerLine(true, "Connected · Sportarr 4.1.12"), model.form.value.line, "Test with the pasted key")
+        assertTrue(http.requests.all { it.headers[SportarrClient.API_KEY_HEADER] == KEY }, "the key sent trimmed")
+        assertTrue(model.save())
+        assertEquals(KEY, secrets.stored.value["key"], "the key Save keeps is the one Test sent")
+    }
+
+    @Test
     fun `an edit clears the answer, and an answer to what was edited away isn't shown`() = runTest {
         val model = filled(model())
         model.test()

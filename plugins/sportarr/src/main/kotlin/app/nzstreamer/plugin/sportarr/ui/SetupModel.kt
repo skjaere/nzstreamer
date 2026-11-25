@@ -183,8 +183,11 @@ internal class SetupModel(
     /** The address as typed and whether Change was pressed: strings and booleans alone, as a page's saved state must be. */
     data class Restored(val address: String, val changing: Boolean)
 
-    /** The key typed, or the one stored where the field shows Saved; null where none is (stored no longer). */
-    private suspend fun keyOf(form: SetupForm): String? = if (form.showsSavedKey) connection.key() else form.key.takeIf { it.isNotBlank() }
+    /**
+     * The key typed, trimmed as Save stores it (a pasted key may bring a line break, which no header can carry, and Test
+     * would read the refusal as no answer), or the one stored where the field shows Saved; null where none is.
+     */
+    private suspend fun keyOf(form: SetupForm): String? = if (form.showsSavedKey) connection.key() else form.key.trim().takeIf { it.isNotEmpty() }
 
     private fun judged(typed: String): AddressSafety = SportarrAddress.safety(typed, safety)
 
