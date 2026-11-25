@@ -358,10 +358,12 @@ class SportsFakes(val sportarr: FakeSportarrServer, val indexer: FakeIndexerServ
  * device tests' 8089 one. Both listen on 127.0.0.1 alone (emulator: 10.0.2.2), on --port and --indexer-port (0 for any
  * free one, never a port another fake or the mock uses), both taken before anything is seeded, so a port in use fails at
  * once. --anchor is the date every start, release name and posted time counts from (the UTC date it starts, unless
- * given). The releases marked whole are seeded into the mock with the clip (--video, the sample clip) under their names,
- * and the others with every article missing, as the screens catalogue's are, so the indexer lists them and a play of one
- * fails as a broken release would; with --seed false they are listed alone, nothing is posted and no clip is needed. The
- * Sportarr key isn't printed. Throws IllegalArgumentException for options it can't take and for a taken port.
+ * given). The sports indexer counts a word a search holds twice, so the catalogue's `reached` holds whatever the anchor:
+ * a search dated "2026 12 12" finds the names of that day, not of the whole month. The releases marked whole are seeded
+ * into the mock with the clip (--video, the sample clip) under their names, and the others with every article missing, as
+ * the screens catalogue's are, so the indexer lists them and a play of one fails as a broken release would; with --seed
+ * false they are listed alone, nothing is posted and no clip is needed. The Sportarr key isn't printed. Throws
+ * IllegalArgumentException for options it can't take and for a taken port.
  */
 internal fun sports(options: Map<String, String>, log: (String) -> Unit = ::println): SportsFakes {
     fun port(name: String, default: Int): Int = options[name]?.let { given ->
@@ -390,7 +392,7 @@ internal fun sports(options: Map<String, String>, log: (String) -> Unit = ::prin
         throw IllegalArgumentException("port $port is taken", e)
     }
     val indexer = try {
-        FakeIndexerServer(emptyList(), SportsFakes.INDEXER_KEY, indexerPort, bind = InetAddress.getLoopbackAddress())
+        FakeIndexerServer(emptyList(), SportsFakes.INDEXER_KEY, indexerPort, bind = InetAddress.getLoopbackAddress(), repeatedWords = true)
     } catch (e: BindException) {
         sportarr.close()
         throw IllegalArgumentException("port $indexerPort is taken", e)

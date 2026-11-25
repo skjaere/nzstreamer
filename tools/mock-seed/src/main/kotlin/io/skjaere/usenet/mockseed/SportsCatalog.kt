@@ -248,8 +248,8 @@ data class SportsRelease(
 /**
  * What the plugin's judge should say of a release for [eventId]'s [part] (L647): [verdict], with an offered one's
  * [reason] or a left-out one's [kind] in L647's words; [reached]: whether the plugin's queries for that event, stage 1 and
- * then stage 2 as its runner sends them, find it in the sports indexer (which matches whole words alone), or only the
- * judge's tests see it.
+ * then stage 2 as its runner sends them, find it in the sports indexer (which matches whole words alone, a word asked
+ * twice standing twice), or only the judge's tests see it.
  */
 data class SportsVerdict(
     val eventId: Int,

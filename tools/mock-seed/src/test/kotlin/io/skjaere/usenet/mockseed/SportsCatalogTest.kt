@@ -237,6 +237,58 @@ class SportsCatalogTest {
     }
 
     @Test
+    fun `a dated search finds the same names on a day whose day and month are one number`() {
+        // The searches L648 and L650 date with three numbers: "Premier League 2026 12 12" holds 12 twice.
+        fun found(anchor: LocalDate): Map<String, Set<String>> = sports(
+            mapOf("port" to "0", "indexer-port" to "0", "anchor" to "$anchor", "seed" to "false"), log = {},
+        ).use { fakes ->
+            val library = catalog.leagues(anchor).flatMap { it.events }.associateBy { it.id }
+            fun date(id: Int) = numbers(library.getValue(id).broadcastDate)
+            val indexer = IndexerConfig("sports", "Sports", "http://127.0.0.1:${fakes.indexer.port}", SportsFakes.INDEXER_KEY)
+            val client = NewznabClient(NewznabClient.defaultHttpClient())
+            mapOf(
+                "the game" to "Premier League ${date(1001)}",
+                "the game with six names, none for it" to "Premier League ${date(1016)}",
+                "the weekly show's third week" to "Velmora Monday Brawl ${date(2003)}",
+            ).mapValues { (_, words) -> runBlocking { client.search(indexer, SearchQuery.Text(words)) }.items.map { it.guid.removePrefix("sp-") }.toSet() }
+        }
+        val usual = found(anchor)
+        assertEquals(7, usual.getValue("the game").size, "every name dated that day with the league's words")
+        // The game on 12 December, then the game with six names on it.
+        listOf(LocalDate.of(2026, 12, 13), LocalDate.of(2026, 12, 14)).forEach { day -> assertEquals(usual, found(day), "at $day") }
+    }
+
+    @Test
+    fun `the plugin's searches find the rows marked reached and none other, whatever the anchor`() {
+        sports(mapOf("port" to "0", "indexer-port" to "0", "anchor" to "$anchor", "seed" to "false"), log = {}).use { fakes ->
+            val rows = releases.flatMap { release -> release.verdicts.map { release.id to it } }
+            val parts = rows.map { (_, row) -> row.eventId to row.part }.distinct()
+            fun found(anchor: LocalDate): Map<Pair<Int, String>, Set<String>> {
+                val library = catalog.leagues(anchor).flatMap { it.events }.associateBy { it.id }
+                val named = catalog.releases(anchor)
+                return parts.associateWith { (event, part) ->
+                    val (first, second) = ASKED.getValue(event)
+                    fun search(stage: List<String>) = stage.flatMap { asked(it, library.getValue(event)) }.distinct()
+                        .flatMap { words -> named.filter { fakes.indexer.finds(words, it.name) } }.map { it.id }.toSet()
+                    val stage1 = search(first)
+                    val accepted = rows.any { (id, row) -> id in stage1 && row.eventId == event && row.part == part && row.verdict == SportsVerdict.Verdict.Accept }
+                    if (accepted) stage1 else stage1 + search(second)
+                }
+            }
+            val usual = found(anchor)
+            parts.forEach { (event, part) ->
+                val marked = rows.filter { (_, row) -> row.eventId == event && row.part == part }
+                assertTrue(usual.getValue(event to part).containsAll(marked.filter { it.second.reached }.map { it.first }), "$event $part")
+                assertTrue(usual.getValue(event to part).none { id -> marked.any { it.first == id && !it.second.reached } }, "$event $part")
+            }
+            // A year and a month of start dates: every day and month, a new year, a 29 February.
+            generateSequence(LocalDate.of(2027, 12, 1)) { it.plusDays(1) }.takeWhile { it.year < 2029 }.forEach { day ->
+                assertEquals(usual, found(day), "at $day")
+            }
+        }
+    }
+
+    @Test
     fun `the command seeds the clip whole under the names that play and every other name with each article missing`(@TempDir dir: File) {
         val raw = CopyOnWriteArrayList<String>()
         val missing = CopyOnWriteArrayList<String>()
@@ -310,6 +362,36 @@ class SportsCatalogTest {
     }
 
     private companion object {
+        /** [date] as three numbers, as the plugin dates a search: "2026 11 21". */
+        fun numbers(date: LocalDate) = "%d %02d %02d".format(date.year, date.monthValue, date.dayOfMonth)
+
+        /** [words] for [event]: {bc} its broadcast date, and its UTC date where that differs, as three numbers; {year} its UTC year. */
+        fun asked(words: String, event: SportsEvent): List<String> {
+            val utc = event.start.atZone(java.time.ZoneOffset.UTC).toLocalDate()
+            return listOf(event.broadcastDate, utc).distinct().map { date -> words.replace("{bc}", numbers(date)).replace("{year}", "${utc.year}") }.distinct()
+        }
+
+        /**
+         * The plugin's searches for each event the catalogue judges releases for, as L648 to L651 write them (item 16 holds
+         * the runner's own to the rows): stage 1, then stage 2 only where stage 1 finds no name the rows accept for the
+         * part.
+         */
+        val ASKED: Map<Int, Pair<List<String>, List<String>>> = buildMap {
+            put(1001, listOf("Lantern Bay Copper Crown", "Premier League {bc}") to listOf("Copper Lantern"))
+            put(1012, listOf("Gildenford Marrowby", "Premier League {bc}") to listOf("Marrowby Gildenford"))
+            put(1016, listOf("Quarrydown Ellerholt", "Premier League {bc}") to listOf("Ellerholt Quarrydown"))
+            put(1017, listOf("Kelderby Amberlow", "Premier League {bc}") to listOf("Amberlow Kelderby"))
+            listOf(1401, 1402).forEach { put(it, listOf("Kestrel 03 Kestrel 07", "Kestrel Baseball League {bc}") to listOf("Kestrel Kestrel")) }
+            put(1501, listOf("Easton Comets Lantern Bay Herons", "NBA {bc}") to listOf("Lantern Easton"))
+            put(1502, listOf("Saltmere Gulls Marrowby Lynx", "NBA {bc}") to listOf("Marrowby Saltmere"))
+            put(1605, listOf("Formula 1 Kestrel", "Formula1 Kestrel") to listOf("Formula 1 20"))
+            (1611..1615).forEach { put(it, listOf("Formula 1 Vellmar", "Formula1 Vellmar") to listOf("Formula 1 19")) }
+            put(1901, listOf("UFC 999", "UFC {bc}") to listOf("UFC Quessel Halde"))
+            (2001..2003).forEach { put(it, listOf("Velmora Monday Brawl {bc}") to listOf("Velmora Monday Brawl")) }
+            put(2101, listOf("Halde Brisk") to emptyList())
+            put(2201, listOf("Kestrel Men's Downhill", "FIS Alpine Ski World Cup {bc}") to listOf("Kestrel Men's Downhill {year}"))
+        }
+
         /** L647's reasons, its nouns' "Small for a whole <noun>" among them. */
         val REASONS = setOf(
             "No date in the name", "Team codes only", "Only a running number, no place", "Session not named in English",

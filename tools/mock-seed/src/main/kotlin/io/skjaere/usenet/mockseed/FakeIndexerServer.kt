@@ -15,7 +15,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * answering the way common indexers do: XML, error documents with Newznab codes, API and
  * grab counters. Its port is taken when it is made; [serve] can give it its releases later,
  * once they are seeded. It listens on [bind] alone where one is given (the sports indexer, on the loopback address), else on
- * every address. Development only.
+ * every address. A search finds a release when every word of the query is a whole word of its name; with [repeatedWords]
+ * (the sports indexer's) a word the query holds twice must stand twice in the name, so a search dated with three numbers
+ * whose day and month are one ("2026 12 12") doesn't find the whole month. Development only.
  */
 class FakeIndexerServer(
     releases: List<Pair<FakeRelease, String>>,
@@ -24,6 +26,7 @@ class FakeIndexerServer(
     private val grabLimit: Int? = null,
     private val apiLimit: Int = 1000,
     bind: InetAddress? = null,
+    private val repeatedWords: Boolean = false,
 ) : AutoCloseable {
     @Volatile
     private var releases: List<Pair<FakeRelease, String>> = releases
@@ -39,6 +42,15 @@ class FakeIndexerServer(
         server.createContext("/api") { exchange -> exchange.use { handle(it) } }
         server.executor = Executors.newFixedThreadPool(4)
         server.start()
+    }
+
+    /**
+     * Whether a search for [query] finds a release named [title]: every word of the query is a whole word of the title,
+     * as often as the query has it where [repeatedWords] counts them.
+     */
+    fun finds(query: String, title: String): Boolean {
+        val titleWords = words(title).groupingBy { it }.eachCount()
+        return words(query).groupingBy { it }.eachCount().all { (word, times) -> (titleWords[word] ?: 0) >= if (repeatedWords) times else 1 }
     }
 
     /** Lists [releases] from now on, in place of the ones it had. */
@@ -66,14 +78,12 @@ class FakeIndexerServer(
     }
 
     private fun search(params: Map<String, String>, typeFilter: ((FakeRelease) -> Boolean)?): List<Pair<FakeRelease, String>> {
-        val words = params["q"]?.lowercase()?.split(Regex("[^a-z0-9]+"))?.filter { it.isNotEmpty() }.orEmpty()
         val season = params["season"]?.removePrefix("S")?.toIntOrNull()
         val episode = params["ep"]?.removePrefix("E")?.toIntOrNull()
         val categories = params["cat"]?.split(',')?.mapNotNull { it.trim().toIntOrNull() }.orEmpty()
         return releases.filter { (release, _) ->
-            val titleWords = release.title.lowercase().split(Regex("[^a-z0-9]+")).toSet()
             (typeFilter?.invoke(release) ?: true) &&
-                words.all { it in titleWords } &&
+                finds(params["q"].orEmpty(), release.title) &&
                 params["tvdbid"]?.let { it.toIntOrNull() == release.ids.tvdb } ?: true &&
                 params["tmdbid"]?.let { it.toIntOrNull() == release.ids.tmdb } ?: true &&
                 params["imdbid"]?.let { "tt" + it.removePrefix("tt").padStart(7, '0') == release.ids.imdb } ?: true &&
@@ -91,6 +101,8 @@ class FakeIndexerServer(
         if (grabLimit != null && grabs.incrementAndGet() > grabLimit) return exchange.reply(error(501, "Download limit reached"))
         exchange.reply(nzb, "application/x-nzb")
     }
+
+    private fun words(text: String): List<String> = text.lowercase().split(NOT_A_WORD).filter { it.isNotEmpty() }
 
     private fun caps() = """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -158,4 +170,7 @@ class FakeIndexerServer(
     private fun error(code: Int, description: String) =
         """<?xml version="1.0" encoding="UTF-8"?>""" + "\n" + """<error code="$code" description="$description"/>"""
 
+    private companion object {
+        val NOT_A_WORD = Regex("[^a-z0-9]+")
+    }
 }
