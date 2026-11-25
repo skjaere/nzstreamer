@@ -305,6 +305,7 @@ class WordsTest {
             Shown(DATES, "SpPhoneListStates", "ago"),
             Shown(DATES, null, "yesterday"),
             Shown(DATES, null, "days ago"),
+            Shown(DATES, null, "on"),
         )
 
         val NAMES = listOf(
@@ -421,6 +422,10 @@ class WordsTest {
                 "No indexer answered. Indexer A: Paused: too many searches from Sportarr · Indexer B: Couldn't reach it.",
             ),
             Template(NOTHING, "unanswered", null, Words.NoRelease.unanswered(emptyList()), "No indexers are switched on."),
+            Template(
+                NOTHING, "keptOn", null, Words.NoRelease.keptOn("yesterday", "20:41", "game"),
+                "No release yesterday at 20:41. Releases often appear a few hours after a game ends.",
+            ),
         )
     }
 }

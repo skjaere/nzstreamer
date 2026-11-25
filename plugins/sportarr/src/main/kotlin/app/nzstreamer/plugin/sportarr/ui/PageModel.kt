@@ -224,7 +224,7 @@ internal object PageScreens {
         val mark = MarkButton(if (watched) Words.Game.MARK_UNWATCHED else Words.Game.MARK_WATCHED, part.key, watched = !watched)
         return EventScreen(
             kind, event.title, Times.meta(event.league.name, event.start, now, zone), status, null, pick, buttons, mark, null,
-            kept(listOf(Item(event, part)), watch, nothing, zone), emptyList(), footnote, buttons.first().key,
+            kept(listOf(Item(event, part)), watch, nothing, now, zone), emptyList(), footnote, buttons.first().key,
         )
     }
 
@@ -283,7 +283,7 @@ internal object PageScreens {
             ?: PageKeys.HELD
         return EventScreen(
             if (weekend != null) PageKind.Weekend else PageKind.Card, title, meta, status, count, null, buttons, null, note,
-            kept(items, watch, nothing, zone), rows, footnote, firstFocus,
+            kept(items, watch, nothing, now, zone), rows, footnote, firstFocus,
         )
     }
 
@@ -340,13 +340,18 @@ internal object PageScreens {
     /**
      * The line the page keeps after Play or Choose release last found nothing for one of [items] ([nothing]), until a
      * release of the page plays after it (the host's last play of any of its parts: a weekend that played on is past it):
-     * the latest such, with when, and the event's noun.
+     * the latest such, with when, and the event's noun; with its day once that isn't today, as the plugin runs on.
      */
-    private fun kept(items: List<Item>, watch: Map<String, WatchInfo>, nothing: Map<String, Instant>, zone: ZoneId): String? {
+    private fun kept(items: List<Item>, watch: Map<String, WatchInfo>, nothing: Map<String, Instant>, now: Instant, zone: ZoneId): String? {
         val played = items.mapNotNull { watch[it.part.key]?.lastPlayedAt }.maxOrNull()
-        return items.mapNotNull { item -> nothing[item.part.key]?.let { item to it } }
+        val (item, at) = items.mapNotNull { item -> nothing[item.part.key]?.let { item to it } }
             .filter { (_, at) -> played == null || played.isBefore(at) }
-            .maxByOrNull { it.second }?.let { (item, at) -> Words.NoRelease.kept(Times.time(at, zone), Nouns.event(item.event)) }
+            .maxByOrNull { it.second } ?: return null
+        val day = Times.date(at, zone)
+        val today = Times.date(now, zone)
+        val noun = Nouns.event(item.event)
+        val time = Times.time(at, zone)
+        return if (day == today) Words.NoRelease.kept(time, noun) else Words.NoRelease.keptOn(Times.pastDay(day, today), time, noun)
     }
 
     private fun progress(info: WatchInfo): Float? = if (info.durationMs > 0) (info.positionMs.toFloat() / info.durationMs).coerceIn(0f, 1f) else null

@@ -39,6 +39,10 @@ internal object Times {
     fun shortDay(date: LocalDate, today: LocalDate): String =
         if (date.year == today.year) dayMonth(date) else "${dayMonth(date)} ${date.year}"
 
+    /** A day before [today] in a line: "yesterday", else its date, "on Sat 21 Nov". */
+    fun pastDay(date: LocalDate, today: LocalDate): String =
+        if (date == today.minusDays(1)) Dates.YESTERDAY_AGO else "${Dates.ON} ${day(date, today)}"
+
     /** When an event or session starts or started: "Fri 20 Nov · 12:30". */
     fun dayAndTime(at: Instant, now: Instant, zone: ZoneId): String = Words.line(day(date(at, zone), date(now, zone)), time(at, zone))
 

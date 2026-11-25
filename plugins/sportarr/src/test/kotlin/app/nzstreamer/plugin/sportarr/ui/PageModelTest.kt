@@ -495,6 +495,18 @@ class PageModelTest {
     }
 
     @Test
+    fun `the line names the day it was left on, once that isn't today`() {
+        // Play found nothing on Saturday evening; the plugin, and its line, live on into the next days.
+        val saturday = at("2026-11-21T20:41")
+        val nothing = mapOf("ev-000012:full" to saturday)
+        fun kept(now: Instant) = assertIs<EventScreen>(PageScreens.of(ListState.Ready(GAMES), Pages.EVENT, "ev-000012", emptyMap(), nothing, null, now, LONDON, tv = false)).kept
+        val often = "Releases often appear a few hours after a game ends."
+        assertEquals("No release at 20:41. $often", kept(at("2026-11-21T23:30")))
+        assertEquals("No release yesterday at 20:41. $often", kept(at("2026-11-22T18:00")))
+        assertEquals("No release on Sat 21 Nov at 20:41. $often", kept(at("2026-11-24T09:00")))
+    }
+
+    @Test
     fun `on a weekend's page, a later play of any of its sessions ends the line one of them left`() {
         // Practice 3's Choose release found nothing at noon on Saturday; that evening the qualifying plays from the top button.
         val noon = at("2026-11-21T12:00")

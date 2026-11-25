@@ -489,6 +489,12 @@ internal object Words {
         fun kept(time: String, noun: String): String = "No release at $time. ${often(noun)}"
 
         /**
+         * Undrawn: the same line once its [day] isn't today, the plugin having run on: "No release yesterday at 20:41.
+         * Releases often appear a few hours after a game ends.", "No release on Sat 21 Nov at 20:41. …".
+         */
+        fun keptOn(day: String, time: String, noun: String): String = "No release $day at $time. ${often(noun)}"
+
+        /**
          * Undrawn: under the page's buttons once Choose release found nothing because no indexer answered, each indexer's
          * name and the host's words for why ("No indexer answered. Indexer A: Paused: too many searches from Sportarr."),
          * as Search says it with none switched on.
@@ -540,11 +546,14 @@ internal object Words {
         /** SpPhoneListStates 2: the kept list's age, "list from 3 h ago". */
         const val AGO = "ago"
 
-        /** Undrawn: a list read the day before, as Discover says its lists' age. */
+        /** Undrawn: a list read the day before, as Discover says its lists' age; a page's line left the day before. */
         const val YESTERDAY_AGO = "yesterday"
 
         /** Undrawn: a list read days before, "4 days ago". */
         const val DAYS_AGO = "days ago"
+
+        /** Undrawn: a day named by its date in a line, "on Sat 21 Nov". */
+        const val ON = "on"
 
         /** SpPhoneList 1: the days' names, Monday first as java.time numbers them: "Fri 20 Nov". */
         @JvmField val DAY_NAMES = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")

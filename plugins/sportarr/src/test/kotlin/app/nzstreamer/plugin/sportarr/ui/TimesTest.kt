@@ -76,6 +76,14 @@ class TimesTest {
     }
 
     @Test
+    fun `a day before today in a line is yesterday, else on its date`() {
+        val today = LocalDate.of(2026, 11, 23)
+        assertEquals("yesterday", Times.pastDay(LocalDate.of(2026, 11, 22), today))
+        assertEquals("on Sat 21 Nov", Times.pastDay(LocalDate.of(2026, 11, 21), today))
+        assertEquals("on Mon 30 Nov 2026", Times.pastDay(LocalDate.of(2026, 11, 30), LocalDate.of(2027, 1, 2)))
+    }
+
+    @Test
     fun `a short day is its date and month, with the year in another year`() {
         assertEquals("23 Sep", Times.shortDay(LocalDate.of(2026, 9, 23), SUNDAY))
         assertEquals("5 Dec", Times.shortDay(LocalDate.of(2026, 12, 5), SUNDAY))
