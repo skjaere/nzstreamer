@@ -129,7 +129,7 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
     private val by = "$owner-${UUID.randomUUID()}"
     private val undo = mutableListOf<String>()
     private var held = false
-    private var keeping: Thread? = null
+    private var keeping: HoldKeeper? = null
     private var indexed = false
     private val mock = PluginMockSetup(INDEXER_ID, INDEXER_NAME, SportsFakes.INDEXER_PORT)
 
@@ -161,16 +161,7 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
         }
         held = true
         control("reset")
-        keeping = thread(isDaemon = true, name = "fake-sportarr-hold") {
-            try {
-                while (true) {
-                    Thread.sleep(RENEW_MS)
-                    ask("take?by=$by&ms=$HOLD_MS")
-                }
-            } catch (e: InterruptedException) {
-                // Given back.
-            }
-        }
+        keeping = HoldKeeper(RENEW_MS) { ask("take?by=$by&ms=$HOLD_MS") }
     }
 
     /** The fake's anchor and now. */
@@ -285,7 +276,7 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
             { undo.asReversed().toList().forEach { control(it) } },
             { undo.clear() },
             { mock.restore() },
-            { keeping?.interrupt() },
+            { keeping?.stop(STOP_WAIT_MS) },
             { keeping = null },
             { if (held) control("give-back?by=$by") },
             { held = false },
@@ -342,6 +333,9 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
         private const val HOLD_MS = 2 * 60_000L
         private const val RENEW_MS = 30_000L
 
+        /** How long [restore] waits for a renewal under way: an ask ends within its connect and read timeouts. */
+        private const val STOP_WAIT_MS = 11_000L
+
         /** How long a test waits for another's turn at the fake. */
         private const val HOLD_WAIT_MS = 12 * 60_000L
 
@@ -350,6 +344,45 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
         private const val CAP_WINDOW_MS = 60_000L
         private const val ACTIONS_A_MINUTE = 3
         private const val PACE_SLACK_MS = 1_000L
+    }
+}
+
+/**
+ * Keeps a hold of the fake Sportarr up: [renew] every [everyMs] on a daemon thread of its own until [stop]. A renewal that
+ * fails (the fake not answering for a moment) stays on this thread, as an exception left on any thread ends the whole
+ * instrumentation process and every class after the test; the hold lapses instead, and the next renewal tries again.
+ */
+internal class HoldKeeper(private val everyMs: Long, private val renew: () -> Unit) {
+    @Volatile
+    private var stopped = false
+
+    private val thread = thread(isDaemon = true, name = "fake-sportarr-hold") {
+        while (!stopped) {
+            try {
+                Thread.sleep(everyMs)
+            } catch (e: InterruptedException) {
+                break // Given back.
+            }
+            if (stopped) break
+            try {
+                renew()
+            } catch (e: Exception) {
+                // Lapses unless the next renewal reaches the fake.
+            }
+        }
+    }
+
+    /** Whether its thread still runs. */
+    val alive: Boolean get() = thread.isAlive
+
+    /**
+     * Stops the renewals, waiting up to [waitMs] for one under way: an interrupt doesn't end a request, and one landing
+     * after the give-back would hold the fake for this test again.
+     */
+    fun stop(waitMs: Long) {
+        stopped = true
+        thread.interrupt()
+        thread.join(waitMs)
     }
 }
 
