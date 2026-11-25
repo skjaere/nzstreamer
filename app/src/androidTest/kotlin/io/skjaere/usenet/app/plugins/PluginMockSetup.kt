@@ -16,13 +16,14 @@ import java.net.Socket
 
 /**
  * The mock's two halves for a plugin's searches and plays, as the user would set them up: the shared fake indexer
- * (10.0.2.2:8089, its Copper Crown releases) as the one indexer on, named [indexerName]; and, where a test plays, the mock
- * NNTP server (10.0.2.2:1119) as the one provider, the engine on it. [restore] puts back every watch row [forget] was
+ * (10.0.2.2:8089, its Copper Crown releases), or another fake indexer on [indexerPort] with the same key (the sports
+ * indexer, 8094), as the one indexer on, named [indexerName]; and, where a test plays, the mock NNTP server
+ * (10.0.2.2:1119) as the one provider, the engine on it. [restore] puts back every watch row [forget] was
  * told of as it was before the test, and after a [setUp] the settings and the releases remembered as tried, and the engine
  * where a play's setUp moved it. The saved providers are hidden for the test, not deleted, as deleting would remove their
  * passwords; the test's own provider and indexer are deleted with their secrets.
  */
-class PluginMockSetup(private val indexerId: String, private val indexerName: String) {
+class PluginMockSetup(private val indexerId: String, private val indexerName: String, private val indexerPort: Int = 8089) {
     private val container = InstrumentationRegistry.getInstrumentation().targetContext.container
     private val settings = container.settings
     private val library = container.library
@@ -33,7 +34,7 @@ class PluginMockSetup(private val indexerId: String, private val indexerName: St
 
     /** Skips the test where the fake indexer, and for a play the mock NNTP server, isn't up. */
     fun assumeUp(plays: Boolean) {
-        assumeTrue("fake indexer not reachable at 10.0.2.2:8089 (mock-seed indexer)", reachable(8089))
+        assumeTrue("fake indexer not reachable at 10.0.2.2:$indexerPort (mock-seed)", reachable(indexerPort))
         if (plays) assumeTrue("mock NNTP server not reachable at 10.0.2.2:1119", reachable(1119))
     }
 
@@ -49,7 +50,7 @@ class PluginMockSetup(private val indexerId: String, private val indexerName: St
             engineSetup("the engine on the saved mock") { container.engine.configuredProviders.first { it == listOf(mock) } }
         }
         settings.indexers.first().filter { it.enabled }.forEach { settings.setIndexerEnabled(it.id, false) }
-        settings.saveIndexer(indexerId, indexerName, "http://10.0.2.2:8089", "fake-indexer-key")
+        settings.saveIndexer(indexerId, indexerName, "http://10.0.2.2:$indexerPort", "fake-indexer-key")
     }
 
     /** [key]'s watch row as it is now, to be put back so by [restore]: the test's plays and marks make or change it. */

@@ -26,6 +26,8 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.isSelected
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.requestFocus
@@ -79,9 +81,12 @@ import io.skjaere.usenet.app.plugins.PluginListState
 import io.skjaere.usenet.app.plugins.PluginPlaceholder
 import io.skjaere.usenet.app.plugins.PluginStateRule
 import io.skjaere.usenet.app.plugins.PluginStatus
+import io.skjaere.usenet.app.plugins.PluginPage1
+import io.skjaere.usenet.app.plugins.PluginSettings1
 import io.skjaere.usenet.app.plugins.PluginTab1
 import io.skjaere.usenet.app.plugins.PluginsPageFakes
 import io.skjaere.usenet.app.plugins.await
+import io.skjaere.usenet.app.plugins.sportarr.SportarrDevice
 import io.skjaere.usenet.app.search.PossibleMatches
 import io.skjaere.usenet.app.search.ReleaseList
 import io.skjaere.usenet.app.settings.IndexerTest
@@ -140,7 +145,8 @@ import java.net.Socket
  * and bottom) all the way down; at 2x no text is cut off. One test per screen, each with all its
  * problems in one report. A text field is reached at its gate, which OK opens: the arrows never
  * put the focus in the field itself. A plugin's placeholder is walked in an in-process fake's slot of the app's own
- * registry ([FakePluginRule]), which PluginStateRule takes out after, as it does from every plugin class.
+ * registry ([FakePluginRule]), which PluginStateRule takes out after, as it does from every plugin class. The Sports
+ * tab's screens are the real Sportarr plugin's over the fake Sportarr ([SportarrDevice]), each skipped without it.
  */
 @RunWith(AndroidJUnit4::class)
 class TvSharedScreensWalkTest {
@@ -159,6 +165,9 @@ class TvSharedScreensWalkTest {
     private lateinit var nav: NavHostController
     private lateinit var focusManager: FocusManager
 
+    /** The real Sportarr plugin and the fake Sportarr, for the Sports cases alone. */
+    private var sportarr: SportarrDevice? = null
+
     @Before
     fun remote() {
         home.show()
@@ -168,7 +177,11 @@ class TvSharedScreensWalkTest {
     @After
     fun restore() {
         instrumentation.setInTouchMode(true)
-        home.restore()
+        try {
+            sportarr?.restore()
+        } finally {
+            home.restore()
+        }
     }
 
     private fun showTheApp() {
@@ -234,11 +247,11 @@ class TvSharedScreensWalkTest {
      * arrows (back on that element before each), so every element reached is reached with the
      * D-pad; at each stop what shows is checked. [required]: the focusable elements that must be
      * reached (and are walked on from). [mustReach]: elements, by how their labels start, the walk must have reached: a
-     * screen without them passes the rest.
+     * screen without them passes the rest. [sideways]: lines that scroll sideways are scrolled back too.
      */
     private fun walk(
         screen: String, problems: MutableList<String>, required: (String) -> Boolean, reach: Boolean, area: Boolean, clipping: Boolean,
-        intended: (String) -> Boolean, scrollBack: Boolean, mustReach: List<String> = emptyList(),
+        intended: (String) -> Boolean, scrollBack: Boolean, mustReach: List<String> = emptyList(), sideways: Boolean = false,
     ) {
         val seen = linkedSetOf<String>()
         val reached = linkedSetOf<String>()
@@ -264,6 +277,14 @@ class TvSharedScreensWalkTest {
             // Gone with its lazy list's item, the list walked on down past it: scrolled back to it first.
             if (scrollBack && nodes.fetchSemanticsNodes().isEmpty()) {
                 runCatching { compose.onAllNodes(hasScrollToNodeAction()).onFirst().performScrollToNode(matcher) }
+                compose.waitForIdle()
+            }
+            // Gone with a line that scrolls sideways (a line of chips), walked along past it: that line scrolled back.
+            if (sideways && nodes.fetchSemanticsNodes().isEmpty()) {
+                val lines = compose.onAllNodes(hasScrollToNodeAction() and SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange))
+                lines.fetchSemanticsNodes().indices.forEach { line ->
+                    if (nodes.fetchSemanticsNodes().isEmpty()) runCatching { lines[line].performScrollToNode(matcher) }
+                }
                 compose.waitForIdle()
             }
             if (nodes.fetchSemanticsNodes().isEmpty()) return false
@@ -314,10 +335,11 @@ class TvSharedScreensWalkTest {
      * [intended]: texts made to end in an ellipsis when there is no room (a poster's name and line), not counted as cut at
      * 2x. [scrollBack]: the screen's one list is long enough to dispose of its first lines as the walk goes down it, which
      * the walk scrolls back to. [mustReach]: elements the walk must reach at 1x and 1.3x, by how their labels start.
+     * [sideways]: its lines that scroll sideways do the same as the walk goes along them.
      */
     private fun check(
         screen: String, required: (String) -> Boolean = { true }, intended: (String) -> Boolean = { false }, scrollBack: Boolean = false,
-        mustReach: List<String> = emptyList(), show: () -> Unit,
+        mustReach: List<String> = emptyList(), sideways: Boolean = false, show: () -> Unit,
     ) {
         val problems = mutableListOf<String>()
         listOf(1f, 1.3f, 2f).forEach { s ->
@@ -326,7 +348,10 @@ class TvSharedScreensWalkTest {
                 compose.waitForIdle()
                 show()
                 val large = s >= 2f
-                walk(screen, problems, required, reach = !large, area = !large, clipping = large, intended = intended, scrollBack = scrollBack, mustReach = mustReach)
+                walk(
+                    screen, problems, required, reach = !large, area = !large, clipping = large, intended = intended, scrollBack = scrollBack,
+                    mustReach = mustReach, sideways = sideways,
+                )
             } catch (e: Exception) {
                 problems += "$screen at ${s}x: ${e.javaClass.simpleName}: ${e.message?.lineSequence()?.take(3)?.joinToString(" ")}"
             }
@@ -789,6 +814,91 @@ class TvSharedScreensWalkTest {
         }
     }
 
+    /**
+     * The real Sportarr plugin installed in the app's first slot (L657), over the fake Sportarr where [connected]; the test
+     * skipped where the fake isn't up.
+     */
+    private fun sportarr(connected: Boolean): SportarrDevice = SportarrDevice(plugins, "TvSharedScreensWalkTest").also { device ->
+        sportarr = device
+        device.assumeUp()
+        device.hold()
+        device.install(connected)
+    }
+
+    /** The Sports tab, fresh, and what it shows once the list is read ([shown]). */
+    private fun openSports(shown: SemanticsMatcher) {
+        compose.runOnIdle {
+            nav.switchTab(HomeRoute)
+            nav.switchTab(PluginTab1, restore = false)
+        }
+        compose.waitUntil(SPORTS_WAIT_MS) { compose.onAllNodes(shown).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitForIdle()
+    }
+
+    /**
+     * The Sports list (L652), its view narrowed to Fighting so the walk reaches all of it: the title line with
+     * Recent | Upcoming, the sport chips and the ⋮, the sport's leagues, and its days' rows.
+     */
+    @Test
+    fun sportsList() {
+        sportarr(connected = true)
+        showTheApp()
+        val fighting = hasText("Fighting") and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton)
+        check(
+            "The Sports list", scrollBack = true, sideways = true,
+            mustReach = listOf("All", "Recent", "Upcoming", "More", "Soccer", "Fighting", "Skiing", "All leagues", "UFC"),
+        ) {
+            openSports(hasText("TODAY"))
+            // Picked once: the choice is kept for the tab (view.json), and the walk comes back to it at each text size.
+            if (compose.onAllNodes(fighting and isSelected()).fetchSemanticsNodes().isEmpty()) {
+                // Its chip brought into its line's view first: the line scrolls sideways.
+                val chips = hasScrollToNodeAction() and SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
+                compose.onAllNodes(chips).onFirst().performScrollToNode(fighting)
+                compose.onNode(fighting).performClick()
+            }
+            compose.waitUntil(SPORTS_WAIT_MS) { compose.onAllNodes(hasText("All leagues")).fetchSemanticsNodes().isNotEmpty() }
+            compose.waitForIdle()
+        }
+    }
+
+    /** A game's page: its two panes, Play, Choose release and Search indexers on the left, Mark watched on the right. */
+    @Test
+    fun sportsGamePage() {
+        val device = sportarr(connected = true)
+        showTheApp()
+        val game = device.catalogue.event(SPORTS_GAME)
+        check("A Sports game's page", mustReach = listOf("Play", "Choose release", "Search indexers", "Mark watched")) {
+            compose.runOnIdle {
+                nav.switchTab(HomeRoute)
+                nav.navigate(PluginPage1("event", game.key))
+            }
+            compose.waitUntil(SPORTS_WAIT_MS) { compose.onAllNodes(hasText("Mark watched")).fetchSemanticsNodes().isNotEmpty() }
+            compose.waitForIdle()
+        }
+    }
+
+    /**
+     * The Sports setup (L640): the tab's first screen, its two fields' gates and Show; then the same form as
+     * Sportarr settings, the address stored, the key Saved with Change, and Test and Save.
+     */
+    @Test
+    fun sportsSetup() {
+        val device = sportarr(connected = false)
+        showTheApp()
+        check("The Sports setup", mustReach = listOf("Sportarr address", "API key", "Show API key")) {
+            openSports(hasText("Sportarr address"))
+        }
+        runBlocking { device.connect() }
+        check("Sportarr settings", mustReach = listOf("Sportarr address", "Change", "Test", "Save")) {
+            compose.runOnIdle {
+                nav.switchTab(HomeRoute)
+                nav.navigate(PluginSettings1)
+            }
+            compose.waitUntil(SPORTS_WAIT_MS) { compose.onAllNodes(hasText("Saved")).fetchSemanticsNodes().isNotEmpty() }
+            compose.waitForIdle()
+        }
+    }
+
     /** Pair a phone over a fake listener at an invented address, whose words a test sends as the listener would. */
     private class FakePairing(phones: Int, listener: TvListener) {
         @Volatile var page: PairPageListener? = null
@@ -986,6 +1096,9 @@ class TvSharedScreensWalkTest {
         )
         const val LEFT_OUT = "3 left out: a name with a score, other sessions. Their names aren't shown."
         const val LOAD_MS = 400L
+        /** The fake Sportarr's library's game of Lantern Bay FC, and how long its list or page may take to come. */
+        const val SPORTS_GAME = 1001
+        const val SPORTS_WAIT_MS = 30_000L
         /** FakeDiscover's invented names, each with its page's number. */
         val DISCOVER_NAME = Regex("""\D+ \d+""")
         const val WALK_INDEXER = "tv-walk-test"
