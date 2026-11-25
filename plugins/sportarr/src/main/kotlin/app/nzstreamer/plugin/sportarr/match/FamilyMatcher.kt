@@ -13,7 +13,7 @@ import java.time.Instant
 interface FamilyMatcher {
     /**
      * The event's own words a release name is read against (L646): its title, its league's name, its sides and its
-     * series' forms, the organisations a card's number follows, and whether it is a show with a pre-show.
+     * series' forms, the organisations a card's number follows, whether it is a show with a pre-show, and its years.
      */
     fun context(event: SportsEvent): NameContext
 

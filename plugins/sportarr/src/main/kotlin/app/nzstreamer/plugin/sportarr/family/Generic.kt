@@ -23,7 +23,7 @@ import java.time.Instant
  */
 object Generic : FamilyMatcher {
     override fun context(event: SportsEvent): NameContext =
-        NameContext(title = event.title, league = event.league.name, series = event.league.alternateNames)
+        NameContext(title = event.title, league = event.league.name, series = event.league.alternateNames, years = eventYears(event))
 
     /**
      * Stage 1: the title's distinctive words, five at most ("Kestrel Mens Downhill"), and the league's name with the event's

@@ -59,6 +59,7 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
             // Only a numbered card's and a fight night's organisation has a card number after it.
             organisations = listOfNotNull(card.organisation?.written).takeIf { card.type in CARD_NUMBERS }.orEmpty(),
             show = card.type == CardType.Premium,
+            years = eventYears(event),
         )
     }
 

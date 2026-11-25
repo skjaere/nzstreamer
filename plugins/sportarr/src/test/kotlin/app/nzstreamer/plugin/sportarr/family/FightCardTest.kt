@@ -327,6 +327,18 @@ class FightCardTest {
     }
 
     @Test
+    fun `a premium event whose title carries its year takes its dated and its undated names`() {
+        val titled = sports(VELMORA to listOf(on(VELMORA, 57, at("2026-11-21T23:00"), "Velmora Iron Crown 2026")))
+        val rows = listOf(
+            "Velmora.Iron.Crown.2026.11.21.1080p.WEB.h264-KESTREL" to show(accepted, otherParts),
+            "Velmora.Iron.Crown.2026.PPV.1080p.WEB.h264-WREN" to show(accepted, otherParts),
+            "Velmora.Iron.Crown.2026.11.21.Pre-Show.720p.WEB.h264-WREN" to show(otherParts, accepted),
+            "Velmora.Iron.Crown.2026.11.14.1080p.WEB.h264-WREN" to show(other, other),
+        )
+        assertEquals("", wrong(titled.byId(57), rows, FightCard(titled)))
+    }
+
+    @Test
     fun `a weekly night first listed alone stays a premium event while it is listed, and the premium rule judges it`() {
         // The first week was read alone once, and kept as a named event; the two weeks after it are weekly.
         val read = SportsList(at("2026-11-22T20:41"), listOf(VELMORA), brawls.sortedByDescending { it.eventDate }, cut = false)

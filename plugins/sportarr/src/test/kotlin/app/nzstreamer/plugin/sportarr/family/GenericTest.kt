@@ -63,6 +63,17 @@ class GenericTest {
     }
 
     @Test
+    fun `a title that carries its year is named by it, dated or not`() {
+        val titled = sports(cup to listOf(on(cup, 1502, at("2026-11-21T15:00"), "Kestrel Cup Final 2026"))).byId(1502)
+        val rows = listOf(
+            "Kestrel.Cup.Final.2026.1080p.WEB.h264-WREN" to byTitle,
+            "Kestrel.Cup.Final.2026.11.21.1080p.WEB.h264-WREN" to byLeague,
+            "Kestrel.Cup.Final.2025.1080p.WEB.h264-WREN" to other,
+        )
+        assertEquals("", wrong(titled, rows))
+    }
+
+    @Test
     fun `nothing is ever accepted, so Play never plays a release by itself`() {
         val names = listOf(
             "FIS.Alpine.Ski.World.Cup.2026.11.21.Kestrel.Mens.Downhill.1080p.WEB.h264-KESTREL",

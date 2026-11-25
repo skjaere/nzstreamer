@@ -54,7 +54,7 @@ class Motorsport(private val sports: Sports) : FamilyMatcher {
     }
 
     override fun context(event: SportsEvent): NameContext =
-        NameContext(title = event.title, league = event.league.name, series = seriesOf(event.league).written)
+        NameContext(title = event.title, league = event.league.name, series = seriesOf(event.league).written, years = eventYears(event))
 
     /**
      * Stage 1: the series' first two forms, each with the place ("Formula 1 Kestrel", "Formula1 Kestrel"); stage 2: the

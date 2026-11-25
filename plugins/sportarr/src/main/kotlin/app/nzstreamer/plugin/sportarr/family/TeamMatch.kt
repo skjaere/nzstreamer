@@ -51,6 +51,7 @@ class TeamMatch(private val sports: Sports) : FamilyMatcher {
             league = event.league.name,
             sides = listOfNotNull(game?.home?.name, game?.away?.name),
             series = event.league.alternateNames,
+            years = eventYears(event),
         )
     }
 

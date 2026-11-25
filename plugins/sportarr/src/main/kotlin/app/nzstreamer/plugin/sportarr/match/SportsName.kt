@@ -96,8 +96,9 @@ object Tokens {
  * What a release name is read against (L646): the event's own [title], its [league]'s name, its [sides] and its [series]'
  * forms. Their numbers are masked where they stand in the name beside a word of theirs, so a race's "500" or a club's "03"
  * is never read as a date, a year or a score; and no word of theirs is a result word. [organisations] are the words a card
- * number follows ("UFC" of "UFC 999"). [show] says the event is a show with a pre-show, whose "Countdown" is that part
- * rather than a preview programme.
+ * number follows ("UFC" of "UFC 999"). [show] says the event is a show with a pre-show, whose "Kickoff Show" is that part
+ * rather than a programme of its own. [years] are the event's own years: a title's number that is one of them is never
+ * masked, since read as a year it says what the event's is ("Velmora Iron Crown 2026" opens "Velmora.Iron.Crown.2026.11.21").
  */
 data class NameContext(
     val title: String? = null,
@@ -106,6 +107,7 @@ data class NameContext(
     val series: List<String> = emptyList(),
     val organisations: List<String> = emptyList(),
     val show: Boolean = false,
+    val years: Set<Int> = emptySet(),
 ) {
     companion object {
         /** A name read against nothing of an event's. */
@@ -318,12 +320,12 @@ private class Reader(private val name: String, private val context: NameContext)
      * Masks each number of the event's own phrases where it stands in the identity beside the word it has beside it there
      * ("500" after "Kestrel" for "Kestrel 500"), or anywhere when the phrase is that number alone. Beside the word after it
      * alone, a number that closes a year-first date stays the date's day: a title's "07 - Game 1" doesn't take the day of
-     * "2026.12.07.Game.1".
+     * "2026.12.07.Game.1". The event's own years stay years.
      */
     private fun maskOwnNumbers() {
         phrases.forEach { phrase ->
             phrase.forEachIndexed { k, word ->
-                if (!word.all { it in '0'..'9' }) return@forEachIndexed
+                if (!word.all { it in '0'..'9' } || (word.length == 4 && word.toInt() in context.years)) return@forEachIndexed
                 for (j in 0 until tailStart) {
                     if (all[j].word != word) continue
                     val before = k > 0 && j > 0 && all[j - 1].word == phrase[k - 1]

@@ -201,6 +201,7 @@ class SportsNameTest {
         val KCL_21 = NameContext(title = "KCL 21: Brisk vs. Loam")
         val DOUBLE_HEADER = NameContext(title = "Kestrel Club 03 vs Kestrel Club 07 - Game 1", sides = listOf("Kestrel Club 03", "Kestrel Club 07"))
         val IN_A_SHOW = NameContext(show = true)
+        val CROWN_2026 = NameContext(title = "Velmora Iron Crown 2026", years = setOf(2026))
 
         val DATES = listOf(
             Row("Premier.League.2026.11.21.Lantern.Bay.FC.vs.Copper.Crown.United.1080p50.WEB.h264-KESTREL", "2026-11-21"),
@@ -260,6 +261,10 @@ class SportsNameTest {
             Row("Kestrel.Club.03.vs.Kestrel.Club.07.Game.1.2026.12.07.1080p.WEB.h264-KESTREL", "2026-12-07", DOUBLE_HEADER),
             Row("KCL.2026.11.21.Brisk.vs.Loam.1080p.WEB.h264-WREN", "2026-11-21", KCL_21),
             Row("KCL.21.Brisk.vs.Loam.2026.11.21.1080p.WEB.h264-WREN", "2026-11-21", KCL_21),
+            // A title's own number that is the event's year is never masked: read as a year, it says what the event's is.
+            Row("Velmora.Iron.Crown.2026.11.21.1080p.WEB.h264-KESTREL", "2026-11-21", CROWN_2026),
+            Row("Velmora.Iron.Crown.2026.PPV.1080p.WEB.h264-KESTREL", "y2026", CROWN_2026),
+            Row("Velmora.Iron.Crown.2025.PPV.1080p.WEB.h264-KESTREL", "y2025", CROWN_2026),
         )
 
         val NUMBERS = listOf(
@@ -664,6 +669,8 @@ class SportsNameTest {
             Row("Formula.1.20.Kestrel.Race.1080p.WEB.h264-WREN", "none", NameContext(series = listOf("Formula 1", "Formula1", "F1"))),
             // A title's own number beside the word after it stays its own where the numbers before it make no date.
             Row("KCL.2026.13.21.Brisk.vs.Loam.1080p.WEB.h264-WREN", "none", KCL_21),
+            // A title's year opens its date: the month and day after it are the date's, no score.
+            Row("Velmora.Iron.Crown.2026.11.21.1080p.WEB.h264-KESTREL", "none", CROWN_2026),
             // A side's own number is a side's word.
             Row(
                 "Kestrel.Club.03.vs.Kestrel.Club.07.2.1.1080p.WEB.h264-WREN",
