@@ -1,5 +1,7 @@
 package app.nzstreamer.plugin.sportarr.ui
 
+import app.nzstreamer.plugin.sportarr.model.Count
+
 /**
  * The plugin's words. Strings live in Kotlin, as a plugin carries no resources (L580, L660), with straight apostrophes as
  * the host's strings have them.
@@ -21,4 +23,10 @@ internal object Words {
 
     const val KEY = "API key"
     const val KEY_HELP = "In Sportarr: Settings › General › Security. Stored encrypted on this device."
+
+    /** A card's or weekend's count: "2 of 4 watched". */
+    fun watched(count: Count): String = "${count.watched} of ${count.of} watched"
+
+    /** After a league's first five on a day: "+3 more". */
+    fun more(count: Int): String = "+$count more"
 }

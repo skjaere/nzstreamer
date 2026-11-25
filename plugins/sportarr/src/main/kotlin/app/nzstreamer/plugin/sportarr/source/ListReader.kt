@@ -72,6 +72,8 @@ class ListReader(
             events += withContext(work) {
                 Membership.events(league, walked.events).filter { it.eventDate >= windowStart && it.eventDate < windowEnd }
                     .distinctBy { it.id }
+                    // Each kept under the league whose route listed it, which the model groups the list by.
+                    .map { if (it.leagueId == league.id) it else it.copy(leagueId = league.id) }
             }
             cut = cut || walked.cut
         }

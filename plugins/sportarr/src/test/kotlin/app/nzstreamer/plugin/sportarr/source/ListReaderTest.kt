@@ -220,6 +220,19 @@ class ListReaderTest {
     }
 
     @Test
+    fun `each event is kept under the league whose route listed it`() {
+        val sportarr = TestSportarr(
+            listOf(league(1, "Premier League"), league(3, "UFC", "Fighting")),
+            mapOf(
+                1 to listOf(event(1, NOW, 1), event(2, NOW, leagueId = 99)),
+                3 to listOf(event(3, NOW, 3).copy(leagueId = null)),
+            ),
+        )
+        val list = list(read(sportarr))
+        assertEquals(mapOf(1 to 1, 2 to 1, 3 to 3), list.events.associate { it.id to it.leagueId })
+    }
+
+    @Test
     fun `nothing switched on reads the leagues alone`() {
         val sportarr = TestSportarr(listOf(league(1, monitored = false)), mapOf(1 to listOf(event(1, NOW))))
         val list = list(read(sportarr))

@@ -1,5 +1,6 @@
 package app.nzstreamer.plugin.sportarr.source
 
+import app.nzstreamer.plugin.sportarr.model.Sports
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
@@ -57,7 +58,7 @@ class RefreshTest {
         kept: KeptList = KeptList(dir, EmptyCoroutineContext),
     ): Refresh {
         val clock = { START.plusMillis(testScheduler.currentTime) }
-        return Refresh(backgroundScope, Connection(secrets), kept, clock) { saved ->
+        return Refresh(backgroundScope, Connection(secrets), kept, clock, work = EmptyCoroutineContext) { saved ->
             ListReader(SportarrClient(sportarr.http, saved.address, saved.key, ::loopbackSafety, EmptyCoroutineContext), clock(), ZoneOffset.UTC, work = EmptyCoroutineContext)
                 .read()
         }
@@ -80,7 +81,7 @@ class RefreshTest {
         assertEquals(oneRead, sportarr.http.requests.size)
         val first = assertIs<ListState.Ready>(refresh.state.value)
         assertEquals(START, first.readAt)
-        assertEquals(setOf(1, 2, 3), first.list.events.map { it.id }.toSet())
+        assertEquals(setOf(1, 2, 3), first.sports.events.map { it.id }.toSet())
 
         advanceTimeBy(10.minutes)
         refresh.shown().join()
@@ -187,16 +188,17 @@ class RefreshTest {
         val kept = KeptList(dir, EmptyCoroutineContext)
         val refresh = refresh(kept = kept)
         refresh.shown().join()
-        val before = assertIs<ListState.Ready>(refresh.state.value).list
+        val before = assertIs<ListState.Ready>(refresh.state.value).sports
+        val keptBefore = assertNotNull(kept.read())
 
         sportarr.pages[2 to 1] = { answer(401) }
         advanceTimeBy(20.minutes)
         refresh.shown().join()
 
         val refused = assertIs<ListState.Refused>(refresh.state.value)
-        assertEquals(before, refused.list)
+        assertEquals(before, refused.sports)
         assertEquals(START, refused.readAt)
-        assertEquals(before, kept.read(), "list.json is the old list")
+        assertEquals(keptBefore, kept.read(), "list.json is the old list")
     }
 
     @Test
@@ -204,14 +206,15 @@ class RefreshTest {
         val kept = KeptList(dir, EmptyCoroutineContext)
         val refresh = refresh(kept = kept)
         refresh.shown().join()
-        val before = assertIs<ListState.Ready>(refresh.state.value).list
+        val before = assertIs<ListState.Ready>(refresh.state.value).sports
+        val keptBefore = assertNotNull(kept.read())
 
         sportarr.pages[2 to 1] = { answer(500) }
         refresh.refresh().join()
 
         assertEquals(ListState.Unreachable(before, Failure.ErrorStatus), refresh.state.value)
         assertEquals(START, (refresh.state.value as ListState.Unreachable).readAt)
-        assertEquals(before, kept.read())
+        assertEquals(keptBefore, kept.read())
     }
 
     @Test
@@ -220,7 +223,7 @@ class RefreshTest {
         val refresh = refresh()
         refresh.shown().join()
         val state = assertIs<ListState.Unreachable>(refresh.state.value)
-        assertNull(state.list)
+        assertNull(state.sports)
         assertNull(state.readAt)
         assertEquals(Failure.NoAnswer, state.why)
     }
@@ -235,11 +238,11 @@ class RefreshTest {
 
         val shown = refresh.shown()
         runCurrent()
-        assertEquals(ListState.Ready(old), refresh.state.value)
+        assertEquals(ListState.Ready(Sports.of(old)), refresh.state.value)
         shown.join()
         val read = assertIs<ListState.Ready>(refresh.state.value)
-        assertEquals(setOf(1, 2, 3), read.list.events.map { it.id }.toSet())
-        assertEquals(read.list, kept.read())
+        assertEquals(setOf(1, 2, 3), read.sports.events.map { it.id }.toSet())
+        assertEquals(read.sports, kept.read()?.let(Sports::of))
     }
 
     @Test
@@ -249,7 +252,7 @@ class RefreshTest {
         kept.write(fresh)
         val refresh = refresh(kept = kept)
         refresh.shown().join()
-        assertEquals(ListState.Ready(fresh), refresh.state.value)
+        assertEquals(ListState.Ready(Sports.of(fresh)), refresh.state.value)
         assertEquals(0, sportarr.http.requests.size)
     }
 
@@ -286,6 +289,46 @@ class RefreshTest {
             assertTrue(decodedOn.none { it === callerThread.single() }, "decoded on: ${decodedOn.map { it.name }}")
             assertNotNull(KeptList(dir).let { runBlocking { it.read() } })
             assertIs<ListState.Ready>(refresh.state.value)
+        } finally {
+            scope.cancel()
+            callerThreads.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `a read gives the model of what it read, each event under its league with its keys`() = runTest {
+        val refresh = refresh()
+        refresh.shown().join()
+        val sports = assertIs<ListState.Ready>(refresh.state.value).sports
+
+        assertEquals(listOf("Premier League", "Formula 1"), sports.leagues.map { it.name })
+        assertEquals("Formula 1", sports.event("ev-000003")!!.league.name)
+        assertEquals(listOf("ev-000003:full"), sports.event("ev-000003")!!.parts.map { it.key })
+        assertEquals(listOf("ev-000003"), sports.weekends.single().sessions.map { it.key })
+        assertEquals(START, sports.readAt)
+    }
+
+    @Test
+    fun `the model is built off the dispatcher that asked, from list_json and from a read`() {
+        val callerThread = CopyOnWriteArrayList<Thread>()
+        val callerThreads = Executors.newSingleThreadExecutor { Thread(it, "refresh-caller").also { thread -> callerThread += thread } }
+        val scope = CoroutineScope(callerThreads.asCoroutineDispatcher() + SupervisorJob())
+        val builtOn = CopyOnWriteArrayList<Thread>()
+        try {
+            val kept = KeptList(dir)
+            val old = SportsList(START.minus(Duration.ofHours(3)), listOf(KeptLeague(1, "Premier League", "Soccer")), listOf(event(9, START, 1)), false)
+            runBlocking { kept.write(old) }
+            val connection = Connection(MapSecrets(mapOf("url" to "http://127.0.0.1:1867", "key" to KEY)))
+            // The build seam: the model's own build, the thread it ran on noted first.
+            val refresh = Refresh(scope, connection, kept, { START }, build = { list -> builtOn += Thread.currentThread(); Sports.of(list) }) { saved ->
+                ListReader(SportarrClient(sportarr.http, saved.address, saved.key, ::loopbackSafety), START, ZoneOffset.UTC).read()
+            }
+            runBlocking { refresh.shown().join() }
+
+            assertEquals(2, builtOn.size, "the kept list, then the list read")
+            assertEquals(1, callerThread.size, "the caller's one thread ran the refresh")
+            assertTrue(builtOn.none { it === callerThread.single() }, "built on: ${builtOn.map { it.name }}")
+            assertEquals(setOf(1, 2, 3), assertIs<ListState.Ready>(refresh.state.value).sports.events.map { it.id }.toSet())
         } finally {
             scope.cancel()
             callerThreads.shutdownNow()

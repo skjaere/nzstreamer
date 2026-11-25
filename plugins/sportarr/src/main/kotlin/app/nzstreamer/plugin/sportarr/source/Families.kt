@@ -2,6 +2,7 @@ package app.nzstreamer.plugin.sportarr.source
 
 import app.nzstreamer.plugin.sportarr.model.CardType
 import app.nzstreamer.plugin.sportarr.model.Family
+import app.nzstreamer.plugin.sportarr.model.Sessions
 import java.util.Locale
 import kotlin.math.abs
 
@@ -115,7 +116,8 @@ object Families {
 
     private fun String.isNumber(): Boolean = isNotEmpty() && all { it in '0'..'9' }
 
-    private fun fold(sport: String?): String =
+    /** [sport] as the families and the runtimes read it: lower-cased, its spaces and hyphens folded into one space. */
+    internal fun fold(sport: String?): String =
         sport.orEmpty().lowercase(Locale.ROOT).split(SPACES_AND_HYPHENS).filter { it.isNotEmpty() }.joinToString(" ")
 
     private val NOT_A_WORD = Regex("""[^\p{L}\p{N}]+""")
@@ -183,14 +185,10 @@ object Families {
     }
 
     /**
-     * Session words as the plugin reads a session's title, longest first so "sprint qualifying" is one session: practice,
-     * qualifying, sprint, race and their kin, and the German, French and Dutch ones release names use.
+     * Session words as the step-down reads a title, longest first so "sprint qualifying" is one session: the sessions' own
+     * words, which also label a weekend's sessions, and "grand prix" and "gp", which name a race but not where it runs.
      */
-    private val SESSIONS: List<List<String>> = listOf(
-        "sprint qualifying", "sprint shootout", "free practice", "freies training", "vrije training", "test day", "grand prix", "warm up",
-        "practice", "qualifying", "quali", "sprint", "race", "gp", "warmup", "shakedown", "testing", "fp1", "fp2", "fp3",
-        "rennen", "qualifikation", "training", "course", "qualifications", "essais", "kwalificatie",
-    ).map { it.split(' ') }.sortedByDescending { it.size }
+    private val SESSIONS: List<List<String>> = (Sessions.words + listOf(listOf("grand", "prix"), listOf("gp"))).sortedByDescending { it.size }
 
     private val MONTHS = setOf(
         "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december",
