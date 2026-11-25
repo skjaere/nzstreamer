@@ -108,9 +108,11 @@ internal object Words {
         /** Undrawn: Sportarr answered with its own error, a 5xx: "Sportarr answered with an error (500). Try again in a moment." */
         fun serverError(status: Int): String = "Sportarr answered with an error ($status). Try again in a moment."
 
-        /** Undrawn: an address that can't be read as one Sportarr can be asked at (L640). */
-        const val INVALID_ADDRESS =
-            "Sports can't read this address. Type it as you open Sportarr in a browser, starting with http:// or https://."
+        /**
+         * Undrawn: an address that can't be read as one Sportarr can be asked at (L640): no http:// or https://, or a ? or #
+         * part, which a copy of the browser's bar can bring.
+         */
+        const val INVALID_ADDRESS = "Sports can't read this address. Type it starting with http:// or https://, with nothing after a ? or #."
 
         /**
          * Test's [answer] as its line under Test and Save (SpPhoneSetup 3 and 4, and the notes' answers), on a TV where [tv]. The ✓ or

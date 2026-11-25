@@ -180,7 +180,7 @@ class WordsTest {
             Shown(SETUP, "SpPhoneSetup", "Sports only reads from Sportarr. It never changes, searches or downloads anything there. To change what shows here, change it in Sportarr."),
             Shown(SETUP, "SpPhoneSetup", "Sportarr refused this API key. Copy it again from Settings › General › Security in Sportarr."),
             Shown(SETUP, "SpPhoneSetup", "This address answers, but it isn't Sportarr."),
-            Shown(SETUP, null, "Sports can't read this address. Type it as you open Sportarr in a browser, starting with http:// or https://."),
+            Shown(SETUP, null, "Sports can't read this address. Type it starting with http:// or https://, with nothing after a ? or #."),
 
             Shown(LIST, "SpPhoneList", "Recent"),
             Shown(LIST, "SpPhoneList", "Upcoming"),

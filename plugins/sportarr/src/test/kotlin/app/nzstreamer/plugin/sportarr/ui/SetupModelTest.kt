@@ -319,6 +319,18 @@ class SetupModelTest {
     }
 
     @Test
+    fun `the line for an address Sports can't read says what to change, a missing http or what follows a question mark or hash`() = runTest {
+        // An address copied from a browser's bar starts with http:// already, and is what the browser showed: the line can't
+        // send the user back there, it has to name what Sports refuses in it.
+        val model = filled(model(), address = "$BASE/?page=1")
+        model.test()
+        val line = model.form.value.line?.text.orEmpty()
+        assertTrue("http://" in line && "https://" in line, "names the start it needs: $line")
+        assertTrue("?" in line && "#" in line, "names what to leave out: $line")
+        assertFalse("browser" in line, "doesn't send the user back to the browser's bar: $line")
+    }
+
+    @Test
     fun `the saved key is the one Test sends and Save keeps, and a Save that changes nothing reads nothing`() = runTest {
         val http = sportarr()
         val secrets = MapSecrets(mapOf("url" to BASE, "key" to KEY))
