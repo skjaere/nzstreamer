@@ -72,20 +72,36 @@ internal class Plays(
     val nothing: StateFlow<Map<String, Instant>> = found.asStateFlow()
 
     /**
+     * The play being made ready, by its part's key, until it is in the host's hands: its item takes a moment to make (its
+     * matcher reads the list), and the host's sheet, with its own guard against a second OK, shows only once it is.
+     * Pressed on the main thread alone.
+     */
+    private var ready: Pair<String, Job>? = null
+
+    /**
      * Plays [part] of [event] of [sports]. The host asks for its releases only when no release played it before, or that
      * one fails; an answer of the indexers that leaves it nothing to play or pick (the runner's note for its no-release
      * sheet) keeps the page's line. With no indexer answering, the host's sheet says why, and the page keeps nothing.
+     *
+     * A press while the same part is being made ready (OK twice, or held over CEC) is that play; a press of another part
+     * replaces it, so the part pressed last plays, whichever item is quicker to make.
      */
-    fun play(sports: Sports, event: SportsEvent, part: Part): Job = scope.launch {
-        val (item, matcher) = withContext(work) { prepared(sports, event, part) }
-        play.play(item) {
-            val run = runner.run(matcher, event, part)
-            when {
-                run.releases.note == null -> cleared(part)
-                run.answered -> noted(part)
-            }
-            run.releases
+    fun play(sports: Sports, event: SportsEvent, part: Part): Job {
+        ready?.let { (key, job) ->
+            if (job.isActive && key == part.key) return job
+            job.cancel()
         }
+        return scope.launch {
+            val (item, matcher) = withContext(work) { prepared(sports, event, part) }
+            play.play(item) {
+                val run = runner.run(matcher, event, part)
+                when {
+                    run.releases.note == null -> cleared(part)
+                    run.answered -> noted(part)
+                }
+                run.releases
+            }
+        }.also { ready = part.key to it }
     }
 
     /**

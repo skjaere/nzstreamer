@@ -28,14 +28,17 @@ import io.skjaere.usenet.plugin.PluginWatch
 import io.skjaere.usenet.plugin.ReleaseHandle
 import io.skjaere.usenet.plugin.ReleaseInfo
 import io.skjaere.usenet.plugin.WatchInfo
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Test
 import java.time.Instant
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -148,6 +151,35 @@ class PlaysTest {
         assertEquals(listOf("Lantern Bay Copper Crown", "Premier League 2026 11 21"), search.words.sorted())
         assertEquals(1, answer.accepted.size)
         assertEquals(emptyMap(), plays.nothing.value, "a play that found something keeps no line")
+    }
+
+    @Test
+    fun `a second press while the play is made ready plays it once, and the last part pressed is the one that plays`() = runBlocking<Unit> {
+        val play = RecordingPlay()
+        val work = HeldWork()
+        val plays = Plays(play, RecordingWatch(), AnsweringSearch { emptyList() }, this, { NOW }, work)
+        val library = sports(
+            PREMIER to listOf(on(PREMIER, 12, at("2026-11-21T15:00"), "Lantern Bay FC vs. Copper Crown United")),
+            FORMULA_1 to kestrelWeekend(firstId = 21),
+        )
+        val game = library.event("ev-000012")!!
+        val race = library.event("ev-000025")!!
+
+        // OK twice on the game, as a held key over CEC sends it, while its item is still being made.
+        val first = plays.play(library, game, game.headline)
+        val second = plays.play(library, game, game.headline)
+        work.runAll(lastFirst = false)
+        first.join()
+        second.join()
+        assertEquals(listOf("ev-000012:full"), play.items.map { it.key }, "one play for the two presses")
+
+        // The game, then the race a moment later: the race's item made first, as it is the cheaper to make.
+        val game2 = plays.play(library, game, game.headline)
+        val race2 = plays.play(library, race, race.headline)
+        work.runAll(lastFirst = true)
+        game2.join()
+        race2.join()
+        assertEquals(listOf("ev-000012:full", "ev-000025:full"), play.items.map { it.key }, "the race, pressed last, plays")
     }
 
     @Test
@@ -306,6 +338,25 @@ class PlaysTest {
             runtimes += runtimeMinutes
             val found = answers(words)
             emit(Found(listOf(IndexerLine("Indexer A", IndexerLine.State.Found, found.size, "${found.size} found")), found))
+        }
+    }
+
+    /** Work held until [runAll] runs it, in the order it came or the last first: an item made slowly, or quickly. */
+    private class HeldWork : CoroutineDispatcher() {
+        private val held = ArrayDeque<Runnable>()
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            synchronized(held) { held += block }
+        }
+
+        suspend fun runAll(lastFirst: Boolean) {
+            // Each press's work arrives once its coroutine starts.
+            repeat(10) { yield() }
+            while (true) {
+                val block = synchronized(held) { if (lastFirst) held.removeLastOrNull() else held.removeFirstOrNull() } ?: break
+                block.run()
+                repeat(10) { yield() }
+            }
         }
     }
 
