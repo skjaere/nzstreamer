@@ -460,7 +460,8 @@ fun SearchScreen(
         r == null || editing -> start()
         else -> {
             // A search of the words sent on purpose (Search indexers, a recent search, a plugin's): what it is, a plugin's
-            // note under it (L629), and TMDB's titles for the words on top, each opening its page.
+            // note under it (L629), and TMDB's titles for the words on top, each opening its page; none for a plugin's
+            // noted words, which TMDB is never asked for (L659).
             if (r.byWords) wordsHeader(r.query, r.note, strip, ::focusOf, onOpen = { s -> openTitle(s, s.stripKey) }) else r.note?.let { noteLine(it) }
             releases(r)
         }

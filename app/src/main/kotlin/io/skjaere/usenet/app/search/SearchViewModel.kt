@@ -231,6 +231,12 @@ data class SearchResults(
     /** A search of the words alone, sent on purpose: not by a picked title, not the preview's own. TMDB's titles for them show on top. */
     val byWords: Boolean get() = pick == null && !fallback
 
+    /**
+     * Whether TMDB is asked for this search's words, for its titles on top ([byWords]): never for a plugin's noted words
+     * (L629), which the user didn't type and which the plugin's privacy words keep to the indexers (L659).
+     */
+    val titlesOnTop: Boolean get() = byWords && note == null
+
     val answered: Int get() = statuses.count { it.answered }
     val found: Int get() = statuses.sumOf { it.results }
 
@@ -367,11 +373,12 @@ class SearchViewModel(private val deps: SearchDeps, initial: SearchRequest?) : V
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /**
-     * TMDB's titles for the words a search of the indexers was for ([SearchResults.byWords]), while its releases show: a
-     * strip on top. Only once TMDB has answered for them: meanwhile the lookup still holds the words before's titles.
+     * TMDB's titles for the words a search of the indexers was for ([SearchResults.titlesOnTop]), while its releases show:
+     * a strip on top. Only once TMDB has answered for them: meanwhile the lookup still holds the words before's titles.
+     * None over a plugin's noted search, even where the user typed the same words before.
      */
     val strip: StateFlow<List<TitleSuggestion>> = combine(lookup, results, editing) { t, r, e ->
-        t.titles.takeIf { t.settled && !e && r != null && r.byWords && t.query == r.query }.orEmpty()
+        t.titles.takeIf { t.settled && !e && r != null && r.titlesOnTop && t.query == r.query }.orEmpty()
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private var job: Job? = null
@@ -396,7 +403,7 @@ class SearchViewModel(private val deps: SearchDeps, initial: SearchRequest?) : V
     init {
         // The key's own flow, not hasTmdbKey: that starts as false, which would read as no key until the settings are read.
         viewModelScope.launch {
-            combine(query, editing, results, deps.hasTmdbKey) { q, e, r, key -> (if (e) q.trim() else r?.takeIf { it.byWords }?.query) to key }
+            combine(query, editing, results, deps.hasTmdbKey) { q, e, r, key -> (if (e) q.trim() else r?.takeIf { it.titlesOnTop }?.query) to key }
                 .debounce(300)
                 .distinctUntilChanged()
                 .collectLatest { (text, key) -> lookUp(text, key) }

@@ -946,6 +946,38 @@ class SearchViewModelTest {
         assertEquals(listOf("quiet marsh", "glasswater"), f.history.entries.value.map { it.query })
     }
 
+    /**
+     * L659: a plugin's noted search asks TMDB nothing for its words, which the user never typed and which the plugin's
+     * privacy words keep to the indexers, so no strip of TMDB's titles over its releases, tried again too. Typed again,
+     * the words are the user's own while typing, and once searched they carry the note again, with no strip.
+     */
+    @Test
+    fun `a search opened with a note never asks TMDB for its words nor shows its titles`() = runTest {
+        val f = fixture()
+        val vm = f.vm(SearchRequest("lantern", note = NOTE))
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(assertNotNull(vm.results.value).done)
+        assertEquals(emptyList(), f.tmdbAsked, "TMDB asked for a plugin's words")
+        assertEquals(emptyList(), vm.strip.value)
+
+        vm.retry()
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(NOTE, assertNotNull(vm.results.value).note)
+        assertEquals(emptyList(), f.tmdbAsked, "TMDB asked for a plugin's words, tried again")
+        assertEquals(emptyList(), vm.strip.value)
+
+        type(vm, "lantern")
+        assertEquals(listOf(lantern), vm.suggestions.value, "the words as typed")
+        vm.searchIndexers()
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(NOTE, assertNotNull(vm.results.value).note)
+        assertEquals(listOf("lantern"), f.tmdbAsked, "TMDB asked once, for the words typed")
+        assertEquals(emptyList(), vm.strip.value, "TMDB's titles over a noted search")
+    }
+
     /** Every release a search's results hold, playable or hidden. */
     private fun SearchResults.listed(): Set<String> = grouped.sections.flatMap { s -> s.groups.flatMap { g -> (g.playable + g.hidden).map { it.item.title } } }.toSet()
 

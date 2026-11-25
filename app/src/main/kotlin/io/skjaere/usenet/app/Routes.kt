@@ -19,7 +19,7 @@ import kotlinx.serialization.Serializable
  * sheet's, for an episode) carries its original [language], which its untagged releases speak.
  * A search a plugin opened ([io.skjaere.usenet.plugin.PluginNav.openSearch], or its item's no-release sheet) may carry
  * the plugin's [note], one line in the warning colour above the results while its words show (L629); such a search isn't
- * kept in the recent searches.
+ * kept in the recent searches, and TMDB isn't asked for its words (L659).
  */
 @Serializable data class SearchRoute(
     val query: String? = null,
