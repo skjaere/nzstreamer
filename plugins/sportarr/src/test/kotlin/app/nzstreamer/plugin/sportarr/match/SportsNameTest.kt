@@ -145,6 +145,9 @@ class SportsNameTest {
         assertTrue(SportsName.read("Premier.League.2026.11.21.Lantern.Bay.FC.vs.Copper.Crown.United.WEB.SD.h264-WREN").standardDefinition)
         assertFalse(SportsName.read("Premier.League.2026.11.21.Lantern.Bay.FC.vs.Copper.Crown.United.720p.WEB.h264-WREN").standardDefinition)
         assertFalse(SportsName.read("Premier.League.2026.11.21.SD.vs.LBF.720p.WEB.h264-WREN").standardDefinition, "a code before the tail")
+        // Right before the tail, as the quality word it is.
+        assertTrue(SportsName.read("Premier.League.2026.11.21.Lantern.Bay.FC.vs.Copper.Crown.United.SD.x264-WREN").standardDefinition)
+        assertFalse(SportsName.read("Premier.League.2026.11.21.Lantern.Bay.FC.vs.Copper.Crown.United.SD").standardDefinition, "no tail after it")
     }
 
     @Test

@@ -323,6 +323,9 @@ class SharedRulesTest {
         }
         val sd = "Premier.League.2026.11.21.Lantern.Bay.FC.vs.Copper.Crown.United.SDTV.x264-KESTREL"
         assertEquals(Verdict.Accept(), judge(game, sd, size = 412_500_000))
+        val bareSd = "Premier.League.2026.11.21.Lantern.Bay.FC.vs.Copper.Crown.United.SD.x264-WREN"
+        assertEquals(Verdict.Accept(), judge(game, bareSd, size = 600_000_000), "SD right before the tail")
+        assertEquals(Verdict.Offer("Small for a whole game"), judge(game, bareSd, size = 412_499_999))
     }
 
     @Test

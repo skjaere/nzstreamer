@@ -193,7 +193,7 @@ class SportsName internal constructor(
     val siblings: Set<String>,
     /** Whether the identity holds a score (L646). */
     val score: Boolean,
-    /** Whether the tail says 480p, 576p or SD, for the size floor's lower rate (L647). */
+    /** Whether the tail, or the word right before it, says 480p, 576p or SD, for the size floor's lower rate (L647). */
     val standardDefinition: Boolean,
     /** False only for a name the parser failed on; then nothing else is read. */
     val readable: Boolean,
@@ -314,7 +314,9 @@ private class Reader(private val name: String, private val context: NameContext)
             results = results,
             siblings = siblings,
             score = readScore(),
-            standardDefinition = (tailStart until end).any { Words.isStandardDefinition(all[it].word) },
+            // "SD" ends no identity, as a team's code may be it, but right before the tail it is the quality word it says.
+            standardDefinition = (tailStart until end).any { Words.isStandardDefinition(all[it].word) } ||
+                (tailStart in 1 until all.size && all[tailStart - 1].word == SD),
             readable = true,
         )
     }
@@ -699,6 +701,7 @@ private class Reader(private val name: String, private val context: NameContext)
         val PLAIN_JOINS = setOf(".", "_")
         val DAY_MONTH_JOINS = setOf(".", "_", "/")
         const val DAY = "day"
+        const val SD = "sd"
 
         /** A colon, an en dash and an em dash: a score's joins, never a date's. */
         const val NEVER_IN_DATES = ":\u2013\u2014"
