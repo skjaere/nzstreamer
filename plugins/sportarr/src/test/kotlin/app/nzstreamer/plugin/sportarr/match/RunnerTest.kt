@@ -21,8 +21,8 @@ import io.skjaere.usenet.plugin.ReleaseInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -31,7 +31,6 @@ import java.time.Duration
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -350,13 +349,27 @@ class RunnerTest {
     @Test
     fun `a cancelled run leaves no search running, and its cancellation goes on up`() = runTest {
         val search = CountingSearch { awaitCancellation() }
-        val run = async { Runner(search).releases(family(), game, game.headline) }
+        val mark = Logged.mark()
+        // The call itself is watched, not a Deferred, which ends cancelled whatever the call does with the cancellation.
+        var returned = false
+        var threw: CancellationException? = null
+        val run = launch {
+            try {
+                Runner(search).releases(family(), game, game.headline)
+                returned = true
+            } catch (e: CancellationException) {
+                threw = e
+                throw e
+            }
+        }
         runCurrent()
         assertEquals(2, search.runningNow, "stage one's two searches")
         run.cancel()
-        assertFailsWith<CancellationException> { run.await() }
+        run.join()
+        assertTrue(threw != null && !returned, "the call threw its cancellation and gave nothing")
         assertEquals(0, search.runningNow)
         assertEquals(2, search.asked.size, "no stage two after a cancel")
+        assertEquals(emptyList(), Logged.pluginLinesSince(mark).map { it.words }, "a cancelled run logs no result")
     }
 
     @Test
