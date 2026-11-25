@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A plugin declares no component and no permission (L624): NZStreamer loads its code, Android never starts it. Its
+     meta-data come from the plugin convention's placeholders, but for the entry class, which is the plugin's own. It has no
+     icon, as it carries no resources (L580): nothing of Android's ever shows it. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application android:hasCode="true" tools:ignore="MissingApplicationIcon">
+        <meta-data android:name="nzs.plugin.id" android:value="${nzsPluginId}" />
+        <meta-data android:name="nzs.plugin.entry" android:value="app.nzstreamer.plugin.sportarr.SportarrPlugin" />
+        <meta-data android:name="nzs.plugin.api.major" android:value="${nzsApiMajor}" />
+        <meta-data android:name="nzs.plugin.api.minor" android:value="${nzsApiMinor}" />
+        <meta-data android:name="nzs.plugin.libs" android:value="${nzsLibs}" />
+    </application>
+</manifest>

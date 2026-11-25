@@ -185,6 +185,11 @@ abstract class PluginBuildFeatures @Inject constructor(val features: BuildFeatur
 //   sources say: version.txt's versionCode, plugin-api.txt's stamp and the libraries above, whatever the plugin's build
 //   file or manifest set. The skeleton's builds are test fixtures with versions and a stamp of their own (L623), which
 //   its build file lists for the rules as pluginCheckExpectations; no other plugin's is read.
+// - JVM tests (L639) on JUnit 5, with the same libraries, the API and the kit, which a test's JVM has no app to take from,
+//   and kotlin-test and kotlinx-coroutines-test. A plugin's build file may add test-only dependencies of its own: they never
+//   reach the APK.
+// - Its debug APK offered to the app's device tests (testPluginApks, which :app copies into their assets as <id>.apk), once
+//   plugin-check's rules passed on it (L639, L657). The skeleton's build file offers its four builds itself.
 subprojects {
     if (!path.startsWith(":plugins:")) return@subprojects
     val pluginId = name
@@ -226,6 +231,9 @@ subprojects {
             }
             buildFeatures { compose = true }
             androidResources { additionalParameters += listOf("--package-id", "0x7e", "--allow-reserved-package-id") }
+            // Android's calls answer defaults in the JVM tests, as in the app's own.
+            testOptions.unitTests.isReturnDefaultValues = true
+            testOptions.unitTests.all { it.useJUnitPlatform() }
             release?.let { key ->
                 signingConfigs.create("pluginRelease") {
                     storeFile = key.store
@@ -245,17 +253,19 @@ subprojects {
         }
 
         dependencies {
-            "compileOnly"(project(":core:plugin"))
-            "compileOnly"(project(":core:ui"))
-            "compileOnly"(platform(libs.compose.bom))
-            "compileOnly"(libs.compose.ui)
-            "compileOnly"(libs.compose.material3)
-            "compileOnly"(libs.compose.material.icons.core)
-            "compileOnly"(libs.kotlinx.coroutines.core)
-            "compileOnly"(libs.kotlinx.serialization.json)
-            "compileOnly"(libs.lifecycle.viewmodel.compose)
-            "compileOnly"(libs.activity.compose)
-            "compileOnly"(libs.slf4j.api)
+            // compileOnly for the APK, and in the JVM tests too, where nothing else would give them.
+            listOf(
+                project(":core:plugin"), project(":core:ui"), platform(libs.compose.bom), libs.compose.ui, libs.compose.material3,
+                libs.compose.material.icons.core, libs.kotlinx.coroutines.core, libs.kotlinx.serialization.json,
+                libs.lifecycle.viewmodel.compose, libs.activity.compose, libs.slf4j.api,
+            ).forEach { shared ->
+                "compileOnly"(shared)
+                "testImplementation"(shared)
+            }
+            "testImplementation"(libs.junit.jupiter)
+            "testImplementation"(libs.kotlin.test)
+            "testImplementation"(libs.kotlinx.coroutines.test)
+            "testRuntimeOnly"(libs.junit.platform.launcher)
         }
         configurations.configureEach {
             val tests = name.endsWith("UnitTestRuntimeClasspath") || name.endsWith("AndroidTestRuntimeClasspath")
@@ -347,6 +357,16 @@ subprojects {
             }
             tasks.named { it == "assemble$capitalized" }.configureEach { finalizedBy(rules) }
             if (variant.debuggable) tasks.named("check") { dependsOn(rules) }
+        }
+
+        // The debug APK for the app's device tests, once plugin-check's rules passed on it.
+        if (path != ":plugins:skeleton") {
+            val testPluginApks = configurations.create("testPluginApks") { isCanBeResolved = false }
+            androidComponents.onVariants(androidComponents.selector().withBuildType("debug")) { variant ->
+                artifacts.add(testPluginApks.name, variant.artifacts.get(SingleArtifact.APK)) {
+                    builtBy("checkPluginRules${variant.name.replaceFirstChar { it.uppercase() }}")
+                }
+            }
         }
     }
 }

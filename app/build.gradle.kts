@@ -442,7 +442,8 @@ android {
     sourceSets["androidTest"].assets.srcDir(rootProject.layout.buildDirectory.dir("stream-bench"))
     // The media the shared mock NNTP server was seeded with, which the gap tests post again on a server of their own (LocalNntp).
     sourceSets["androidTest"].assets.srcDir("src/androidTest/fixtures")
-    // The skeleton plugin's four builds (L623), copied there by copyTestPlugins below: the plugins the device tests install.
+    // The skeleton plugin's four builds (L623) and the Sportarr plugin's debug build (L657), copied there by copyTestPlugins
+    // below: the plugins the device tests install.
     sourceSets["androidTest"].assets.srcDir(layout.buildDirectory.dir("test-plugins"))
 
     // Discover (TMDB's lists: trending, popular, ...) is in the debug, bench and beta builds only, never in the release (Play)
@@ -555,21 +556,24 @@ dependencies {
 }
 
 // The skeleton plugin's four debug builds (L623) as the device tests' assets: skeleton-v1.apk, skeleton-v2.apk,
-// skeleton-foreign.apk (v2 signed with a throwaway key) and skeleton-newer.apk (built against the next plugin API minor).
-// The tests install them as the Plugins page installs a download, and none of them is ever released. Copied before the
-// test APK's assets are merged; plugin-check's rules run on each as it is built.
+// skeleton-foreign.apk (v2 signed with a throwaway key) and skeleton-newer.apk (built against the next plugin API minor);
+// and the Sportarr plugin's debug build as sportarr.apk (L657), signed as the app under test is. The tests install them as
+// the Plugins page installs a download, and none of these builds is ever released. Copied before the test APK's assets are
+// merged; plugin-check's rules run on each as it is built.
 val testPluginApks: Configuration by configurations.creating {
     isCanBeConsumed = false
 }
 
 dependencies {
     testPluginApks(project(":plugins:skeleton", "testPluginApks"))
+    testPluginApks(project(":plugins:sportarr", "testPluginApks"))
 }
 
 val copyTestPlugins by tasks.registering(Sync::class) {
     from(testPluginApks) {
         include("*.apk")
         rename("""skeleton-(\w+)-debug\.apk""", "skeleton-$1.apk")
+        rename("""sportarr-debug\.apk""", "sportarr.apk")
     }
     into(layout.buildDirectory.dir("test-plugins"))
 }

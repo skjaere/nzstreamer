@@ -69,8 +69,9 @@ include(":core:ui")
 include(":core:player")
 include(":app")
 // Plugins (L587): each an APK of its own, built by the root build's plugin convention. The skeleton is the platform's
-// example and test plugin, never released.
+// example and test plugin, never released; Sportarr is the first plugin users install (L639).
 include(":plugins:skeleton")
+include(":plugins:sportarr")
 
 // Local checkouts of the usenet libraries, only with -PusenetLibsDir. All four must be there: a missing one fails the
 // build, so a build is never half local. The wrapper's folder may carry its repository's name or yenc_kotlin_wrapper.
