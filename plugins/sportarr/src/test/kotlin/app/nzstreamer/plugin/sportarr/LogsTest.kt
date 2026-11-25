@@ -1,11 +1,22 @@
 package app.nzstreamer.plugin.sportarr
 
+import app.nzstreamer.plugin.sportarr.family.Matchers
+import app.nzstreamer.plugin.sportarr.match.Runner
+import app.nzstreamer.plugin.sportarr.match.TestHandle
+import app.nzstreamer.plugin.sportarr.model.Sports
+import app.nzstreamer.plugin.sportarr.source.ListRead
 import app.nzstreamer.plugin.sportarr.source.ListReader
 import app.nzstreamer.plugin.sportarr.source.LoopbackHttp
 import app.nzstreamer.plugin.sportarr.source.SportarrClient
 import app.nzstreamer.plugin.sportarr.source.loopbackSafety
 import io.skjaere.usenet.mockseed.FakeSportarrServer
 import io.skjaere.usenet.mockseed.SportsCatalog
+import io.skjaere.usenet.plugin.Found
+import io.skjaere.usenet.plugin.IndexerLine
+import io.skjaere.usenet.plugin.PluginSearch
+import io.skjaere.usenet.plugin.ReleaseInfo
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
@@ -15,15 +26,17 @@ import java.net.ServerSocket
 import java.net.URI
 import java.time.LocalDate
 import java.time.ZoneOffset
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /**
  * The plugin's log lines (L653, L660): they reach the app's Logs page, which users share, so they say counts, durations
- * and kinds, and never the key, the address or its host, an event's or a league's title, or anything Sportarr sends that
- * the plugin never declares (the canary values of the fake's every event and league). The test-only capturing provider
- * records every line of the plugin's loggers while Test answers and a refresh reads the fake Sportarr's library.
+ * and kinds, and never the key, the address or its host, an event's or a league's title, a release's name, or anything
+ * Sportarr sends that the plugin never declares (the canary values of the fake's every event and league). The test-only
+ * capturing provider records every line of the plugin's loggers while Test answers, a refresh reads the fake Sportarr's
+ * library and the runner judges the catalogue's names.
  */
 class LogsTest {
     private val anchor = LocalDate.of(2026, 11, 22)
@@ -99,5 +112,37 @@ class LogsTest {
         val lines = Logged.pluginLinesSince(mark)
         assertEquals(5, lines.size, lines.joinToString("\n") { it.words })
         assertClean(lines)
+    }
+
+    @Test
+    fun `the runner logs no release name, title or canary value, whatever it judges`() {
+        // The library as a read of the fake gives it, its canary fields sent with every event and league; and every name of
+        // the catalogue, scored and result-word ones among them, found by every search of every part of every listed event.
+        val now = anchor.atTime(12, 0).toInstant(ZoneOffset.UTC)
+        val read = assertIs<ListRead.Read>(runBlocking { ListReader(client(), now, ZoneOffset.UTC).read() })
+        val sports = Sports.of(read.list)
+        val matchers = Matchers(sports)
+        val releases = catalog.releases(anchor)
+        val asked = CopyOnWriteArrayList<String>()
+        val search = object : PluginSearch {
+            override fun search(words: String, runtimeMinutes: Int?, fresh: Boolean): Flow<Found> = flow {
+                asked += words
+                val found = releases.map { ReleaseInfo(it.name, it.sizeBytes, it.postedAt, INDEXER, playable = true, whyNot = null, handle = TestHandle(it.id)) }
+                emit(Found(listOf(IndexerLine(INDEXER, IndexerLine.State.Found, found.size, "${found.size} found")), found))
+            }
+        }
+        val items = sports.events.flatMap { event -> event.parts.map { event to it } }
+        val mark = Logged.mark()
+        items.forEach { (event, part) -> runBlocking { Runner(search).releases(matchers.of(event), event, part) } }
+        val lines = Logged.pluginLinesSince(mark)
+        assertEquals(items.size, lines.size, lines.joinToString("\n") { it.words })
+        // Every run judged every name, and counted the scores and result words it left out without naming one.
+        assertTrue(lines.all { "${releases.size} judged" in it.words }, lines.first().words)
+        assertTrue(lines.any { "Score=" in it.words } && lines.any { "Result=" in it.words }, lines.joinToString("\n") { it.words })
+        assertClean(lines, *(releases.map { it.name } + asked).toTypedArray())
+    }
+
+    private companion object {
+        const val INDEXER = "Sports indexer"
     }
 }

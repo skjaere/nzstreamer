@@ -24,15 +24,20 @@ import io.skjaere.usenet.mockseed.SportsEvent as CatalogueEvent
 /**
  * The sports fakes' catalogue (mock-seed's, on the tests' classpath) at one anchor, as the plugin keeps its library after
  * a read: the leagues switched on, each league's page as Sportarr's route gives it, and L642's membership. Its release
- * rows say what the judge should make of each name, so a family's tests can hold it to them.
+ * rows say what the judge should make of each name, so a family's tests can hold it to them. Its anchor is a Sunday: the
+ * fixtures' game and race are the day before, Saturday 21 November 2026.
  */
-object Catalogue {
-    /** The anchor, a Sunday: the fixtures' game and race are the day before, Saturday 21 November 2026. */
-    val anchor: LocalDate = LocalDate.of(2026, 11, 22)
+object Catalogue : CatalogueAt(LocalDate.of(2026, 11, 22))
 
-    private val catalog = SportsCatalog.load()
-
+/**
+ * The catalogue at [anchor], the date every start, release name and posted time counts from, as the sports fakes keep it
+ * when they start that day: the rows hold whatever the anchor, as the device classes need on any day they run.
+ */
+open class CatalogueAt(val anchor: LocalDate) {
     val releases: List<SportsRelease> by lazy { catalog.releases(anchor) }
+
+    /** Every verdict a release row gives, with its release: for its own event and part, then for any other it names. */
+    val rows: List<Pair<SportsRelease, SportsVerdict>> by lazy { releases.flatMap { release -> release.verdicts.map { release to it } } }
 
     val sports: Sports by lazy {
         val leagues = catalog.leagues(anchor).filter { it.monitored }
@@ -55,9 +60,8 @@ object Catalogue {
     fun event(id: Int): SportsEvent = sports.events.single { it.id == id }
 
     /** Every verdict a release row gives for a listed event of [family], with its release. */
-    fun verdicts(family: Family): List<Pair<SportsRelease, SportsVerdict>> = releases
-        .flatMap { release -> release.verdicts.map { release to it } }
-        .filter { (_, verdict) -> sports.events.any { it.id == verdict.eventId && it.family == family } }
+    fun verdicts(family: Family): List<Pair<SportsRelease, SportsVerdict>> =
+        rows.filter { (_, verdict) -> sports.events.any { it.id == verdict.eventId && it.family == family } }
 
     /**
      * What the shared rules and [matcher] make of [release] for [verdict]'s event and part, in the words the row writes it
@@ -87,4 +91,9 @@ object Catalogue {
         eventDate = start, broadcastDate = broadcastDate, broadcastTimezone = broadcastTimezone, monitored = monitored, hasFile = hasFile,
         round = round, homeTeamName = homeTeamName, awayTeamName = awayTeamName, eventTypePartNames = partNames,
     )
+
+    private companion object {
+        /** The file, read once: each anchor expands it again. */
+        val catalog = SportsCatalog.load()
+    }
 }
