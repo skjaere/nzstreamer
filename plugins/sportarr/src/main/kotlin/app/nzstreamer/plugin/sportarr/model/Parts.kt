@@ -46,6 +46,16 @@ object Parts {
         }
     }
 
+    /**
+     * The labels Sportarr gave a card's [parts] (L644), each with its part's id, which a release may name its part by
+     * ("Countdown" for a show's pre-show): every card part's label but one that is the plugin's own label for that part,
+     * so an event whose parts are the plugin's own has none.
+     */
+    fun sentLabels(parts: List<Part>): List<Pair<String, String>> {
+        val own = OWN.values.flatten().map { (id, label) -> id to fold(label) }.toSet()
+        return parts.filter { it.id != FULL && (it.id to fold(it.label)) !in own }.map { it.label to it.id }
+    }
+
     /** The part that marks an event watched: its main card, its main show, else the whole event. */
     fun headline(parts: List<Part>): Part =
         parts.firstOrNull { it.id == MAIN_CARD } ?: parts.firstOrNull { it.id == MAIN_SHOW } ?: parts.firstOrNull { it.id == FULL } ?: parts.last()

@@ -207,6 +207,7 @@ class SportsNameTest {
         val KCL_21 = NameContext(title = "KCL 21: Brisk vs. Loam")
         val DOUBLE_HEADER = NameContext(title = "Kestrel Club 03 vs Kestrel Club 07 - Game 1", sides = listOf("Kestrel Club 03", "Kestrel Club 07"))
         val IN_A_SHOW = NameContext(show = true)
+        val COUNTDOWN = NameContext(show = true, labels = listOf("Countdown" to PartWord.PreShow))
         val LBF_CCU = NameContext(league = "Premier League", sides = listOf("Lantern Bay FC", "Copper Crown United"))
         val CROWN_2026 = NameContext(title = "Velmora Iron Crown 2026", years = setOf(2026))
 
@@ -557,6 +558,20 @@ class SportsNameTest {
             Row("$SHOW.Countdown.1080p.WEB.h264-KESTREL", "show:countdown", IN_A_SHOW),
             Row("$SHOW.Countdown.1080p.WEB.h264-KESTREL", "show:countdown"),
             Row("$CARD.Countdown.720p.WEB.h264-WREN", "show:countdown"),
+            // A part's label as Sportarr gave it names that part, before the lists: its words win over a list's word equal
+            // to them, and give way to a longer one ("Main Event Only"). A label of the event's own title's words is none.
+            Row("$SHOW.Countdown.1080p.WEB.h264-KESTREL", "part:pre-show", COUNTDOWN),
+            Row("$SHOW.Kickoff.1080p.WEB.h264-KESTREL", "part:pre-show", NameContext(show = true, labels = listOf("Kickoff" to PartWord.PreShow))),
+            Row("$SHOW.Kickoff.Show.1080p.WEB.h264-KESTREL", "part:pre-show", NameContext(show = true, labels = listOf("Kickoff" to PartWord.PreShow))),
+            Row("$CARD.Lead.Card.720p.WEB.h264-WREN", "part:prelims", NameContext(labels = listOf("Lead Card" to PartWord.Prelims))),
+            Row("$CARD.Lead.Card.720p.WEB.h264-WREN", ""),
+            Row(
+                "Kestrel.Boxing.2026.11.21.Halde.vs.Brisk.Main.Event.Only.720p.WEB.h264-WREN",
+                "part:main event only",
+                NameContext(labels = listOf("Main Event" to PartWord.MainCard)),
+            ),
+            Row("Kestrel.Boxing.2026.11.21.Halde.vs.Brisk.Main.Event.720p.WEB.h264-WREN", "part:main card", NameContext(labels = listOf("Main Event" to PartWord.MainCard))),
+            Row("Kestrel.Countdown.2026.11.21.1080p.WEB.h264-WREN", "", COUNTDOWN.copy(title = "Kestrel Countdown")),
             // Session words.
             Row("$RACE.FP1.1080p.WEB.h264-KESTREL", "session:practice 1"),
             Row("$RACE.FP2.1080p.WEB.h264-KESTREL", "session:practice 2"),

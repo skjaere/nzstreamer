@@ -100,6 +100,8 @@ object Tokens {
  * number follows ("UFC" of "UFC 999"). [show] says the event is a show with a pre-show, whose "Kickoff Show" is that part
  * rather than a programme of its own. [years] are the event's own years: a title's number that is one of them is never
  * masked, since read as a year it says what the event's is ("Velmora Iron Crown 2026" opens "Velmora.Iron.Crown.2026.11.21").
+ * [labels] are the labels Sportarr gave the event's parts, each with the part word of its part: a name holding a label's
+ * words names that part ("Countdown" a show's pre-show, which elsewhere is a programme).
  */
 data class NameContext(
     val title: String? = null,
@@ -109,6 +111,7 @@ data class NameContext(
     val organisations: List<String> = emptyList(),
     val show: Boolean = false,
     val years: Set<Int> = emptySet(),
+    val labels: List<Pair<String, PartWord>> = emptyList(),
 ) {
     companion object {
         /** A name read against nothing of an event's. */
@@ -152,9 +155,9 @@ data class Sides(val before: List<Token>, val separator: String, val after: List
  * ranking. The identity is the name up to its tail, the first quality word; the group, the tail's last hyphenated word, is
  * set aside. What the identity holds is read in this order, each word read once: the event's own numbers are masked; the
  * dates (compact, year first, day first) and what is never one (season spans, a year with a running number or an
- * episode); the years; a trailing day and month, with a year elsewhere; the word lists, content words before parts and
- * sessions (so "Pre-Race" is no race); the numbers after their words; a card's number; then the siblings, the result
- * words, the sides and a score.
+ * episode); the years; a trailing day and month, with a year elsewhere; the labels of the event's parts; the word lists,
+ * content words before parts and sessions (so "Pre-Race" is no race); the numbers after their words; a card's number;
+ * then the siblings, the result words, the sides and a score.
  *
  * Reading is linear in the name's length, with no regular expression, and never throws: a name it somehow can't read
  * comes back with [readable] false and nothing read, which the shared rules leave out.
@@ -266,6 +269,13 @@ private class Reader(private val name: String, private val context: NameContext)
         (listOfNotNull(context.title, context.league) + context.sides + context.series).map { words(it) }.filter { it.isNotEmpty() }
     private val ownWords: Set<String> = (phrases.flatten() + context.organisations.flatMap(::words)).toSet()
 
+    /** The event's part labels as a list of their own, folded as a name's words are. */
+    private val labels: PhraseList<PartWord> =
+        PhraseList(context.labels.map { (label, word) -> Phrase(words(label), word) }.filter { it.words.isNotEmpty() })
+
+    private val nonEventList = if (context.show) Words.nonEventInShows else Words.nonEvent
+    private val partList = if (context.show) Words.showParts else Words.parts
+
     private val dates = mutableListOf<NameDate>()
     private val years = mutableListOf<Int>()
     private val seasons = mutableListOf<SeasonSpan>()
@@ -280,11 +290,14 @@ private class Reader(private val name: String, private val context: NameContext)
         readDates()
         readYears()
         readDayMonth()
+        // The event's own part labels before every list: where Sportarr labels a show's pre-show "Countdown", a name's
+        // "Countdown" is that part, not the programme the non-event words make it elsewhere.
+        val labelled = find(labels, notOwn = true, yields = ::longerListWord)
         // A word of the event's own is none of these lists', as it is no result word: "Kestrel Countdown" is no countdown.
-        val nonEvent = find(if (context.show) Words.nonEventInShows else Words.nonEvent, notOwn = true).map { it.first }
+        val nonEvent = find(nonEventList, notOwn = true).map { it.first }
         val partial = find(Words.partial, notOwn = true).map { (word, number) -> if (number != null) "$word $number" else word }
         val packs = find(Words.packs, notOwn = true).map { it.first }
-        val parts = find(if (context.show) Words.showParts else Words.parts).map { it.first }
+        val parts = (labelled + find(partList)).sortedBy { it.third }.map { it.first }
         val sessionWords = find(Words.sessions)
         // "Race 2" is a session and a race's number at once; "Test Day 2" a testing session and a test match's day.
         sessionWords.forEach { (entry, number, at) ->
@@ -476,9 +489,14 @@ private class Reader(private val name: String, private val context: NameContext)
 
     /**
      * Each entry of [list] found among the words not yet read, the longest first at each word, with the number it takes:
-     * as (value, number, where it starts). With [notOwn], an entry whose words are all the event's own is passed over.
+     * as (value, number, where it starts). With [notOwn], an entry whose words are all the event's own is passed over; so is
+     * one that [yields] where it stands, given where it starts and how many words it has.
      */
-    private fun <T> find(list: PhraseList<T>, notOwn: Boolean = false): List<Triple<T, Int?, Int>> {
+    private fun <T> find(
+        list: PhraseList<T>,
+        notOwn: Boolean = false,
+        yields: (at: Int, size: Int) -> Boolean = { _, _ -> false },
+    ): List<Triple<T, Int?, Int>> {
         fun counts(phrase: Phrase<T>) = !notOwn || !phrase.words.all { it in ownWords }
         val found = mutableListOf<Triple<T, Int?, Int>>()
         var i = 0
@@ -488,7 +506,7 @@ private class Reader(private val name: String, private val context: NameContext)
                 continue
             }
             val match = list.startingWith(all[i].word).firstNotNullOfOrNull { phrase ->
-                fit(phrase, i)?.takeIf { counts(phrase) }?.let { phrase to it.number }
+                fit(phrase, i)?.takeIf { counts(phrase) && !yields(i, phrase.words.size) }?.let { phrase to it.number }
             }
             if (match != null) {
                 val (phrase, number) = match
@@ -508,6 +526,15 @@ private class Reader(private val name: String, private val context: NameContext)
         }
         return found
     }
+
+    /**
+     * Whether a word of a list read after the labels, longer than a label of [size] words, stands at [at]: a label gives
+     * way to it as a list's shorter word does ("Main Event Only" over a "Main Event" label), and wins over one as long.
+     */
+    private fun longerListWord(at: Int, size: Int): Boolean =
+        listOf(nonEventList, Words.partial, Words.packs, partList, Words.sessions).any { list ->
+            list.startingWith(all[at].word).any { it.words.size > size && fit(it, at) != null }
+        }
 
     /** [phrase] standing at [i] among the free words, with the number it takes there if any; null where it doesn't stand. */
     private fun fit(phrase: Phrase<*>, i: Int): Fit? {

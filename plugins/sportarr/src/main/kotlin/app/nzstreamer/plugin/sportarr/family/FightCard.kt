@@ -33,8 +33,9 @@ import java.time.Instant
  * - A premium event is the organisation's or league's word, every word of its title, its year or edition (its edition or
  *   date where another edition of its title is listed), and its night where its title has one.
  *
- * Then the parts: a name's part words name its part (pre-show words a premium event's pre-show); one with none, or with
- * PPV, is the card's main part and never a prelim; a full event is every part's, the picker choosing the part's file.
+ * Then the parts: a name's part words name its part (pre-show words a premium event's pre-show), and so does the label
+ * Sportarr gave a part, read before them ("Countdown" where it labels a show's pre-show); one with none, or with PPV, is
+ * the card's main part and never a prelim; a full event is every part's, the picker choosing the part's file.
  *
  * What names a card less surely is a possible match: both surnames with no date, the main event alone, and, as for every
  * family, a name with the league's word and the card's date that fails the rest. Another card's number or night, another
@@ -60,6 +61,8 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
             organisations = listOfNotNull(card.organisation?.written).takeIf { card.type in CARD_NUMBERS }.orEmpty(),
             show = card.type == CardType.Premium,
             years = eventYears(event),
+            // A release may name a part by the label Sportarr gave it: "Countdown", a programme to the word lists, or "Kickoff".
+            labels = Parts.sentLabels(event.parts).mapNotNull { (label, id) -> PartWord.naming(id)?.let { label to it } },
         )
     }
 

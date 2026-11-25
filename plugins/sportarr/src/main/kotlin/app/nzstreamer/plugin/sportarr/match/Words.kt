@@ -35,6 +35,12 @@ enum class PartWord(val word: String, val id: String?) {
     PreShow("pre-show", Parts.PRE_SHOW),
     MainShow("main show", Parts.MAIN_SHOW),
     PostShow("post show", null),
+    ;
+
+    companion object {
+        /** The part word that names the part [id] alone, or null where none does. */
+        fun naming(id: String): PartWord? = entries.firstOrNull { it.id == id }
+    }
 }
 
 /** The words a number follows in a name (L646): "Round 20", "Week 10", "Game 1", "Night 2". */

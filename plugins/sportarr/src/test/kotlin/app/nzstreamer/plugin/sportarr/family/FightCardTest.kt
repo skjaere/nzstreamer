@@ -20,6 +20,7 @@ import app.nzstreamer.plugin.sportarr.model.ufc999
 import app.nzstreamer.plugin.sportarr.source.KeptLeague
 import app.nzstreamer.plugin.sportarr.source.SportsList
 import app.nzstreamer.plugin.sportarr.source.WireEvent
+import io.skjaere.usenet.plugin.FileInfo
 import org.junit.jupiter.api.Test
 import java.time.Duration
 import java.time.Instant
@@ -69,6 +70,7 @@ class FightCardTest {
 
     private val accepted = Verdict.Accept()
     private val otherParts = Verdict.Reject(RejectKind.OtherParts)
+    private val shows = Verdict.Reject(RejectKind.Shows)
 
     /** Another card's, fight's or show's, as its event's noun words it. */
     private val other = Verdict.Reject(RejectKind.OtherEvents)
@@ -330,6 +332,50 @@ class FightCardTest {
             "Velmora.Iron.Crown.37.1080p.WEB.h264-WREN" to show(other, other),
         )
         assertEquals("", wrong(edition.byId(56), editionRows, FightCard(edition)))
+    }
+
+    @Test
+    fun `a part named in a release by the label Sportarr gives it is that part, before the programme and part words`() {
+        // Night 2's pre-show is labelled "Countdown": its Countdown release is the pre-show, never a programme.
+        val nightTwoRows = listOf(
+            "Velmora.Iron.Crown.Night.2.2026.Countdown.720p.WEB.h264-WREN" to show(otherParts, accepted),
+            "Velmora.Iron.Crown.2026.Night.2.Countdown.1080p.WEB.h264-KESTREL" to show(otherParts, accepted),
+            "Velmora.Iron.Crown.Night.2.2026.1080p.WEB.h264-KESTREL" to show(accepted, otherParts),
+        )
+        assertEquals("", wrong(nightTwo, nightTwoRows))
+
+        // A show whose pre-show is labelled "Kickoff", and a fight night whose prelims are labelled "Lead Card".
+        val labelled = sports(
+            VELMORA to listOf(on(VELMORA, 56, at("2026-11-11T23:00"), "Velmora Iron Crown 38", parts = listOf("Kickoff", "Main Show"))),
+            UFC to listOf(on(UFC, 33, at("2026-11-28T19:00"), "UFC Fight Night: Brisk vs. Loam", parts = listOf("Lead Card", "Main Card"))),
+        )
+        val matcher = FightCard(labelled)
+        val kickoffRows = listOf(
+            "Velmora.Iron.Crown.38.Kickoff.720p.WEB.h264-WREN" to show(otherParts, accepted),
+            "Velmora.Iron.Crown.38.1080p.WEB.h264-KESTREL" to show(accepted, otherParts),
+        )
+        assertEquals("", wrong(labelled.byId(56), kickoffRows, matcher))
+        val leadCardRows = listOf(
+            "UFC.Fight.Night.2026.11.28.Lead.Card.720p.WEB.h264-WREN" to mapOf(Parts.PRELIMS to accepted, Parts.MAIN_CARD to otherParts),
+            "UFC.Fight.Night.2026.11.28.Brisk.vs.Loam.1080p.WEB.h264-KESTREL" to mapOf(Parts.PRELIMS to otherParts, Parts.MAIN_CARD to accepted),
+        )
+        assertEquals("", wrong(labelled.byId(33), leadCardRows, matcher))
+
+        // A show whose parts are the plugin's own reads as before: "Countdown" a programme, "Kickoff" alone no part word.
+        val ownRows = listOf(
+            "Velmora.Iron.Crown.2026.Countdown.720p.WEB.h264-WREN" to show(shows, shows),
+            "Velmora.Iron.Crown.2026.Kickoff.720p.WEB.h264-WREN" to show(accepted, otherParts),
+        )
+        assertEquals("", wrong(crown, ownRows))
+
+        // In a full event's release, the label names the part's file.
+        val folder = "Velmora.Iron.Crown.Night.2.2026.Full.Event.1080p.WEB.h264-ORCHID"
+        val files = listOf(
+            FileInfo("$folder/Velmora.Iron.Crown.Night.2.2026.Countdown.1080p.WEB.h264-ORCHID.mkv", 2_000_000_000, isVideo = true),
+            FileInfo("$folder/Velmora.Iron.Crown.Night.2.2026.Main.Show.1080p.WEB.h264-ORCHID.mkv", 6_000_000_000, isVideo = true),
+        )
+        assertEquals(0, PartPicker.of(cards, nightTwo, nightTwo.parts.single { it.id == Parts.PRE_SHOW }).pick(files))
+        assertEquals(1, PartPicker.of(cards, nightTwo, nightTwo.parts.single { it.id == Parts.MAIN_SHOW }).pick(files))
     }
 
     @Test
