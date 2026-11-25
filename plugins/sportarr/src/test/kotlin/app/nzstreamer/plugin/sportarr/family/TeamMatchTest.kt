@@ -148,6 +148,30 @@ class TeamMatchTest {
     }
 
     @Test
+    fun `another club of the same towns is another game's, though its league isn't followed, and a derby needs full names`() {
+        val soccerOnly = sports(premier to listOf(game(premier, 1010, "2026-11-21T15:00", "Saltmere City", "Marrowby United")))
+        val matcher = TeamMatch(soccerOnly)
+        val rows = listOf(
+            "NBA.2026.11.20.Saltmere.Gulls.vs.Marrowby.Lynx.1080p.WEB.h264-KESTREL" to otherGame,
+            "Marrowby.Lynx.vs.Saltmere.Gulls.2026.11.21.720p.WEB.h264-WREN" to otherGame,
+            "Premier.League.2026.11.21.Saltmere.City.vs.Marrowby.United.1080p.WEB.h264-KESTREL" to accepted,
+            "Premier.League.2026.11.21.Saltmere.City.FC.vs.Marrowby.United.1080p.WEB.h264-KESTREL" to accepted,
+            "Saltmere.vs.Marrowby.2026.11.21.720p.WEB.h264-WREN" to accepted,
+            "Saltmere.vs.Marrowby.2026.11.21.Full.Match.720p.WEB.h264-WREN" to accepted,
+        )
+        assertEquals("", wrong(soccerOnly.byId(1010), rows, matcher))
+
+        // Two clubs of one town: their one distinctive word names neither apart from the other.
+        val derby = sports(premier to listOf(game(premier, 1020, "2026-11-21T15:00", "Saltmere City", "Saltmere Rovers")))
+        val derbyRows = listOf(
+            "Premier.League.2026.11.21.Saltmere.City.vs.Saltmere.Rovers.1080p.WEB.h264-KESTREL" to accepted,
+            "Premier.League.2026.11.21.Saltmere.vs.Lowmarsh.1080p.WEB.h264-KESTREL" to otherGame,
+            "Premier.League.2026.11.21.Saltmere.1080p.WEB.h264-KESTREL" to otherGame,
+        )
+        assertEquals("", wrong(derby.byId(1020), derbyRows, TeamMatch(derby)))
+    }
+
+    @Test
     fun `a game is searched by both sides' distinctive words and by its league and date, then by one word of each, away first`() {
         val queries = teams.queries(lbf, lbf.headline)
         assertEquals(listOf("Lantern Bay Copper Crown", "Premier League 2026 11 21"), queries.first)

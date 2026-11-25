@@ -83,11 +83,14 @@ class TeamMatch(private val sports: Sports) : FamilyMatcher {
             game.home.key.takeIf { game.home.foundBy(read) != null },
             game.away.key.takeIf { game.away.foundBy(read) != null },
         )
-        val home = game.home.key in found
-        val away = game.away.key in found
+        // A derby's two clubs share their distinctive words, which then name neither apart: each needs its full words.
+        val derby = game.home.distinctive == game.away.distinctive
+        val home = if (derby) read.has(game.home.full) else game.home.key in found
+        val away = if (derby) read.has(game.away.full) else game.away.key in found
         val dated = name.dates.isNotEmpty()
         return when {
             anotherGame(game, read, found) -> OTHER_GAME
+            home && away && anotherClub(game, read) -> OTHER_GAME
             home && away -> bothSides(game, name, dated)
             home || away -> when {
                 anotherTeam(game, read) -> OTHER_GAME
@@ -149,6 +152,24 @@ class TeamMatch(private val sports: Sports) : FamilyMatcher {
         return listOf(sides.before, sides.after).any { half ->
             val named = half.filter { it.word !in league && !isCode(it) }
             named.any { it.hasLetter } && named.none { it.word in game.words }
+        }
+    }
+
+    /**
+     * Another club of a side's town: before the name's separator, a word after the side's distinctive words or nickname
+     * that is no word of this game's sides, nor a club form, the league's word or a team code ("Saltmere Gulls" for
+     * "Saltmere City", whose league the list may not follow). Words after the second side are left alone, as names add
+     * "Full Match" and the like there.
+     */
+    private fun anotherClub(game: Game, read: Read): Boolean {
+        val half = read.name.sides?.before ?: return false
+        val league = leagueWords(game.event)
+        return listOf(game.home, game.away).any { side ->
+            val by = side.foundBy(read)?.takeIf { it != side.full } ?: return@any false
+            val last = half.indexOfLast { it.word in by }
+            last >= 0 && half.drop(last + 1).any { token ->
+                token.hasLetter && token.word !in game.words && token.word !in COMMON && token.word !in league && !isCode(token)
+            }
         }
     }
 
