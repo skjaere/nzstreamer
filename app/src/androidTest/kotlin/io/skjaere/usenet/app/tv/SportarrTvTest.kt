@@ -37,11 +37,13 @@ import io.skjaere.usenet.app.plugins.PLUGIN_WAIT_MS
 import io.skjaere.usenet.app.plugins.PluginMeasure
 import io.skjaere.usenet.app.plugins.PluginStateRule
 import io.skjaere.usenet.app.play.OkGuard
+import io.skjaere.usenet.app.plugins.sportarr.SPORTARR
 import io.skjaere.usenet.app.plugins.sportarr.SportarrDevice
 import io.skjaere.usenet.app.plugins.sportarr.SportsFakes
 import io.skjaere.usenet.app.plugins.sportarr.dayHeader
 import io.skjaere.usenet.app.plugins.sportarr.screenWords
 import io.skjaere.usenet.app.ui.FieldGateLabel
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -50,6 +52,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
+import java.io.File
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -446,7 +449,9 @@ class SportarrTvTest {
 
     /**
      * M-big on a TV: with the fake's busy league kept (5,000 events), the time from OK on the rail's Sports to the list's
-     * first row, and the share of slow frames as the remote goes down the rows, through the instrumentation's status.
+     * first row, opened afresh (the plugin made again, as after the app's start, its kept list read from its file) and
+     * again while it runs, and the share of slow frames as the remote goes down the rows, through the instrumentation's
+     * status.
      */
     @Test
     fun theBusyLeagueOnATv() {
@@ -467,14 +472,37 @@ class SportarrTvTest {
         assertEquals(SPORTS, remote.pressUntil(KeyEvent.KEYCODE_DPAD_DOWN, SPORTS, max = 6))
         val opened = SystemClock.elapsedRealtime()
         instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_CENTER)
-        compose.waitUntil(BUSY_WAIT_MS) { exists(hasText(TODAY)) }
+        compose.waitUntil(BUSY_WAIT_MS) { exists(busyRow) }
         val firstRowMs = SystemClock.elapsedRealtime() - opened
         listFocused()
         val (frames, slow) = framesOf(compose.activity.window) { repeat(DOWNS) { instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_DOWN) } }
+
+        // Opened afresh: the plugin removed and installed again, its kept list put back in its folder, then OK on Sports.
+        val kept = File(plugins.context.cacheDir, "sportarr-busy-list.json")
+        File(sportarr.dataDir, LIST_FILE).copyTo(kept, overwrite = true)
+        remote.press(KeyEvent.KEYCODE_BACK)
+        waitForFocusOn(railItem(SPORTS), "its rail item")
+        try {
+            runBlocking { plugins.app.remove(SPORTARR) }
+            compose.waitUntil(PLUGIN_WAIT_MS) { !exists(railItem(SPORTS)) }
+            sportarr.install()
+            kept.copyTo(File(sportarr.dataDir, LIST_FILE), overwrite = true)
+        } finally {
+            kept.delete()
+        }
+        waitFor(railItem(SPORTS))
+        // Remove took the tab away under the focus, and the shell put it on Home: back to the rail, then down to Sports.
+        repeat(MAX_LEFTS) { if (!remote.isFocused(railItem("Home"))) remote.press(KeyEvent.KEYCODE_DPAD_LEFT) }
+        waitForFocusOn(railItem("Home"), "the rail's Home")
+        assertEquals(SPORTS, remote.pressUntil(KeyEvent.KEYCODE_DPAD_DOWN, SPORTS, max = 6))
+        val afresh = SystemClock.elapsedRealtime()
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DPAD_CENTER)
+        compose.waitUntil(BUSY_WAIT_MS) { exists(busyRow) }
+        val coldMs = SystemClock.elapsedRealtime() - afresh
         PluginMeasure.say(
             "M-big",
-            "tv: the tab's first row ${firstRowMs} ms after OK on its rail item over 5,000 kept events; $DOWNS presses of Down: $slow of " +
-                "$frames frames slow (over ${SLOW_FRAME_MS} ms)",
+            "tv: the tab's first row ${coldMs} ms after OK on its rail item, opened afresh over 5,000 kept events (${firstRowMs} ms opened again " +
+                "while the plugin runs); $DOWNS presses of Down: $slow of $frames frames slow (over ${SLOW_FRAME_MS} ms)",
         )
         assertTrue("frames drawn going down", frames > 0)
     }
@@ -584,5 +612,11 @@ class SportarrTvTest {
         const val KEYBOARD_MS = 1_000L
         const val SETTLE_MS = 1_500L
         const val SLOW_FRAME_MS = 16L
+
+        /** The plugin's kept list in its folder (L645). */
+        const val LIST_FILE = "list.json"
+
+        /** Presses of Left that bring the focus out of Home's content to the rail, at most. */
+        const val MAX_LEFTS = 6
     }
 }

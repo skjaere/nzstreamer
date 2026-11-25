@@ -43,6 +43,7 @@ import io.skjaere.usenet.app.plugins.PLUGIN_WAIT_MS
 import io.skjaere.usenet.app.plugins.PluginMeasure
 import io.skjaere.usenet.app.plugins.PluginStateRule
 import io.skjaere.usenet.app.ui.AppTheme
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -53,6 +54,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
+import java.io.File
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -353,8 +355,9 @@ class SportarrListDeviceTest {
 
     /**
      * The fake's busy league, past the 5,000 kept and the page budget: the cut line ends Recent.
-     * M-big: the time from the tab's first frame to its first row with 5,000 events kept, and the share of slow frames in
-     * one fling, through the instrumentation's status.
+     * M-big: the time from the tab's first frame to its first row with 5,000 events kept, opened afresh (the plugin made
+     * again, as after the app's start, its kept list read from its file and built) and again while it runs; and the share
+     * of slow frames in one fling, through the instrumentation's status.
      */
     @Test
     fun theBusyLeagueEndsRecentWithTheCutLine() {
@@ -383,10 +386,29 @@ class SportarrListDeviceTest {
             compose.onNode(list).performTouchInput { swipeUp(durationMillis = FLING_MS) }
             compose.waitForIdle()
         }
+
+        // Opened afresh: the plugin removed and installed again, its kept list put back in its folder, the tab opened.
+        val kept = File(context.cacheDir, "sportarr-busy-list.json")
+        File(sportarr.dataDir, LIST_FILE).copyTo(kept, overwrite = true)
+        compose.onNode(barTab("Home")).performClick()
+        waitFor(hasText("Search your indexers") and hasClickAction())
+        try {
+            runBlocking { plugins.app.remove(SPORTARR) }
+            compose.waitUntil(PLUGIN_WAIT_MS) { !exists(barTab(SPORTS)) }
+            sportarr.install()
+            kept.copyTo(File(sportarr.dataDir, LIST_FILE), overwrite = true)
+        } finally {
+            kept.delete()
+        }
+        waitFor(barTab(SPORTS))
+        val afresh = SystemClock.elapsedRealtime()
+        compose.onNode(barTab(SPORTS)).performClick()
+        compose.waitUntil(BUSY_WAIT_MS) { exists(row(BUSY_CLUB, substring = true)) }
+        val coldMs = SystemClock.elapsedRealtime() - afresh
         PluginMeasure.say(
             "M-big",
-            "phone: the tab's first row ${firstRowMs} ms after it was opened over 5,000 kept events; one fling: $slow of $frames frames slow " +
-                "(over ${SLOW_FRAME_MS} ms), against $fewSlow of $fewFrames over the library alone",
+            "phone: the tab's first row ${coldMs} ms after it was opened afresh over 5,000 kept events (${firstRowMs} ms opened again while the " +
+                "plugin runs); one fling: $slow of $frames frames slow (over ${SLOW_FRAME_MS} ms), against $fewSlow of $fewFrames over the library alone",
         )
         assertTrue("frames drawn in the fling", frames > 0)
     }
@@ -607,6 +629,9 @@ class SportarrListDeviceTest {
         /** The title line's and the cut line's items in the list. */
         const val TOP_KEY = "top"
         const val CUT_KEY = "cut"
+
+        /** The plugin's kept list in its folder (L645). */
+        const val LIST_FILE = "list.json"
 
         /** Items the canary scan moves on at a time: fewer than a screenful of the list's shortest. */
         const val SCAN_STEP = 2
