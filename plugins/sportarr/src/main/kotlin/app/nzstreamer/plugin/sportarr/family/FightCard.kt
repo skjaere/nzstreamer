@@ -30,8 +30,8 @@ import java.time.Instant
  * - A boxing matchup is both surnames and its date.
  * - A weekly show is its title's words and its own date: the same show airs every week, so a name with no date is no one
  *   week's.
- * - A premium event is the organisation's or league's word, every word of its title, its year or edition, and its night
- *   where its title has one.
+ * - A premium event is the organisation's or league's word, every word of its title, its year or edition (its edition or
+ *   date where another edition of its title is listed), and its night where its title has one.
  *
  * Then the parts: a name's part words name its part (pre-show words a premium event's pre-show); one with none, or with
  * PPV, is the card's main part and never a prelim; a full event is every part's, the picker choosing the part's file.
@@ -119,12 +119,27 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
             CardType.Numbered -> name.cardNumbers.any { it != card.number } || name.has(FIGHT_NIGHT)
             CardType.FightNight -> name.cardNumbers.isNotEmpty() || (card.number != null && nights.any { it != card.number })
             // A title with no night is the first.
-            CardType.Premium -> nights.any { it != (card.night ?: 1) }
+            CardType.Premium -> nights.any { it != (card.night ?: 1) } || otherEdition(card, name)
             CardType.Matchup, CardType.WeeklyShow -> false
         }
         return own || cards.values.any { other ->
             other.event.key != card.event.key && other.identity.isNotEmpty() && words.containsAll(other.identity) &&
                 !card.identity.containsAll(other.identity)
+        }
+    }
+
+    /**
+     * A premium event's other edition: right after the title's word its edition number follows ("Crown" of "Velmora Iron
+     * Crown 37"), another number than its own, a year's or a date's aside ("Velmora.Iron.Crown.38").
+     */
+    private fun otherEdition(card: Card, name: SportsName): Boolean {
+        val dated = name.dates.flatMap { it.places }.toSet()
+        val identity = name.identity
+        return card.editionsAfter.any { (word, edition) ->
+            (0 until identity.size - 1).any { at ->
+                val next = identity[at + 1]
+                identity[at].word == word && next.isNumber && next.word.length < YEAR_DIGITS && at + 1 !in dated && next.word.toInt() != edition
+            }
         }
     }
 
@@ -156,8 +171,10 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
             }
             CardType.WeeklyShow -> SURE.takeIf { dated && card.titleIn(words) }
             CardType.Premium -> {
-                val years = name.yearsNamed()
-                val edition = card.editions.any(name::hasNumber) || years.any { it in eventYears(card.event) }
+                // Where another edition of the same title is listed, the year names neither: the edition's number or the
+                // date, which the shared rules held to this one's, must.
+                val yearNames = name.yearsNamed().any { it in eventYears(card.event) } && !(card.numbered && related(card.event).isNotEmpty())
+                val edition = card.editions.any(name::hasNumber) || dated || yearNames
                 val night = card.night == null || card.night in name.numbered(NumberWord.Night)
                 SURE.takeIf { leagueNamed(card, name, words) && card.titleIn(words) && edition && night }
             }
@@ -237,6 +254,14 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
         val editions: Set<Int> =
             tokens.filterIndexed { at, token -> token.isNumber && at != nightAt?.plus(1) }.mapNotNull { it.word.toIntOrNull() }.toSet()
 
+        /** Each edition number with the title's word right before it: ("crown", 37) of "Velmora Iron Crown 37". */
+        val editionsAfter: List<Pair<String, Int>> = tokens.indices
+            .filter { at -> at > 0 && tokens[at].isNumber && at != nightAt?.plus(1) && tokens[at - 1].hasLetter }
+            .mapNotNull { at -> tokens[at].word.toIntOrNull()?.let { tokens[at - 1].word to it } }
+
+        /** Whether its title numbers an edition by more than a year. */
+        val numbered: Boolean = editions.any { it.toString().length < YEAR_DIGITS }
+
         val identity: Set<String> = when (type) {
             CardType.WeeklyShow, CardType.Premium -> words.map { it.word }.toSet()
             else -> surnames.takeIf { it.size == 2 }?.map { it.word }?.toSet().orEmpty()
@@ -257,6 +282,9 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
         const val FIGHT_NIGHT = "fight night"
         const val FIGHT_NIGHT_WRITTEN = "Fight Night"
         const val NIGHT = "night"
+
+        /** A year's digits: a number of four after a title's word is its year, never another edition. */
+        const val YEAR_DIGITS = 4
 
         /** A premium event's search: its title's first five words. */
         const val TITLE_WORDS = 5

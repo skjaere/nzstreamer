@@ -333,6 +333,32 @@ class FightCardTest {
     }
 
     @Test
+    fun `two editions of one title in a year are told apart by their number or their date, never by the year alone`() {
+        val editions = sports(
+            VELMORA to listOf(on(VELMORA, 58, at("2026-10-10T23:00"), "Velmora Iron Crown 37"), on(VELMORA, 59, at("2026-11-14T23:00"), "Velmora Iron Crown 38")),
+        )
+        val matcher = FightCard(editions)
+        val thirtySeven = editions.byId(58)
+        val thirtyEight = editions.byId(59)
+        assertEquals(listOf(CardType.Premium, CardType.Premium), listOf(thirtySeven.cardType, thirtyEight.cardType))
+        val rows = listOf(
+            Triple("Velmora.Iron.Crown.38.2026.PPV.1080p.WEB.h264-KESTREL", other, accepted),
+            Triple("Velmora.Iron.Crown.37.2026.1080p.WEB.h264-WREN", accepted, other),
+            Triple("Velmora.Iron.Crown.2026.10.10.1080p.WEB.h264-WREN", accepted, other),
+            Triple("Velmora.Iron.Crown.2026.11.14.1080p.WEB.h264-WREN", other, accepted),
+            Triple("Velmora.Iron.Crown.2026.PPV.1080p.WEB.h264-WREN", other, other),
+        )
+        val posted = thirtyEight.start.plus(Duration.ofHours(4))
+        val wrong = rows.flatMap { (name, forFirst, forSecond) ->
+            listOfNotNull(
+                judge(thirtySeven, Parts.MAIN_SHOW, name, posted, matcher).takeIf { it != forFirst }?.let { "$name for 37: $it" },
+                judge(thirtyEight, Parts.MAIN_SHOW, name, posted, matcher).takeIf { it != forSecond }?.let { "$name for 38: $it" },
+            )
+        }
+        assertTrue(wrong.isEmpty(), wrong.joinToString("\n"))
+    }
+
+    @Test
     fun `a premium event whose title carries its year takes its dated and its undated names`() {
         val titled = sports(VELMORA to listOf(on(VELMORA, 57, at("2026-11-21T23:00"), "Velmora Iron Crown 2026")))
         val rows = listOf(
