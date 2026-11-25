@@ -39,6 +39,7 @@ import io.skjaere.usenet.app.plugins.PluginStateRule
 import io.skjaere.usenet.app.play.OkGuard
 import io.skjaere.usenet.app.plugins.sportarr.SportarrDevice
 import io.skjaere.usenet.app.plugins.sportarr.SportsFakes
+import io.skjaere.usenet.app.plugins.sportarr.dayHeader
 import io.skjaere.usenet.app.plugins.sportarr.screenWords
 import io.skjaere.usenet.app.ui.FieldGateLabel
 import org.junit.After
@@ -49,6 +50,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.concurrent.atomic.AtomicInteger
@@ -323,9 +325,10 @@ class SportarrTvTest {
     @Test
     fun moreOpensInPlaceOnItsSixthRow() {
         sportarr.install()
-        val yesterday = LocalDate.now(zone).minusDays(1)
-        val games = library.league(PREMIER_LEAGUE).events.filter { it.listed && it.date(zone) == yesterday }.sortedWith(compareBy({ it.start }, { it.key }))
-        assertTrue("more than five games yesterday: ${games.size}", games.size > 5)
+        // The day its game shows under, read from the fixtures: the device's date is the fake's anchor only until midnight.
+        val day = library.event(GAME).date(zone)
+        val games = library.league(PREMIER_LEAGUE).events.filter { it.listed && it.date(zone) == day }.sortedWith(compareBy({ it.start }, { it.key }))
+        assertTrue("more than five games the day of its game: ${games.size}", games.size > 5)
         openSports()
         listFocused()
         val more = "+${games.size - 5} more"
@@ -349,7 +352,7 @@ class SportarrTvTest {
         assertEquals("Left from All", UPCOMING, remote.press(KeyEvent.KEYCODE_DPAD_LEFT))
         remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
         waitFor(sideTab(UPCOMING) and isSelected())
-        waitFor(hasText("TOMORROW"))
+        waitFor(hasText(dayHeader(library.upcoming(Instant.now()).first().date(zone), LocalDate.now(zone))))
         assertEquals("the focus after OK", UPCOMING, remote.focused())
         assertTrue("All still picked", exists(chip(ALL) and isSelected()))
     }

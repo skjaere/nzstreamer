@@ -40,7 +40,10 @@ import java.net.Socket
 import java.net.URL
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import java.util.UUID
+import kotlin.math.abs
 
 /** The Sportarr plugin's id, as its builds carry it (L639). */
 const val SPORTARR = "sportarr"
@@ -160,8 +163,19 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
         return FakeClock(LocalDate.parse(clock.getValue("anchor").jsonPrimitive.content), Instant.parse(clock.getValue("now").jsonPrimitive.content))
     }
 
-    /** The catalogue at the fake's anchor: the fixtures' titles, keys and starts, and the releases' verdicts. */
-    val catalogue: SportsLibrary by lazy { SportsCatalogAssets.load(clock().anchor) }
+    /**
+     * The catalogue at the fake's anchor: the fixtures' titles, keys and starts, and the releases' verdicts. The classes
+     * read the days from its events, so they hold from the anchor's evening into the next day in the device's zone; past
+     * a day either way the fixtures' days are too far from what the list shows, and the run says so at once.
+     */
+    val catalogue: SportsLibrary by lazy {
+        val anchor = clock().anchor
+        val today = LocalDate.now(ZoneId.systemDefault())
+        check(abs(ChronoUnit.DAYS.between(anchor, today)) <= 1) {
+            "the fake Sportarr's anchor is $anchor and the device's date $today: start mock-seed sports again with --anchor $today"
+        }
+        SportsCatalogAssets.load(anchor)
+    }
 
     /**
      * Turns the fake's switch [name] on with [params] (`fail` with "status=500&route=events"), to be turned off again by

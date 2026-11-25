@@ -52,6 +52,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.concurrent.atomic.AtomicInteger
@@ -65,7 +66,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * followed); the cut line with the fake's busy league, and M-big over it; no canary value anywhere on the screen or in
  * the plugin's files; and the list whole at 1.3 times the text size.
  *
- * Days are the device's: what the tests expect is read from the catalogue's starts in the device's zone. The watch rows
+ * Days are the device's: what the tests expect is read from the catalogue's starts in the device's zone, never from the
+ * device's date, which is the fake's anchor only until midnight there (the fixtures' days count from the anchor). The watch rows
  * the tests write, and the fake's switches, are put back after each test, and the plugin with its files and secrets
  * removed. TMDB is a strict fake: what Home asks of other titles is refused, never sent.
  */
@@ -221,9 +223,8 @@ class SportarrListDeviceTest {
     @Test
     fun moreOpensTheLeaguesDayAndShowFewerClosesIt() {
         sportarr.install()
-        val yesterday = today().minusDays(1)
-        val games = library.league(PREMIER_LEAGUE).events.filter { it.listed && it.date(zone) == yesterday }.sortedBy { it.start }
-        assertTrue("the library's Premier League has more than five games yesterday: ${games.size}", games.size > 5)
+        val games = gamesOnTheDayOf(GAME)
+        assertTrue("the library's Premier League has more than five games the day of its game: ${games.size}", games.size > 5)
         openSports()
         listShown()
         val more = "+${games.size - 5} more"
@@ -243,8 +244,7 @@ class SportarrListDeviceTest {
     @Test
     fun showWatchedPutsWatchedRowsBackWithTheirTick() {
         sportarr.install()
-        val yesterday = today().minusDays(1)
-        val games = library.league(PREMIER_LEAGUE).events.filter { it.listed && it.date(zone) == yesterday }
+        val games = gamesOnTheDayOf(GAME)
         val watched = library.event(WATCHED_GAME)
         sportarr.watched(watched.part(), watched.title)
         openSports()
@@ -264,7 +264,7 @@ class SportarrListDeviceTest {
         compose.waitUntil(5_000) { !exists(row(watched.title)) }
     }
 
-    /** Upcoming, Today first, then tomorrow's game, and a weekend still to come by its first session. */
+    /** Upcoming, soonest first: its first day, the next game under its day, and a weekend still to come by its first session. */
     @Test
     fun upcomingListsWhatsStillToStart() {
         sportarr.install()
@@ -272,10 +272,11 @@ class SportarrListDeviceTest {
         listShown()
         compose.onNode(sideTab(UPCOMING)).performClick()
         waitFor(sideTab(UPCOMING) and isSelected())
-        waitFor(hasText(TODAY))
-        val tomorrow = library.events.first { it.leagueId == PREMIER_LEAGUE && it.date(zone) == today().plusDays(1) }
-        scrollTo(hasText(TOMORROW))
-        scrollTo(row(tomorrow.title))
+        val upcoming = library.upcoming(Instant.now())
+        waitFor(hasText(header(upcoming.first().date(zone))))
+        val next = upcoming.first { it.leagueId == PREMIER_LEAGUE }
+        scrollTo(hasText(header(next.date(zone))))
+        scrollTo(row(next.title))
         scrollTo(row(TARNHOLM_GP))
         assertTrue("its round, first session and sessions", exists(row(TARNHOLM_GP) and hasText("Round 21 · Practice 1 first · 5 sessions")))
         assertFalse("yesterday's game on Upcoming", exists(row(library.event(GAME).title)))
@@ -419,11 +420,12 @@ class SportarrListDeviceTest {
     private fun today(): LocalDate = LocalDate.now(zone)
 
     /** A day's header as the phone writes it, upper-cased: Today, Yesterday, else "Mon 23 Nov". */
-    private fun header(date: LocalDate): String = when (date) {
-        today() -> TODAY
-        today().minusDays(1) -> "YESTERDAY"
-        today().plusDays(1) -> TOMORROW
-        else -> "%s %d %s".format(DAYS[date.dayOfWeek.value - 1], date.dayOfMonth, MONTHS[date.monthValue - 1]).uppercase()
+    private fun header(date: LocalDate): String = dayHeader(date, today())
+
+    /** The Premier League's listed games on the day [event] shows under, in time order. */
+    private fun gamesOnTheDayOf(event: Int): List<CatalogueEvent> {
+        val day = library.event(event).date(zone)
+        return library.league(PREMIER_LEAGUE).events.filter { it.listed && it.date(zone) == day }.sortedBy { it.start }
     }
 
     /** Opens the ⋮, at the list's top, and presses its [item]. */
@@ -552,7 +554,6 @@ class SportarrListDeviceTest {
         const val RECENT = "Recent"
         const val UPCOMING = "Upcoming"
         const val TODAY = "TODAY"
-        const val TOMORROW = "TOMORROW"
         const val UP_NEXT = "UP NEXT"
         const val MORE = "More"
         const val ALL = "All"
@@ -575,9 +576,6 @@ class SportarrListDeviceTest {
         /** The title line's and the cut line's items in the list. */
         const val TOP_KEY = "top"
         const val CUT_KEY = "cut"
-
-        val DAYS = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-        val MONTHS = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
         const val MINUTE = 60_000L
 

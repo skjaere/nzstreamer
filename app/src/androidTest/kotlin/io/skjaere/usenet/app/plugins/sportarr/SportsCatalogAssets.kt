@@ -10,6 +10,7 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -61,6 +62,21 @@ data class CatalogueEvent(
     }
 }
 
+/**
+ * A day's header in the list, as the kit's section header writes it, upper-cased: TODAY, YESTERDAY or TOMORROW from the
+ * device's [today], else "SAT 28 NOV", with the year in another year.
+ */
+fun dayHeader(date: LocalDate, today: LocalDate): String = when (date) {
+    today -> "TODAY"
+    today.minusDays(1) -> "YESTERDAY"
+    today.plusDays(1) -> "TOMORROW"
+    else -> ("%s %d %s".format(DAY_NAMES[date.dayOfWeek.value - 1], date.dayOfMonth, MONTH_NAMES[date.monthValue - 1]) +
+        if (date.year != today.year) " ${date.year}" else "").uppercase()
+}
+
+private val DAY_NAMES = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+private val MONTH_NAMES = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
 /** A release the sports indexer lists, its [name] at the anchor, with what the plugin's judge says of it for each event and part it is found for. */
 data class CatalogueRelease(val id: String, val name: String, val whole: Boolean, val verdicts: List<CatalogueVerdict>)
 
@@ -75,12 +91,22 @@ class SportsLibrary(val leagues: List<CatalogueLeague>, val releases: List<Catal
 
     fun league(id: Int): CatalogueLeague = leagues.single { it.id == id }
 
+    /**
+     * What the list shows still to come after [now], soonest first: the events listed of the leagues followed. A test
+     * reads the days from these, never from the device's date, which is the anchor's only until midnight in its zone.
+     */
+    fun upcoming(now: Instant): List<CatalogueEvent> =
+        leagues.filter { it.monitored }.flatMap { it.events }.filter { it.listed && it.start.isAfter(now.plus(UPCOMING_MARGIN)) }.sortedBy { it.start }
+
     /** The releases the plugin's searches for [event]'s [part] find with [verdict], each with its verdict for that part. */
     fun found(event: Int, part: String, verdict: String): List<Pair<CatalogueRelease, CatalogueVerdict>> = releases.mapNotNull { release ->
         release.verdicts.firstOrNull { it.event == event && it.part == part && it.reached && it.verdict == verdict }?.let { release to it }
     }
 
     companion object {
+        /** An event starting this soon may have started by the time a test looks. */
+        private val UPCOMING_MARGIN: Duration = Duration.ofMinutes(5)
+
         fun parse(text: String, anchor: LocalDate): SportsLibrary {
             val root = Json.parseToJsonElement(text).jsonObject
             check(root.getValue("format").jsonPrimitive.int == 1) { "${SportsCatalogAssets.ASSET} isn't format 1" }
