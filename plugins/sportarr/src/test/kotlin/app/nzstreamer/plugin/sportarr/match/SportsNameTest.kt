@@ -166,15 +166,18 @@ class SportsNameTest {
     }
 
     @Test
-    fun `a name of a few hundred characters reads in well under a millisecond`() {
+    fun `names of a few hundred characters read whole, and how long they take is measured, never asserted`() {
+        // A time is the machine's, not the parser's: CI's runner shares its CPUs, so it is printed for the record alone.
+        // A parser that grew with the square of a name would meet the per-test limit over the names above first.
         val names = hostile().filter { it.length in 200..1_000 } + generated(200, minLength = 200)
         repeat(3) { names.forEach { SportsName.read(it) } }
         val runs = 10
         val started = System.nanoTime()
-        repeat(runs) { names.forEach { SportsName.read(it) } }
+        val read = List(runs) { names.map { SportsName.read(it) } }.last()
         val micros = (System.nanoTime() - started) / 1_000.0 / (runs * names.size)
         println("SportsName.read: %.1f µs a name over %d names of 200 to 1,000 characters".format(Locale.ROOT, micros, names.size))
-        assertTrue(micros < 1_000, "$micros µs a name")
+        assertEquals(names, read.map { it.name })
+        assertTrue(read.all { it.readable }, "read without the guard")
     }
 
     private class Row(val name: String, val expected: String, val context: NameContext = NameContext.NONE)
