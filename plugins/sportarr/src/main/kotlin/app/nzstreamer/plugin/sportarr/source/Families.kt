@@ -190,7 +190,8 @@ object Families {
      */
     private val SESSIONS: List<List<String>> = (Sessions.words + listOf(listOf("grand", "prix"), listOf("gp"))).sortedByDescending { it.size }
 
-    private val MONTHS = setOf(
+    /** Month names, which a title's date may hold. */
+    internal val MONTHS = setOf(
         "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december",
         "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
     )

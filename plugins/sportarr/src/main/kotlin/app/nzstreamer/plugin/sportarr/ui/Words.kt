@@ -94,6 +94,12 @@ internal object Words {
     /** A round with several races, and a name that says none's number. */
     const val NO_RACE_NUMBER = "No race number in the name"
 
+    /** A card's main fight alone, not its main part. */
+    const val MAIN_EVENT_ONLY = "Main event only"
+
+    /** The league's word and the event's date, and nothing else of the event's. */
+    const val BY_LEAGUE_AND_DATE = "Picked by league and date"
+
     // The kinds a release is left out as, in the left-out line (L647).
 
     /** Another event's release: "other games", "other sessions", "other cards". */
