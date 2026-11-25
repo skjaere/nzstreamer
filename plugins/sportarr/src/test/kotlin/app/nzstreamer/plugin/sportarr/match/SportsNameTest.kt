@@ -198,6 +198,8 @@ class SportsNameTest {
         const val SHOW = "Velmora.Iron.Crown.2026.11.21"
 
         val UFC = NameContext(organisations = listOf("UFC"))
+        val KCL_21 = NameContext(title = "KCL 21: Brisk vs. Loam")
+        val DOUBLE_HEADER = NameContext(title = "Kestrel Club 03 vs Kestrel Club 07 - Game 1", sides = listOf("Kestrel Club 03", "Kestrel Club 07"))
         val IN_A_SHOW = NameContext(show = true)
 
         val DATES = listOf(
@@ -241,6 +243,13 @@ class SportsNameTest {
             // A number of the event's own title is masked first: a race named for its distance gives no year.
             Row("Kestrel.Endurance.Series.2026.Kestrel.2000.Race.1080p.WEB.h264-KESTREL", "y2026", NameContext(title = "Kestrel 2000")),
             Row("Kestrel.Endurance.Series.2026.Kestrel.2000.Race.1080p.WEB.h264-KESTREL", "y2026 y2000"),
+            // Masked beside the word after it alone, a number that closes a year-first date is the date's day: a title's
+            // "07 - Game 1" or "21: Brisk" doesn't take it from a name dated the 7th or the 21st.
+            Row("Kestrel.Club.03.vs.Kestrel.Club.07.2026.12.07.Game.1.1080p.WEB.h264-KESTREL", "2026-12-07", DOUBLE_HEADER),
+            Row("Kestrel.Club.03.vs.Kestrel.Club.07.2026.07.05.Game.1.1080p.WEB.h264-KESTREL", "2026-07-05", DOUBLE_HEADER),
+            Row("Kestrel.Club.03.vs.Kestrel.Club.07.Game.1.2026.12.07.1080p.WEB.h264-KESTREL", "2026-12-07", DOUBLE_HEADER),
+            Row("KCL.2026.11.21.Brisk.vs.Loam.1080p.WEB.h264-WREN", "2026-11-21", KCL_21),
+            Row("KCL.21.Brisk.vs.Loam.2026.11.21.1080p.WEB.h264-WREN", "2026-11-21", KCL_21),
         )
 
         val NUMBERS = listOf(
@@ -628,6 +637,8 @@ class SportsNameTest {
             // The series' own number is masked only when the series is given.
             Row("Formula.1.20.Kestrel.Race.1080p.WEB.h264-WREN", "score"),
             Row("Formula.1.20.Kestrel.Race.1080p.WEB.h264-WREN", "none", NameContext(series = listOf("Formula 1", "Formula1", "F1"))),
+            // A title's own number beside the word after it stays its own where the numbers before it make no date.
+            Row("KCL.2026.13.21.Brisk.vs.Loam.1080p.WEB.h264-WREN", "none", KCL_21),
             // A side's own number is a side's word.
             Row(
                 "Kestrel.Club.03.vs.Kestrel.Club.07.2.1.1080p.WEB.h264-WREN",

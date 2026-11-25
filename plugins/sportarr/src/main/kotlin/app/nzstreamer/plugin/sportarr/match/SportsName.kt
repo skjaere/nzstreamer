@@ -316,7 +316,9 @@ private class Reader(private val name: String, private val context: NameContext)
 
     /**
      * Masks each number of the event's own phrases where it stands in the identity beside the word it has beside it there
-     * ("500" after "Kestrel" for "Kestrel 500"), or anywhere when the phrase is that number alone.
+     * ("500" after "Kestrel" for "Kestrel 500"), or anywhere when the phrase is that number alone. Beside the word after it
+     * alone, a number that closes a year-first date stays the date's day: a title's "07 - Game 1" doesn't take the day of
+     * "2026.12.07.Game.1".
      */
     private fun maskOwnNumbers() {
         phrases.forEach { phrase ->
@@ -326,10 +328,17 @@ private class Reader(private val name: String, private val context: NameContext)
                     if (all[j].word != word) continue
                     val before = k > 0 && j > 0 && all[j - 1].word == phrase[k - 1]
                     val after = k < phrase.lastIndex && j + 1 < tailStart && all[j + 1].word == phrase[k + 1]
-                    if (phrase.size == 1 || before || after) masked[j] = true
+                    if (phrase.size == 1 || before || (after && !closesYearFirstDate(j))) masked[j] = true
                 }
             }
         }
+    }
+
+    /** Whether the number at [j] is a year-first date's day, its year and month the two words before it ("2026.12.07"). */
+    private fun closesYearFirstDate(j: Int): Boolean {
+        if (j < 2 || (j - 2..j).any { !all[it].isNumber }) return false
+        val (year, month, day) = (j - 2..j).map { all[it].word }
+        return year.length == 4 && month.length <= 2 && day.length <= 2 && date(year.toInt(), month.toInt(), day.toInt()) != null
     }
 
     /** One-token forms: a compact date "20261121", a year and a running number "2026x07", a year's episode "S2026E34". */

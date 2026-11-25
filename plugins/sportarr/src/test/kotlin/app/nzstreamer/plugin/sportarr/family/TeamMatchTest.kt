@@ -227,17 +227,21 @@ class TeamMatchTest {
         fun numbered(id: Int, start: String, number: Int) = game(
             baseball, id, start, "Kestrel Club 03", "Kestrel Club 07", round = null, season = "2026", title = "Kestrel Club 03 vs Kestrel Club 07 - Game $number",
         )
-        val doubleHeader = sports(baseball to listOf(numbered(1401, "2026-11-20T15:00", 1), numbered(1402, "2026-11-20T19:00", 2)))
-        val matcher = TeamMatch(doubleHeader)
-        val gameOne = "Kestrel.Club.03.vs.Kestrel.Club.07.2026.11.20.Game.1.1080p.WEB.h264-KESTREL"
-        val gameTwo = "Kestrel.Club.03.vs.Kestrel.Club.07.2026.11.20.Game2.1080p.WEB.h264-KESTREL"
-        val noNumber = "Kestrel.Club.03.vs.Kestrel.Club.07.2026.11.20.720p.WEB.h264-WREN"
-        val undated = "Kestrel.Club.03.vs.Kestrel.Club.07.Game.1.720p.WEB.h264-WREN"
-        val rows = { mine: String, theirs: String ->
-            listOf(mine to accepted, theirs to otherGame, noNumber to offered("No game number"), undated to otherGame)
+        // On the 7th too, where the date's day stands right before "Game", as "07" does in the title.
+        listOf("2026-11-20", "2026-12-07").forEach { day ->
+            val doubleHeader = sports(baseball to listOf(numbered(1401, "${day}T15:00", 1), numbered(1402, "${day}T19:00", 2)))
+            val matcher = TeamMatch(doubleHeader)
+            val date = day.replace('-', '.')
+            val gameOne = "Kestrel.Club.03.vs.Kestrel.Club.07.$date.Game.1.1080p.WEB.h264-KESTREL"
+            val gameTwo = "Kestrel.Club.03.vs.Kestrel.Club.07.$date.Game2.1080p.WEB.h264-KESTREL"
+            val noNumber = "Kestrel.Club.03.vs.Kestrel.Club.07.$date.720p.WEB.h264-WREN"
+            val undated = "Kestrel.Club.03.vs.Kestrel.Club.07.Game.1.720p.WEB.h264-WREN"
+            val rows = { mine: String, theirs: String ->
+                listOf(mine to accepted, theirs to otherGame, noNumber to offered("No game number"), undated to otherGame)
+            }
+            assertEquals("", wrong(doubleHeader.byId(1401), rows(gameOne, gameTwo), matcher), day)
+            assertEquals("", wrong(doubleHeader.byId(1402), rows(gameTwo, gameOne), matcher), day)
         }
-        assertEquals("", wrong(doubleHeader.byId(1401), rows(gameOne, gameTwo), matcher))
-        assertEquals("", wrong(doubleHeader.byId(1402), rows(gameTwo, gameOne), matcher))
     }
 
     @Test
