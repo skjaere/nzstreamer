@@ -169,6 +169,8 @@ class WordsTest {
             Shown(SETUP, "SpPhoneSetup", "⚠ Not encrypted: your API key would be readable on its way over the internet. Use https:// if your Sportarr has it."),
             Shown(SETUP, "SpPhoneSetup", "API key"),
             Shown(SETUP, "SpPhoneSetup", "In Sportarr: Settings › General › Security. Stored encrypted on this device."),
+            Shown(SETUP, "SpPhoneSetup", "Show"),
+            Shown(SETUP, null, "Hide"),
             Shown(SETUP, "SpPhoneSetup", "Saved"),
             Shown(SETUP, "SpPhoneSetup", "Change"),
             Shown(SETUP, "SpPhoneSetup", "Paste the new key"),

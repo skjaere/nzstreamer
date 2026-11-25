@@ -14,10 +14,16 @@ import java.net.URISyntaxException
 class Connection(private val secrets: PluginSecrets) {
     /** The address and key saved, or null until both are. */
     suspend fun saved(): Saved? {
-        val address = secrets.get(URL)?.takeIf { it.isNotBlank() } ?: return null
-        val key = secrets.get(KEY)?.takeIf { it.isNotBlank() } ?: return null
+        val address = address() ?: return null
+        val key = key() ?: return null
         return Saved(address, key)
     }
+
+    /** The address saved, or null; the setup form shows it. */
+    suspend fun address(): String? = secrets.get(URL)?.takeIf { it.isNotBlank() }
+
+    /** The key saved, or null; the setup form never shows it, only says it is saved and sends it on Test. */
+    suspend fun key(): String? = secrets.get(KEY)?.takeIf { it.isNotBlank() }
 
     /**
      * Stores [address] and [key], each trimmed (a pasted key may bring a line break, which no header can carry); true when

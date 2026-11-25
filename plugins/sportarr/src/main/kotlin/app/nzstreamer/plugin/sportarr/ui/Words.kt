@@ -52,6 +52,12 @@ internal object Words {
         /** SpPhoneSetup 1: the key's help. */
         const val KEY_HELP = "In Sportarr: Settings › General › Security. Stored encrypted on this device."
 
+        /** SpPhoneSetup 1: in the key's field, which shows the key typed; SpTvSetup 1. */
+        const val SHOW = "Show"
+
+        /** Undrawn: Show's word while the key shows, as the host's own key fields have it. */
+        const val HIDE = "Hide"
+
         /** SpPhoneSetup 5: the key field once a key is saved, which it never shows. */
         const val SAVED = "Saved"
 
