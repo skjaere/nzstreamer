@@ -302,6 +302,7 @@ class SportarrPagesDeviceTest {
         waitFor(hasText("No release at ", substring = true))
         val kept = hasText("No release at ", substring = true) and hasText("Releases often appear a few hours after a game ends.", substring = true)
         assertTrue("its words", exists(kept))
+        assertTrue("announced as it comes, as Test's answer is", exists(kept and SemanticsMatcher.keyIsDefined(SemanticsProperties.LiveRegion)))
     }
 
     /** (mock) Play with possible matches alone opens Choose release with them and their reasons, and the left-out line. */

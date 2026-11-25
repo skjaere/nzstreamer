@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,6 +28,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -36,7 +38,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
@@ -90,9 +95,18 @@ internal fun PartsPage(screen: EventScreen, tv: Boolean, actions: PageActions, o
 
 @Composable
 private fun PhoneParts(screen: EventScreen, actions: PageActions, okGuard: OkGuard, bar: @Composable () -> Unit) {
+    val list = rememberLazyListState()
+    // The line Play or Choose release leaves sits under the top button: brought into view as it comes, from a row's ⋮
+    // far down the page, so its outcome shows (not as the page opens with one).
+    val kept = screen.kept
+    var seen by remember { mutableStateOf(kept) }
+    LaunchedEffect(kept) {
+        if (kept != null && kept != seen) list.animateScrollToItem(0)
+        seen = kept
+    }
     Column(Modifier.fillMaxSize().pageOkGuard(okGuard)) {
         bar()
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(bottom = 16.dp)) {
             item {
                 Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     PageTitle(screen.title, tv = false)
@@ -101,7 +115,7 @@ private fun PhoneParts(screen: EventScreen, actions: PageActions, okGuard: OkGua
                     screen.count?.let { Status(it, AppType.secondary, 3.dp, colors.divider) }
                     screen.buttons.forEach { button -> Box(Modifier.padding(top = 6.dp)) { PhoneButton(button, actions) } }
                     screen.note?.let { SmallLine(it) }
-                    screen.kept?.let { SmallLine(it) }
+                    screen.kept?.let { SmallLine(it, live = true) }
                 }
             }
             item {
@@ -143,7 +157,9 @@ private fun PhonePartRow(row: PartRow, actions: PageActions) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(row.label, style = AppType.body, color = if (row.started) colors.text else colors.textSecondary)
                 row.meta?.let { Text(it, style = AppType.small, color = colors.muted) }
-                if (row.searching) Text(Words.Game.SEARCHING, style = AppType.small, color = colors.accent)
+                if (row.searching) {
+                    Text(Words.Game.SEARCHING, style = AppType.small, color = colors.accent, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                }
                 row.left?.let { left ->
                     Text(left, style = AppType.small, color = colors.accent)
                     row.progress?.let { ProgressBar(it, 2.dp, colors.divider) }
@@ -175,7 +191,7 @@ private fun TvParts(screen: EventScreen, actions: PageActions, okGuard: OkGuard)
             TvHeading(screen)
             TvButtons(screen.buttons, panes, actions)
             screen.note?.let { HeldLine(it, panes) }
-            screen.kept?.let { SmallLine(it) }
+            screen.kept?.let { SmallLine(it, live = true) }
         },
         leftFoot = { TvFoot(screen.footnote, TvDimens.pagePane) },
         right = {

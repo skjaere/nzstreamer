@@ -56,7 +56,7 @@ private fun PhoneOnePart(screen: EventScreen, actions: PageActions, okGuard: OkG
                         Box(if (index == 0) Modifier.padding(top = 6.dp) else Modifier) { PhoneButton(button, actions) }
                     }
                     screen.note?.let { SmallLine(it) }
-                    screen.kept?.let { SmallLine(it) }
+                    screen.kept?.let { SmallLine(it, live = true) }
                 }
             }
             screen.mark?.let { mark -> item { PhoneMark(mark, actions) } }
@@ -74,7 +74,7 @@ private fun TvOnePart(screen: EventScreen, actions: PageActions, okGuard: OkGuar
             TvHeading(screen)
             TvButtons(screen.buttons, panes, actions)
             screen.note?.let { HeldLine(it, panes) }
-            screen.kept?.let { SmallLine(it) }
+            screen.kept?.let { SmallLine(it, live = true) }
         },
         right = {
             Box(Modifier.weight(1f).fillMaxWidth()) {

@@ -35,7 +35,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
@@ -267,13 +269,17 @@ internal fun PageButtonView(button: PageButton, actions: PageActions, modifier: 
     }
 }
 
-/** A phone's page button: its focus for a remote, the outline round it while focused. */
+/**
+ * A phone's page button: its focus for a remote, the outline round it while focused. Choose release's is read as its
+ * words change, "Searching your indexers…" and back.
+ */
 @Composable
 internal fun PhoneButton(button: PageButton, actions: PageActions) {
     PageButtonView(
         button, actions,
         Modifier.focusRequester(actions.focus.requester(button.key))
-            .focusOutline(RoundedCornerShape(24.dp), color = if (button.primary) colors.text else null, fill = false),
+            .focusOutline(RoundedCornerShape(24.dp), color = if (button.primary) colors.text else null, fill = false)
+            .then(if (button.action == PageAction.Choose) Modifier.semantics { liveRegion = LiveRegionMode.Polite } else Modifier),
     )
 }
 
@@ -299,10 +305,14 @@ internal fun HeldLine(text: String, panes: PaneMemory) {
     ) { Text(text, style = AppType.secondary, color = colors.textSecondary) }
 }
 
-/** A page's small muted line: the line before the start on a phone, the line kept after Play found nothing. */
+/**
+ * A page's small muted line: the line before the start on a phone, the line kept after Play or Choose release found
+ * nothing. That one comes as their outcome, which nothing else on the page says, so it is [live]: TalkBack reads it as it
+ * comes, as it reads Test's answer.
+ */
 @Composable
-internal fun SmallLine(text: String) {
-    Text(text, style = AppType.small, color = colors.muted)
+internal fun SmallLine(text: String, live: Boolean = false) {
+    Text(text, style = AppType.small, color = colors.muted, modifier = if (live) Modifier.semantics { liveRegion = LiveRegionMode.Polite } else Modifier)
 }
 
 /** A TV page's footnote, not across the whole pane, as the Movie page's. */
