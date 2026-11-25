@@ -29,7 +29,7 @@ import kotlin.system.exitProcess
  *   indexer --catalog screens --video <clip> --port <8093 or above> [--mock http://localhost:8081] [--apikey fake-indexer-key] [--segment 750000] [--catalog-file app/src/androidTest/assets/screens/catalog.json]
  *   torznab [--port 8096] [--apikey fake-torznab-key] [--extra-hash <hex> --extra-title <title>] [--fail 429-900] [--delay-ms <n>]
  *   debrid  [--port 8097] [--torbox-key fake-torbox-key] [--premiumize-key fake-premiumize-key] [--media build]
- *   sports  [--port 8098] [--indexer-port 8094] [--anchor <yyyy-mm-dd>] [--mock http://localhost:8081] [--seed true] [--video build/sample.mkv]
+ *   sports  [--port 8098] [--indexer-port 8094] [--anchor <yyyy-mm-dd>] [--mock http://localhost:8081] [--seed true] [--video build/sample.mkv] [--api-limit 100000]
  */
 fun main(args: Array<String>) {
     val command = args.firstOrNull() ?: usage()
@@ -60,7 +60,7 @@ private fun usage(): Nothing {
         indexer --catalog screens --video <clip> --port <8093 or above> [--mock http://localhost:8081] [--apikey fake-indexer-key] [--segment 750000] [--catalog-file app/src/androidTest/assets/screens/catalog.json]
         torznab [--port 8096] [--apikey fake-torznab-key] [--extra-hash <hex> --extra-title <title>] [--fail 429-900] [--delay-ms <n>]
         debrid  [--port 8097] [--torbox-key fake-torbox-key] [--premiumize-key fake-premiumize-key] [--media build]
-        sports  [--port 8098] [--indexer-port 8094] [--anchor <yyyy-mm-dd>] [--mock http://localhost:8081] [--seed true] [--video build/sample.mkv]
+        sports  [--port 8098] [--indexer-port 8094] [--anchor <yyyy-mm-dd>] [--mock http://localhost:8081] [--seed true] [--video build/sample.mkv] [--api-limit 100000]
         """.trimIndent()
     )
     exitProcess(2)
@@ -345,6 +345,12 @@ class SportsFakes(val sportarr: FakeSportarrServer, val indexer: FakeIndexerServ
         const val INDEXER_KEY = "fake-indexer-key"
 
         /**
+         * The sports indexer's API calls before it answers "Request limit reached", unless --api-limit says: the fakes stay
+         * up across many device runs, each play a few searches, and the count never goes back.
+         */
+        const val API_LIMIT = 100_000
+
+        /**
          * Ports in use: the mock's (1119, 8081), the device tests' indexer (8089), mock-up.sh's and the screens indexer's (8090,
          * 8093), the debrid fakes' (8096, 8097), and others' (8091, 8092, 29101).
          */
@@ -362,8 +368,9 @@ class SportsFakes(val sportarr: FakeSportarrServer, val indexer: FakeIndexerServ
  * a search dated "2026 12 12" finds the names of that day, not of the whole month. The releases marked whole are seeded
  * into the mock with the clip (--video, the sample clip) under their names, and the others with every article missing, as
  * the screens catalogue's are, so the indexer lists them and a play of one fails as a broken release would; with --seed
- * false they are listed alone, nothing is posted and no clip is needed. The Sportarr key isn't printed. Throws
- * IllegalArgumentException for options it can't take and for a taken port.
+ * false they are listed alone, nothing is posted and no clip is needed. The sports indexer answers [SportsFakes.API_LIMIT]
+ * calls, or --api-limit's. The Sportarr key isn't printed. Throws IllegalArgumentException for options it can't take and
+ * for a taken port.
  */
 internal fun sports(options: Map<String, String>, log: (String) -> Unit = ::println): SportsFakes {
     fun port(name: String, default: Int): Int = options[name]?.let { given ->
@@ -383,6 +390,9 @@ internal fun sports(options: Map<String, String>, log: (String) -> Unit = ::prin
         "false" -> false
         else -> throw IllegalArgumentException("--seed takes true or false")
     }
+    val apiLimit = options["api-limit"]?.let { given ->
+        requireNotNull(given.toIntOrNull()?.takeIf { it > 0 }) { "--api-limit takes a number of calls above 0" }
+    } ?: SportsFakes.API_LIMIT
     val clip = if (seed) File(options["video"] ?: "build/sample.mkv").also { require(it.isFile) { "${it.path} missing; see README" } } else null
     val catalog = SportsCatalog.load()
     val releases = catalog.releases(anchor)
@@ -392,7 +402,9 @@ internal fun sports(options: Map<String, String>, log: (String) -> Unit = ::prin
         throw IllegalArgumentException("port $port is taken", e)
     }
     val indexer = try {
-        FakeIndexerServer(emptyList(), SportsFakes.INDEXER_KEY, indexerPort, bind = InetAddress.getLoopbackAddress(), repeatedWords = true)
+        FakeIndexerServer(
+            emptyList(), SportsFakes.INDEXER_KEY, indexerPort, apiLimit = apiLimit, bind = InetAddress.getLoopbackAddress(), repeatedWords = true,
+        )
     } catch (e: BindException) {
         sportarr.close()
         throw IllegalArgumentException("port $indexerPort is taken", e)

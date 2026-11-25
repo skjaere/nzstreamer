@@ -386,6 +386,21 @@ class SportsCatalogTest {
     }
 
     @Test
+    fun `the sports indexer lasts a long run of device classes, and takes a limit of its own`() {
+        fun search(fakes: SportsFakes) =
+            java.net.URI("http://127.0.0.1:${fakes.indexer.port}/api?t=search&q=Kestrel&apikey=${SportsFakes.INDEXER_KEY}").toURL().readText()
+        val options = mapOf("port" to "0", "indexer-port" to "0", "anchor" to "$anchor", "seed" to "false")
+        sports(options, log = {}).use { fakes -> assertContains(search(fakes), """apimax="100000"""") }
+        sports(options + ("api-limit" to "2"), log = {}).use { fakes ->
+            repeat(2) { assertContains(search(fakes), "<rss") }
+            assertContains(search(fakes), """<error code="500" description="Request limit reached"/>""")
+        }
+        listOf("0", "-1", "many").forEach { limit ->
+            assertFailsWith<IllegalArgumentException>(limit) { sports(options + ("api-limit" to limit), log = {}).close() }
+        }
+    }
+
+    @Test
     fun `the command needs a clip to seed`() {
         val refused = assertFailsWith<IllegalArgumentException> {
             sports(mapOf("port" to "0", "indexer-port" to "0", "video" to "none.mkv", "mock" to "http://127.0.0.1:1"), log = {}).close()
