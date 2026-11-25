@@ -25,19 +25,20 @@ import kotlin.coroutines.CoroutineContext
  * A part's releases (L647), found through the user's indexers ([search], the host's) and judged by its family, for Play
  * and Choose release alone: never as a page opens, on a timer or for a list.
  *
- * Stage 1 searches the family's first two queries together, stage 2 its one more only when they accepted nothing: three
- * searches at most, each with the part's runtime, so the host ranks for it (its cache keys on the words, so another part's
- * same words cost no new request). Each search is read to its last answer. Every release is judged once (the same name,
- * size and indexer is one release), on [work], off the caller's thread; the accepted keep the host's order, each at its
- * best place across the answers, the first search first at the same place, and the possible matches follow that order.
+ * Stage 1 searches the family's first two queries together, stage 2 its one more only when they accepted nothing that
+ * plays here (a torrent not cached, a codec with no decoder is no find): three searches at most, each with the part's
+ * runtime, so the host ranks for it (its cache keys on the words, so another part's same words cost no new request).
+ * Each search is read to its last answer. Every release is judged once (the same name, size and indexer is one
+ * release), on [work], off the caller's thread; the accepted keep the host's order, each at its best place across the
+ * answers, the first search first at the same place, and the possible matches follow that order.
  *
  * A cancelled run cancels its searches with it. Its log line says counts, kinds and how long it took, never a name.
  */
 class Runner(private val search: PluginSearch, private val work: CoroutineContext = Dispatchers.Default) {
     /**
      * [part] of [event]'s releases, judged by [matcher]: the accepted in order, the possible matches with their reasons,
-     * one line counting what was left out by kind; and, when nothing was accepted or offered, each indexer's line and the
-     * note for the no-release sheet.
+     * one line counting what was left out by kind; and, when nothing accepted or offered plays here, each indexer's line
+     * and the note for the no-release sheet.
      */
     suspend fun releases(matcher: FamilyMatcher, event: SportsEvent, part: Part): ItemReleases {
         val started = System.nanoTime()
@@ -47,7 +48,7 @@ class Runner(private val search: PluginSearch, private val work: CoroutineContex
         val judged = Judged(matcher, event, part)
         val answers = coroutineScope { first.map { words -> async { last(words, part.runtimeMinutes) } }.awaitAll() }.toMutableList()
         answers.forEachIndexed { query, found -> judged.add(query, found.releases) }
-        if (then != null && judged.none { it.verdict is Verdict.Accept }) {
+        if (then != null && judged.none { it.verdict is Verdict.Accept && it.playable }) {
             answers += last(then, part.runtimeMinutes)
             judged.add(answers.lastIndex, answers.last().releases)
         }
@@ -56,7 +57,8 @@ class Runner(private val search: PluginSearch, private val work: CoroutineContex
         val accepted = ordered.filter { it.verdict is Verdict.Accept }.map { it.handle }
         val offered = ordered.mapNotNull { judging -> (judging.verdict as? Verdict.Offer)?.let { Offered(judging.handle, it.reason) } }
         val kinds = ordered.mapNotNull { (it.verdict as? Verdict.Reject)?.kind }.groupingBy { it }.eachCount()
-        val nothing = accepted.isEmpty() && offered.isEmpty()
+        // As the host decides: with nothing here to play or to pick, it shows the no-release sheet, which needs the lines.
+        val nothing = ordered.none { it.playable && it.verdict !is Verdict.Reject }
         val noun = Nouns.event(event)
         log.info(
             "Releases for a {} part: {} searches, {} judged, {} accepted, {} offered, {} left out {} in {} ms",
@@ -111,11 +113,13 @@ class Runner(private val search: PluginSearch, private val work: CoroutineContex
                 val key = Release(release.name, release.size, release.indexer)
                 val known = byRelease[key]
                 if (known == null) {
-                    byRelease[key] = Judging(SharedRules.judge(matcher, event, part, release.name, release.postedAt, release.size), release.handle, place, query)
+                    val verdict = SharedRules.judge(matcher, event, part, release.name, release.postedAt, release.size)
+                    byRelease[key] = Judging(verdict, release.handle, place, query, release.playable)
                 } else if (place < known.place) {
                     known.place = place
                     known.query = query
                     known.handle = release.handle
+                    known.playable = release.playable
                 }
             }
         }
@@ -126,8 +130,8 @@ class Runner(private val search: PluginSearch, private val work: CoroutineContex
     /** One release as the run tells it from another. */
     private data class Release(val name: String, val size: Long, val indexer: String)
 
-    /** A release's verdict, and the handle at its best place: [place] in the answer to query [query]. */
-    private class Judging(val verdict: Verdict, var handle: ReleaseHandle, var place: Int, var query: Int)
+    /** A release's verdict, and the handle at its best place: [place] in the answer to query [query], [playable] here or not. */
+    private class Judging(val verdict: Verdict, var handle: ReleaseHandle, var place: Int, var query: Int, var playable: Boolean)
 
     private companion object {
         /** Stage 1's queries, searched together. */

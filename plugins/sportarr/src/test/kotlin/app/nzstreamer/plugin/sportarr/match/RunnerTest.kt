@@ -268,6 +268,26 @@ class RunnerTest {
     }
 
     @Test
+    fun `an accepted release that can't play here finds nothing, so stage two still asks and the sheet gets its lines and note`() = runTest {
+        val name = gameNamed("1080p.WEB.h264-KESTREL")
+        fun unplayable(name: String) = ReleaseInfo(name, 6_000_000_000, null, "Indexer A", playable = false, whyNot = "Not cached", handle = TestHandle(name))
+        val search = answers("q1" to listOf(unplayable(name)))
+        val result = Runner(search).releases(family(), game, game.headline)
+        assertEquals(listOf("q1", "q2", "q3"), search.asked.map { it.words }.sorted())
+        assertEquals(listOf(name), result.acceptedLabels, "still given, for the host to show as hidden")
+        assertEquals(listOf("Indexer A"), result.lines.map { it.indexer })
+        assertEquals("Releases often appear a few hours after a game ends. Try Play again later.", result.note)
+
+        // A possible match that plays here is something to pick: Choose release opens, with no sheet.
+        val offer = gameNamed("720p.WEB.h264-DRIFTWOOD")
+        val withOffer = answers("q1" to listOf(unplayable(name), release(offer)))
+        val picked = Runner(withOffer).releases(family(offer to Verdict.Offer("No date in the name")), game, game.headline)
+        assertEquals(listOf("q1", "q2", "q3"), withOffer.asked.map { it.words }.sorted())
+        assertEquals(emptyList(), picked.lines)
+        assertNull(picked.note)
+    }
+
+    @Test
     fun `an indexer's one release counted under another's listing still counts as its result`() = runTest {
         // A torrent several indexers list is one release, kept under one of them.
         val highlights = gameNamed("Highlights.720p.WEB.h264-WREN")
