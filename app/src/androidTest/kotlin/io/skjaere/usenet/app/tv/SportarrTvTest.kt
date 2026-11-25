@@ -343,18 +343,26 @@ class SportarrTvTest {
         assertEquals("back on the sixth row", sixth, remote.focused())
     }
 
-    /** OK on Upcoming switches the side, the focus staying on it and the chips keeping their choice. */
+    /**
+     * OK on Upcoming switches the side, the focus staying on it and the chips keeping their choice: a sport picked first,
+     * as All is also what clearing the chips would leave.
+     */
     @Test
     fun upcomingByOkKeepsTheFocusThere() {
         sportarr.install()
         openSports()
         listFocused()
-        assertEquals("Left from All", UPCOMING, remote.press(KeyEvent.KEYCODE_DPAD_LEFT))
+        assertEquals("Right from All", SOCCER, remote.press(KeyEvent.KEYCODE_DPAD_RIGHT))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        waitFor(chip(SOCCER) and isSelected())
+        assertEquals(UPCOMING, remote.pressUntil(KeyEvent.KEYCODE_DPAD_LEFT, UPCOMING, max = 3))
         remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
         waitFor(sideTab(UPCOMING) and isSelected())
-        waitFor(hasText(dayHeader(library.upcoming(Instant.now()).first().date(zone), LocalDate.now(zone))))
+        val soccer = library.leagues.filter { it.sport == SOCCER }.map { it.id }.toSet()
+        waitFor(hasText(dayHeader(library.upcoming(Instant.now()).first { it.leagueId in soccer }.date(zone), LocalDate.now(zone))))
         assertEquals("the focus after OK", UPCOMING, remote.focused())
-        assertTrue("All still picked", exists(chip(ALL) and isSelected()))
+        assertTrue("Soccer still picked", exists(chip(SOCCER) and isSelected()))
+        assertTrue("All not picked", !exists(chip(ALL) and isSelected()))
     }
 
     /**
@@ -543,6 +551,7 @@ class SportarrTvTest {
         const val TODAY = "TODAY"
         const val ALL = "All"
         const val SKIING = "Skiing"
+        const val SOCCER = "Soccer"
 
         /** The library's one skiing event, the last sport's. */
         const val SKI_EVENT = 2201
