@@ -48,8 +48,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Test
@@ -567,6 +569,7 @@ class ListModelTest {
             val model = session.list(tv = false, restored = null)
             val running = launch { model.run() }
             val screen = model.next { it.upNext.isNotEmpty() }
+            host.settle()
             assertEquals(0, host.searches.get(), "nothing searched as the list shows")
             assertEquals(emptyList(), host.played)
             assertTrue(sportarr.http.requests.all { "/api/leagues" in it.url }, "the list's routes alone: ${sportarr.http.requests.map { it.url }}")
@@ -580,6 +583,7 @@ class ListModelTest {
             assertEquals("Premier League", played.subtitle)
             assertEquals(110, played.runtimeMinutes)
             assertEquals("game", played.noun)
+            host.settle()
             assertEquals(0, host.searches.get(), "the host searches once the play asks for releases, not the list")
             running.cancelAndJoin()
         } finally {
@@ -676,6 +680,18 @@ class ListModelTest {
 
         override fun addressSafety(url: String): AddressSafety = loopbackSafety(url)
 
+        /**
+         * Waits for what the host's scope was given meanwhile: its queue run, and what was launched in it finished (a search
+         * started there, as a page or the list is made, counts by then, however late it starts). The fake's search answers
+         * at once, so nothing launched there waits long.
+         */
+        suspend fun settle() = withTimeout(WAIT) {
+            repeat(SETTLE_ROUNDS) {
+                withContext(main) {}
+                scope.coroutineContext.job.children.toList().forEach { it.join() }
+            }
+        }
+
         fun close() {
             scope.cancel()
             main.close()
@@ -689,6 +705,9 @@ class ListModelTest {
         val NOW: Instant = at("2026-11-22T20:41")
         /** How long a test waits for what runs on threads of its own (the session's read and file), at most. */
         const val WAIT = 20_000L
+
+        /** Rounds of waiting for the host's scope: what one round's work launched there, the next waits for. */
+        const val SETTLE_ROUNDS = 3
 
         val LIBRARY_LEAGUES: List<KeptLeague> = listOf(PREMIER, FORMULA_1, MOTO_GP, UFC, SKIING, NBA)
 

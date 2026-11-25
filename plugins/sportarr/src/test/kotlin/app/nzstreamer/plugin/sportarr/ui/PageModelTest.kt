@@ -51,8 +51,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -583,11 +585,13 @@ class PageModelTest {
             val running = launch { model.run() }
             val screen = assertIs<EventScreen>(model.next { it is EventScreen })
             assertEquals("Lantern Bay FC vs. Copper Crown United", screen.title)
+            host.settle()
             assertEquals(0, host.searches.get(), "nothing searched as the page opens")
 
             model.play("ev-000001:full")
             withTimeout(WAIT) { while (host.played.isEmpty()) kotlinx.coroutines.yield() }
             assertEquals("ev-000001:full", host.played.single().key)
+            host.settle()
             assertEquals(0, host.searches.get(), "the host searches once the play asks for releases, not the page")
             running.cancelAndJoin()
         } finally {
@@ -758,6 +762,18 @@ class PageModelTest {
 
         override fun addressSafety(url: String): AddressSafety = loopbackSafety(url)
 
+        /**
+         * Waits for what the host's scope was given meanwhile: its queue run, and what was launched in it finished (a search
+         * started there, as a page or the list is made, counts by then, however late it starts). The fake's search answers
+         * at once, so nothing launched there waits long.
+         */
+        suspend fun settle() = withTimeout(WAIT) {
+            repeat(SETTLE_ROUNDS) {
+                withContext(main) {}
+                scope.coroutineContext.job.children.toList().forEach { it.join() }
+            }
+        }
+
         fun close() {
             scope.cancel()
             main.close()
@@ -774,6 +790,9 @@ class PageModelTest {
         val MONDAY: Instant = at("2026-11-23T20:41")
 
         const val WAIT = 20_000L
+
+        /** Rounds of waiting for the host's scope: what one round's work launched there, the next waits for. */
+        const val SETTLE_ROUNDS = 3
 
         const val GAME = "Lantern Bay FC vs. Copper Crown United"
         const val GAME_FOOT =
