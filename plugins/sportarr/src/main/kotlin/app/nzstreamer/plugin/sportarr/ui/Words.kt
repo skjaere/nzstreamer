@@ -488,6 +488,17 @@ internal object Words {
          */
         fun kept(time: String, noun: String): String = "No release at $time. ${often(noun)}"
 
+        /**
+         * Undrawn: under the page's buttons once Choose release found nothing because no indexer answered, each indexer's
+         * name and the host's words for why ("No indexer answered. Indexer A: Paused: too many searches from Sportarr."),
+         * as Search says it with none switched on.
+         */
+        fun unanswered(lines: List<Pair<String, String>>): String =
+            if (lines.isEmpty()) NO_INDEXERS else "No indexer answered. ${lines.joinToString(" · ") { (indexer, words) -> "$indexer: $words" }}."
+
+        /** Undrawn: Choose release with no indexer switched on, in Search's words. */
+        const val NO_INDEXERS = "No indexers are switched on."
+
         private fun often(noun: String): String = "Releases often appear a few hours after ${a(noun)} $noun ends."
     }
 

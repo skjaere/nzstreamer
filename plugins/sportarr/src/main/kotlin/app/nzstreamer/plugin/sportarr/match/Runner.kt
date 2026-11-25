@@ -40,7 +40,16 @@ class Runner(private val search: PluginSearch, private val work: CoroutineContex
      * one line counting what was left out by kind; and, when nothing accepted or offered plays here, each indexer's line
      * and the note for the no-release sheet.
      */
-    suspend fun releases(matcher: FamilyMatcher, event: SportsEvent, part: Part): ItemReleases {
+    suspend fun releases(matcher: FamilyMatcher, event: SportsEvent, part: Part): ItemReleases = run(matcher, event, part).releases
+
+    /**
+     * What one run found ([releases]), and whether any indexer [answered] it: one that failed, was skipped or paused by the
+     * host's cap, or none switched on, says nothing of whether the part's releases are there yet.
+     */
+    class Run(val releases: ItemReleases, val answered: Boolean)
+
+    /** [part] of [event]'s releases as [releases] gives them, with whether any indexer answered. */
+    suspend fun run(matcher: FamilyMatcher, event: SportsEvent, part: Part): Run {
         val started = System.nanoTime()
         val queries = matcher.queries(event, part)
         val first = queries.first.map(String::trim).filter(String::isNotEmpty).distinct().take(FIRST_AT_ONCE)
@@ -64,13 +73,14 @@ class Runner(private val search: PluginSearch, private val work: CoroutineContex
             "Releases for a {} part: {} searches, {} judged, {} accepted, {} offered, {} left out {} in {} ms",
             event.family, answers.size, ordered.size, accepted.size, offered.size, kinds.values.sum(), kinds, (System.nanoTime() - started) / 1_000_000,
         )
-        return ItemReleases(
+        val releases = ItemReleases(
             accepted = accepted,
             offered = offered,
             leftOut = LeftOut.line(kinds, noun),
             lines = if (nothing) lines(answers, Nouns.item(event, part)) else emptyList(),
             note = if (nothing) Words.NoRelease.note(noun) else null,
         )
+        return Run(releases, answered = answers.any { found -> found.indexers.any { it.state == IndexerLine.State.Found } })
     }
 
     /** The search for [words], read to its last answer: what every indexer said once they all had. */

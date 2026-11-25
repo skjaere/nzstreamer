@@ -290,6 +290,7 @@ class WordsTest {
             Shown(CHOOSE, null, "older releases"),
 
             Shown(NOTHING, "SpPhoneNothing", "No results"),
+            Shown(NOTHING, null, "No indexers are switched on."),
 
             Shown(SEARCH, "SpPhoneSearchWarning", "Indexer results can show scores."),
 
@@ -415,6 +416,11 @@ class WordsTest {
                 NOTHING, "kept", "SpPhoneNothing", Words.NoRelease.kept("20:41", "session"),
                 "No release at 20:41. Releases often appear a few hours after a session ends.",
             ),
+            Template(
+                NOTHING, "unanswered", null, Words.NoRelease.unanswered(listOf("Indexer A" to "Paused: too many searches from Sportarr", "Indexer B" to "Couldn't reach it")),
+                "No indexer answered. Indexer A: Paused: too many searches from Sportarr · Indexer B: Couldn't reach it.",
+            ),
+            Template(NOTHING, "unanswered", null, Words.NoRelease.unanswered(emptyList()), "No indexers are switched on."),
         )
     }
 }

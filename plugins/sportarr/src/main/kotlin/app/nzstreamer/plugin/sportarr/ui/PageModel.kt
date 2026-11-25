@@ -85,7 +85,8 @@ internal sealed interface PageScreen
  * gives it; its [meta] (the league and when, or a weekend's round and days); a [status] line (not watched, what is left, ✓
  * Watched, when it starts); a card's or weekend's [count] with its bar; Generic's line that the user picks ([pick]); the
  * [buttons], the primary first; the line in the buttons' place before the start ([note], which holds a TV's focus); the
- * line kept after Play or Choose release found nothing ([kept]); a one-part page's [mark]; a card's or weekend's [parts];
+ * line kept after Play or Choose release found nothing, or why Choose release found nothing where no indexer answered
+ * ([kept]); a one-part page's [mark]; a card's or weekend's [parts];
  * the [footnote]; and a TV's [firstFocus], one of [PageKeys].
  */
 internal data class EventScreen(
@@ -129,8 +130,8 @@ internal object PageKeys {
 /**
  * The event pages as data (L644, L647, L652, L653), built from the refresh's [ListState], the page and its key, the host's
  * watch states of its parts, when Play or Choose release last found nothing for them, the part Choose release is
- * searching for, the time now and the device's zone; [tv] where its words or buttons differ. It reads no clock and
- * searches nothing.
+ * searching for, the time now and the device's zone; [tv] where its words or buttons differ; and what Choose release
+ * last said of a part ([unanswered]) where no indexer answered it. It reads no clock and searches nothing.
  *
  * - A one-part page: before the start, the league, when it starts and the line in the buttons' place; then Play (Resume
  *   while played, Play again once watched), Choose release, Search indexers, and Mark watched or unwatched. Generic's has
@@ -152,15 +153,19 @@ internal object PageScreens {
         now: Instant,
         zone: ZoneId,
         tv: Boolean,
+        unanswered: Pair<String, String>? = null,
     ): PageScreen? {
         if (state == ListState.Loading) return null
         val sports = state.sports ?: return GONE
         val listed = listed(sports, page, key) ?: return GONE
-        return if (listed is SportsEvent && listed.parts.size == 1) {
+        val screen = if (listed is SportsEvent && listed.parts.size == 1) {
             onePart(listed, watch, nothing, searching, now, zone)
         } else {
             parts(listed, watch, nothing, searching, now, zone, tv)
         }
+        // Why Choose release found nothing, where no indexer answered, in the kept line's place while the page shows.
+        val why = unanswered?.takeIf { (part, _) -> listed.items.any { it.part.key == part } }?.second ?: return screen
+        return screen.copy(kept = why)
     }
 
     /** What [page] [key] shows of [sports]: an event, or a weekend, a session's own page being its weekend's; null once gone. */
@@ -369,6 +374,9 @@ internal class PageModel(
 ) {
     private val now = MutableStateFlow(clock())
     private val searching = MutableStateFlow<String?>(null)
+
+    /** The part Choose release last found nothing for with no indexer answering, and why: until the next Play or Choose release. */
+    private val unanswered = MutableStateFlow<Pair<String, String>?>(null)
     private val shown = MutableStateFlow<PageScreen?>(null)
 
     /** The page's screen, null until the first is built and while the list loads. */
@@ -385,11 +393,13 @@ internal class PageModel(
             val listed = sports?.let { withContext(work) { PageScreens.listed(it, page, key) } }
             if (listed == null) flowOf(listState to emptyMap()) else watch.observe(listed.items.map { it.part.key }).map { listState to it }
         }
-        combine(followed, plays.nothing, searching, now) { (listState, states), nothing, searching, now -> Input(listState, states, nothing, searching, now) }
+        combine(followed, plays.nothing, searching, now, unanswered) { (listState, states), nothing, searching, now, unanswered ->
+            Input(listState, states, nothing, searching, now, unanswered)
+        }
             .collectLatest { input ->
                 val (built, listed) = withContext(work) {
                     val sports = input.state.sports
-                    PageScreens.of(input.state, page, key, input.watch, input.nothing, input.searching, input.now, zone(), tv) to
+                    PageScreens.of(input.state, page, key, input.watch, input.nothing, input.searching, input.now, zone(), tv, input.unanswered) to
                         sports?.let { PageScreens.listed(it, page, key)?.let { listed -> sports to listed } }
                 }
                 current = listed
@@ -399,7 +409,9 @@ internal class PageModel(
 
     /** Plays [part] (its key), handing it to the host. */
     fun play(part: String) {
-        find(part)?.let { (sports, event, found) -> plays.play(sports, event, found) }
+        val (sports, event, found) = find(part) ?: return
+        unanswered.value = null
+        plays.play(sports, event, found)
     }
 
     /**
@@ -409,8 +421,9 @@ internal class PageModel(
     suspend fun choose(part: String, nav: PluginNav) {
         val (sports, event, found) = find(part) ?: return
         if (!searching.compareAndSet(null, part)) return
+        unanswered.value = null
         try {
-            plays.choose(sports, event, found, nav)
+            (plays.choose(sports, event, found, nav) as? Chosen.Unanswered)?.let { unanswered.value = part to it.line }
         } finally {
             searching.value = null
         }
@@ -437,5 +450,12 @@ internal class PageModel(
         return Triple(sports, item.event, item.part)
     }
 
-    private class Input(val state: ListState, val watch: Map<String, WatchInfo>, val nothing: Map<String, Instant>, val searching: String?, val now: Instant)
+    private class Input(
+        val state: ListState,
+        val watch: Map<String, WatchInfo>,
+        val nothing: Map<String, Instant>,
+        val searching: String?,
+        val now: Instant,
+        val unanswered: Pair<String, String>?,
+    )
 }

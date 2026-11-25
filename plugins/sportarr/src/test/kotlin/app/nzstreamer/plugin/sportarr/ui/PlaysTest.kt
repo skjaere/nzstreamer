@@ -170,7 +170,7 @@ class PlaysTest {
         val plays = Plays(RecordingPlay(), RecordingWatch(), search, this, { NOW }, EmptyCoroutineContext)
         val (library, game) = game()
 
-        assertTrue(plays.choose(library, game, game.headline, nav))
+        assertEquals(Chosen.Opened, plays.choose(library, game, game.headline, nav))
         val opened = nav.releases.single()
         assertEquals("ev-000012:full", opened.item.key)
         assertEquals("Lantern Bay Copper Crown", opened.item.search?.words)
@@ -188,9 +188,35 @@ class PlaysTest {
         val plays = Plays(RecordingPlay(), RecordingWatch(), search, this, { NOW }, EmptyCoroutineContext)
         val (library, game) = game()
 
-        assertFalse(plays.choose(library, game, game.headline, nav))
+        assertEquals(Chosen.NoneFound, plays.choose(library, game, game.headline, nav))
         assertEquals(emptyList(), nav.releases, "no list opened")
         assertEquals(mapOf("ev-000012:full" to NOW), plays.nothing.value)
+    }
+
+    @Test
+    fun `a search no indexer answered keeps no line, and Choose release opens nothing`() = runBlocking<Unit> {
+        // Paused by the host's cap, failed, or none switched on: nothing says the releases aren't there yet.
+        listOf(
+            listOf(IndexerLine("Indexer A", IndexerLine.State.Limited, 0, PAUSED)),
+            listOf(IndexerLine("Indexer A", IndexerLine.State.Failed, 0, "Couldn't reach it"), IndexerLine("Indexer B", IndexerLine.State.Skipped, 0, "Can't search by text")),
+            emptyList(),
+        ).forEach { lines ->
+            val search = UnansweredSearch(lines)
+            val play = RecordingPlay()
+            val nav = RecordingNav()
+            val plays = Plays(play, RecordingWatch(), search, this, { NOW }, EmptyCoroutineContext)
+            val (library, game) = game()
+
+            plays.play(library, game, game.headline).join()
+            val answer = play.releases.single()()
+            assertTrue(answer.accepted.isEmpty() && answer.offered.isEmpty(), "nothing found with ${lines.map { it.state }}")
+            assertEquals(emptyMap(), plays.nothing.value, "Play keeps no line when no indexer answered: ${lines.map { it.state }}")
+
+            val why = if (lines.isEmpty()) "No indexers are switched on." else "No indexer answered. ${lines.joinToString(" · ") { "${it.name}: ${it.text}" }}."
+            assertEquals(Chosen.Unanswered(why), plays.choose(library, game, game.headline, nav))
+            assertEquals(emptyList(), nav.releases, "no list opened")
+            assertEquals(emptyMap(), plays.nothing.value, "Choose release keeps no line when no indexer answered: ${lines.map { it.state }}")
+        }
     }
 
     @Test
@@ -258,6 +284,11 @@ class PlaysTest {
         }
     }
 
+    /** The user's indexers, none of which answers a search: each says [lines], the host's words for why. */
+    private class UnansweredSearch(private val lines: List<IndexerLine>) : PluginSearch {
+        override fun search(words: String, runtimeMinutes: Int?, fresh: Boolean): Flow<Found> = flow { emit(Found(lines, emptyList())) }
+    }
+
     /** NZStreamer's play, keeping each item it was handed and the way to ask for its releases. */
     private class RecordingPlay : PluginPlay {
         val items: MutableList<PlayItem> = CopyOnWriteArrayList()
@@ -310,5 +341,8 @@ class PlaysTest {
         const val ACCEPTED = "Premier.League.2026.11.21.Lantern.Bay.FC.vs.Copper.Crown.United.1080p50.WEB.h264-KESTREL"
         const val UNDATED = "Lantern.Bay.FC.vs.Copper.Crown.United.1080p.WEB.h264-DRIFTWOOD"
         const val SCORED = "Lantern.Bay.FC.3.1.Copper.Crown.United.2026.11.21.720p.WEB.h264-WREN"
+
+        /** The host's words for an indexer its cap paused. */
+        const val PAUSED = "Paused: too many searches from Sportarr"
     }
 }

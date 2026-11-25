@@ -495,6 +495,33 @@ class PageModelTest {
     }
 
     @Test
+    fun `Choose release no indexer answered shows the indexers' words for a moment, and keeps no line`() = runBlocking<Unit> {
+        val paused = object : PluginSearch {
+            override fun search(words: String, runtimeMinutes: Int?, fresh: Boolean): Flow<Found> =
+                flow { emit(Found(listOf(IndexerLine("Indexer A", IndexerLine.State.Limited, 0, "Paused: too many searches from Sportarr")), emptyList())) }
+        }
+        val monday = at("2026-11-23T20:41")
+        val plays = Plays(RecordingPlay(), MutableWatch(), paused, this, { monday }, EmptyCoroutineContext)
+        val model = PageModel(MutableStateFlow(ListState.Ready(GAMES)), MutableWatch(), plays, Pages.EVENT, "ev-000013", tv = false, { monday }, { LONDON }, EmptyCoroutineContext)
+        val running = launch { model.run() }
+        model.next { true }
+        val nav = RecordingNav()
+
+        model.choose("ev-000013:full", nav)
+        assertEquals(emptyList(), nav.opened, "nothing to open")
+        val words = "No indexer answered. Indexer A: Paused: too many searches from Sportarr."
+        assertEquals(listOf("[Play]* [Choose release] [Search indexers]", words, "Mark watched"), lines(model.next { words in lines(it) }).subList(3, 6))
+        assertEquals(emptyMap(), plays.nothing.value, "no line kept for the plugin's run")
+
+        // The page again (Back, then the row): nothing said of releases that may well be there.
+        val again = PageModel(MutableStateFlow(ListState.Ready(GAMES)), MutableWatch(), plays, Pages.EVENT, "ev-000013", tv = false, { monday }, { LONDON }, EmptyCoroutineContext)
+        val second = launch { again.run() }
+        assertEquals(listOf("[Play]* [Choose release] [Search indexers]", "Mark watched"), lines(again.next { true }).subList(3, 5))
+        second.cancelAndJoin()
+        running.cancelAndJoin()
+    }
+
+    @Test
     fun `nothing is searched as a page opens, and Play asks the host alone`() = runBlocking<Unit> {
         val now = Instant.now()
         val game = on(PREMIER, 1, now.minus(Duration.ofHours(3)), "Lantern Bay FC vs. Copper Crown United")

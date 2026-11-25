@@ -29,6 +29,18 @@ import kotlinx.coroutines.withContext
 import java.time.Instant
 import kotlin.coroutines.CoroutineContext
 
+/** What Choose release came to. */
+internal sealed interface Chosen {
+    /** The host's list opened over the page. */
+    data object Opened : Chosen
+
+    /** The indexers answered, with nothing for the part: the page keeps its line. */
+    data object NoneFound : Chosen
+
+    /** No indexer answered: [line], each one's words for why, for the page to show while it does. */
+    data class Unanswered(val line: String) : Chosen
+}
+
 /**
  * How the pages and Up next play a part through NZStreamer (L647, L652, L653), its searches the user's indexers through
  * [search], the host's:
@@ -40,7 +52,8 @@ import kotlin.coroutines.CoroutineContext
  * - Mark watched and unwatched go to the host's [watch], under the part's key with the title its play stores.
  *
  * When Play or Choose release finds nothing for a part, the time is kept ([nothing]) for the plugin's run, so the page
- * says when it last found nothing until a release of the part plays. Each item is made on [work], off the main thread, as
+ * says when it last found nothing until a release of the part plays; not when no indexer answered (each failed, was skipped
+ * or paused, or none is on), which says nothing of the releases. Each item is made on [work], off the main thread, as
  * its matcher reads the whole list; a play and a mark go on in [scope], the host's, as the page may close meanwhile;
  * [clock] says when nothing was found.
  */
@@ -60,29 +73,34 @@ internal class Plays(
 
     /**
      * Plays [part] of [event] of [sports]. The host asks for its releases only when no release played it before, or that
-     * one fails; an answer that leaves it nothing to play or pick (the runner's note for its no-release sheet) keeps the
-     * page's line.
+     * one fails; an answer of the indexers that leaves it nothing to play or pick (the runner's note for its no-release
+     * sheet) keeps the page's line. With no indexer answering, the host's sheet says why, and the page keeps nothing.
      */
     fun play(sports: Sports, event: SportsEvent, part: Part): Job = scope.launch {
         val (item, matcher) = withContext(work) { prepared(sports, event, part) }
         play.play(item) {
-            runner.releases(matcher, event, part).also { answer -> if (answer.note != null) noted(part) }
+            val run = runner.run(matcher, event, part)
+            if (run.releases.note != null && run.answered) noted(part)
+            run.releases
         }
     }
 
     /**
-     * Choose release for [part] of [event] of [sports]: what the runner finds, in the host's list over the page; true when
-     * it opened. With nothing accepted or offered it opens nothing, and the page keeps its line.
+     * Choose release for [part] of [event] of [sports]: what the runner finds, in the host's list over the page. With
+     * nothing accepted or offered it opens nothing: the page keeps its line where the indexers answered, and shows why
+     * where none did.
      */
-    suspend fun choose(sports: Sports, event: SportsEvent, part: Part, nav: PluginNav): Boolean {
+    suspend fun choose(sports: Sports, event: SportsEvent, part: Part, nav: PluginNav): Chosen {
         val (item, matcher) = withContext(work) { prepared(sports, event, part) }
-        val answer = runner.releases(matcher, event, part)
+        val run = runner.run(matcher, event, part)
+        val answer = run.releases
         if (answer.accepted.isEmpty() && answer.offered.isEmpty()) {
+            if (!run.answered) return Chosen.Unanswered(Words.NoRelease.unanswered(answer.lines.map { it.indexer to it.words }))
             noted(part)
-            return false
+            return Chosen.NoneFound
         }
         nav.openReleases(item, answer.accepted, answer.offered, answer.leftOut)
-        return true
+        return Chosen.Opened
     }
 
     /** Search indexers for [part] of [event]: the host's Search with the event's words and the scores note; it searches nothing itself. */
