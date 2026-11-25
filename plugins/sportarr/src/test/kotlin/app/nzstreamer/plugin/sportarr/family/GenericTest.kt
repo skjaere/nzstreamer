@@ -13,6 +13,7 @@ import app.nzstreamer.plugin.sportarr.model.at
 import app.nzstreamer.plugin.sportarr.model.on
 import app.nzstreamer.plugin.sportarr.model.sports
 import app.nzstreamer.plugin.sportarr.source.KeptLeague
+import io.skjaere.usenet.plugin.FileInfo
 import org.junit.jupiter.api.Test
 import java.time.Duration
 import java.time.Instant
@@ -71,6 +72,21 @@ class GenericTest {
             "Kestrel.Cup.Final.2025.1080p.WEB.h264-WREN" to other,
         )
         assertEquals("", wrong(titled, rows))
+    }
+
+    @Test
+    fun `a title holding a list's word is still named by it, and its programmes still left out`() {
+        val golf = KeptLeague(16, "Kestrel Golf Tour", "Golf")
+        val countdown = sports(golf to listOf(on(golf, 2301, at("2026-11-21T12:00"), "Kestrel Countdown"))).byId(2301)
+        val rows = listOf(
+            "Kestrel.Golf.Tour.2026.11.21.Kestrel.Countdown.1080p.WEB.h264-WREN" to byLeague,
+            "Kestrel.Countdown.2026.Final.Round.720p.WEB.h264-WREN" to byTitle,
+            "Kestrel.Countdown.2026.11.21.Highlights.720p.WEB.h264-WREN" to Verdict.Reject(RejectKind.Highlights),
+            "Kestrel.Countdown.2026.11.21.Preview.720p.WEB.h264-WREN" to Verdict.Reject(RejectKind.Shows),
+        )
+        assertEquals("", wrong(countdown, rows))
+        val picker = PartPicker.of(Generic, countdown, countdown.headline)
+        assertEquals(0, picker.pick(listOf(FileInfo("Kestrel.Countdown.2026.Final.Round.mkv", 4_000_000_000, true))))
     }
 
     @Test

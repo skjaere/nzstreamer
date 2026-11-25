@@ -274,9 +274,10 @@ private class Reader(private val name: String, private val context: NameContext)
         readDates()
         readYears()
         readDayMonth()
-        val nonEvent = find(if (context.show) Words.nonEventInShows else Words.nonEvent).map { it.first }
-        val partial = find(Words.partial).map { (word, number) -> if (number != null) "$word $number" else word }
-        val packs = find(Words.packs).map { it.first }
+        // A word of the event's own is none of these lists', as it is no result word: "Kestrel Countdown" is no countdown.
+        val nonEvent = find(if (context.show) Words.nonEventInShows else Words.nonEvent, notOwn = true).map { it.first }
+        val partial = find(Words.partial, notOwn = true).map { (word, number) -> if (number != null) "$word $number" else word }
+        val packs = find(Words.packs, notOwn = true).map { it.first }
         val parts = find(if (context.show) Words.showParts else Words.parts).map { it.first }
         val sessionWords = find(Words.sessions)
         // "Race 2" is a session and a race's number at once; "Test Day 2" a testing session and a test match's day.
@@ -467,9 +468,10 @@ private class Reader(private val name: String, private val context: NameContext)
 
     /**
      * Each entry of [list] found among the words not yet read, the longest first at each word, with the number it takes:
-     * as (value, number, where it starts).
+     * as (value, number, where it starts). With [notOwn], an entry whose words are all the event's own is passed over.
      */
-    private fun <T> find(list: PhraseList<T>): List<Triple<T, Int?, Int>> {
+    private fun <T> find(list: PhraseList<T>, notOwn: Boolean = false): List<Triple<T, Int?, Int>> {
+        fun counts(phrase: Phrase<T>) = !notOwn || !phrase.words.all { it in ownWords }
         val found = mutableListOf<Triple<T, Int?, Int>>()
         var i = 0
         while (i < end) {
@@ -477,7 +479,9 @@ private class Reader(private val name: String, private val context: NameContext)
                 i++
                 continue
             }
-            val match = list.startingWith(all[i].word).firstNotNullOfOrNull { phrase -> fit(phrase, i)?.let { phrase to it.number } }
+            val match = list.startingWith(all[i].word).firstNotNullOfOrNull { phrase ->
+                fit(phrase, i)?.takeIf { counts(phrase) }?.let { phrase to it.number }
+            }
             if (match != null) {
                 val (phrase, number) = match
                 val size = phrase.words.size + if (number != null) 1 else 0
@@ -486,7 +490,7 @@ private class Reader(private val name: String, private val context: NameContext)
                 i += size
             } else {
                 // A word glued to its number: "Race2", "Practice2", "Half2".
-                val glued = gluedPhrase(list, all[i].word)
+                val glued = gluedPhrase(list, all[i].word)?.takeIf { counts(it.first) }
                 if (glued != null) {
                     used[i] = true
                     found += Triple(glued.first.value, glued.second, i)

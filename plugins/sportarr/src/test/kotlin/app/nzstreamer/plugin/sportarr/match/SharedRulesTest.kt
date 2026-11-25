@@ -157,6 +157,15 @@ class SharedRulesTest {
     }
 
     @Test
+    fun `a list's word that is the event's own leaves none of its names out, while another one still does`() {
+        val countdown = KeptLeague(16, "Kestrel Countdown Cup", "Baseball")
+        val game = sports(countdown to listOf(on(countdown, 1701, at("2026-03-10T18:00"), "Saltmere Gulls vs Marrowby Lynx"))).byId(1701)
+        assertEquals(Verdict.Accept(), judge(game, "Kestrel.Countdown.Cup.2026.03.10.Saltmere.Gulls.vs.Marrowby.Lynx.1080p.WEB.h264-WREN"))
+        assertEquals(left(RejectKind.Highlights), judge(game, "Kestrel.Countdown.Cup.2026.03.10.Saltmere.Gulls.vs.Marrowby.Lynx.Highlights.720p.WEB.h264-WREN"))
+        assertEquals(left(RejectKind.Shows), judge(game, "Kestrel.Countdown.Cup.2026.03.10.Saltmere.Gulls.vs.Marrowby.Lynx.Preview.720p.WEB.h264-WREN"))
+    }
+
+    @Test
     fun `a part of a game or a pack is left out`() {
         val rows = listOf(
             Triple(game, "Lantern.Bay.FC.vs.Copper.Crown.United.2026.11.21.1st.Half.1080p.WEB.h264-WREN", "parts of a game"),

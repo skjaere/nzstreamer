@@ -468,6 +468,17 @@ class SportsNameTest {
             Row("$RACE.Grid.Walk.1080p.WEB.h264-WREN", "race show:grid walk"),
             Row("$RACE.Drivers'.Parade.1080p.WEB.h264-WREN", "race show:drivers parade"),
             Row("$RACE.Grand.Prix.Race.Highlights.720p.WEB.h264-ORCHID", "cut:highlights, session:race, gp"),
+            // A word of the event's own title, league or sides is no list's word, as no result word is.
+            Row("Kestrel.Countdown.2026.Final.Round.720p.WEB.h264-WREN", "", NameContext(title = "Kestrel Countdown")),
+            Row("Kestrel.Countdown.2026.Highlights.720p.WEB.h264-WREN", "cut:highlights", NameContext(title = "Kestrel Countdown")),
+            Row("Kestrel.Countdown.2026.Final.Round.720p.WEB.h264-WREN", "show:countdown"),
+            Row(
+                "Kestrel.Countdown.Cup.2026.03.10.Saltmere.Gulls.vs.Marrowby.Lynx.1080p.WEB.h264-WREN",
+                "",
+                NameContext(league = "Kestrel Countdown Cup"),
+            ),
+            Row("Velmora.Watch.Party.2026.11.21.1080p.WEB.h264-KESTREL", "", NameContext(title = "Velmora Watch Party")),
+            Row("Kestrel.Bundle.Rally.2026.11.21.1080p.WEB.h264-KESTREL", "", NameContext(title = "Kestrel Bundle Rally")),
             // Partial words.
             Row("$GAME.1st.Half.1080p.WEB.h264-WREN", "partial:1st half"),
             Row("$GAME.2nd.Half.1080p.WEB.h264-WREN", "partial:2nd half"),
