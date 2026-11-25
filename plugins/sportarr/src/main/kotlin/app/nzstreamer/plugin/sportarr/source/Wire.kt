@@ -37,7 +37,7 @@ import java.time.temporal.TemporalQuery
  * (Sportarr sends it today, but its API doesn't promise it) that can't be read is none, which every reader takes as "the
  * route's answer as it is" (L642), the title, or Generic.
  */
-object Wire {
+object Wire : WireDecoder {
     /** Unknown keys skipped; a nullable field may be missing, or come as null, as Sportarr writes every empty one. */
     internal val json = Json {
         ignoreUnknownKeys = true
@@ -45,16 +45,16 @@ object Wire {
     }
 
     /** `GET /api/system/status`, or null when the body isn't such an answer. */
-    fun status(body: ByteArray): WireStatus? = read(body) { json.decodeFromString(WireStatus.serializer(), it) }
+    override fun status(body: ByteArray): WireStatus? = read(body) { json.decodeFromString(WireStatus.serializer(), it) }
 
     /** `GET /api/leagues`: a plain array of leagues, or null when the body isn't one. */
-    fun leagues(body: ByteArray): List<WireLeague>? = read(body) { json.decodeFromString(LEAGUES, it) }
+    override fun leagues(body: ByteArray): List<WireLeague>? = read(body) { json.decodeFromString(LEAGUES, it) }
 
     /**
      * `GET /api/leagues/{id}/events`: one page of an envelope when paging was asked of a Sportarr that pages (4.1.10 on), or
      * the whole league as a plain array from one that ignores it; null when the body is neither.
      */
-    fun events(body: ByteArray): WireEvents? = read(body) { text ->
+    override fun events(body: ByteArray): WireEvents? = read(body) { text ->
         when (text.firstOrNull { !it.isWhitespace() && it != BOM }) {
             '{' -> WireEvents.Paged(json.decodeFromString(WirePage.serializer(), text.trimStart(BOM)))
             '[' -> WireEvents.Whole(json.decodeFromString(EVENTS, text.trimStart(BOM)))
@@ -74,6 +74,15 @@ object Wire {
     } catch (e: IllegalArgumentException) {
         null
     }
+}
+
+/** Reads Sportarr's answers: [Wire], or a test's stand-in that notes where it ran (the decode is off the main thread, L641). */
+interface WireDecoder {
+    fun status(body: ByteArray): WireStatus?
+
+    fun leagues(body: ByteArray): List<WireLeague>?
+
+    fun events(body: ByteArray): WireEvents?
 }
 
 /** Who answers: Sportarr says its [appName], and its [version] in four parts ("4.1.12.1122"). */
