@@ -15,7 +15,7 @@ import kotlin.math.abs
  * holds naming the kind a name is left out as:
  * 1. a score or a result word (W167 a: such a name is never offered, so it never reaches Choose release);
  * 2. a non-event word: highlights, recaps and condensed games; a race's own shows; every other programme;
- * 3. a half, quarter, period or innings alone; a pack;
+ * 3. a half, quarter, period or innings alone, or one numbered part of a recording ("Part 1"); a pack;
  * 4. posted more than a day before the event started (a release with no time passes);
  * 5. a date that isn't the event's.
  *
@@ -38,7 +38,7 @@ object SharedRules {
             name.score -> RejectKind.Score
             name.results.isNotEmpty() -> RejectKind.Result
             name.nonEvent.isNotEmpty() -> nonEvent(name.nonEvent, event)
-            name.partial.isNotEmpty() -> RejectKind.Partial
+            name.partial.isNotEmpty() || name.numbered(NumberWord.Part).isNotEmpty() -> RejectKind.Partial
             name.packs.isNotEmpty() -> RejectKind.Packs
             posted != null && posted < event.start.minus(EARLY) -> RejectKind.Older
             !datesMatch(name, event, related) -> RejectKind.OtherEvents

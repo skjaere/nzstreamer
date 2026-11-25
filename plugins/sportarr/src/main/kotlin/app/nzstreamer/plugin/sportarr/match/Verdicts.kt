@@ -62,7 +62,7 @@ enum class RejectKind {
     /** A motorsport programme before or after the race. */
     RaceShow,
 
-    /** A half, quarter, period or innings alone. */
+    /** A half, quarter, period or innings alone, or one numbered part of a recording. */
     Partial,
 
     /** A pack of several events. */

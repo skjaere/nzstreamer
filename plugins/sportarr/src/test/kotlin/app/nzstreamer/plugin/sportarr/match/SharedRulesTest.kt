@@ -171,6 +171,10 @@ class SharedRulesTest {
             Triple(game, "Lantern.Bay.FC.vs.Copper.Crown.United.2026.11.21.1st.Half.1080p.WEB.h264-WREN", "parts of a game"),
             Triple(game, "Lantern.Bay.FC.vs.Copper.Crown.United.2026.11.21.Second.Half.1080p.WEB.h264-WREN", "parts of a game"),
             Triple(nba, "NBA.2026.11.21.Saltmere.Gulls.vs.Marrowby.Lynx.4th.Quarter.720p.WEB.h264-WREN", "parts of a game"),
+            // A recording cut into numbered parts: one of them is no whole game, session or card part.
+            Triple(game, "Lantern.Bay.FC.vs.Copper.Crown.United.2026.11.21.Part.1.1080p.WEB.h264-KESTREL", "parts of a game"),
+            Triple(race, "Formula1.2026.Round20.Kestrel.Grand.Prix.Race.Part.2.1080p.WEB.h264-WREN", "parts of a session"),
+            Triple(card, "UFC.999.Main.Card.Part1.1080p.WEB.h264-KESTREL", "parts of a card"),
             Triple(game, "Premier.League.2026.Week.13.720p.WEB.h264-WREN", "packs"),
             Triple(game, "Premier.League.2026.Complete.Season.1080p.WEB.h264-WREN", "packs"),
             Triple(game, "Premier.League.2026.11.21.Bundle.720p.WEB.h264-ORCHID", "packs"),
