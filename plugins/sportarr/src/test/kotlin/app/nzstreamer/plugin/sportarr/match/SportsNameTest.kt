@@ -527,6 +527,8 @@ class SportsNameTest {
             Row("$CARD.Prelims.1080p.WEB.h264-KESTREL", "part:prelims"),
             Row("$CARD.Preliminary.Card.1080p.WEB.h264-KESTREL", "part:prelims"),
             Row("$CARD.Preliminaries.1080p.WEB.h264-KESTREL", "part:prelims"),
+            Row("$CARD.Undercard.1080p.WEB.h264-KESTREL", "part:prelims"),
+            Row("Kestrel.Boxing.2026.11.18.Halde.vs.Brisk.Under.Card.720p.WEB.h264-WREN", "part:prelims"),
             Row("$CARD.Main.Card.1080p.WEB.h264-KESTREL", "part:main card"),
             Row("$CARD.Maincard.1080p.WEB.h264-KESTREL", "part:main card"),
             Row("Kestrel.Boxing.2026.11.21.Halde.vs.Brisk.Main.Event.Only.720p.WEB.h264-WREN", "part:main event only"),

@@ -346,6 +346,12 @@ object Words {
         ).flatten()
     }
 
+    /**
+     * A card's or a show's part words, and the pre-show's. "Main Event" alone is none: it is also a wrestling programme's
+     * name. "Post Fight Show" and "Post Fight Press Conference" are read as programmes first ("post fight" and "press
+     * conference" among the non-event words), which leaves such a name out all the same. "Full PPV" stays the PPV part:
+     * the pay-per-view broadcast in full is still the part sold on its own, never the whole event.
+     */
     private fun partEntries(): List<Phrase<PartWord>> =
         phrases(PartWord.EarlyPrelims, "early prelims", "early prelim", "earlyprelims", "early preliminary card", "early preliminaries") +
             phrases(PartWord.Prelims, "prelims", "prelim", "preliminary card", "preliminaries", "undercard", "under card", "prelim card") +

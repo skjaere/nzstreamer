@@ -115,6 +115,7 @@ class FightCardTest {
             "UFC.999.Prelims.1080p.WEB.h264-KESTREL" to only(Parts.PRELIMS),
             "UFC.999.Preliminary.Card.720p.WEB.h264-ORCHID" to only(Parts.PRELIMS),
             "UFC.999.Preliminaries.720p.WEB.h264-ORCHID" to only(Parts.PRELIMS),
+            "UFC.999.Undercard.720p.WEB.h264-ORCHID" to only(Parts.PRELIMS),
             "UFC.999.Main.Card.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD),
             "UFC.999.Maincard.1080p.WEB.h264-WREN" to only(Parts.MAIN_CARD),
         )
@@ -247,6 +248,8 @@ class FightCardTest {
             "Boxing.2026.11.18.Halde.vs.Brisk.Main.Event.Only.720p.WEB.h264-ORCHID" to full(offered("Main event only")),
             "Kestrel.Boxing.2026.11.18.1080p.WEB.h264-WREN" to full(offered("Picked by league and date")),
             "Boxing.2026.11.18.Halde.vs.Brisk.Prelims.720p.WEB.h264-WREN" to full(otherParts),
+            // Boxing's word for the fights before the main event.
+            "Boxing.2026.11.18.Halde.vs.Brisk.Undercard.1080p.WEB.h264-WREN" to full(otherParts),
             "Boxing.2026.11.18.Halde.vs.Loam.1080p.WEB.h264-WREN" to full(other),
             "Boxing.2026.11.25.Halde.vs.Brisk.1080p.WEB.h264-WREN" to full(other),
         )
