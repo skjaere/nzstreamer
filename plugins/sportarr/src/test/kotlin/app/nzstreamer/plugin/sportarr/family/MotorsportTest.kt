@@ -215,6 +215,11 @@ class MotorsportTest {
         )
         val wrong = rows.mapNotNull { (name, titles) -> accepting(practices, name).takeIf { it != titles }?.let { "$name: $it" } }
         assertTrue(wrong.isEmpty(), wrong.joinToString("\n"))
+        // A sprint weekend's one practice is named by "Practice" alone.
+        val sprintPractice = list.byId(1611)
+        assertEquals(accepted, judge(sprintPractice, "Formula1.2026.Round19.Vellmar.Free.Practice.1080p.WEB.h264-KESTREL"))
+        assertEquals(accepted, judge(sprintPractice, "Formula1.2026.Round19.Vellmar.Practice.1.1080p.WEB.h264-KESTREL"))
+        assertEquals(otherSession, judge(sprintPractice, "Formula1.2026.Round19.Vellmar.Practice.2.1080p.WEB.h264-KESTREL"))
     }
 
     @Test

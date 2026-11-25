@@ -133,10 +133,11 @@ class Motorsport(private val sports: Sports) : FamilyMatcher {
             weekend.count { it.session?.kind == SessionKind.Race } > 1
         } else {
             if (word.kind != session.kind) return OTHER_SESSION
-            // A session with no number of its own takes any, while it is the only one of its kind in its round.
+            // While a session is the only one of its kind in its round, a number on one side alone tells nothing: a "Race"
+            // takes "Race 1", and "Free Practice" names the one "Practice 1".
             val alone = weekend.count { it.session?.kind == session.kind } <= 1
             val number = number(session)
-            val same = word.number == number || (number == null && alone)
+            val same = word.number == number || ((number == null || word.number == null) && alone)
             val unnumberedRace = session.kind == SessionKind.Race && !alone && word.number == null
             if (!same && !unnumberedRace) return OTHER_SESSION
             !same
