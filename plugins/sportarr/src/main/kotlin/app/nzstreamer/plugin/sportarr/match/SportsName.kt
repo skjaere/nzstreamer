@@ -207,6 +207,12 @@ class SportsName internal constructor(
     /** The numbers [word] leads in the name. */
     fun numbered(word: NumberWord): List<Int> = numbered.filter { it.word == word }.map { it.number }
 
+    /**
+     * The part words that say which part the name is: "PPV" names the part sold on its own only where no other part word
+     * does ("UFC 999 PPV Prelims" is the prelims).
+     */
+    val partNamed: List<PartWord> get() = parts.filter { it != PartWord.Ppv }.ifEmpty { parts }
+
     /** Whether [phrase]'s words, folded as a name's are, stand together in the identity. */
     fun has(phrase: String): Boolean {
         val words = Tokens.of(phrase).map { it.word }

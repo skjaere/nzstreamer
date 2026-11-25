@@ -156,6 +156,9 @@ class FightCardTest {
             "UFC.999.Full.PPV.1080p.WEB.h264-ORCHID" to only(Parts.MAIN_CARD),
             "UFC.999.2026.11.21.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD),
             "UFC.999.Prelims.Quessel.vs.Halde.720p.WEB.h264-WREN" to only(Parts.PRELIMS),
+            // PPV beside a part's own word is that part's pay-per-view: the word decides.
+            "UFC.999.PPV.Prelims.1080p.WEB.h264-KESTREL" to only(Parts.PRELIMS),
+            "UFC.999.PPV.Early.Prelims.1080p.WEB.h264-KESTREL" to only(Parts.EARLY_PRELIMS),
         )
         assertEquals("", wrong(card, rows))
     }

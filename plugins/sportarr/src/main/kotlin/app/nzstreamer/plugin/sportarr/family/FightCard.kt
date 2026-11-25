@@ -166,11 +166,11 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
 
     /**
      * What [name]'s part words make of it for [part]: a full event is every part's, and the part alone only where the
-     * card has no other; the main event alone a possible match for the main part; no part word, or PPV, the main part;
-     * else the parts its words name, the part alone only when they name no other.
+     * card has no other; the main event alone a possible match for the main part; no part word, or PPV alone, the main
+     * part; else the parts its words name, the part alone only when they name no other.
      */
     private fun parts(card: Card, part: Part, name: SportsName): Verdict {
-        val words = name.parts
+        val words = name.partNamed
         val headline = card.event.headline.id
         return when {
             PartWord.FullEvent in words -> Verdict.Accept(whole = card.event.parts.size == 1)

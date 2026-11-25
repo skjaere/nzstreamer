@@ -62,7 +62,7 @@ class PartPicker(
     /** Whether [name] carries the part's words: its session's kind and number, or its card part's word. */
     private fun carries(name: SportsName): Boolean = when (wanted) {
         is Wanted.Session -> name.sessions.any { it.kind == wanted.kind && it.number == wanted.number }
-        is Wanted.CardPart -> name.parts.any { it.names(wanted.id) }
+        is Wanted.CardPart -> name.partNamed.any { it.names(wanted.id) }
         Wanted.Whole -> false
     }
 
@@ -72,7 +72,7 @@ class PartPicker(
      */
     private fun othersWords(name: SportsName): Boolean = when (wanted) {
         is Wanted.Session -> name.sessions.any { it.kind != wanted.kind || it.number != wanted.number }
-        is Wanted.CardPart -> name.parts.any { it != PartWord.FullEvent && !it.names(wanted.id) }
+        is Wanted.CardPart -> name.partNamed.any { it != PartWord.FullEvent && !it.names(wanted.id) }
         Wanted.Whole -> false
     }
 

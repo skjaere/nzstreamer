@@ -97,6 +97,10 @@ class PartPickerTest {
         assertEquals(listOf(0, 1, 2), listOf("early-prelims", "prelims", "main-card").map { picker(card, it).pick(files) })
         val ppv = listOf(video("UFC.999.Prelims.1080p.WEB.h264-ORCHID.mkv"), video("UFC.999.PPV.Quessel.vs.Halde.1080p.WEB.h264-ORCHID.mkv"))
         assertEquals(1, picker(card, "main-card").pick(ppv))
+        // A part's own word beside PPV says which part it is: the prelims of the pay-per-view, never its main card.
+        val ppvPrelims = listOf(video("UFC.999.PPV.Prelims.1080p.WEB.h264-ORCHID.mkv"))
+        assertNull(picker(card, "main-card").pick(ppvPrelims))
+        assertEquals(0, picker(card, "prelims").pick(ppvPrelims))
 
         val night = list.titled("Velmora Iron Crown: Night 2")
         val show = listOf(
