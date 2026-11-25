@@ -245,6 +245,11 @@ class SharedRulesTest {
         assertEquals(left(RejectKind.OtherEvents), judge(cup, named("2026.11.21"), family))
         assertEquals(Verdict.Accept(), judge(cup, named("2026.11.22"), family))
         assertEquals(Verdict.Accept(), judge(league, named("2026.11.22")), "with no other meeting listed, the 22nd is a day after")
+        // Every date a name holds must be the game's: a release dated both meetings' days is neither's.
+        val bothDays = named("2026.11.21.2026.11.22")
+        assertEquals(left(RejectKind.OtherEvents), judge(league, bothDays, family))
+        assertEquals(left(RejectKind.OtherEvents), judge(cup, bothDays, family))
+        assertEquals(left(RejectKind.OtherEvents), judge(league, named("2026.11.21.2026.11.26"), family), "a second date nobody's")
     }
 
     @Test
