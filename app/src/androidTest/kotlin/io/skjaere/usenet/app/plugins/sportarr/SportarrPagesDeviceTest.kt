@@ -178,6 +178,7 @@ class SportarrPagesDeviceTest {
         waitFor(hasText("42 min left"))
         assertTrue("Resume", exists(button(RESUME)))
         assertFalse("Play beside Resume", exists(button(PLAY)))
+        assertEquals("canary values, played part-way", emptyList<String>(), compose.canaries())
     }
 
     /** Mark watched, ✓ Watched, Play again, Mark unwatched; and back again, the row kept under the part's key. */
@@ -190,6 +191,7 @@ class SportarrPagesDeviceTest {
         compose.onNode(button(MARK_WATCHED).also { waitFor(it) }).performScrollTo().performClick()
         waitFor(hasText(WATCHED))
         assertTrue("Play again", exists(button(PLAY_AGAIN)))
+        assertEquals("canary values, watched", emptyList<String>(), compose.canaries())
         compose.waitUntil(5_000) { sportarr.state(game.part())?.watched == true }
         assertEquals("kept as a plugin's item", WatchKind.Item, sportarr.state(game.part())!!.kind)
         compose.onNode(button(MARK_UNWATCHED)).performScrollTo().performClick()
@@ -209,6 +211,7 @@ class SportarrPagesDeviceTest {
         assertTrue("its line", exists(hasText(GAME_NOT_STARTED)))
         listOf(PLAY, CHOOSE, SEARCH).forEach { assertFalse("its $it before the start", exists(button(it))) }
         assertTrue("its footnote", exists(hasText(GAME_FOOTNOTE)))
+        assertEquals("canary values, before the start", emptyList<String>(), compose.canaries())
     }
 
     /**
@@ -303,6 +306,7 @@ class SportarrPagesDeviceTest {
         val kept = hasText("No release at ", substring = true) and hasText("Releases often appear a few hours after a game ends.", substring = true)
         assertTrue("its words", exists(kept))
         assertTrue("announced as it comes, as Test's answer is", exists(kept and SemanticsMatcher.keyIsDefined(SemanticsProperties.LiveRegion)))
+        assertEquals("canary values, with its line", emptyList<String>(), compose.canaries())
     }
 
     /** (mock) Play with possible matches alone opens Choose release with them and their reasons, and the left-out line. */

@@ -25,6 +25,7 @@ import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToKey
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
@@ -390,7 +391,10 @@ class SportarrListDeviceTest {
         assertTrue("frames drawn in the fling", frames > 0)
     }
 
-    /** No canary value of the fake's (scores, statuses, images, venues, files) on Recent, Upcoming or with Show watched, or in the plugin's files. */
+    /**
+     * No canary value of the fake's (scores, statuses, images, venues, files) anywhere on Recent, Upcoming or with Show
+     * watched, every row of every day brought into view in turn, or in the plugin's files.
+     */
     @Test
     fun noCanaryValueShowsOrIsKept() {
         sportarr.install()
@@ -398,12 +402,13 @@ class SportarrListDeviceTest {
         sportarr.progress(game.part(), game.title, 40 * MINUTE, 110 * MINUTE)
         openSports()
         listShown()
-        assertEquals("on Recent", emptyList<String>(), compose.canaries())
+        assertEquals("on Recent", emptyList<String>(), wholeListsCanaries())
         menu(SHOW_WATCHED)
-        assertEquals("with Show watched", emptyList<String>(), compose.canaries())
+        assertEquals("with Show watched", emptyList<String>(), wholeListsCanaries())
+        compose.onNode(list).performScrollToKey(TOP_KEY)
         compose.onNode(sideTab(UPCOMING)).performClick()
         waitFor(sideTab(UPCOMING) and isSelected())
-        assertEquals("on Upcoming", emptyList<String>(), compose.canaries())
+        assertEquals("on Upcoming", emptyList<String>(), wholeListsCanaries())
         val files = sportarr.dataDir.listFiles().orEmpty().filter { it.isFile }
         assertTrue("its kept list: ${files.map { it.name }}", files.any { it.name == "list.json" })
         files.forEach { file -> assertFalse("a canary value in ${file.name}", file.readText().contains(SportsFakes.CANARY, ignoreCase = true)) }
@@ -442,6 +447,25 @@ class SportarrListDeviceTest {
         waitFor(inMenu)
         compose.onNode(inMenu).performClick()
         compose.waitForIdle()
+    }
+
+    /**
+     * The canary values on the screen as the list shows each of its items in turn, from the top: a lazy list composes only
+     * the items near its view, so a scan of the screen alone sees the first screenful. Back at the top after.
+     */
+    private fun wholeListsCanaries(): List<String> {
+        val found = linkedSetOf<String>()
+        compose.onNode(list).performScrollToKey(TOP_KEY)
+        var index = 0
+        while (true) {
+            compose.waitForIdle()
+            found += compose.canaries()
+            index += SCAN_STEP
+            // Past the last item the list refuses the scroll: every item has been in view.
+            if (runCatching { compose.onNode(list).performScrollToIndex(index) }.isFailure) break
+        }
+        compose.onNode(list).performScrollToKey(TOP_KEY)
+        return found.toList()
     }
 
     /** [matcher] brought into the list's view. */
@@ -583,6 +607,9 @@ class SportarrListDeviceTest {
         /** The title line's and the cut line's items in the list. */
         const val TOP_KEY = "top"
         const val CUT_KEY = "cut"
+
+        /** Items the canary scan moves on at a time: fewer than a screenful of the list's shortest. */
+        const val SCAN_STEP = 2
 
         const val MINUTE = 60_000L
 
