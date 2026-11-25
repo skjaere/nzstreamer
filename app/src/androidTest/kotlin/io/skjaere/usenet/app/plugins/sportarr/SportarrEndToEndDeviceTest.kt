@@ -102,6 +102,8 @@ class SportarrEndToEndDeviceTest {
 
     @After
     fun restore() {
+        // A player a failure left open, closed before the rows are put back: its save as it closes would come after.
+        sportarr.closePlayers()
         container.playback.cancel()
         // The runner's source for the whole run: an address that answers nothing (L622).
         PluginSource.override = PluginSource.CLOSED

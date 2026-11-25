@@ -177,6 +177,9 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
     private var held = false
     private var keeping: HoldKeeper? = null
     private var indexed = false
+
+    /** The part [playAndKeep] last started a player for, and from when its save counts. */
+    private var started: Pair<String, Long>? = null
     private val mock = PluginMockSetup(INDEXER_ID, INDEXER_NAME, SportsFakes.INDEXER_PORT)
 
     /** Skips the test where the fake Sportarr, and where asked the sports indexer or the mock, isn't up. */
@@ -329,19 +332,19 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
 
     /**
      * [launch] in the player (PlayerActivity, streaming from the mock), started from the test's activity [from] as the
-     * app starts one, over the app's own screens, which come back as it closes: stopped three quarters in, past Up next's
-     * minute and before watched, and closed. Then the row it saved for [part] as it closed, checked: a plugin's item, by
-     * the launch's title, where it stopped, with the release and the file that played. Never through ActivityScenario,
-     * whose launch clears the test's own task and the test's activity with it.
+     * app starts one, over the app's own screens, which come back as it closes: stopped three quarters in, past Up
+     * next's minute and before watched, and closed. Then the row it saved for [part] as it closed, checked: a plugin's
+     * item, by the launch's title, where it stopped, with the release and the file that played. Never through
+     * ActivityScenario, whose launch clears the test's own task and the test's activity with it. Whatever fails, from
+     * the start on, the player is closed and its save waited for ([closePlayers]).
      */
     @androidx.annotation.OptIn(UnstableApi::class)
     fun playAndKeep(part: String, launch: PlayerLaunch, from: Activity): WatchState {
         val pressedAt = System.currentTimeMillis() - 60_000
-        onMain { from.startActivity(PlayerActivity.intent(from, launch)) }
-        val player = poll("the player in front") {
-            onMain { ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).filterIsInstance<PlayerActivity>().firstOrNull() }
-        }
+        started = part to pressedAt
         val stoppedAt = try {
+            onMain { from.startActivity(PlayerActivity.intent(from, launch)) }
+            val player = poll("the player in front") { onMain { players(Stage.RESUMED).firstOrNull() } }
             val duration = poll("the player to be ready") {
                 onMain { player.player?.takeIf { it.playbackState == Player.STATE_READY }?.duration?.takeIf { it > 0 } }
             }
@@ -352,10 +355,16 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
                 player.player!!.pause()
             }
             poll("the player at ${target / 1000} s") { onMain { player.player?.currentPosition?.takeIf { abs(it - target) < 2_000 } } }
-        } finally {
-            if (!onMain { player.isDestroyed || player.isFinishing }) onMain { player.finish() }
-            poll("the player to close") { onMain { player.isDestroyed.takeIf { it } } }
+        } catch (e: Throwable) {
+            // The failure first; a player that won't close is told beside it.
+            try {
+                closePlayers()
+            } catch (closing: Throwable) {
+                e.addSuppressed(closing)
+            }
+            throw e
         }
+        closePlayers()
         val saved = poll("the player's save as it closed") { state(part)?.takeIf { it.lastPlayedAt >= pressedAt } }
         assertEquals("kept as a plugin's item", WatchKind.Item, saved.kind)
         assertEquals("by its title", launch.watch.title, saved.title)
@@ -364,6 +373,31 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
         assertEquals("the release that played it", launch.release.nzbId, saved.release?.nzbId)
         assertEquals("its file", launch.release.fileName, saved.release?.fileName)
         return saved
+    }
+
+    /**
+     * Every player still open, in whatever stage, finished and waited for until each has gone: one left open would be in
+     * front of the next test. Then the save of the part [playAndKeep] last played, which a player makes on the app's
+     * scope as it closes, is waited for a moment, so [restore] puts the row back after it rather than before; a player
+     * that knew no length yet saves nothing. The class's @After calls it before [restore], for a player a failure left.
+     */
+    fun closePlayers() {
+        val open = onMain { players(*OPEN) }
+        if (open.isEmpty()) return
+        open.forEach { player -> onMain { if (!player.isDestroyed && !player.isFinishing) player.finish() } }
+        poll("the player to close") { onMain { open.all { it.isDestroyed }.takeIf { it } } }
+        started?.let { (part, since) ->
+            try {
+                poll("its save as it closed", SAVE_WAIT_MS) { state(part)?.takeIf { it.lastPlayedAt >= since } }
+            } catch (e: AssertionError) {
+                // None: it closed before it knew the release's length.
+            }
+        }
+    }
+
+    private fun players(vararg stages: Stage): List<PlayerActivity> {
+        val monitor = ActivityLifecycleMonitorRegistry.getInstance()
+        return stages.flatMap(monitor::getActivitiesInStage).filterIsInstance<PlayerActivity>().distinct()
     }
 
     private fun <T> onMain(block: () -> T): T {
@@ -458,6 +492,12 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
 
         /** The player's opening of a release on the mock, a seek in it, and its save as it closes. */
         private const val PLAY_WAIT_MS = 60_000L
+
+        /** A player's save as it closes, on a failure's way out: a write to the library. */
+        private const val SAVE_WAIT_MS = 5_000L
+
+        /** Every stage a player is open in: all but destroyed. */
+        private val OPEN = Stage.values().filter { it != Stage.DESTROYED }.toTypedArray()
 
         /** When the run's searching actions began, for [paceSearches]: the host's cap counts a minute's. */
         private val SEARCHES = ArrayDeque<Long>()
