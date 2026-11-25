@@ -27,7 +27,8 @@
     "plugins/sportarr": {
       "release-type": "simple",
       "component": "plugin-sportarr",
-      "include-component-in-tag": true
+      "include-component-in-tag": true,
+      "initial-version": "0.1.0"
     }
   }
 }

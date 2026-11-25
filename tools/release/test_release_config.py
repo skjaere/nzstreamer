@@ -9,8 +9,9 @@ release-please action's paths_released, with a fake gh for GitHub's API (and jq,
 - release-please-config.json: every package but the root's is a plugin's folder, plugins/<id>, released as component
   plugin-<id> with the component in its tag (plugin-<id>-v1.2.3), and its path in the root's exclude-paths, so a commit
   that touches a plugin alone never bumps the app. Sportarr's is the first (L658).
-- .release-please-manifest.json and each plugin's version.txt agree (L658), and its listing.json reads as the release
-  reads it, with plugin_index.py's listing().
+- .release-please-manifest.json and each plugin's version.txt agree (L658): never released, version.txt holds the version
+  release-please gives its first release, its package's initial-version; and its listing.json reads as the release reads
+  it, with plugin_index.py's listing().
 - release-please.yml: the apk job still follows the root's release alone; the plugins output lists each released plugin
   and its tag, built from paths_released alone, and the plugins job runs release-plugin.yml once for each.
 - release-plugin.yml: no test runs while the key is in the runner, the signed build makes the APK alone, and the release
@@ -199,15 +200,23 @@ def config_problems(config, manifest, root):
     return problems
 
 
-# A plugin never released: 0.0.0 in the manifest, and in its version.txt the version release-please's first feat release
-# gives it from there (bump-minor-pre-major), which its builds already carry (L658).
+# A plugin never released: 0.0.0 in the manifest, which release-please reads as no release at all (it makes a release up
+# from the manifest only for another version). Its first release is then its package's initial-version, else 1.0.0,
+# whatever the commits: bump-minor-pre-major only bumps a release there is. Its version.txt holds that version, which its
+# builds already carry (L658).
 NEVER_RELEASED = "0.0.0"
-FIRST_RELEASE = "0.1.0"
+RELEASE_PLEASES_FIRST = "1.0.0"
 
 
-def version_problems(manifest, root):
-    """Where a plugin package's version.txt and the manifest disagree (L658): never released, the manifest's 0.0.0 and
-    version.txt's 0.1.0; once released, release-please writes both in its release pull request, the same version."""
+def first_release(config, path):
+    """The version release-please gives the package at path when it has never been released."""
+    return config["packages"].get(path, {}).get("initial-version", config.get("initial-version", RELEASE_PLEASES_FIRST))
+
+
+def version_problems(config, manifest, root):
+    """Where a plugin package's version.txt and the manifest disagree (L658): never released, the manifest's 0.0.0 and in
+    version.txt its first release's version; once released, release-please writes both in its release pull request, the
+    same version."""
     problems = []
     for path, released in manifest.items():
         if path == ".":
@@ -217,9 +226,11 @@ def version_problems(manifest, root):
         except OSError:
             problems.append(f"{path}: it has no version.txt")
             continue
-        if released == NEVER_RELEASED and version != FIRST_RELEASE:
-            problems.append(f"{path}: never released, its version.txt must hold {FIRST_RELEASE}, the version "
-                            f"release-please gives its first release, not {version}")
+        first = first_release(config, path)
+        if released == NEVER_RELEASED and version != first:
+            why = "its initial-version" if first != RELEASE_PLEASES_FIRST else "with no initial-version, its own default"
+            problems.append(f"{path}: never released, release-please gives its first release {first} ({why}), but its "
+                            f"version.txt holds {version}")
         elif released != NEVER_RELEASED and version != released:
             problems.append(f"{path}: released as {released} in the manifest, but its version.txt holds {version}")
     return problems
@@ -233,31 +244,39 @@ class ReleaseConfigTest(unittest.TestCase):
     def test_the_configs_packages_keep_the_rules(self):
         self.assertEqual([], config_problems(self.config, self.manifest, ROOT))
 
-    def test_sportarrs_package_is_the_one_l658_writes(self):
-        self.assertEqual({"release-type": "simple", "component": "plugin-sportarr", "include-component-in-tag": True},
-                         self.config["packages"].get("plugins/sportarr"))
+    def test_sportarrs_package_is_the_one_l658_writes_first_released_as_its_builds_are(self):
+        # L658's package, and its first release 0.1.0 (versionCode 10000, L657), the version its builds carry: with no
+        # initial-version, release-please would release it as 1.0.0.
+        self.assertEqual({"release-type": "simple", "component": "plugin-sportarr", "include-component-in-tag": True,
+                          "initial-version": "0.1.0"}, self.config["packages"].get("plugins/sportarr"))
         self.assertIn("plugins/sportarr", self.config["packages"]["."].get("exclude-paths", []))
 
     def test_each_plugins_version_agrees_with_the_manifest(self):
         # Sportarr's among them: 0.0.0 in the manifest and 0.1.0 in version.txt until its first release.
         self.assertIn("plugins/sportarr", self.manifest)
-        self.assertIs(True, self.config.get("bump-minor-pre-major"), "a first feat release from 0.0.0 is 0.1.0")
-        self.assertEqual([], version_problems(self.manifest, ROOT))
+        self.assertEqual([], version_problems(self.config, self.manifest, ROOT))
 
     def test_the_version_rule_catches_a_plugin_out_of_step_with_the_manifest(self):
         root = tempfile.mkdtemp(prefix="release-versions-")
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         os.makedirs(os.path.join(root, "plugins", "kestrel"))
+        first = {"packages": {"plugins/kestrel": {"initial-version": "0.1.0"}}}
         cases = {
-            ("0.0.0", "0.1.0"): True, ("0.1.0", "0.1.0"): True, ("1.2.3", "1.2.3"): True,
-            ("0.0.0", "0.0.0"): False, ("0.0.0", "0.2.0"): False, ("0.1.0", "0.2.0"): False, ("0.2.0", "0.1.0"): False,
+            ("0.0.0", "0.1.0", True): True, ("0.1.0", "0.1.0", True): True, ("1.2.3", "1.2.3", True): True,
+            ("0.0.0", "1.0.0", False): True, ("0.1.0", "0.1.0", False): True,
+            ("0.0.0", "0.0.0", True): False, ("0.0.0", "0.2.0", True): False, ("0.0.0", "1.0.0", True): False,
+            ("0.0.0", "0.1.0", False): False, ("0.1.0", "0.2.0", True): False, ("0.2.0", "0.1.0", True): False,
         }
-        for (released, version), agrees in cases.items():
-            with self.subTest(released=released, version=version):
+        for (released, version, initial), agrees in cases.items():
+            with self.subTest(released=released, version=version, initial_version=initial):
                 with open(os.path.join(root, "plugins", "kestrel", "version.txt"), "w") as f:
                     f.write(version + "\n")
-                self.assertEqual(agrees, not version_problems({".": "0.2.0", "plugins/kestrel": released}, root))
-        self.assertTrue(version_problems({".": "0.2.0", "plugins/quillmere": "0.0.0"}, root), "no version.txt")
+                config = first if initial else {"packages": {"plugins/kestrel": {}}}
+                self.assertEqual(agrees, not version_problems(config, {".": "0.2.0", "plugins/kestrel": released}, root))
+        # A top-level initial-version counts for every package that sets none.
+        self.assertEqual([], version_problems({"initial-version": "0.1.0", "packages": {"plugins/kestrel": {}}},
+                                              {".": "0.2.0", "plugins/kestrel": "0.0.0"}, root))
+        self.assertTrue(version_problems(first, {".": "0.2.0", "plugins/quillmere": "0.0.0"}, root), "no version.txt")
 
     def test_each_plugins_listing_reads_as_the_release_reads_it(self):
         # release-plugin.yml's describe reads plugins/<id>/listing.json with plugin_index.py's listing() for the plugin
