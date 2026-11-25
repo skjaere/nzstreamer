@@ -51,6 +51,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.skjaere.usenet.app.search.kindLabel
 import io.skjaere.usenet.app.search.openedTitle
 import io.skjaere.usenet.app.tv.CardRow
@@ -75,6 +77,7 @@ import io.skjaere.usenet.app.ui.rememberReturnFocus
 import io.skjaere.usenet.app.ui.tryFocus
 import io.skjaere.usenet.app.ui.turnsOver
 import io.skjaere.usenet.data.RecentSearch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -119,6 +122,7 @@ fun TvHomeContent(
     val latest by rememberUpdatedState(state)
     val scope = rememberCoroutineScope()
     val undo = remember { UpNextUndoFocus() }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     // The card whose menu is open, by its row's key.
     var menuFor by remember { mutableStateOf<String?>(null) }
 
@@ -159,9 +163,14 @@ fun TvHomeContent(
     }
 
     // The first focus, once the library has answered: back on what opened what was in front, else the first of Home's.
+    // Home's own only once Home is the screen in front (resumed): brought back by the rail's OK, it fades in over the tab
+    // it replaces, and until that one has gone the shell's content hands a request for one of Home's elements to the
+    // element last focused there. The focus would then land wherever the content's way in goes as that screen goes (Open a
+    // .nzb file, under the centred empty card), not on Home's first.
     LaunchedEffect(state != null) {
         if (state == null) return@LaunchedEffect
         if (focus.restore(::bringIntoView)) return@LaunchedEffect
+        lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.RESUMED) }
         initial.awaitTurn()
         withFrameNanos {}
         latest?.let(::firstFocus)?.let { focus.requester(it).tryFocus() }

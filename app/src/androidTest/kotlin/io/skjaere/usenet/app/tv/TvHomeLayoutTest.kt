@@ -85,8 +85,9 @@ import kotlin.math.abs
  * first focus in each state; the remote reaching every card, poster, See all and recent search, and Left from the first
  * card the rail; OK on an Up next card opening its page (the Movie page here is the real one, over the TMDB seam), where
  * the OK that opened it plays nothing and the next OK plays; a release played without TMDB playing from its card; Back
- * from a page on the card or poster that opened it; the focus kept on a card, and on screen, as Up next reorders, and
- * handed on when the card goes; See all opening the Collection tab; everything inside the safe area and shown in full at
+ * from a page on the card or poster that opened it; Home's own first focus when the rail's OK brings it back from another
+ * tab; the focus kept on a card, and on screen, as Up next reorders, and handed on when the card goes; See all opening
+ * the Collection tab; everything inside the safe area and shown in full at
  * 1x and 1.3x. A held OK on a card opens its menu (L24): Remove from Up next, and Mark watched for an episode or film in
  * progress; after them Undo has the focus, which goes on to the next card, the one before, the first poster or the empty
  * card's button as the bar goes, and back to the card Undo restores. The Show pages and the other tabs are stand-ins.
@@ -491,6 +492,34 @@ class TvHomeLayoutTest {
         remote.waitForFocus(SEARCH_INDEXERS)
         settle()
         assertEquals("none left, nothing collected: the empty card's button", SEARCH_INDEXERS, remote.focused())
+    }
+
+    /**
+     * Home again by the rail's OK from another tab, whose screen fades out as Home fades in: Home's own first focus, the
+     * empty card's button over the rows it had (nothing to resume yet), never the element the content's way in finds as
+     * the other tab's screen goes (Open a .nzb file, under the centred card); then, as the rows read anew bring a first
+     * card (a play from the other tab), that card.
+     */
+    @Test
+    fun backByTheRailsOkHomeTakesItsOwnFirstFocusThenTheFirstCardThatComes() {
+        val nothing = HomeState(emptyList(), emptyList(), null, hasTmdbKey = true)
+        showHome(nothing)
+        remote.waitForFocus(SEARCH_INDEXERS)
+        settle()
+        remote.press(KeyEvent.KEYCODE_DPAD_LEFT)
+        assertTrue("the rail's Collection", "Collection" in remote.pressUntil(KeyEvent.KEYCODE_DPAD_DOWN, "Collection"))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        remote.waitForFocus(COLLECTION_TAB)
+        settle()
+        remote.press(KeyEvent.KEYCODE_DPAD_LEFT)
+        assertTrue("the rail's Home", "Home" in remote.pressUntil(KeyEvent.KEYCODE_DPAD_UP, "Home"))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        settle()
+        assertEquals("Home's own first focus", SEARCH_INDEXERS, remote.focused())
+        compose.runOnIdle { shown = nothing.copy(upNext = listOf(harbor)) }
+        remote.waitForFocus("Harbor Lights")
+        settle()
+        assertTrue("the first card; focus on ${remote.focused()}", remote.isFocused(card("Harbor Lights")))
     }
 
     /** The open menu's items' words, in order. */
