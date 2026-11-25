@@ -157,9 +157,9 @@ class TeamMatch(private val sports: Sports) : FamilyMatcher {
 
     /**
      * Another club of a side's town: before the name's separator, a word after the side's distinctive words or nickname
-     * that is no word of this game's sides, nor a club form, the league's word or a team code ("Saltmere Gulls" for
-     * "Saltmere City", whose league the list may not follow). Words after the second side are left alone, as names add
-     * "Full Match" and the like there.
+     * that is no word of this game's sides, nor a club form written any way ("Utd", "Football Club"), the league's word or
+     * a team code ("Saltmere Gulls" for "Saltmere City", whose league the list may not follow). Words after the second
+     * side are left alone, as names add "Full Match" and the like there.
      */
     private fun anotherClub(game: Game, read: Read): Boolean {
         val half = read.name.sides?.before ?: return false
@@ -168,7 +168,8 @@ class TeamMatch(private val sports: Sports) : FamilyMatcher {
             val by = side.foundBy(read)?.takeIf { it != side.full } ?: return@any false
             val last = half.indexOfLast { it.word in by }
             last >= 0 && half.drop(last + 1).any { token ->
-                token.hasLetter && token.word !in game.words && token.word !in COMMON && token.word !in league && !isCode(token)
+                token.hasLetter && token.word !in game.words && token.word !in COMMON && token.word !in NameWords.clubSpellings &&
+                    token.word !in league && !isCode(token)
             }
         }
     }

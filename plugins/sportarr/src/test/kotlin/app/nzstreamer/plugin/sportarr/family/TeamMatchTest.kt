@@ -122,6 +122,9 @@ class TeamMatchTest {
             "Copper.Crown.United.v.Lantern.Bay.FC.2026.11.21.1080p.HDTV.x264-ORCHID" to accepted,
             "Lantern Bay FC - Copper Crown United 21.11.2026 1080p WEB h264-WREN" to accepted,
             "Copper.Crown.United.Lantern.Bay.FC.20261121.720p.WEB.h264-KESTREL" to accepted,
+            // A club word written out or short is no other club's: "Football Club" for FC, "Utd" for United.
+            "Premier.League.2026.11.21.Lantern.Bay.Football.Club.vs.Copper.Crown.United.1080p.WEB.h264-KESTREL" to accepted,
+            "Premier.League.2026.11.21.Copper.Crown.Utd.vs.Lantern.Bay.FC.720p.WEB.h264-WREN" to accepted,
         )
         assertEquals("", wrong(lbf, forGame))
         val forHerons = listOf(
@@ -158,6 +161,10 @@ class TeamMatchTest {
             "Premier.League.2026.11.21.Saltmere.City.FC.vs.Marrowby.United.1080p.WEB.h264-KESTREL" to accepted,
             "Saltmere.vs.Marrowby.2026.11.21.720p.WEB.h264-WREN" to accepted,
             "Saltmere.vs.Marrowby.2026.11.21.Full.Match.720p.WEB.h264-WREN" to accepted,
+            // A town followed by a club word written short or in full is still this game's club.
+            "Premier.League.2026.11.21.Marrowby.Utd.vs.Saltmere.City.720p.WEB.h264-WREN" to accepted,
+            "Premier.League.2026.11.21.Saltmere.Football.Club.vs.Marrowby.Utd.1080p.WEB.h264-KESTREL" to accepted,
+            "Premier.League.2026.11.21.Marrowby.Utd.FC.vs.Saltmere.City.FC.1080p.WEB.h264-ORCHID" to accepted,
         )
         assertEquals("", wrong(soccerOnly.byId(1010), rows, matcher))
 

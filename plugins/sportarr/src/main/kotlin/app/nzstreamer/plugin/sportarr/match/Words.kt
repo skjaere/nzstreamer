@@ -181,6 +181,13 @@ object Words {
         "fc", "afc", "cf", "sc", "ac", "cd", "fk", "club", "the", "city", "united", "town", "athletic", "rovers", "county",
     )
 
+    /**
+     * Club words names write that [clubWords] leaves out: "Utd" for United, "Football" of a club's name written out
+     * ("Football Club" for FC). Beside a side's town they name no other club; a side whose own name holds one keeps it
+     * among its distinctive words, as L648's list says nothing of them.
+     */
+    val clubSpellings: Set<String> = setOf("utd", "football")
+
     /** Result words (L646), as whole tokens: a name holding one is never offered (W167 a). */
     val results: Set<String> = setOf(
         "result", "results", "winner", "winners", "wins", "won", "beat", "beats", "defeats", "defeated", "victory", "retains", "ko", "tko",
