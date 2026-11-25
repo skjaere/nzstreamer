@@ -51,10 +51,10 @@ internal fun SetupPage(title: String, intro: String?, onBack: (() -> Unit)?) {
         intro?.let { Text(it, style = AppType.body, color = colors.textSecondary, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp)) }
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             FormField(
-                Words.ADDRESS, address, { address = it }, Modifier.focusRequester(first), kind = FieldKind.Url, mono = true,
-                placeholder = Words.ADDRESS_PLACEHOLDER, help = Words.ADDRESS_HELP,
+                Words.Setup.ADDRESS, address, { address = it }, Modifier.focusRequester(first), kind = FieldKind.Url, mono = true,
+                placeholder = Words.Setup.ADDRESS_PLACEHOLDER, help = Words.Setup.ADDRESS_HELP,
             )
-            FormField(Words.KEY, key, { key = it }, kind = FieldKind.Key, mono = true, help = Words.KEY_HELP, spoken = true)
+            FormField(Words.Setup.KEY, key, { key = it }, kind = FieldKind.Key, mono = true, help = Words.Setup.KEY_HELP, spoken = true)
         }
     }
 }

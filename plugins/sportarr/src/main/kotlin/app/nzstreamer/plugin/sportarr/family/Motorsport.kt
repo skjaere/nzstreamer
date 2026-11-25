@@ -111,8 +111,8 @@ class Motorsport(private val sports: Sports) : FamilyMatcher {
         val verdict = sessionVerdict(event, session, name, posted, placed)
         return when {
             verdict !is Verdict.Accept -> verdict
-            session.kind == SessionKind.Testing -> Verdict.Offer(Words.TESTING)
-            session.kind == SessionKind.Race && Runtimes.endurance(event.title) -> Verdict.Offer(Words.ENDURANCE)
+            session.kind == SessionKind.Testing -> Verdict.Offer(Words.Choose.TESTING)
+            session.kind == SessionKind.Race && Runtimes.endurance(event.title) -> Verdict.Offer(Words.Choose.ENDURANCE)
             else -> verdict
         }
     }
@@ -143,9 +143,9 @@ class Motorsport(private val sports: Sports) : FamilyMatcher {
             !same
         }
         return when {
-            !placed -> Verdict.Offer(if (name.indexes.any { it.form == IndexForm.Cross }) Words.RUNNING_NUMBER else Words.NO_PLACE)
-            word?.foreign == true -> Verdict.Offer(Words.NOT_IN_ENGLISH)
-            noRaceNumber -> Verdict.Offer(Words.NO_RACE_NUMBER)
+            !placed -> Verdict.Offer(if (name.indexes.any { it.form == IndexForm.Cross }) Words.Choose.RUNNING_NUMBER else Words.Choose.NO_PLACE)
+            word?.foreign == true -> Verdict.Offer(Words.Choose.NOT_IN_ENGLISH)
+            noRaceNumber -> Verdict.Offer(Words.Choose.NO_RACE_NUMBER)
             else -> Verdict.Accept()
         }
     }

@@ -85,11 +85,11 @@ class WatchedTest {
         val saturday = mapOf(session(1) to watched(), session(2) to watched(), session(4) to played(1_000_000, SATURDAY_EVENING))
         val count = Watched.count(weekend, saturday, SATURDAY_EVENING)
         assertEquals(Count(2, 4), count)
-        assertEquals("2 of 4 watched", Words.watched(count))
+        assertEquals("2 of 4 watched", Words.SportsList.watched(count))
 
         // After the race: qualifying watched too.
-        assertEquals("3 of 5 watched", Words.watched(Watched.count(weekend, saturday + (session(4) to watched()), MONDAY)))
-        assertEquals("2 of 3 watched", Words.watched(Watched.count(card, mapOf(cardPart("early-prelims") to watched(), cardPart("prelims") to watched()), SUNDAY)))
+        assertEquals("3 of 5 watched", Words.SportsList.watched(Watched.count(weekend, saturday + (session(4) to watched()), MONDAY)))
+        assertEquals("2 of 3 watched", Words.SportsList.watched(Watched.count(card, mapOf(cardPart("early-prelims") to watched(), cardPart("prelims") to watched()), SUNDAY)))
     }
 
     @Test
@@ -108,8 +108,8 @@ class WatchedTest {
         assertEquals(listOf("ev-000042:full", session(5), cardPart("main-card")), strip.map { it.item.part.key })
         assertEquals(listOf(game, weekend, card), strip.map { it.listed })
         assertEquals(listOf(true, true, false), strip.map { it.info != null })
-        assertEquals("3 of 5 watched", Words.watched(Watched.count(strip[1].listed, watch, SUNDAY)))
-        assertEquals("2 of 3 watched", Words.watched(Watched.count(strip[2].listed, watch, SUNDAY)))
+        assertEquals("3 of 5 watched", Words.SportsList.watched(Watched.count(strip[1].listed, watch, SUNDAY)))
+        assertEquals("2 of 3 watched", Words.SportsList.watched(Watched.count(strip[2].listed, watch, SUNDAY)))
     }
 
     @Test

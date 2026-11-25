@@ -18,16 +18,16 @@ import io.skjaere.usenet.plugin.PluginTab
  * the list and the event pages come later.
  */
 class SportarrPlugin : NzPlugin {
-    override fun tab(): PluginTab = PluginTab(Words.TAB, CupIcon)
+    override fun tab(): PluginTab = PluginTab(Words.Setup.TAB, CupIcon)
 
     @Composable
     override fun Page(page: String, arg: String?, host: PluginHost, nav: PluginNav) {
-        SetupPage(Words.TAB, Words.SETUP_INTRO, onBack = null)
+        SetupPage(Words.Setup.TAB, Words.Setup.INTRO, onBack = null)
     }
 
     @Composable
     override fun Settings(host: PluginHost, nav: PluginNav) {
-        SetupPage(Words.SETTINGS_TITLE, intro = null, onBack = { nav.back() })
+        SetupPage(Words.Setup.SETTINGS_TITLE, intro = null, onBack = { nav.back() })
     }
 
     // The host cancels the plugin's scope before it closes it, and the plugin starts nothing outside that scope.

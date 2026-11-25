@@ -41,13 +41,13 @@ object Generic : FamilyMatcher {
     override fun judge(event: SportsEvent, part: Part, name: SportsName, posted: Instant?, size: Long?): Verdict {
         val dated = name.dates.isNotEmpty()
         val league = (listOf(event.league.name) + event.league.alternateNames).any(name::has)
-        if (dated && league) return Verdict.Offer(Words.BY_LEAGUE_AND_DATE)
+        if (dated && league) return Verdict.Offer(Words.Choose.BY_LEAGUE_AND_DATE)
         val present = name.identity.mapTo(HashSet()) { it.word }
         val title = titleWords(event).map { it.word }.distinct()
         val enough = title.isNotEmpty() && title.count { it in present } * 10 >= title.size * SHARE_IN_TENS
         val year = dated || name.yearsNamed().any { it in eventYears(event) }
         val started = posted == null || !posted.isBefore(event.start)
-        return if (enough && year && started) Verdict.Offer(Words.BY_TITLE) else OTHER_EVENT
+        return if (enough && year && started) Verdict.Offer(Words.Choose.BY_TITLE) else OTHER_EVENT
     }
 
     /** The title's distinctive words: all of them but articles and the "vs" between two sides. */

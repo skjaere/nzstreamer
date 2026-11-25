@@ -74,16 +74,16 @@ enum class RejectKind {
 
     /** The kind's words for [count] releases of an event whose noun is [noun]: "other games", "a name with a score". */
     fun words(noun: String, count: Int = 1): String = when (this) {
-        OtherEvents -> Words.otherEvents(noun)
-        OtherParts -> Words.OTHER_PARTS
-        Highlights -> Words.HIGHLIGHTS
-        Score -> Words.withScore(count)
-        Result -> Words.withResult(count)
-        Shows -> Words.PREVIEWS_AND_SHOWS
-        RaceShow -> Words.preRaceShow(count)
-        Partial -> Words.partsOf(noun)
-        Packs -> Words.PACKS
-        Older -> Words.OLDER
+        OtherEvents -> Words.Choose.otherEvents(noun)
+        OtherParts -> Words.Choose.OTHER_PARTS
+        Highlights -> Words.Choose.HIGHLIGHTS
+        Score -> Words.Choose.withScore(count)
+        Result -> Words.Choose.withResult(count)
+        Shows -> Words.Choose.PREVIEWS_AND_SHOWS
+        RaceShow -> Words.Choose.preRaceShow(count)
+        Partial -> Words.Choose.partsOf(noun)
+        Packs -> Words.Choose.PACKS
+        Older -> Words.Choose.OLDER
     }
 }
 
@@ -98,7 +98,7 @@ object LeftOut {
         val kinds = counts.filterValues { it > 0 }.entries
             .sortedWith(compareByDescending<Map.Entry<RejectKind, Int>> { it.value }.thenBy { it.key.ordinal })
         if (kinds.isEmpty()) return null
-        return Words.leftOut(kinds.sumOf { it.value }, kinds.take(SHOWN).map { (kind, count) -> kind.words(noun, count) }, more = kinds.size > SHOWN)
+        return Words.Choose.leftOut(kinds.sumOf { it.value }, kinds.take(SHOWN).map { (kind, count) -> kind.words(noun, count) }, more = kinds.size > SHOWN)
     }
 
     private const val SHOWN = 3
@@ -113,43 +113,36 @@ object LeftOut {
  */
 object Nouns {
     fun item(event: SportsEvent, part: Part): String = when (event.family) {
-        Family.TeamGame -> GAME
-        Family.Motorsport -> SESSION
-        Family.Generic -> EVENT
+        Family.TeamGame -> Words.Choose.GAME
+        Family.Motorsport -> Words.Choose.SESSION
+        Family.Generic -> Words.Choose.EVENT
         Family.FightCard -> when (event.cardType) {
-            CardType.Matchup -> FIGHT
-            CardType.WeeklyShow -> SHOW
+            CardType.Matchup -> Words.Choose.FIGHT
+            CardType.WeeklyShow -> Words.Choose.SHOW
             // A premium event's parts by their own words: Sportarr may label its pre-show "Countdown".
-            CardType.Premium, null -> PARTS[part.id] ?: CARD
+            CardType.Premium, null -> PARTS[part.id] ?: Words.Choose.CARD
             CardType.Numbered, CardType.FightNight ->
-                part.label.trim().lowercase(Locale.ROOT).takeIf(PluginKeys::validNoun) ?: PARTS[part.id] ?: CARD
+                part.label.trim().lowercase(Locale.ROOT).takeIf(PluginKeys::validNoun) ?: PARTS[part.id] ?: Words.Choose.CARD
         }
     }
 
     fun event(event: SportsEvent): String = when (event.family) {
-        Family.TeamGame -> GAME
-        Family.Motorsport -> SESSION
-        Family.Generic -> EVENT
+        Family.TeamGame -> Words.Choose.GAME
+        Family.Motorsport -> Words.Choose.SESSION
+        Family.Generic -> Words.Choose.EVENT
         Family.FightCard -> when (event.cardType) {
-            CardType.Matchup -> FIGHT
-            CardType.WeeklyShow -> SHOW
-            else -> CARD
+            CardType.Matchup -> Words.Choose.FIGHT
+            CardType.WeeklyShow -> Words.Choose.SHOW
+            else -> Words.Choose.CARD
         }
     }
 
-    private const val GAME = "game"
-    private const val SESSION = "session"
-    private const val CARD = "card"
-    private const val FIGHT = "fight"
-    private const val SHOW = "show"
-    private const val EVENT = "event"
-
-    /** A card part's own noun, where its label won't do. */
+    /** A card part's own noun, where its label won't do: the plugin's own label for it, in lower case. */
     private val PARTS = mapOf(
-        Parts.EARLY_PRELIMS to "early prelims",
-        Parts.PRELIMS to "prelims",
-        Parts.MAIN_CARD to "main card",
-        Parts.PRE_SHOW to "pre-show",
-        Parts.MAIN_SHOW to "main show",
-    )
+        Parts.EARLY_PRELIMS to Words.Card.EARLY_PRELIMS,
+        Parts.PRELIMS to Words.Card.PRELIMS,
+        Parts.MAIN_CARD to Words.Card.MAIN_CARD,
+        Parts.PRE_SHOW to Words.Card.PRE_SHOW,
+        Parts.MAIN_SHOW to Words.Card.MAIN_SHOW,
+    ).mapValues { it.value.lowercase(Locale.ROOT) }
 }

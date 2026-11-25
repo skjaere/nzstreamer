@@ -91,7 +91,7 @@ object SharedRules {
         val runtime = part.runtimeMinutes ?: return verdict
         if (size == null || size <= 0) return verdict
         val bitsPerSecond = if (name.standardDefinition) SD_BITS_PER_SECOND else BITS_PER_SECOND
-        return if (size * 8 < bitsPerSecond * runtime * 60) Verdict.Offer(Words.small(noun)) else verdict
+        return if (size * 8 < bitsPerSecond * runtime * 60) Verdict.Offer(Words.Choose.small(noun)) else verdict
     }
 
     /** A non-event word's kind: highlights before any other, a race's own show only at a motorsport event. */

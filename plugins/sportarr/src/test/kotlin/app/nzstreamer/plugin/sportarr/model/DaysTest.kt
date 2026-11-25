@@ -129,7 +129,7 @@ class DaysTest {
         val premier = day.leagues.single { it.league.id == PREMIER.id }
         assertEquals((10..14).map { "ev-0000$it" }, premier.first.map { it.listed.key })
         assertEquals((15..17).map { "ev-0000$it" }, premier.rest.map { it.listed.key })
-        assertEquals("+3 more", Words.more(premier.rest.size))
+        assertEquals("+3 more", Words.SportsList.more(premier.rest.size))
         assertEquals(listOf(1, 1), day.leagues.filter { it.league.id != PREMIER.id }.map { it.rows.size })
         assertTrue(day.leagues.filter { it.league.id != PREMIER.id }.all { it.rest.isEmpty() })
     }

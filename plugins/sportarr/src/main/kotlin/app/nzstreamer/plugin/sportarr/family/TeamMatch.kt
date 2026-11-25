@@ -94,10 +94,10 @@ class TeamMatch(private val sports: Sports) : FamilyMatcher {
             home && away -> bothSides(game, name, dated)
             home || away -> when {
                 anotherTeam(game, read) -> OTHER_GAME
-                dated && leagueNamed(event, read) -> Verdict.Offer(Words.ONE_TEAM)
+                dated && leagueNamed(event, read) -> Verdict.Offer(Words.Choose.ONE_TEAM)
                 else -> OTHER_GAME
             }
-            codes(name) && (dated || leagueNamed(event, read)) -> Verdict.Offer(Words.TEAM_CODES)
+            codes(name) && (dated || leagueNamed(event, read)) -> Verdict.Offer(Words.Choose.TEAM_CODES)
             else -> OTHER_GAME
         }
     }
@@ -105,13 +105,13 @@ class TeamMatch(private val sports: Sports) : FamilyMatcher {
     /** A name holding both of [game]'s sides: its sibling markers, a cricket day, its date or its round. */
     private fun bothSides(game: Game, name: SportsName, dated: Boolean): Verdict {
         if (!game.siblings.containsAll(name.siblings)) return OTHER_GAME
-        if (game.cricket && name.numbered(NumberWord.Day).isNotEmpty()) return Verdict.Offer(Words.ONE_DAY)
+        if (game.cricket && name.numbered(NumberWord.Day).isNotEmpty()) return Verdict.Offer(Words.Choose.ONE_DAY)
         if (!dated) return undated(game, name)
         // A double header: the same sides twice on one day, told apart by the game's number alone.
         if (others(game).none { sameDay(it.event, game.event) }) return Verdict.Accept()
         val numbers = name.numbered(NumberWord.Game).toSet()
         return when {
-            numbers.isEmpty() || game.number == null -> Verdict.Offer(Words.NO_GAME_NUMBER)
+            numbers.isEmpty() || game.number == null -> Verdict.Offer(Words.Choose.NO_GAME_NUMBER)
             numbers == setOf(game.number) -> Verdict.Accept()
             else -> OTHER_GAME
         }
@@ -128,11 +128,11 @@ class TeamMatch(private val sports: Sports) : FamilyMatcher {
         if (years.isNotEmpty() && years.none { it in event.seasonYears }) return OTHER_GAME
         val rounds = listOf(NumberWord.Week, NumberWord.Matchday, NumberWord.Round).flatMap { name.numbered(it) }
         if (rounds.isNotEmpty()) {
-            val round = event.roundNumber ?: return Verdict.Offer(Words.WEEK_NO_DATE)
+            val round = event.roundNumber ?: return Verdict.Offer(Words.Choose.WEEK_NO_DATE)
             if (rounds.any { it != round }) return OTHER_GAME
             if (years.isNotEmpty() && others(game).none { apart(it, game) <= THREE_DAYS }) return Verdict.Accept()
         }
-        return if (others(game).none { apart(it, game) <= FORTY_FIVE_DAYS }) Verdict.Offer(Words.NO_DATE) else OTHER_GAME
+        return if (others(game).none { apart(it, game) <= FORTY_FIVE_DAYS }) Verdict.Offer(Words.Choose.NO_DATE) else OTHER_GAME
     }
 
     /** Both sides of another listed game, one of them at least by words this game's sides don't have. */

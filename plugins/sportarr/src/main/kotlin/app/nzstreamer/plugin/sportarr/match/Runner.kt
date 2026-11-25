@@ -69,7 +69,7 @@ class Runner(private val search: PluginSearch, private val work: CoroutineContex
             offered = offered,
             leftOut = LeftOut.line(kinds, noun),
             lines = if (nothing) lines(answers, Nouns.item(event, part)) else emptyList(),
-            note = if (nothing) Words.note(noun) else null,
+            note = if (nothing) Words.NoRelease.note(noun) else null,
         )
     }
 
@@ -94,8 +94,8 @@ class Runner(private val search: PluginSearch, private val work: CoroutineContex
                 answered.maxOfOrNull { it.found } ?: 0,
             )
             val words = when {
-                found > 0 -> Words.noneFor(found, noun)
-                answered.isNotEmpty() -> Words.NO_RESULTS
+                found > 0 -> Words.NoRelease.noneFor(found, noun)
+                answered.isNotEmpty() -> Words.NoRelease.NO_RESULTS
                 else -> own.first().text
             }
             IndexerNote(indexer, words)

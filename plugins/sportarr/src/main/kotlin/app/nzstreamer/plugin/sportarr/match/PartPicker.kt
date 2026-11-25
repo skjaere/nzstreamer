@@ -26,7 +26,7 @@ class PartPicker(
     private val whole: (releaseName: String) -> Boolean,
 ) : PluginFilePicker {
     /** "No file for the Main Card in this release". */
-    override val noMatch: String = Words.noFile(label)
+    override val noMatch: String = Words.Choose.noFile(label)
 
     override fun pick(files: List<FileInfo>): Int? {
         val videos = files.withIndex().filter { (_, file) -> file.isVideo && !sample(file.path) }

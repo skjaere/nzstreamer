@@ -1,5 +1,6 @@
 package app.nzstreamer.plugin.sportarr.model
 
+import app.nzstreamer.plugin.sportarr.ui.Words
 import java.util.Locale
 
 /**
@@ -80,9 +81,13 @@ object Parts {
      * don't fit its type.
      */
     private val OWN: Map<CardType, List<Pair<String, String>>> = mapOf(
-        CardType.Numbered to listOf(EARLY_PRELIMS to "Early Prelims", PRELIMS to "Prelims", MAIN_CARD to "Main Card"),
-        CardType.FightNight to listOf(PRELIMS to "Prelims", MAIN_CARD to "Main Card"),
-        CardType.Premium to listOf(PRE_SHOW to "Pre-Show", MAIN_SHOW to "Main Show"),
+        CardType.Numbered to listOf(
+            EARLY_PRELIMS to Words.Card.EARLY_PRELIMS,
+            PRELIMS to Words.Card.PRELIMS,
+            MAIN_CARD to Words.Card.MAIN_CARD,
+        ),
+        CardType.FightNight to listOf(PRELIMS to Words.Card.PRELIMS, MAIN_CARD to Words.Card.MAIN_CARD),
+        CardType.Premium to listOf(PRE_SHOW to Words.Card.PRE_SHOW, MAIN_SHOW to Words.Card.MAIN_SHOW),
     )
 
     /** The part each type can't be without, among Sportarr's part names as among its own. */

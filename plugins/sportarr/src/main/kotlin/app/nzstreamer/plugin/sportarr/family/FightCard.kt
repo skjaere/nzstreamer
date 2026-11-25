@@ -106,7 +106,7 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
         if (anotherCard(card, name, words)) return OTHER_CARD
         // L647 rule 6: a name with the league's word and the card's date that fails the rest is offered, not left out.
         val named = identity(card, name, words)
-            ?: if (name.dates.isNotEmpty() && leagueNamed(card, name, words)) Verdict.Offer(Words.BY_LEAGUE_AND_DATE) else return OTHER_CARD
+            ?: if (name.dates.isNotEmpty() && leagueNamed(card, name, words)) Verdict.Offer(Words.Choose.BY_LEAGUE_AND_DATE) else return OTHER_CARD
         val parts = parts(card, part, name)
         return if (parts is Verdict.Reject || named is Verdict.Accept) parts else named
     }
@@ -154,7 +154,7 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
         return when (card.type) {
             CardType.Numbered -> when {
                 card.number != null && card.number in name.cardNumbers -> SURE
-                organisation && surnames && !dated -> Verdict.Offer(Words.NO_DATE)
+                organisation && surnames && !dated -> Verdict.Offer(Words.Choose.NO_DATE)
                 else -> null
             }
             CardType.FightNight -> {
@@ -163,14 +163,14 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
                 when {
                     !organisation -> null
                     dated && (fightNight || surnames) -> SURE
-                    surnames || numbered -> Verdict.Offer(Words.NO_DATE)
+                    surnames || numbered -> Verdict.Offer(Words.Choose.NO_DATE)
                     else -> null
                 }
             }
             CardType.Matchup -> when {
                 !surnames -> null
                 dated -> SURE
-                else -> Verdict.Offer(Words.NO_DATE)
+                else -> Verdict.Offer(Words.Choose.NO_DATE)
             }
             CardType.WeeklyShow -> SURE.takeIf { dated && card.titleIn(words) }
             CardType.Premium -> {
@@ -198,7 +198,7 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
         val headline = card.event.headline.id
         return when {
             PartWord.FullEvent in words -> Verdict.Accept(whole = card.event.parts.size == 1)
-            PartWord.MainEventOnly in words -> if (part.id == headline) Verdict.Offer(Words.MAIN_EVENT_ONLY) else OTHER_PART
+            PartWord.MainEventOnly in words -> if (part.id == headline) Verdict.Offer(Words.Choose.MAIN_EVENT_ONLY) else OTHER_PART
             words.isEmpty() -> if (part.id == headline) SURE else OTHER_PART
             else -> {
                 val named = words.map { partOf(card.type, it) }

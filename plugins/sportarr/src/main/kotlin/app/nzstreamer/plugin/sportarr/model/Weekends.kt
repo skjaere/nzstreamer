@@ -1,5 +1,6 @@
 package app.nzstreamer.plugin.sportarr.model
 
+import app.nzstreamer.plugin.sportarr.ui.Words
 import java.time.Duration
 import java.util.Locale
 
@@ -174,7 +175,8 @@ object Sessions {
             kinds += phrase.second
             at = end - phrase.first.size
         }
-        if (kinds.isEmpty()) return Session(RACE, SessionKind.Race, title.trim())
+        // A title with no session word names the race.
+        if (kinds.isEmpty()) return Session(Words.Weekend.RACE, SessionKind.Race, title.trim())
         val from = tokens[at].range.first
         val label = title.substring(from, tokens.last().range.last + 1)
         return Session(label, kindOf(kinds), title.substring(0, from).trimEnd { it.isWhitespace() || it in SEPARATORS }.trim())
@@ -187,8 +189,6 @@ object Sessions {
         SessionKind.SprintQualifying, SessionKind.Sprint, SessionKind.Qualifying, SessionKind.WarmUp, SessionKind.Practice, SessionKind.Testing,
         SessionKind.Race,
     )
-
-    private const val RACE = "Race"
 
     private fun english(words: String, kind: SessionKind, numbering: Numbering = Numbering.None, number: Int? = null) =
         SessionPhrase(words.split(' '), kind, numbering, number, foreign = false)
