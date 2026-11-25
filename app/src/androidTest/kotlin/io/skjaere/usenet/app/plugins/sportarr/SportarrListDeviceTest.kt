@@ -172,12 +172,14 @@ class SportarrListDeviceTest {
         compose.onNode(chip and hasText("Motorsport")).performClick()
         waitFor(chip and hasText(ALL_LEAGUES))
         assertTrue("its leagues", exists(chip and hasText("Formula 1")) && exists(chip and hasText("MotoGP")))
-        scrollTo(row(KESTREL_GP))
-        assertFalse("a game with Motorsport picked", exists(row(library.event(GAME).title)))
+        // At the list's top, where any day's rows would show first: a lazy list composes only what is near, so an absence
+        // is looked for there, before scrolling away.
+        waitFor(row(KESTREL_GP))
+        assertFalse("the Premier League with Motorsport picked", exists(hasText(PREMIER_LEAGUE_NAME)))
 
         compose.onNode(chip and hasText("MotoGP")).performClick()
         waitFor(chip and hasText("MotoGP") and isSelected())
-        scrollTo(row(OSKELUND_GP))
+        waitFor(row(OSKELUND_GP))
         assertFalse("Formula 1's weekend with MotoGP picked", exists(row(KESTREL_GP)))
 
         // The tab again after Home: the chips as they were.
@@ -273,13 +275,17 @@ class SportarrListDeviceTest {
         compose.onNode(sideTab(UPCOMING)).performClick()
         waitFor(sideTab(UPCOMING) and isSelected())
         val upcoming = library.upcoming(Instant.now())
+        // Soonest first: the first day still to come heads the list, nothing that has aired above it. Looked for at the
+        // top, as a lazy list composes only what is near.
         waitFor(hasText(header(upcoming.first().date(zone))))
+        val aired = library.event(GAME)
+        assertFalse("yesterday's game on Upcoming", exists(row(aired.title)))
+        assertFalse("its day on Upcoming", exists(hasText(header(aired.date(zone)))))
         val next = upcoming.first { it.leagueId == PREMIER_LEAGUE }
         scrollTo(hasText(header(next.date(zone))))
         scrollTo(row(next.title))
         scrollTo(row(TARNHOLM_GP))
         assertTrue("its round, first session and sessions", exists(row(TARNHOLM_GP) and hasText("Round 21 · Practice 1 first · 5 sessions")))
-        assertFalse("yesterday's game on Upcoming", exists(row(library.event(GAME).title)))
     }
 
     /** With no list kept and Sportarr failing, the card in the list's place says why, and Try again reads the list. */
@@ -539,6 +545,7 @@ class SportarrListDeviceTest {
     private companion object {
         /** The Premier League, its game of Lantern Bay FC, yesterday's earliest, and UFC 999's card. */
         const val PREMIER_LEAGUE = 1
+        const val PREMIER_LEAGUE_NAME = "Premier League"
         const val GAME = 1001
         const val WATCHED_GAME = 1002
         const val CARD = 1901
