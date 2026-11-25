@@ -29,4 +29,58 @@ internal object Words {
 
     /** After a league's first five on a day: "+3 more". */
     fun more(count: Int): String = "+$count more"
+
+    // What Choose release and Play's no-release sheet say of a part's releases (L647). An item's noun is "game", "session",
+    // a card part's label ("main card"), "fight", "show", "pre-show", "main show" or "event"; an event's is "game",
+    // "session", "card", "fight", "show" or "event".
+
+    /**
+     * Choose release's last line, counting what was left out by kind and never naming one: "6 left out: highlights, a name
+     * with a score, other games. Their names aren't shown."
+     */
+    fun leftOut(count: Int, kinds: List<String>, more: Boolean): String =
+        "$count left out: ${kinds.joinToString(", ")}${if (more) " and more" else ""}. Their names aren't shown."
+
+    /** An indexer's line on the no-release sheet when what it found was none of the item's: "6 results, none for this game". */
+    fun noneFor(results: Int, noun: String): String = "${if (results == 1) "1 result" else "$results results"}, none for this $noun"
+
+    /** An indexer's line when it answered with nothing. */
+    const val NO_RESULTS = "No results"
+
+    /** The no-release sheet's note: "Releases often appear a few hours after a game ends. Try Play again later." */
+    fun note(noun: String): String = "Releases often appear a few hours after ${a(noun)} $noun ends. Try Play again later."
+
+    /** A possible match too small for the part's runtime: "Small for a whole game". */
+    fun small(noun: String): String = "Small for a whole $noun"
+
+    /** The play's failure when a release holds no file for the part: "No file for the Main Card in this release". */
+    fun noFile(label: String): String = "No file for the $label in this release"
+
+    // The kinds a release is left out as, in the left-out line (L647).
+
+    /** Another event's release: "other games", "other sessions", "other cards". */
+    fun otherEvents(noun: String): String = "other ${noun}s"
+
+    const val OTHER_PARTS = "other parts"
+    const val HIGHLIGHTS = "highlights"
+
+    fun withScore(count: Int): String = if (count == 1) "a name with a score" else "names with a score"
+
+    fun withResult(count: Int): String = if (count == 1) "a name with a result" else "names with a result"
+
+    const val PREVIEWS_AND_SHOWS = "previews and shows"
+
+    /** A motorsport programme before or after the race. */
+    fun preRaceShow(count: Int): String = if (count == 1) "a pre-race show" else "pre-race shows"
+
+    /** A half, quarter, period or innings alone: "parts of a game". */
+    fun partsOf(noun: String): String = "parts of ${a(noun)} $noun"
+
+    const val PACKS = "packs"
+    const val OLDER = "older releases"
+
+    /** The article before [noun]: "an event", "a game". */
+    private fun a(noun: String): String = if (noun.firstOrNull()?.lowercaseChar() in VOWELS) "an" else "a"
+
+    private val VOWELS = setOf('a', 'e', 'i', 'o', 'u')
 }

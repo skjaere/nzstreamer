@@ -1,0 +1,138 @@
+package app.nzstreamer.plugin.sportarr.match
+
+import app.nzstreamer.plugin.sportarr.model.Part
+import app.nzstreamer.plugin.sportarr.model.SportsEvent
+import app.nzstreamer.plugin.sportarr.ui.Words
+import io.skjaere.usenet.plugin.Found
+import io.skjaere.usenet.plugin.IndexerLine
+import io.skjaere.usenet.plugin.IndexerNote
+import io.skjaere.usenet.plugin.ItemReleases
+import io.skjaere.usenet.plugin.Offered
+import io.skjaere.usenet.plugin.PluginSearch
+import io.skjaere.usenet.plugin.ReleaseHandle
+import io.skjaere.usenet.plugin.ReleaseInfo
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.lastOrNull
+import kotlinx.coroutines.withContext
+import org.slf4j.LoggerFactory
+import kotlin.coroutines.CoroutineContext
+
+/**
+ * A part's releases (L647), found through the user's indexers ([search], the host's) and judged by its family, for Play
+ * and Choose release alone: never as a page opens, on a timer or for a list.
+ *
+ * Stage 1 searches the family's first two queries together, stage 2 its one more only when they accepted nothing: three
+ * searches at most, each with the part's runtime, so the host ranks for it (its cache keys on the words, so another part's
+ * same words cost no new request). Each search is read to its last answer. Every release is judged once (the same name,
+ * size and indexer is one release), on [work], off the caller's thread; the accepted keep the host's order, each at its
+ * best place across the answers, the first search first at the same place, and the possible matches follow that order.
+ *
+ * A cancelled run cancels its searches with it. Its log line says counts, kinds and how long it took, never a name.
+ */
+class Runner(private val search: PluginSearch, private val work: CoroutineContext = Dispatchers.Default) {
+    /**
+     * [part] of [event]'s releases, judged by [matcher]: the accepted in order, the possible matches with their reasons,
+     * one line counting what was left out by kind; and, when nothing was accepted or offered, each indexer's line and the
+     * note for the no-release sheet.
+     */
+    suspend fun releases(matcher: FamilyMatcher, event: SportsEvent, part: Part): ItemReleases {
+        val started = System.nanoTime()
+        val queries = matcher.queries(event, part)
+        val first = queries.first.map(String::trim).filter(String::isNotEmpty).distinct().take(FIRST_AT_ONCE)
+        val then = queries.then?.trim()?.takeIf { it.isNotEmpty() && it !in first }
+        val judged = Judged(matcher, event, part)
+        val answers = coroutineScope { first.map { words -> async { last(words, part.runtimeMinutes) } }.awaitAll() }.toMutableList()
+        answers.forEachIndexed { query, found -> judged.add(query, found.releases) }
+        if (then != null && judged.none { it.verdict is Verdict.Accept }) {
+            answers += last(then, part.runtimeMinutes)
+            judged.add(answers.lastIndex, answers.last().releases)
+        }
+
+        val ordered = judged.sortedWith(compareBy<Judging>({ it.place }, { it.query }))
+        val accepted = ordered.filter { it.verdict is Verdict.Accept }.map { it.handle }
+        val offered = ordered.mapNotNull { judging -> (judging.verdict as? Verdict.Offer)?.let { Offered(judging.handle, it.reason) } }
+        val kinds = ordered.mapNotNull { (it.verdict as? Verdict.Reject)?.kind }.groupingBy { it }.eachCount()
+        val nothing = accepted.isEmpty() && offered.isEmpty()
+        val noun = Nouns.event(event)
+        log.info(
+            "Releases for a {} part: {} searches, {} judged, {} accepted, {} offered, {} left out {} in {} ms",
+            event.family, answers.size, ordered.size, accepted.size, offered.size, kinds.values.sum(), kinds, (System.nanoTime() - started) / 1_000_000,
+        )
+        return ItemReleases(
+            accepted = accepted,
+            offered = offered,
+            leftOut = LeftOut.line(kinds, noun),
+            lines = if (nothing) lines(answers, Nouns.item(event, part)) else emptyList(),
+            note = if (nothing) Words.note(noun) else null,
+        )
+    }
+
+    /** The search for [words], read to its last answer: what every indexer said once they all had. */
+    private suspend fun last(words: String, runtimeMinutes: Int?): Found =
+        search.search(words, runtimeMinutes).lastOrNull() ?: Found(emptyList(), emptyList())
+
+    /**
+     * One line per indexer, in the host's order, for a run that found nothing for the item ([noun]): how many releases it
+     * found, "No results" where it answered with none, else the host's words for why it gave none (failed, skipped or
+     * paused). A release several indexers list is kept under one of them, so an indexer's count is at least what its own
+     * line said.
+     */
+    private fun lines(answers: List<Found>, noun: String): List<IndexerNote> {
+        val indexerLines = answers.flatMap { it.indexers }
+        val releases = answers.flatMap { it.releases }
+        return indexerLines.map { it.name }.distinct().map { indexer ->
+            val own = indexerLines.filter { it.name == indexer }
+            val answered = own.filter { it.state == IndexerLine.State.Found }
+            val found = maxOf(
+                releases.filter { it.indexer == indexer }.distinctBy { it.name to it.size }.size,
+                answered.maxOfOrNull { it.found } ?: 0,
+            )
+            val words = when {
+                found > 0 -> Words.noneFor(found, noun)
+                answered.isNotEmpty() -> Words.NO_RESULTS
+                else -> own.first().text
+            }
+            IndexerNote(indexer, words)
+        }
+    }
+
+    /** What one run judged: each release once, with its verdict and its best place. */
+    private inner class Judged(private val matcher: FamilyMatcher, private val event: SportsEvent, private val part: Part) : Iterable<Judging> {
+        private val byRelease = LinkedHashMap<Release, Judging>()
+
+        /** Query [query]'s [releases], best first: the new ones judged on [work], the known ones moved up to a better place. */
+        suspend fun add(query: Int, releases: List<ReleaseInfo>) = withContext(work) {
+            releases.forEachIndexed { place, release ->
+                ensureActive()
+                val key = Release(release.name, release.size, release.indexer)
+                val known = byRelease[key]
+                if (known == null) {
+                    byRelease[key] = Judging(SharedRules.judge(matcher, event, part, release.name, release.postedAt, release.size), release.handle, place, query)
+                } else if (place < known.place) {
+                    known.place = place
+                    known.query = query
+                    known.handle = release.handle
+                }
+            }
+        }
+
+        override fun iterator(): Iterator<Judging> = byRelease.values.iterator()
+    }
+
+    /** One release as the run tells it from another. */
+    private data class Release(val name: String, val size: Long, val indexer: String)
+
+    /** A release's verdict, and the handle at its best place: [place] in the answer to query [query]. */
+    private class Judging(val verdict: Verdict, var handle: ReleaseHandle, var place: Int, var query: Int)
+
+    private companion object {
+        /** Stage 1's queries, searched together. */
+        const val FIRST_AT_ONCE = 2
+
+        val log = LoggerFactory.getLogger(Runner::class.java)
+    }
+}
