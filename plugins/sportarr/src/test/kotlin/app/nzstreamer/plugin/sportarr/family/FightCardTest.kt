@@ -371,7 +371,7 @@ class FightCardTest {
     }
 
     @Test
-    fun `a weekly night first listed alone stays a premium event while it is listed, and the premium rule judges it`() {
+    fun `a weekly night first listed alone stays a premium event while it is listed, held to its own date as its weeks are`() {
         // The first week was read alone once, and kept as a named event; the two weeks after it are weekly.
         val read = SportsList(at("2026-11-22T20:41"), listOf(VELMORA), brawls.sortedByDescending { it.eventDate }, cut = false)
         val kept = Sports.of(read.copy(cardTypes = mapOf("ev-000051" to CardType.Premium)))
@@ -379,10 +379,12 @@ class FightCardTest {
         val firstWeek = kept.byId(51)
         assertEquals(CardType.Premium, firstWeek.cardType)
         val rows = listOf(
-            // A year and no date: every week's, yet the premium rule takes it.
-            "Velmora.Monday.Brawl.2026.1080p.WEB.h264-DRIFTWOOD" to show(accepted, otherParts),
+            // A year and no date: any week's, as its weekly nights would say, so no week's.
+            "Velmora.Monday.Brawl.2026.1080p.WEB.h264-DRIFTWOOD" to show(other, other),
+            "Velmora.Monday.Brawl.S2026E47.1080p.WEB.h264-WREN" to show(other, other),
+            "Velmora.Monday.Brawl.2026.Pre-Show.720p.WEB.h264-WREN" to show(other, other),
             "Velmora.Monday.Brawl.2026.11.06.1080p.WEB.h264-KESTREL" to show(accepted, otherParts),
-            "Velmora.Monday.Brawl.2026.Pre-Show.720p.WEB.h264-WREN" to show(otherParts, accepted),
+            "Velmora.Monday.Brawl.2026.11.06.Pre-Show.720p.WEB.h264-WREN" to show(otherParts, accepted),
             "Velmora.Wrestling.2026.11.06.1080p.WEB.h264-WREN" to show(offered("Picked by league and date"), otherParts),
             // Another week's date, its own or its local one, is that week's.
             "Velmora.Monday.Brawl.2026.11.13.1080p.WEB.h264-WREN" to show(other, other),

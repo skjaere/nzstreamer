@@ -171,12 +171,16 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
             }
             CardType.WeeklyShow -> SURE.takeIf { dated && card.titleIn(words) }
             CardType.Premium -> {
+                val kin = related(card.event)
                 // Where another edition of the same title is listed, the year names neither: the edition's number or the
                 // date, which the shared rules held to this one's, must.
-                val yearNames = name.yearsNamed().any { it in eventYears(card.event) } && !(card.numbered && related(card.event).isNotEmpty())
+                val yearNames = name.yearsNamed().any { it in eventYears(card.event) } && !(card.numbered && kin.isNotEmpty())
                 val edition = card.editions.any(name::hasNumber) || dated || yearNames
                 val night = card.night == null || card.night in name.numbered(NumberWord.Night)
-                SURE.takeIf { leagueNamed(card, name, words) && card.titleIn(words) && edition && night }
+                // A weekly show's night kept as a named event (L643) is held to its own date as its weeks are: a name with
+                // none is any week's.
+                val ownDate = dated || kin.none { it.cardType == CardType.WeeklyShow }
+                SURE.takeIf { leagueNamed(card, name, words) && card.titleIn(words) && edition && night && ownDate }
             }
         }
     }
