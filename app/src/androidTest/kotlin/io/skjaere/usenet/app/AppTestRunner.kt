@@ -13,6 +13,7 @@ import io.skjaere.usenet.app.debrid.DevServices
 import io.skjaere.usenet.app.debrid.ServiceEndpoints
 import io.skjaere.usenet.app.discover.DiscoverLookup
 import io.skjaere.usenet.app.discover.FakeDiscover
+import io.skjaere.usenet.app.plugins.PluginDevSecrets
 import io.skjaere.usenet.app.plugins.PluginSource
 import io.skjaere.usenet.app.plugins.PluginStateRule
 import io.skjaere.usenet.app.plugins.PluginStore
@@ -48,6 +49,10 @@ import java.io.File
  * indexer from local.properties and sends no key anywhere. The instrumentation argument `debridLive=true` (the lead's
  * live classes alone) leaves both as the app has them. A class that needs the debrid fake points the clients there itself.
  *
+ * And no plugin a run installs is given the developer's own settings a debug build carries (W168 a, L656: Sportarr's
+ * address and key from local.properties): their seeding is turned off before the app starts ([PluginDevSecrets.seeding]),
+ * in every run, live ones too. A class that needs a plugin set up stores its own invented or fake values.
+ *
  * And the plugins the device tests install, the skeleton's debug builds, are signed as the app under test is, not with the
  * beta key: the app trusts that signer too for the run ([PluginTrust.testSigner], honoured by a debug build alone, L622).
  * Nothing else ever sets it, so a debug build with no test running trusts the beta key alone. And no plugin a process
@@ -70,6 +75,7 @@ class AppTestRunner : AndroidJUnitRunner() {
             DevServices.seeding = false
             ServiceEndpoints.override = { ServiceEndpoints.CLOSED }
         }
+        PluginDevSecrets.seeding = false
         CastFakes.beforeTheApp()
         PluginTrust.testSigner = ownSigner(targetContext)
         PluginSource.override = PluginSource.CLOSED

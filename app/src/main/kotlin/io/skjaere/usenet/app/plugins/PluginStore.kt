@@ -1,6 +1,7 @@
 package io.skjaere.usenet.app.plugins
 
 import io.skjaere.usenet.data.SecretStore
+import io.skjaere.usenet.plugin.PluginKeys
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -67,6 +68,24 @@ class PluginStore(filesDir: File, cacheDir: File, private val secrets: NamedSecr
             if (folder.exists() && !folder.deleteRecursively()) throw IOException("Couldn't empty a plugin's folder")
             if (!folder.mkdirs()) throw IOException("Couldn't make a plugin's folder")
         }
+    }
+
+    /**
+     * A debug build's preset secrets for a new install of [id] (W168 a, [PluginDevSecrets]): each of [values], a secret's
+     * name and its value, stored as plugin:<id>:<name> only where none is stored (or none that can be read), so nothing
+     * the user saved is replaced. A name outside the plugins' rule, or an empty value, is left out. Remove deletes them
+     * with the plugin's other secrets ([delete]). How many it stored.
+     */
+    suspend fun seedSecrets(id: String, values: List<Pair<String, String>>): Int {
+        val prefix = "$SECRETS${checked(id)}:"
+        var stored = 0
+        values.filter { (name, value) -> PluginKeys.validSecretName(name) && value.isNotEmpty() }.forEach { (name, value) ->
+            if (secrets.get("$prefix$name") == null) {
+                secrets.put("$prefix$name", value)
+                stored++
+            }
+        }
+        return stored
     }
 
     /** Deletes [id]'s version [versionCode]: its file and what ART compiled beside it. */

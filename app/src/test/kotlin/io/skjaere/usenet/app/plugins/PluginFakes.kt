@@ -220,12 +220,13 @@ internal class RegistryHarness(private val dir: File, private val test: TestScop
 
     /**
      * A registry over the files, its work in [scope]: by default the test's own, run by advanceUntilIdle and waited for.
-     * Its plugins' items play through [play] where it is given.
+     * Its plugins' items play through [play] where it is given. It seeds no plugin's secrets from the build's encoding,
+     * which a debug build carries with the developer's values (W168 a): a test that seeds gives its own.
      */
     fun registry(scope: CoroutineScope = test, play: PluginPlayService? = null): PluginRegistry = PluginRegistry(
         store, loading, PluginHosts(store, secrets, main = dispatcher, play = play), guard, scope, io = dispatcher,
         now = { test.testScheduler.currentTime },
-    )
+    ).apply { devSecrets = { "" } }
 
     /** Installs [id]'s version [versionCode] as the Plugins page does with a download that passed the list's checks. */
     suspend fun install(registry: PluginRegistry, id: String, versionCode: Long): InstallResult {

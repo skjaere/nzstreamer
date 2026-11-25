@@ -155,6 +155,25 @@ class PluginStoreTest {
         assertTrue(store.dataDir("kestrel").isDirectory)
     }
 
+    /** W168 (a), L656: a debug build's preset secrets go only where none is stored, and Remove takes them with the rest. */
+    @Test
+    fun `preset secrets go only where none is stored, and the plugin's delete takes them`() = runBlocking<Unit> {
+        secrets.values += mapOf("plugin:sportarr:key" to "a-key-the-user-saved", "plugin:kestrel:url" to "kestrel's own")
+        val stored = store.seedSecrets(
+            "sportarr",
+            listOf("url" to "http://192.0.2.10:1867", "key" to "a-preset-key", "API Key" to "a name outside the rule", "token" to ""),
+        )
+        assertEquals(1, stored, "the address alone: the key was stored, and the others can't be")
+        assertEquals(setOf("plugin:sportarr:url", "plugin:sportarr:key", "plugin:kestrel:url"), secrets.values.keys)
+        assertTrue(secrets.values["plugin:sportarr:url"] == "http://192.0.2.10:1867", "the address, stored")
+        assertTrue(secrets.values["plugin:sportarr:key"] == "a-key-the-user-saved", "the key the user saved, kept")
+        assertTrue(secrets.values["plugin:kestrel:url"] == "kestrel's own", "another plugin's, untouched")
+        assertFailsWith<IllegalArgumentException> { store.seedSecrets("../sportarr", listOf("key" to "a-preset-key")) }
+
+        store.delete("sportarr")
+        assertEquals(setOf("plugin:kestrel:url"), secrets.values.keys)
+    }
+
     private fun record(id: String, slot: Int) = PluginRecord(
         id = id, name = id, versionCode = 1, versionName = "1", sha256 = "a".repeat(64), slot = slot, installedAt = 1,
     )

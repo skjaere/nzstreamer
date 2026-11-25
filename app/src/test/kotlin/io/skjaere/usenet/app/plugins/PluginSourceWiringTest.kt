@@ -106,6 +106,8 @@ class PluginSourceWiringTest {
             val secrets = FakeSecrets()
             val store = PluginStore(File(dir, "files"), File(dir, "cache"), secrets)
             val registry = PluginRegistry(store, FakeLoading(), PluginHosts(store, secrets, main = Dispatchers.Unconfined), FakeGuard(), scope, io = Dispatchers.IO)
+            // Never the build's own plugin settings, which a debug build carries with the developer's values (W168 a).
+            registry.devSecrets = { "" }
             registry.start()
             val list = PluginList.of(File(dir, "files"), installed = { false }, http = { http }, scope = scope)
             // This JVM's Android stubs say SDK 0: the device's, as a phone of 14 gives it.

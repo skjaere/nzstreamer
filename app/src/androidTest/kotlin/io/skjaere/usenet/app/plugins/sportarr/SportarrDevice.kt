@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.platform.app.InstrumentationRegistry
 import io.skjaere.usenet.app.plugins.InstallRequest
 import io.skjaere.usenet.app.plugins.InstallResult
+import io.skjaere.usenet.app.plugins.PluginDevSecrets
 import io.skjaere.usenet.app.plugins.PluginStateRule
 import io.skjaere.usenet.app.plugins.PluginStore
 import io.skjaere.usenet.app.plugins.Sha256
@@ -42,9 +43,13 @@ object SportarrBuild {
 /**
  * The real plugin installed in the app's own registry, as the Plugins page's installer does after a download (L657): its
  * hosts are the app's, with its http, search, play and watch. Never a [PluginStateRule.registry], whose hosts have none of
- * them. The rule removes it after the test, with its files and secrets.
+ * them. The rule removes it after the test, with its files and secrets. Never while the runner left the plugins' dev
+ * seeding on (W168 a): the install would store the debug build's own Sportarr address and key on the device.
  */
 suspend fun PluginStateRule.installSportarr(): InstallResult {
+    check(!PluginDevSecrets.seeding) {
+        "The runner left the plugins' dev seeding on: an install would store local.properties' values"
+    }
     val download = SportarrBuild.download(context)
     return app.install(download, SportarrBuild.request(Sha256.of(download)))
 }

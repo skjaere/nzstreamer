@@ -24,6 +24,9 @@ plugins {
 // devTorrentIndexer.N.url, .apikey and an optional .name, torrent indexers as devIndexer.N: saved while the app has none,
 // unless a device run turns that off (AppTestRunner, so a run never reaches the real accounts). Never in the bench build,
 // a beta or release: checkNoDebridDevKeys looks for them there.
+// Debug builds alone too (W168 a, L656): devSportarr.url and devSportarr.key, the Sportarr plugin's address and API
+// key, given to it as it is installed where it has none stored, unless a device run turns that off (AppTestRunner).
+// Never in the bench build, a beta or release: checkNoDebridDevKeys and checkBetaHasNoDevSettings look for them there.
 val localProperties = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.reader()?.use { load(it) }
 }
@@ -49,6 +52,11 @@ val devTorrentIndexers: String = encodedIndexers("devTorrentIndexer")
 val DEBRID_SERVICE_KEY_NAMES = """devTorBoxKey|devPremiumizeKey"""
 val DEBRID_TORRENT_INDEXER_NAMES = """devTorrentIndexer\.\d+\.(url|apikey)"""
 val DEBRID_DEV_NAMES = "$DEBRID_SERVICE_KEY_NAMES|$DEBRID_TORRENT_INDEXER_NAMES"
+// The plugins' dev settings (W168 a, L656): their addresses and their keys. A private build with preset settings may
+// carry an address another of its settings shares (one ingress for both), never a key: checkNoDebridDevKeys.
+val PLUGIN_DEV_ADDRESS_NAMES = """devSportarr\.url"""
+val PLUGIN_DEV_KEY_NAMES = """devSportarr\.key"""
+val PLUGIN_DEV_NAMES = "$PLUGIN_DEV_ADDRESS_NAMES|$PLUGIN_DEV_KEY_NAMES"
 // The dev settings a build made with devSettings() carries on purpose (a private build with preset settings, -PbetaDevSettings).
 val CARRIED_DEV_NAMES = """devProvider\.(host|username|password)|devTmdbKey|devIndexer\.\d+\.(url|apikey)"""
 
@@ -67,6 +75,14 @@ fun devCredentials(names: Regex): List<Pair<String, String>> = localProperties.l
 /** The debrid dev keys, encoded for the app's DevServices: one line per service set, its name and key by a tab. */
 val devServiceKeys: String = listOf("TorBox" to "devTorBoxKey", "Premiumize" to "devPremiumizeKey")
     .mapNotNull { (service, name) -> localProperties.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }?.let { "$service\t$it" } }
+    .joinToString("\n")
+
+/**
+ * The plugins' dev settings, encoded for the app's PluginDevSecrets: one line per secret set, the plugin's id, the
+ * secret's name and its value by tabs.
+ */
+val devPluginSecrets: String = listOf(Triple("sportarr", "url", "devSportarr.url"), Triple("sportarr", "key", "devSportarr.key"))
+    .mapNotNull { (id, name, setting) -> localProperties.getProperty(setting)?.trim()?.takeIf { it.isNotEmpty() }?.let { "$id\t$name\t$it" } }
     .joinToString("\n")
 
 fun String.asBuildConfigString() = "\"" + replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\t", "\\t") + "\""
@@ -295,6 +311,9 @@ android {
             buildConfigField("String", "DEV_SERVICE_KEYS", devServiceKeys.asBuildConfigString())
             buildConfigField("String", "DEV_TORRENT_INDEXERS", devTorrentIndexers.asBuildConfigString())
         }
+        // The plugins' dev settings (W168 a, L656): debug's alone, as the debrid ones; every other build type has none.
+        fun com.android.build.api.dsl.ApplicationBuildType.devPluginSettings() =
+            buildConfigField("String", "DEV_PLUGIN_SECRETS", devPluginSecrets.asBuildConfigString())
         // Not a constant (a call, not a literal), so no class compiles the value in: each reads its own build's, whatever an
         // incremental compile kept from a build with the other answer (a beta built with -PwithDebrid=true, then without).
         fun com.android.build.api.dsl.ApplicationBuildType.debridHidden(hidden: Boolean) =
@@ -302,6 +321,7 @@ android {
         debug {
             devSettings()
             devDebridSettings()
+            devPluginSettings()
             debridHidden(hideDebrid)
         }
         release {
@@ -312,9 +332,10 @@ android {
             }
             buildConfigField("String", "DEV_TMDB_KEY", "\"\"")
             buildConfigField("String", "DEV_INDEXERS", "\"\"")
-            // Bench and both betas start from release (initWith): none of them carries the debrid dev keys.
+            // Bench and both betas start from release (initWith): none carries the debrid or the plugins' dev keys.
             buildConfigField("String", "DEV_SERVICE_KEYS", "\"\"")
             buildConfigField("String", "DEV_TORRENT_INDEXERS", "\"\"")
+            buildConfigField("String", "DEV_PLUGIN_SECRETS", "\"\"")
             isMinifyEnabled = false
         }
         if (benchBuild) {
@@ -386,6 +407,9 @@ android {
         // shared libraries come from: a change to either alone runs it again too.
         it.inputs.file(rootProject.file("tools/beta-cert.sha256")).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("pluginSigner")
         it.inputs.file(rootProject.file("gradle/libs.versions.toml")).withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("versionCatalog")
+        // DevSettingsChecksTest reads this file's secret checks as text, for the dev settings' names they look for: a
+        // change to it alone runs it again.
+        it.inputs.file("build.gradle.kts").withPathSensitivity(PathSensitivity.RELATIVE).withPropertyName("buildFile")
         // PluginIndexTest reads the plugin list tools/release writes from invented releases: a change to it alone runs it again.
         it.inputs.file(rootProject.file("tools/release/testdata/plugin-index.json")).withPathSensitivity(PathSensitivity.RELATIVE)
             .withPropertyName("pluginListSample")
@@ -968,10 +992,11 @@ tasks.register<PluginLinkCheck>("checkPluginLinks") {
 
 // checkBetaHasNoDevSettings: the beta built without -PbetaDevSettings is published for anyone (by the site's publish
 // script, kept private), so it must carry none of local.properties' credentials: the provider's host, username and
-// password, the TMDB key, each indexer's address (and its host) and API key. tools/feature-check looks for each in
-// every entry of the APK and the file itself, as UTF-8 and UTF-16; its control is the applicationId, which a dex must
-// hold. It names settings and entries, never a value, and looks for -PbetaScanExtra's strings too (above), counting
-// them without a name. Run after every assembleBeta of that build; the publish script publishes only an APK it passed.
+// password, the TMDB key, each indexer's address (and its host) and API key, and the debrid and the plugins' dev settings
+// (L182, L656). tools/feature-check looks for each in every entry of the APK and the file itself, as UTF-8 and UTF-16;
+// its control is the applicationId, which a dex must hold. It names settings and entries, never a value, and looks for
+// -PbetaScanExtra's strings too (above), counting them without a name. Run after every assembleBeta of that build; the
+// publish script publishes only an APK it passed.
 if (betaBuild != null && !betaDevSettings) {
     val checkBetaHasNoDevSettings by tasks.registering(JavaExec::class) {
         group = "verification"
@@ -981,8 +1006,8 @@ if (betaBuild != null && !betaDevSettings) {
         val apkLoader = betaApkLoader
         val control = betaApplicationId
         val extra = betaScanExtra
-        // The debrid dev keys too (L182): the published beta carries none of them either.
-        val settings: List<Pair<String, String>> = devCredentials(Regex("$CARRIED_DEV_NAMES|$DEBRID_DEV_NAMES"))
+        // The debrid dev keys too (L182), and the plugins' addresses and keys (L656): the published beta carries none.
+        val settings: List<Pair<String, String>> = devCredentials(Regex("$CARRIED_DEV_NAMES|$DEBRID_DEV_NAMES|$PLUGIN_DEV_NAMES"))
         // For this check only; build/ already holds the debug build's BuildConfig, which has the same values.
         val settingsFile = layout.buildDirectory.file("tmp/checkBetaHasNoDevSettings/settings.tsv")
         val report = layout.buildDirectory.file("reports/checkBetaHasNoDevSettings.txt")
@@ -1011,22 +1036,24 @@ if (betaBuild != null && !betaDevSettings) {
 }
 
 // checkNoDebridDevKeys (L182): debug alone carries local.properties' debrid dev keys (devTorBoxKey, devPremiumizeKey and
-// devTorrentIndexer.N.url and .apikey, with their hosts), so this looks for each of them in the release APK, the bench APK
-// and both betas', after each of their assembles, as checkBetaHasNoDevSettings does (tools/feature-check's SecretCheck,
-// under this task's name, a report each). A private build with preset settings (-PbetaDevSettings) carries its devIndexer
-// and devProvider settings on purpose: a torrent indexer's value the same as one of them (one Prowlarr or Jackett has one
-// host and one key for all its indexers) is reported as such and passes, while a service key never does. It names
-// settings, never a value; with none set it has nothing to look for and passes.
+// devTorrentIndexer.N.url and .apikey, with their hosts) and the plugins' (devSportarr.url, with its host, and
+// devSportarr.key; L656), so this looks for each of them in the release APK, the bench APK and both betas', after each of
+// their assembles, as checkBetaHasNoDevSettings does (tools/feature-check's SecretCheck, under this task's name, a report
+// each). A private build with preset settings (-PbetaDevSettings) carries its devIndexer and devProvider settings on
+// purpose: a torrent indexer's value or a plugin's address the same as one of them (one Prowlarr or Jackett has one host
+// and one key for all its indexers; one ingress can serve an indexer and Sportarr) is reported as such and passes, while a
+// service's or a plugin's key never does. It names settings, never a value; with none set it has nothing to look for and
+// passes.
 fun checkNoDebridDevKeys(variant: String, apkDir: DirectoryProperty, apkLoader: Property<BuiltArtifactsLoader>, control: String, carriesDevSettings: Boolean) =
     tasks.register("checkNoDebridDevKeys${variant.replaceFirstChar { it.uppercase() }}", JavaExec::class) {
         group = "verification"
-        description = "Fails when the $variant build carries any of local.properties' debrid dev keys."
+        description = "Fails when the $variant build carries any of local.properties' debrid or plugin dev keys."
         // Locals: the argument provider must not capture the script (configuration cache).
         val apks = apkDir
         val loader = apkLoader
         val check = name
-        val strict = devCredentials(Regex(if (carriesDevSettings) DEBRID_SERVICE_KEY_NAMES else DEBRID_DEV_NAMES))
-        val carriable = if (carriesDevSettings) devCredentials(Regex(DEBRID_TORRENT_INDEXER_NAMES)) else emptyList()
+        val strict = devCredentials(Regex(if (carriesDevSettings) "$DEBRID_SERVICE_KEY_NAMES|$PLUGIN_DEV_KEY_NAMES" else "$DEBRID_DEV_NAMES|$PLUGIN_DEV_NAMES"))
+        val carriable = if (carriesDevSettings) devCredentials(Regex("$DEBRID_TORRENT_INDEXER_NAMES|$PLUGIN_DEV_ADDRESS_NAMES")) else emptyList()
         val carried = if (carriesDevSettings) devCredentials(Regex(CARRIED_DEV_NAMES)) else emptyList()
         // For this check only, as checkBetaHasNoDevSettings' own.
         val dir = layout.buildDirectory.dir("tmp/$check")
@@ -1051,7 +1078,7 @@ fun checkNoDebridDevKeys(variant: String, apkDir: DirectoryProperty, apkLoader: 
                 val into = dir.get().asFile
                 return files.flatMap { listOf("--apk", it) } + listOf(
                     "--check-name", check, "--settings", File(into, "settings.tsv").path, "--control", control,
-                    "--advice", "Only debug builds may carry them (local.properties' devTorBoxKey, devPremiumizeKey and devTorrentIndexer.N).",
+                    "--advice", "Only debug builds may carry them (local.properties' devTorBoxKey, devPremiumizeKey, devTorrentIndexer.N, devSportarr.url and devSportarr.key).",
                     "--report", report.get().asFile.path,
                 ) + if (carriesDevSettings) listOf("--settings-if-not-carried", File(into, "carriable.tsv").path, "--carried", File(into, "carried.tsv").path) else emptyList()
             }

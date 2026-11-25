@@ -88,6 +88,13 @@ class PluginRegistry(
     private val shown = MutableStateFlow<List<InstalledPlugin>?>(null)
     private val off = MutableStateFlow(false)
 
+    /**
+     * Test seam: the build's encoding of a debug build's plugin settings ([PluginDevSecrets]), read as a new install is
+     * given them. A JVM test gives its own, so none reads the developer's values a debug build carries.
+     */
+    @VisibleForTesting
+    internal var devSecrets: () -> String = { BuildConfig.DEV_PLUGIN_SECRETS }
+
     /** Whether this start loads no plugin: NZStreamer closed twice just after starting (L619), until Turn on again. */
     val pluginsOff: StateFlow<Boolean> = off.asStateFlow()
 
@@ -250,6 +257,7 @@ class PluginRegistry(
             when {
                 existing == null -> {
                     withContext(io) { store.emptyFolders(id) }
+                    seedDevSecrets(id, request.versionCode)
                     val slot = PluginStore.SLOTS.first { slot -> records.none { it.slot == slot } }
                     records += PluginRecord(id, request.name, request.versionCode, facts.versionName, request.sha256, slot, installedAt = now())
                     persist()
@@ -284,6 +292,18 @@ class PluginRegistry(
         }
         publish()
         return result
+    }
+
+    /**
+     * A debug build gives a new install of [id] its preset secrets (W168 a, L656): those local.properties gave the build
+     * for it ([devSecrets]), each where none is stored. Never in another build, nor while the seeding is off (device runs).
+     * Its log line counts them, naming none. Under [lock].
+     */
+    private suspend fun seedDevSecrets(id: String, versionCode: Long) {
+        val values = PluginDevSecrets.forNewInstall(id, devSecrets)
+        if (values.isEmpty()) return
+        val stored = withContext(io) { store.seedSecrets(id, values) }
+        log.info("Plugin {} {}: {} of {} preset settings stored", id, versionCode, stored, values.size)
     }
 
     /**

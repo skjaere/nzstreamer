@@ -1,5 +1,7 @@
 package io.skjaere.usenet.app
 
+import io.skjaere.usenet.app.plugins.UnitTestBuild
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.Test
 import java.io.File
 import kotlin.test.assertEquals
@@ -12,7 +14,9 @@ import kotlin.test.fail
  * versions, in L615's order. A plugin's own build stamps the same list from the same catalog, so a plugin built against
  * newer ones is told apart (L584). This reads both files itself; the app's unit tests declare them inputs, so a change to
  * either alone runs it again. BuildConfig's fields are read at run time: their constants, compiled into this class,
- * could be an earlier build's.
+ * could be an earlier build's. And no build but debug carries a plugin's dev settings (W168 a, L656): the release build,
+ * which bench and both betas start from, has none. That field is read in a release build's run alone: a debug build's
+ * holds the developer's own values.
  */
 class BuildConfigPinTest {
     private fun buildConfig(field: String): Any? = BuildConfig::class.java.getField(field).get(null)
@@ -46,5 +50,14 @@ class BuildConfigPinTest {
             ).joinToString(","),
             buildConfig("PLUGIN_HOST_LIBS"),
         )
+    }
+
+    @Test
+    fun `a release build carries no plugin's dev settings`() {
+        assumeFalse(UnitTestBuild.debug, "a debug build carries local.properties' plugin settings: never read here")
+        val encoded = buildConfig("DEV_PLUGIN_SECRETS") as String
+        // Should one be there, the message names its plugin and setting alone, never its value.
+        val named = encoded.lines().filter { it.isNotBlank() }.map { line -> line.split('\t').take(2).joinToString(" ") }
+        assertTrue(encoded.isEmpty(), "the ${UnitTestBuild.type} build carries plugin settings: $named")
     }
 }

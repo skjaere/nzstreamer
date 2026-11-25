@@ -34,9 +34,11 @@ import io.skjaere.usenet.app.tv.railItem
 import io.skjaere.usenet.app.tv.setTvContent
 import io.skjaere.usenet.app.ui.AppTheme
 import io.skjaere.usenet.plugin.NzPlugin
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeFalse
@@ -109,6 +111,10 @@ class SportarrLoadDeviceTest {
         // Loaded in this process, from the app's own registry (above): the test runs in the app's process, so a load that
         // restarted it would have ended this run.
         assertSame("the instance the app's registry runs", instance, (plugins.app.plugins.value!!.single().status as PluginStatus.Running).instance)
+        // A device run gives it none of the debug build's own settings (W168 a): asked by name, never read.
+        listOf("url", "key").forEach { name ->
+            assertFalse("plugin:sportarr:$name stored by the install", runBlocking { container.data.secrets.has("plugin:sportarr:$name").first() })
+        }
     }
 
     /** W160 on a phone: the bar's order, then the tab's page, the setup form's first lines. */
