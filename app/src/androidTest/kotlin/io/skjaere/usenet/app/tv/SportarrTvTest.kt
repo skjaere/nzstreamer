@@ -28,6 +28,7 @@ import io.skjaere.usenet.app.HomeContentShown
 import io.skjaere.usenet.app.TvDevice
 import io.skjaere.usenet.app.assumeTv
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.play.PlayState
 import io.skjaere.usenet.app.plugins.PLUGIN_WAIT_MS
 import io.skjaere.usenet.app.plugins.PluginMeasure
 import io.skjaere.usenet.app.plugins.PluginStateRule
@@ -92,6 +93,7 @@ class SportarrTvTest {
     @After
     fun restore() {
         instrumentation.setInTouchMode(true)
+        container.playback.cancel()
         try {
             tmdb?.close()
         } catch (e: AssertionError) {
@@ -215,6 +217,43 @@ class SportarrTvTest {
         remote.press(KeyEvent.KEYCODE_BACK)
         waitFor(tvHome)
         waitForFocusOn(railItem("Home"), "the rail's Home, after Back on the rail")
+    }
+
+    /**
+     * OK on an Up next row plays it and leaves nothing for the focus to come back to: on a TV the list stays under the
+     * player, or the host's sheet. Home, and the tab again: the list's first focus, All, never the Up next row, whose OK
+     * plays it again. Here the game has no release on the sports indexer, so the host's sheet says so.
+     */
+    @Test
+    fun anUpNextPlayLeavesTheTabsFirstFocusAsItWas() {
+        sportarr.assumeUp(indexer = true)
+        sportarr.install()
+        sportarr.indexers(plays = false)
+        val game = library.event(NOTHING_GAME)
+        sportarr.progress(game.part(), game.title, 40 * MINUTE, 110 * MINUTE)
+        openSports()
+        listFocused()
+        val upNext = remote.press(KeyEvent.KEYCODE_DPAD_DOWN)
+        assertTrue("Down from All: Up next's game, \"$upNext\"", upNext.startsWith("${game.title} | Premier League · "))
+        sportarr.paceSearches()
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        waitFor(hasText("No playable release found"), SEARCH_WAIT_MS)
+        remote.press(KeyEvent.KEYCODE_BACK)
+        compose.waitUntil(FOCUS_WAIT_MS) { !exists(hasText("No playable release found")) }
+        // The play over, as the next test needs it.
+        container.playback.cancel()
+        compose.waitUntil(FOCUS_WAIT_MS) { container.playback.state.value == PlayState.Idle }
+
+        remote.press(KeyEvent.KEYCODE_DPAD_LEFT)
+        waitForFocusOn(railItem(SPORTS), "its rail item")
+        assertEquals("Home", remote.pressUntil(KeyEvent.KEYCODE_DPAD_UP, "Home", max = 4))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        waitFor(tvHome)
+        remote.press(KeyEvent.KEYCODE_DPAD_LEFT)
+        waitForFocusOn(railItem("Home"), "the rail's Home")
+        assertEquals(SPORTS, remote.pressUntil(KeyEvent.KEYCODE_DPAD_DOWN, SPORTS, max = 6))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        listFocused()
     }
 
     /** L660: Back from a game's page, opened by OK on its row, lands on that row. */
@@ -426,6 +465,9 @@ class SportarrTvTest {
         const val PREMIER_LEAGUE = 1
         const val GAME = 1001
 
+        /** A game with no release of its own on the sports indexer. */
+        const val NOTHING_GAME = 1016
+
         const val SPORTS = "Sports"
         const val RECENT = "Recent"
         const val UPCOMING = "Upcoming"
@@ -455,6 +497,7 @@ class SportarrTvTest {
 
         const val LIST_WAIT_MS = 30_000L
         const val BUSY_WAIT_MS = 90_000L
+        const val SEARCH_WAIT_MS = 60_000L
         const val FOCUS_WAIT_MS = 8_000L
         const val KEYBOARD_MS = 1_000L
         const val SETTLE_MS = 1_500L

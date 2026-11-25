@@ -75,9 +75,10 @@ import io.skjaere.usenet.app.ui.tvFocusMemory
  * The focus: first on the sport chip picked ("All" as the tab opens); on Recent while the cards are blank; on the notice's
  * or the card's button in those states. It moves on from where it was put as the list comes, but never from where the
  * user took it. Down goes into Up next, then the days; Left from a line's first element to the rail. OK on an Up next row
- * plays it, on any other row opens its page; "+3 more" opens in place with the focus on its sixth row. The list keeps the
- * row the focus left for the way back from the rail ([tvFocusMemory]), Back from a page lands on the row that opened it
- * ([rememberReturnFocus], "+3 more" opened or not), and the focus sits a third of the way down as the list moves.
+ * plays it, the focus staying there under the player; on any other row it opens its page; "+3 more" opens in place with
+ * the focus on its sixth row. The list keeps the row the focus left for the way back from the rail ([tvFocusMemory]),
+ * Back from a page lands on the row that opened it ([rememberReturnFocus], "+3 more" opened or not), and the focus sits a
+ * third of the way down as the list moves.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -144,10 +145,9 @@ internal fun TvSportsList(screen: ListScreen, model: ListModel, actions: ListAct
                 item(key = ListKeys.UP_NEXT) {
                     Column {
                         SectionHeader(Words.SportsList.UP_NEXT, top = 20.dp)
-                        TvUpNext(screen.upNext, ::element) { row ->
-                            focus.leaving(ListKeys.next(row.item.part.key))
-                            model.play(row)
-                        }
+                        // No way back to keep: on a TV the list stays under the player and the host's sheet, the focus where
+                        // it was, and a key left waiting would take the focus back here later, where OK plays again.
+                        TvUpNext(screen.upNext, ::element) { row -> model.play(row) }
                     }
                 }
             }

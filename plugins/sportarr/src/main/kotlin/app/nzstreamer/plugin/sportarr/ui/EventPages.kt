@@ -100,7 +100,7 @@ internal fun EventPage(session: Session, play: PluginPlay, nav: PluginNav, page:
     val focus = rememberReturnFocus()
     val okGuard = rememberPageOkGuard()
     val scope = rememberCoroutineScope()
-    val actions = remember(model, nav, scope, focus) { PageActions(model, nav, scope, focus) }
+    val actions = remember(model, nav, scope, focus, tv) { PageActions(model, nav, scope, focus, tv) }
     val bar = @Composable { if (!tv) TopBar("", actions::back) { play.PlayOnButton(Modifier) } }
     when (val shown = screen) {
         null -> Column(Modifier.fillMaxSize()) {
@@ -119,13 +119,20 @@ internal fun EventPage(session: Session, play: PluginPlay, nav: PluginNav, page:
 
 /**
  * What a page's elements do, each saying where the focus comes back to ([focus], by the element's key) as what it opens
- * covers the page: the player, Choose release, Search. Choose release and Search run in the page's [scope], so a page
- * left meanwhile opens nothing; the focus is kept for them only as they open, as Choose release with nothing at all
- * opens nothing.
+ * covers the page: Choose release, Search, and on a phone the player, whose landscape makes the page again. Choose
+ * release and Search run in the page's [scope], so a page left meanwhile opens nothing; the focus is kept for them only
+ * as they open, as Choose release with nothing at all opens nothing. On a [tv] the page stays under the player, the focus
+ * where it was, so a play keeps no way back: one left waiting would take the focus later.
  */
-internal class PageActions(private val model: PageModel, private val nav: PluginNav, private val scope: CoroutineScope, val focus: ReturnFocus) {
+internal class PageActions(
+    private val model: PageModel,
+    private val nav: PluginNav,
+    private val scope: CoroutineScope,
+    val focus: ReturnFocus,
+    private val tv: Boolean,
+) {
     fun play(part: String, from: String) {
-        if (model.play(part)) focus.leaving(from)
+        if (model.play(part) && !tv) focus.leaving(from)
     }
 
     fun choose(part: String, from: String) {
