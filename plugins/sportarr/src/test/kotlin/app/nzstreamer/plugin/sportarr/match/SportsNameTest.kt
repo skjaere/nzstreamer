@@ -224,9 +224,19 @@ class SportsNameTest {
             Row("Premier.League.21.13.2026.Lantern.Bay.FC.vs.Copper.Crown.United.720p", "y2026"),
             // A trailing day and month, the year elsewhere; with no year they are no date.
             Row("Kestrel.Hockey.League.2026.Easton.Comets.Saltmere.Gulls.22.11.720p.WEB.h264-WREN", "2026-11-22 y2026"),
-            Row("Kestrel.Hockey.League.2026.Easton.Comets.Saltmere.Gulls.05.11.720p.WEB.h264-WREN", "2026-11-05|2026-05-11 y2026"),
             Row("Lantern.Bay.vs.Copper.Crown.21.11.720p50.WEB.h264-WREN", ""),
             Row("Formula1.2026.Kestrel.Race.21.11.1080p.WEB.h264-WREN", "2026-11-21 y2026"),
+            // Beside a word, a day of 12 or less reads two ways, as a score does ("Gulls 3 1"): it is left to the score rule.
+            Row("Kestrel.Hockey.League.2026.Easton.Comets.Saltmere.Gulls.05.11.720p.WEB.h264-WREN", "y2026"),
+            Row("Kestrel.Premier.Division.2027.Lantern.Bay.FC.vs.Copper.Crown.United.3.1.720p.WEB.h264-WREN", "y2027"),
+            // A colon or a dash joins a score's numbers, never a day and a month; a date's are joined the same way twice.
+            Row("Kestrel.Premier.Division.2027.Lantern.Bay.FC.vs.Copper.Crown.United.3-1.720p.WEB.h264-WREN", "y2027"),
+            Row("Kestrel.Premier.Division.2027.Lantern.Bay.FC.vs.Copper.Crown.United.22-11.720p.WEB.h264-WREN", "y2027"),
+            Row("Lantern Bay FC vs Copper Crown United 2027 3:1 720p", "y2027"),
+            Row("Lantern Bay FC vs Copper Crown United 2027 3 - 1 720p", "y2027"),
+            Row("Lantern Bay FC vs Copper Crown United 2027.3-1 720p", "y2027"),
+            Row("Premier League 21:11:2026 Lantern Bay FC vs Copper Crown United 720p", "y2026"),
+            Row("Premier League 2026 - 11 - 21 Lantern Bay FC vs Copper Crown United 720p", "2026-11-21"),
             // Season spans, a year and a running number, a year and an episode: years, never dates.
             Row("Premier.League.2026.2027.Lantern.Bay.FC.vs.Copper.Crown.United.720p", "s2026/2027"),
             Row("Kestrel.Premier.Division.2025-26.Week.10.Lantern.Bay.FC.vs.Copper.Crown.United.720p", "s2025/2026"),
@@ -634,6 +644,10 @@ class SportsNameTest {
             Row("Lantern.Bay.FC.2.0.Copper.Crown.United.1080p.WEB.h264-WREN", "score"),
             // A day and month with no year elsewhere is no date: two numbers beside a side.
             Row("Lantern.Bay.vs.Copper.Crown.21.11.720p50.WEB.h264-WREN", "score"),
+            // With a year elsewhere, a pair beside a side that reads two ways is a score, never only a date.
+            Row("Kestrel.Premier.Division.2027.Lantern.Bay.FC.vs.Copper.Crown.United.3.1.720p.WEB.h264-WREN", "score"),
+            Row("Kestrel.Hockey.League.2026.Easton.Comets.Saltmere.Gulls.05.11.720p.WEB.h264-WREN", "score"),
+            Row("Kestrel.Premier.Division.2027.Lantern.Bay.FC.vs.Copper.Crown.United.1.1.720p.WEB.h264-WREN", "score"),
             // The series' own number is masked only when the series is given.
             Row("Formula.1.20.Kestrel.Race.1080p.WEB.h264-WREN", "score"),
             Row("Formula.1.20.Kestrel.Race.1080p.WEB.h264-WREN", "none", NameContext(series = listOf("Formula 1", "Formula1", "F1"))),

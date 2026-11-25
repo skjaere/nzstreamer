@@ -260,6 +260,19 @@ class SharedRulesTest {
     }
 
     @Test
+    fun `a score at a name's end is never read as only a date, so a game on a day its numbers make never takes it`() {
+        val name = "Kestrel.Premier.Division.2027.Lantern.Bay.FC.vs.Copper.Crown.United.3.1.720p.WEB.h264-WREN"
+        // 3 and 1 make the 3rd of January or the 1st of March; Sportarr's fallback date lets a day either side pass.
+        listOf("2027-01-03", "2027-03-01", "2027-02-28", "2027-03-02").forEach { day ->
+            val game = sports(PREMIER to listOf(on(PREMIER, 1001, at("${day}T15:00"), "Lantern Bay FC vs Copper Crown United"))).byId(1001)
+            listOf(accepting, offering).forEach { family -> assertEquals(left(RejectKind.Score), judge(game, name, family), "$day, $family") }
+        }
+        // A day above 12 reads one way, as the day and month it is.
+        val late = sports(PREMIER to listOf(on(PREMIER, 1001, at("2027-11-22T15:00"), "Lantern Bay FC vs Copper Crown United"))).byId(1001)
+        assertEquals(Verdict.Accept(), judge(late, "Kestrel.Premier.Division.2027.Lantern.Bay.FC.vs.Copper.Crown.United.22.11.720p.WEB.h264-WREN"))
+    }
+
+    @Test
     fun `below 1 Mbit a second over the part's runtime an accepted release is a possible match, half that for standard definition`() {
         // 110 minutes of a soccer game: 825,000,000 bytes at 1 Mbit/s.
         val name = "Premier.League.2026.11.21.Lantern.Bay.FC.vs.Copper.Crown.United.1080p.WEB.h264-KESTREL"

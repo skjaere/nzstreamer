@@ -377,11 +377,12 @@ private class Reader(private val name: String, private val context: NameContext)
         }
     }
 
-    /** "2026.11.21" with any separator: the words it took, or null. */
+    /** "2026.11.21" with any separator, the same twice: the words it took, or null. */
     private fun yearFirst(i: Int): Int? {
         val year = free(i, 4, 4) ?: return null
         val month = free(i + 1, 1, 2) ?: return null
         val day = free(i + 2, 1, 2) ?: return null
+        if (!dateJoins(i)) return null
         val date = date(year, month, day) ?: return null
         dates += NameDate(listOf(date), DateForm.YearFirst, i)
         take(i, 3)
@@ -409,6 +410,7 @@ private class Reader(private val name: String, private val context: NameContext)
         val first = free(i, 1, 2) ?: return null
         val second = free(i + 1, 1, 2) ?: return null
         val year = free(i + 2, 4, 4) ?: return null
+        if (!dateJoins(i)) return null
         val readings = readings(first, second, year).ifEmpty { return null }
         dates += NameDate(readings, DateForm.DayFirst, i)
         take(i, 3)
@@ -430,16 +432,32 @@ private class Reader(private val name: String, private val context: NameContext)
 
     /**
      * A trailing day and month ("… Gulls 22 11"), read as a date only with one year elsewhere in the name. Before the words
-     * a number follows, so "Race 21 11" keeps its date.
+     * a number follows, so "Race 21 11" keeps its date. Never across a hyphen, colon or dash, which join a score's numbers
+     * ("3-1"); and a day of 12 or less beside a word reads two ways, as a score beside a side does ("Gulls 3 1"), so it is
+     * left to the score rule: a score is never only a date, which the event's own day could match (W167 a).
      */
     private fun readDayMonth() {
         val year = years.distinct().singleOrNull() ?: return
-        val first = free(tailStart - 2, 1, 2) ?: return
-        val second = free(tailStart - 1, 1, 2) ?: return
+        val at = tailStart - 2
+        val first = free(at, 1, 2) ?: return
+        val second = free(at + 1, 1, 2) ?: return
+        if (!dayMonthJoin(all[at + 1].sep) || (first <= 12 && wordBeside(at - 1))) return
         val readings = readings(first, second, year).ifEmpty { return }
-        dates += NameDate(readings, DateForm.DayMonth, tailStart - 2)
-        take(tailStart - 2, 2)
+        dates += NameDate(readings, DateForm.DayMonth, at)
+        take(at, 2)
     }
+
+    /**
+     * Whether the three numbers from [i] are joined as a date's are: by the same separator twice, never a colon or an en or
+     * em dash, which join a score ("2026 3:1", "2026.3-1").
+     */
+    private fun dateJoins(i: Int): Boolean {
+        val (first, second) = all[i + 1].sep to all[i + 2].sep
+        return first.trim() == second.trim() && first.none { it in NEVER_IN_DATES }
+    }
+
+    /** A day and a month's join: a dot, an underscore, a slash or spaces; a hyphen, colon or dash joins a score. */
+    private fun dayMonthJoin(sep: String): Boolean = (sep.isNotEmpty() && sep.isBlank()) || sep.trim() in DAY_MONTH_JOINS
 
     /**
      * Each entry of [list] found among the words not yet read, the longest first at each word, with the number it takes:
@@ -657,6 +675,10 @@ private class Reader(private val name: String, private val context: NameContext)
         val YEARS = 1900..2099
         val CHANNELS = setOf("5.1", "7.1", "2.0")
         val PLAIN_JOINS = setOf(".", "_")
+        val DAY_MONTH_JOINS = setOf(".", "_", "/")
+
+        /** A colon, an en dash and an em dash: a score's joins, never a date's. */
+        const val NEVER_IN_DATES = ":\u2013\u2014"
         /** A hyphen, a colon, an en dash and an em dash. */
         const val DASHES = "-:\u2013\u2014"
     }
