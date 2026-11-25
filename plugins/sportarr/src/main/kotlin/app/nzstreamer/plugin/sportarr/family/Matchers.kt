@@ -17,12 +17,12 @@ class Matchers(sports: Sports) {
     private val motorsport = Motorsport(sports)
     private val fightCards = FightCard(sports)
 
-    /** [event]'s family's matcher; null for a family whose rules the plugin doesn't have yet. */
-    fun of(event: SportsEvent): FamilyMatcher? = when (event.family) {
+    /** [event]'s family's matcher: every sport without rules of its own is Generic's. */
+    fun of(event: SportsEvent): FamilyMatcher = when (event.family) {
         Family.TeamGame -> teamGames
         Family.Motorsport -> motorsport
         Family.FightCard -> fightCards
-        Family.Generic -> null
+        Family.Generic -> Generic
     }
 }
 
@@ -37,6 +37,10 @@ internal fun searchDate(event: SportsEvent): String {
     val date = event.broadcastDate ?: utcDate(event)
     return "${date.year} ${date.monthValue.toString().padStart(2, '0')} ${date.dayOfMonth.toString().padStart(2, '0')}"
 }
+
+/** The years [event] may be named by: its season's, and those of its UTC start and its broadcast date. */
+internal fun eventYears(event: SportsEvent): Set<Int> =
+    (event.seasonYears + listOfNotNull(utcDate(event).year, event.broadcastDate?.year)).toSet()
 
 /** Every year a name holds: a year of its own, a date's, a season span's, a running number's or an episode's. */
 internal fun SportsName.yearsNamed(): List<Int> =

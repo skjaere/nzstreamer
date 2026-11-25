@@ -100,6 +100,9 @@ internal object Words {
     /** The league's word and the event's date, and nothing else of the event's. */
     const val BY_LEAGUE_AND_DATE = "Picked by league and date"
 
+    /** Most of the event's title and its year or date, posted after it started: for a sport the plugin has no rules for. */
+    const val BY_TITLE = "Picked by the title's words"
+
     // The kinds a release is left out as, in the left-out line (L647).
 
     /** Another event's release: "other games", "other sessions", "other cards". */

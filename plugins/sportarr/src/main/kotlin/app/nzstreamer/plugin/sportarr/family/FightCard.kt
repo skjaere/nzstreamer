@@ -156,7 +156,7 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
             CardType.WeeklyShow -> SURE.takeIf { dated && card.titleIn(words) }
             CardType.Premium -> {
                 val years = name.yearsNamed()
-                val edition = card.editions.any(name::hasNumber) || years.any { it in yearsOf(card.event) }
+                val edition = card.editions.any(name::hasNumber) || years.any { it in eventYears(card.event) }
                 val night = card.night == null || card.night in name.numbered(NumberWord.Night)
                 SURE.takeIf { leagueNamed(card, name, words) && card.titleIn(words) && edition && night }
             }
@@ -292,8 +292,5 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
                 else -> null
             }
         }
-
-        /** The years a card may be named by: its season's, and the years of its start and its broadcast date. */
-        fun yearsOf(event: SportsEvent): Set<Int> = (event.seasonYears + listOfNotNull(utcDate(event).year, event.broadcastDate?.year)).toSet()
     }
 }
