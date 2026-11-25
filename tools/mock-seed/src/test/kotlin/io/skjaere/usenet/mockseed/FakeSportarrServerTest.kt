@@ -391,6 +391,33 @@ class FakeSportarrServerTest {
     }
 
     @Test
+    fun `on=false turns any switch off alone, a removed league back among the rest`() {
+        control("remove-league?id=1")
+        control("remove-league?id=7")
+        assertEquals(200, control("remove-league?id=7&on=false").statusCode())
+        assertEquals(200, get("/api/leagues/7/events").statusCode(), "Formula 1 back")
+        assertEquals(404, get("/api/leagues/1/events").statusCode(), "the other still removed")
+        assertEquals(400, control("remove-league?on=false").statusCode(), "a league named")
+
+        control("busy?events=10")
+        control("busy?on=false")
+        assertTrue(leagues().none { it.number("id") == SportsCatalog.BUSY_LEAGUE_ID })
+        control("order?dir=asc")
+        control("order?on=false")
+        assertEquals(newestFirst(7), ok("/api/leagues/7/events").ids())
+        control("version?v=4.0.998")
+        control("version?v=4.0.998&on=false")
+        assertEquals(FakeSportarrServer.VERSION, ok("/api/system/status").jsonObject.getValue("version").jsonPrimitive.content)
+        control("url-base?base=/sportarr")
+        control("url-base?on=false")
+        assertEquals(200, get("/api/leagues").statusCode())
+        control("slow?ms=10")
+        control("slow?on=false")
+        get("/api/health", key = null)
+        assertEquals(emptyList(), paused.toList())
+    }
+
+    @Test
     fun `the clock says the anchor and the fake's now, and reset puts every switch back`() {
         val clock = Json.parseToJsonElement(control("clock").body()).jsonObject
         assertEquals("2026-11-22", clock.getValue("anchor").jsonPrimitive.content)

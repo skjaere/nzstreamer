@@ -41,15 +41,17 @@ import java.util.concurrent.Executors
  * reaches a model, a file, a screen or a log (L653).
  *
  * Switches at `/control/…`, each answering `{"ok":true}`: `refuse-key` (every key refused), `version?v=4.0.998` (none
- * given: back to [VERSION]), `html` (every /api/ route answers a page), `url-base?base=/sportarr` (every route under it;
- * empty for none), `slow?ms=` (each /api/ answer held that long), `fail?status=500&route=events&page=2` (a route, status,
- * leagues or events, answered with that status; for events, one page, one league or both if named; one failure at a time),
- * `remove-league?id=` (its events answer 404 from then on, while the leagues still list it: a league removed between the
- * plugin's two reads), `order?dir=asc` (oldest first, then by id), `paging?on=false` (plain arrays whatever is asked, a
- * server before 4.1.10), `empty` (no league switched on), `busy?events=5200` (the catalogue's busy league added, none with
- * 0). A switch's `on=false` turns it off. `clock` says the anchor and the fake's now; `counts` the requests by route and
- * by league and page (`<id>:<page>`, `<id>:whole` without paging), and how many asked without the key or carried it in
- * the query, which the plugin never does; `reset` puts every switch and count back.
+ * given: back to [VERSION]), `html` (every /api/ route answers a page), `url-base?base=/sportarr` (every route under
+ * it; empty for none), `slow?ms=` (each /api/ answer held that long), `fail?status=500&route=events&page=2` (a route,
+ * status, leagues or events, answered with that status; for events, one page, one league or both if named; one failure
+ * at a time), `remove-league?id=` (its events answer 404 from then on, while the leagues still list it: a league
+ * removed between the plugin's two reads), `order?dir=asc` (oldest first, then by id), `paging?on=false` (plain arrays
+ * whatever is asked, a server before 4.1.10), `empty` (no league switched on), `busy?events=5200` (the catalogue's busy
+ * league added, none with 0). A switch's `on=false` turns it off and no other: the version, the base, the pause, the
+ * order and the busy league back as they were, and `remove-league?id=&on=false` that league back. `clock` says the
+ * anchor and the fake's now; `counts` the requests by route and by league and page (`<id>:<page>`, `<id>:whole` without
+ * paging), and how many asked without the key or carried it in the query, which the plugin never does; `reset` puts
+ * every switch and count back.
  *
  * The switches and counts are one set for every emulator reaching the fake, so a device class holds it while it runs
  * (`take?by=<its id>`, `give-back?by=`): another is refused (409) until it is given back or [leaseMs] after it was taken;
@@ -236,14 +238,14 @@ class FakeSportarrServer(
         val name = exchange.requestURI.path.removePrefix("/control/")
         when (name) {
             "refuse-key" -> refuseKey = on
-            "version" -> version = query["v"]?.takeIf { it.isNotEmpty() } ?: VERSION
+            "version" -> version = query["v"]?.takeIf { it.isNotEmpty() && on } ?: VERSION
             "html" -> html = on
             "url-base" -> {
-                val base = query["base"].orEmpty().trimEnd('/')
+                val base = if (on) query["base"].orEmpty().trimEnd('/') else ""
                 if (base.isNotEmpty() && !base.startsWith("/")) return exchange.json("""{"error":"base= starts with a slash"}""", 400)
                 urlBase = base
             }
-            "slow" -> slowMs = query["ms"]?.toLongOrNull()?.takeIf { it >= 0 } ?: return exchange.json("""{"error":"ms= is milliseconds"}""", 400)
+            "slow" -> slowMs = if (!on) 0 else query["ms"]?.toLongOrNull()?.takeIf { it >= 0 } ?: return exchange.json("""{"error":"ms= is milliseconds"}""", 400)
             "fail" -> {
                 if (!on) {
                     fail = null
@@ -257,9 +259,9 @@ class FakeSportarrServer(
             "remove-league" -> {
                 val id = query["id"]?.toIntOrNull()?.takeIf { id -> leagues().any { it.id == id } }
                     ?: return exchange.json("""{"error":"id= names a league"}""", 400)
-                removed = removed + id
+                removed = if (on) removed + id else removed - id
             }
-            "order" -> ascending = when (query["dir"]) {
+            "order" -> ascending = if (!on) false else when (query["dir"]) {
                 "asc" -> true
                 "desc" -> false
                 else -> return exchange.json("""{"error":"dir= is asc or desc"}""", 400)
@@ -267,7 +269,7 @@ class FakeSportarrServer(
             "paging" -> paging = on
             "empty" -> empty = on
             "busy" -> {
-                val events = query["events"]?.toIntOrNull()?.takeIf { it in 0..BUSY_MAX } ?: return exchange.json("""{"error":"events= is 0 to $BUSY_MAX"}""", 400)
+                val events = if (!on) 0 else query["events"]?.toIntOrNull()?.takeIf { it in 0..BUSY_MAX } ?: return exchange.json("""{"error":"events= is 0 to $BUSY_MAX"}""", 400)
                 busy = events.takeIf { it > 0 }?.let(busyOf)
             }
             "clock" -> return exchange.json(buildJsonObject {
