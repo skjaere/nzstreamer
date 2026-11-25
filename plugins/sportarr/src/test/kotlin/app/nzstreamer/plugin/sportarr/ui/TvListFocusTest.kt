@@ -75,6 +75,25 @@ class TvListFocusTest {
         assertEquals(emptyList(), asked, "nothing asked for")
     }
 
+    @Test
+    fun `back from a page whose row has gone, the row in its place takes the focus, not the state's first`() = runBlocking<Unit> {
+        focus()
+        val back = launch {
+            focus.settle(ALL, restore = { false }, awaitTurn = {}, bringIntoView = {}, returning = ROW) { gone -> if (gone == ROW) NEXT_ROW else null }
+        }
+        repeat(3) { frames.send(Unit) }
+        back.join()
+        assertEquals(NEXT_ROW, focus.focused)
+
+        // A state after it, nothing to go back to: the row stays as the user's, whatever a page left before.
+        asked.clear()
+        val later = launch { focus.settle(NOTICE, restore = { false }, awaitTurn = {}, bringIntoView = {}) { NEXT_ROW } }
+        repeat(2) { frames.send(Unit) }
+        later.join()
+        assertEquals(NEXT_ROW, focus.focused)
+        assertEquals(emptyList(), asked)
+    }
+
     private suspend fun waitUntil(holds: () -> Boolean) {
         repeat(1_000) {
             if (holds()) return
@@ -88,5 +107,6 @@ class TvListFocusTest {
         const val ALL = "sport:*"
         const val NOTICE = "notice"
         const val ROW = "row:ev-000012"
+        const val NEXT_ROW = "row:ev-000013"
     }
 }

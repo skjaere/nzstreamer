@@ -32,8 +32,11 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -97,10 +100,21 @@ internal fun TvSportsList(screen: ListScreen, model: ListModel, actions: ListAct
 
     suspend fun bringIntoView(key: String) = ListKeys.bringIntoView(list, latest, key, sportsLine = false)
 
-    // Back on what opened a page; else the state's first focus, once the rail lets the list take one, and again when the
-    // state changes under a focus the list put (the blank cards' Recent as the list comes), never under the user's.
+    // Where the row that opened a page stood, for the way back once it has gone (a game watched on its page).
+    var leftAt by rememberSaveable { mutableStateOf<String?>(null) }
+
+    // Back on what opened a page, or what stands in its place; else the state's first focus, once the rail lets the list
+    // take one, and again when the state changes under a focus the list put (the blank cards' Recent as the list comes),
+    // never under the user's.
     val first = firstFocus(screen)
-    LaunchedEffect(first) { memory.settle(first, { focus.restore(::bringIntoView) }, initial::awaitTurn, ::bringIntoView) }
+    LaunchedEffect(first) {
+        val returning = focus.pending
+        val left = leftAt
+        if (returning != null) leftAt = null
+        memory.settle(first, { focus.restore(::bringIntoView) }, initial::awaitTurn, ::bringIntoView, returning) { gone ->
+            left?.takeIf { gone.startsWith(ListKeys.ROW) }?.let { ListKeys.standIn(latest, it) }
+        }
+    }
     // What the list shows changed (the list came, a card took its place): the shell checks the focus is somewhere.
     LaunchedEffect(kind(screen)) { rail?.contentChanged() }
     // "+3 more" opened by OK: the focus on the league's sixth row, the first of those it brought.
@@ -158,6 +172,7 @@ internal fun TvSportsList(screen: ListScreen, model: ListModel, actions: ListAct
                         league, ::element,
                         onOpen = { row ->
                             focus.leaving(ListKeys.row(row.key))
+                            leftAt = ListKeys.place(screen, row.key)
                             actions.open(row)
                         },
                         onMore = {
@@ -204,18 +219,31 @@ internal class TvListFocus(private val request: (String) -> Unit, private val fr
     private var settled = false
 
     /**
-     * A state's first focus: back on what opened a page ([restore]); else, once the screen may take one ([awaitTurn]),
-     * [first], unless the user took the focus off where the list put it. Before the list has put it anywhere, a focus
-     * elsewhere is where the shell's settling left it as the content showed (the list's rows kept from before), not the
-     * user's, and [first] takes it.
+     * A state's first focus: back on what opened a page ([restore]), or where that has gone (its key [returning]), on what
+     * [standIn] says stands in its place; else, once the screen may take one ([awaitTurn]), [first], unless the user took
+     * the focus off where the list put it. Before the list has put it anywhere, a focus elsewhere is where the shell's
+     * settling left it as the content showed (the list's rows kept from before), not the user's, and [first] takes it.
      */
-    suspend fun settle(first: String, restore: suspend () -> Boolean, awaitTurn: suspend () -> Unit, bringIntoView: suspend (String) -> Unit) {
+    suspend fun settle(
+        first: String,
+        restore: suspend () -> Boolean,
+        awaitTurn: suspend () -> Unit,
+        bringIntoView: suspend (String) -> Unit,
+        returning: String? = null,
+        standIn: (String) -> String? = { null },
+    ) {
         if (restore()) {
             placed = null
             settled = true
             return
         }
         awaitTurn()
+        val instead = returning?.let(standIn)
+        if (instead != null && place(instead, bringIntoView, own = false)) {
+            placed = null
+            settled = true
+            return
+        }
         val now = focused
         if (settled && now != null && now != placed) return
         settled = true

@@ -32,6 +32,7 @@ import io.skjaere.usenet.app.play.PlayState
 import io.skjaere.usenet.app.plugins.PLUGIN_WAIT_MS
 import io.skjaere.usenet.app.plugins.PluginMeasure
 import io.skjaere.usenet.app.plugins.PluginStateRule
+import io.skjaere.usenet.app.play.OkGuard
 import io.skjaere.usenet.app.plugins.sportarr.SportarrDevice
 import io.skjaere.usenet.app.plugins.sportarr.SportsFakes
 import io.skjaere.usenet.app.plugins.sportarr.screenWords
@@ -271,6 +272,34 @@ class SportarrTvTest {
         remote.press(KeyEvent.KEYCODE_BACK)
         remote.waitForFocus(game.title)
         assertEquals("back on its row", row, remote.focused())
+    }
+
+    /**
+     * Back from a game's page once it was watched there: its row has gone (watched rows wait for Show watched), and the
+     * focus lands on the row now in its place, not back at the top on All.
+     */
+    @Test
+    fun backFromAGameWatchedOnItsPageLandsOnTheRowInItsPlace() {
+        sportarr.install()
+        val game = library.event(GAME)
+        val day = library.league(PREMIER_LEAGUE).events.filter { it.listed && it.date(zone) == game.date(zone) }.sortedWith(compareBy({ it.start }, { it.key }))
+        val after = day[day.indexOf(game) + 1]
+        openSports()
+        listFocused()
+        val row = remote.pressUntil(KeyEvent.KEYCODE_DPAD_DOWN, game.title, max = 30)
+        assertTrue("its row: \"$row\"", game.title in row)
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        waitFor(hasText(NOT_WATCHED))
+        remote.waitForFocus("Play")
+        // The OK that opened the page is past its guard.
+        SystemClock.sleep(OkGuard.WINDOW_MS)
+        assertEquals("Right from Play", "Mark watched", remote.press(KeyEvent.KEYCODE_DPAD_RIGHT))
+        sportarr.forget(game.part())
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        waitFor(hasText("✓ Watched"))
+        remote.press(KeyEvent.KEYCODE_BACK)
+        remote.waitForFocus(after.title, FOCUS_WAIT_MS)
+        assertTrue("on a day's row: \"${remote.focused()}\"", ROW.matches(remote.focused()))
     }
 
     /** "+N more" by OK opens the league's day in place, the focus on its sixth row; Back from that row's page lands on it. */

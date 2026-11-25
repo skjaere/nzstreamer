@@ -86,7 +86,8 @@ internal object ListKeys {
     fun sport(sport: String?) = "sport:${sport ?: "*"}"
     fun league(league: LeagueChoice?) = "league:${league?.id ?: "*"}"
     fun next(partKey: String) = "next:$partKey"
-    fun row(key: String) = "row:$key"
+    fun row(key: String) = "$ROW$key"
+    const val ROW = "row:"
     fun more(leagueKey: String) = "more:$leagueKey"
 
     /** The list's items. */
@@ -132,6 +133,46 @@ internal object ListKeys {
         key.startsWith("row:") -> screen.days.flatMap { it.leagues }.firstOrNull { league -> league.rows.any { row(it.key) == key } }?.let(::group)
         else -> null
     }
+
+    /**
+     * Where [row] (a row's key) stands in [screen]: its day, its league's card and their places, for the way back to its
+     * neighbourhood once it has gone ([standIn]); null where it isn't one of [screen]'s. As text, kept with the page.
+     */
+    fun place(screen: ListScreen, row: String): String? {
+        screen.days.forEach { day ->
+            day.leagues.forEachIndexed { at, league ->
+                val index = league.rows.indexOfFirst { it.key == row }
+                if (index >= 0) return listOf(day.date, league.key, at, index).joinToString(PLACE)
+            }
+        }
+        return null
+    }
+
+    /**
+     * The row now standing where a row that left [screen] stood ([place]): the one in its place in its league's card, or
+     * the card's last; else the first of the league's card now in that card's place in the day, or the day's last; else,
+     * the day gone, the first of the day the side lists next. Null where none is, or [place] can't be read.
+     */
+    fun standIn(screen: ListScreen, place: String): String? {
+        val parts = place.split(PLACE)
+        if (parts.size != 4) return null
+        val date = parts[0]
+        val leagueAt = parts[2].toIntOrNull() ?: return null
+        val rowAt = parts[3].toIntOrNull() ?: return null
+        val day = screen.days.firstOrNull { it.date.toString() == date }
+        val stands = if (day != null) {
+            day.leagues.firstOrNull { it.key == parts[1] }?.rows?.let { it.getOrNull(rowAt) ?: it.lastOrNull() }
+                ?: (day.leagues.getOrNull(leagueAt) ?: day.leagues.lastOrNull())?.rows?.firstOrNull()
+        } else {
+            // Dates as text sort as the days do (yyyy-mm-dd): Recent lists the earlier day next, Upcoming the later.
+            val next = screen.days.firstOrNull { if (screen.side == Side.Recent) it.date.toString() < date else it.date.toString() > date }
+            (next ?: screen.days.lastOrNull())?.leagues?.firstOrNull()?.rows?.firstOrNull()
+        }
+        return stands?.let { row(it.key) }
+    }
+
+    /** Between a place's parts: no date, league key or number holds it. */
+    private const val PLACE = "\t"
 
     /** Brings [key]'s item into [list]'s view, when it isn't. */
     suspend fun bringIntoView(list: LazyListState, screen: ListScreen, key: String, sportsLine: Boolean) {
