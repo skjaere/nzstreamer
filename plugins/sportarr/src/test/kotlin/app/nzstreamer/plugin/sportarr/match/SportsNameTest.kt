@@ -551,7 +551,8 @@ class SportsNameTest {
             // A post-fight show is read as the programme first, which leaves it out all the same.
             Row("$CARD.Post.Fight.Show.720p.WEB.h264-WREN", "show:post-fight"),
             // "Kickoff Show" and "Red Carpet" are part words only beside a show: its pre-show. Elsewhere they are programmes
-            // of their own. "Countdown" is a programme everywhere.
+            // of their own. The word lists read "Countdown" as a programme everywhere, unless one of the event's own parts is
+            // labelled "Countdown" (below).
             Row("$SHOW.Kickoff.Show.1080p.WEB.h264-KESTREL", "part:pre-show", IN_A_SHOW),
             Row("$SHOW.Kick.Off.Show.1080p.WEB.h264-KESTREL", "part:pre-show", IN_A_SHOW),
             Row("$SHOW.Red.Carpet.1080p.WEB.h264-KESTREL", "part:pre-show", IN_A_SHOW),
