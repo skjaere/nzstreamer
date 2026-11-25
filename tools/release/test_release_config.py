@@ -236,6 +236,11 @@ def version_problems(config, manifest, root):
     return problems
 
 
+# release-please reads at most this many commits unless commit-search-depth says otherwise, and builds each package's
+# notes from those alone.
+RELEASE_PLEASES_COMMIT_SEARCH = 500
+
+
 class ReleaseConfigTest(unittest.TestCase):
     def setUp(self):
         self.config = json.loads(read(os.path.join(ROOT, "release-please-config.json")))
@@ -290,6 +295,18 @@ class ReleaseConfigTest(unittest.TestCase):
                 except plugin_index.Bad as error:
                     self.fail(f"{path}: {error}")
                 self.assertTrue(name.strip() and summary.strip(), "the Plugins page shows both")
+
+    def test_the_commit_search_reaches_back_to_the_apps_last_release(self):
+        # Past the app's last release, its oldest changes would be left out of its notes. While a package has no release
+        # yet (Sportarr's, until its first), release-please reads that many commits on every run, whatever it finds.
+        tag = "v" + self.manifest["."]
+        done = subprocess.run(["git", "-C", ROOT, "rev-list", "--count", f"{tag}..HEAD"], capture_output=True, text=True,
+                              timeout=60)
+        if done.returncode != 0:
+            self.skipTest(f"no {tag} in this checkout (CI's is shallow)")
+        since = int(done.stdout)
+        depth = self.config.get("commit-search-depth", RELEASE_PLEASES_COMMIT_SEARCH)
+        self.assertLess(since, depth, f"{since} commits since {tag}, but release-please reads the newest {depth} alone")
 
     def test_the_rules_catch_each_way_a_plugin_package_breaks_them(self):
         root = tempfile.mkdtemp(prefix="release-config-")
