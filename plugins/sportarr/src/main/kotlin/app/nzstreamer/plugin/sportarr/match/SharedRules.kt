@@ -51,18 +51,33 @@ object SharedRules {
      * Rule 5: each date [name] holds is [event]'s, and no other listed event's of [related]. A broadcast date unlike the
      * UTC date is exact: the name's date is one of the two. One equal to it, or none, may be Sportarr's own fallback
      * (it stores the UTC date where its data has no broadcast date, and says nothing of it), so the date is unknown:
-     * within a day of the UTC date. The broadcast date is read as written, never moved into a zone. A day that is
-     * another related event's own (and not this one's too, as a double header's) is that event's. A day-first date that
-     * reads two ways matches when one reading does and neither is another event's.
+     * within a day of the UTC date. The broadcast date is read as written, never moved into a zone.
+     *
+     * A day is another related event's where it is that event's [localDay] and not this one's, or that event's UTC date
+     * and this one's by neither: so two evening games of the same sides a day apart each keep their own local date, and a
+     * double header's games share theirs. A day-first date that reads two ways matches when one reading does and neither
+     * is another event's.
      */
     fun datesMatch(name: SportsName, event: SportsEvent, related: List<SportsEvent>): Boolean {
         if (name.dates.isEmpty()) return true
         val utc = utcDate(event)
-        val own = ownDates(event)
+        val day = localDay(event)
         val exact = event.broadcastDate != null && event.broadcastDate != utc
-        val others = related.filter { it.key != event.key }.flatMap(::ownDates).toSet() - own
-        fun matches(date: LocalDate) = if (exact) date in own else abs(utc.toEpochDay() - date.toEpochDay()) <= 1
-        return name.dates.all { date -> date.readings.any(::matches) && date.readings.none { it in others } }
+        val others = related.filter { it.key != event.key }
+        fun matches(date: LocalDate) = if (exact) date == day || date == utc else abs(utc.toEpochDay() - date.toEpochDay()) <= 1
+        fun theirs(date: LocalDate) = date != day && others.any { other -> date == localDay(other) || (date == utcDate(other) && date != utc) }
+        return name.dates.all { date -> date.readings.any(::matches) && date.readings.none(::theirs) }
+    }
+
+    /**
+     * The day [event]'s release names most likely carry: its broadcast date where that is exact; else, the date being
+     * unknown, its UTC date, or the day before for a start in UTC's small hours, an evening in the Americas, which names
+     * write by its local date. Two listed events of the same sides are on one day, a double header, when theirs is one.
+     */
+    fun localDay(event: SportsEvent): LocalDate {
+        val utc = utcDate(event)
+        if (event.broadcastDate != null && event.broadcastDate != utc) return event.broadcastDate
+        return if (event.start.atOffset(ZoneOffset.UTC).hour < SMALL_HOURS_END) utc.minusDays(1) else utc
     }
 
     /**
@@ -87,8 +102,8 @@ object SharedRules {
 
     private fun utcDate(event: SportsEvent): LocalDate = event.start.atOffset(ZoneOffset.UTC).toLocalDate()
 
-    /** The days an event is on: its UTC date, and its broadcast date as written. */
-    private fun ownDates(event: SportsEvent): Set<LocalDate> = setOfNotNull(utcDate(event), event.broadcastDate)
+    /** Where UTC's small hours end: an evening in the Americas starts before six in the morning UTC, a day after its local date. */
+    private const val SMALL_HOURS_END = 6
 
     /** How early a release may be posted: a day before the start covers every time zone's evening. */
     private val EARLY: Duration = Duration.ofDays(1)

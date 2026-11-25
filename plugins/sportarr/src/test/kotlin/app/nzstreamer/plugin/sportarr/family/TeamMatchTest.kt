@@ -245,6 +245,32 @@ class TeamMatchTest {
     }
 
     @Test
+    fun `a series of evening games is no double header, and a double header's late game is on its first game's day`() {
+        val title = "Kestrel Club 03 vs Kestrel Club 07"
+        fun evening(id: Int, start: String, broadcast: String?) =
+            game(baseball, id, start, "Kestrel Club 03", "Kestrel Club 07", round = null, season = "2026").copy(broadcastDate = broadcast?.let(LocalDate::parse))
+        fun named(date: String, extra: String = "") = "Kestrel.Club.03.vs.Kestrel.Club.07.$date.${extra}1080p.WEB.h264-KESTREL"
+        // Friday's and Saturday's games in the evening on the west coast, with their local dates and with Sportarr's fallback.
+        listOf(listOf("2026-11-20", "2026-11-21"), listOf(null, null)).forEach { (friday, saturday) ->
+            val series = sports(baseball to listOf(evening(1407, "2026-11-21T03:10", friday), evening(1408, "2026-11-22T03:10", saturday)))
+            val matcher = TeamMatch(series)
+            assertEquals("", wrong(series.byId(1407), listOf(named("2026.11.20") to accepted, named("2026.11.21") to otherGame), matcher), "$friday")
+            assertEquals("", wrong(series.byId(1408), listOf(named("2026.11.21") to accepted, named("2026.11.20") to otherGame), matcher), "$saturday")
+        }
+        // A double header's second game after midnight UTC is still the evening of its first.
+        val doubleHeader = sports(
+            baseball to listOf(
+                game(baseball, 1409, "2026-06-12T22:05", "Kestrel Club 03", "Kestrel Club 07", round = null, season = "2026", title = "$title - Game 1"),
+                game(baseball, 1410, "2026-06-13T01:35", "Kestrel Club 03", "Kestrel Club 07", round = null, season = "2026", title = "$title - Game 2"),
+            ),
+        )
+        val matcher = TeamMatch(doubleHeader)
+        val rows = { mine: String, theirs: String -> listOf(mine to accepted, theirs to otherGame, named("2026.06.12") to offered("No game number")) }
+        assertEquals("", wrong(doubleHeader.byId(1409), rows(named("2026.06.12", "Game.1."), named("2026.06.12", "Game.2.")), matcher))
+        assertEquals("", wrong(doubleHeader.byId(1410), rows(named("2026.06.12", "Game.2."), named("2026.06.12", "Game.1.")), matcher))
+    }
+
+    @Test
     fun `a date's numbers name no side, though a listed club is numbered like its day or month`() {
         fun numbered(id: Int, start: String, number: Int) = game(
             baseball, id, start, "Kestrel Club 03", "Kestrel Club 07", round = null, season = "2026", title = "Kestrel Club 03 vs Kestrel Club 07 - Game $number",

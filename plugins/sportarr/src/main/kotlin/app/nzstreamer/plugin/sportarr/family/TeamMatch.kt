@@ -5,6 +5,7 @@ import app.nzstreamer.plugin.sportarr.match.NameContext
 import app.nzstreamer.plugin.sportarr.match.NumberWord
 import app.nzstreamer.plugin.sportarr.match.Queries
 import app.nzstreamer.plugin.sportarr.match.RejectKind
+import app.nzstreamer.plugin.sportarr.match.SharedRules
 import app.nzstreamer.plugin.sportarr.match.SportsName
 import app.nzstreamer.plugin.sportarr.match.Token
 import app.nzstreamer.plugin.sportarr.match.Tokens
@@ -240,9 +241,8 @@ class TeamMatch(private val sports: Sports) : FamilyMatcher {
 
         fun utcDate(event: SportsEvent): LocalDate = event.start.atOffset(ZoneOffset.UTC).toLocalDate()
 
-        /** Whether two events are on one day: their UTC dates or their broadcast dates. */
-        fun sameDay(a: SportsEvent, b: SportsEvent): Boolean =
-            setOfNotNull(utcDate(a), a.broadcastDate).intersect(setOfNotNull(utcDate(b), b.broadcastDate)).isNotEmpty()
+        /** Whether two events are on one day, a double header: the days their names carry are one. */
+        fun sameDay(a: SportsEvent, b: SportsEvent): Boolean = SharedRules.localDay(a) == SharedRules.localDay(b)
 
         fun apart(a: Game, b: Game): Duration = Duration.between(a.event.start, b.event.start).abs()
 

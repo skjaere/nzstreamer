@@ -248,6 +248,35 @@ class SharedRulesTest {
     }
 
     @Test
+    fun `two evening meetings of the same sides a day apart are each told by its own local date, fallback or exact`() {
+        val baseball = KeptLeague(10, "Kestrel Baseball League", "Baseball")
+        val title = "Kestrel Club 07 vs Kestrel Club 05"
+        // Past two in the morning UTC: the evening before in the Americas, which names write by its local date.
+        listOf(null to null, "2026-06-12" to "2026-06-13").forEach { (first, second) ->
+            val series = sports(
+                baseball to listOf(
+                    on(baseball, 1405, at("2026-06-13T02:10"), title).withBroadcast(first),
+                    on(baseball, 1406, at("2026-06-14T02:10"), title).withBroadcast(second),
+                ),
+            )
+            val family = TestFamily(related = { event -> series.events.filter { it.key != event.key } })
+            fun named(date: String) = "Kestrel.Club.07.vs.Kestrel.Club.05.$date.1080p.WEB.h264-KESTREL"
+            val rows = listOf(
+                Triple("2026.06.12", Verdict.Accept(), left(RejectKind.OtherEvents)),
+                Triple("2026.06.13", left(RejectKind.OtherEvents), Verdict.Accept()),
+                Triple("2026.06.14", left(RejectKind.OtherEvents), Verdict.Accept()),
+            )
+            val wrong = rows.flatMap { (date, forFirst, forSecond) ->
+                listOfNotNull(
+                    "$date for the first: ${judge(series.byId(1405), named(date), family)}".takeIf { judge(series.byId(1405), named(date), family) != forFirst },
+                    "$date for the second: ${judge(series.byId(1406), named(date), family)}".takeIf { judge(series.byId(1406), named(date), family) != forSecond },
+                )
+            }
+            assertTrue(wrong.isEmpty(), "broadcast $first and $second:\n" + wrong.joinToString("\n"))
+        }
+    }
+
+    @Test
     fun `a double header's other game on the same day doesn't make the day another game's`() {
         val first = "Kestrel Club 03 vs Kestrel Club 07 - Game 1"
         val baseball = KeptLeague(10, "Kestrel Baseball League", "Baseball")
