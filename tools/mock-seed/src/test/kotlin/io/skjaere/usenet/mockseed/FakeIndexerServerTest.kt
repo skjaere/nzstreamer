@@ -21,8 +21,9 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.SocketTimeoutException
 import java.net.URI
-import java.time.Duration
+import java.time.Clock
 import java.time.Instant
+import java.time.ZoneId
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -112,8 +113,12 @@ class FakeIndexerServerTest {
             category = FakeCatalog.TV_SPORT, ids = FakeIds(), ageDays = 400, fileNames = listOf("posted.mkv"), postedAt = posted,
         )
         val dated = FakeRelease(guid = "sp-dated", title = "Lantern.Bay.Copper.Crown.Dated", category = FakeCatalog.TV_SPORT, ids = FakeIds(), ageDays = 3, fileNames = listOf("dated.mkv"))
-        val started = Instant.now()
-        FakeIndexerServer(listOf(sports to fakeNzb(sports.guid), dated to fakeNzb(dated.guid)), apiKey = "k", port = 0).use { server ->
+        // Started on the Monday after New York's clocks went forward, where three days back are 71 hours.
+        val clock = Clock.fixed(Instant.parse("2027-03-15T16:00:00Z"), ZoneId.of("America/New_York"))
+        val started = clock.instant()
+        FakeIndexerServer(
+            listOf(sports to fakeNzb(sports.guid), dated to fakeNzb(dated.guid)), apiKey = "k", port = 0, bind = InetAddress.getLoopbackAddress(), clock = clock,
+        ).use { server ->
             val raw = URI("http://127.0.0.1:${server.port}/api?t=search&q=lantern&apikey=k").toURL().readText()
             val item = raw.substringAfter("<title>${sports.title}</title>").substringBefore("</item>")
             assertContains(item, "<pubDate>Sat, 21 Nov 2026 18:00:00 GMT</pubDate>")
@@ -121,8 +126,8 @@ class FakeIndexerServerTest {
             assertContains(item, """<newznab:attr name="category" value="5060"/>""")
             val items = client.search(indexer.copy(baseUrl = "http://127.0.0.1:${server.port}", apiKey = "k"), SearchQuery.Text("lantern")).items
             assertEquals(posted, items.single { it.guid == "sp-posted" }.postedAt)
-            val ago = Duration.between(items.single { it.guid == "sp-dated" }.postedAt, started)
-            assertTrue(ago > Duration.ofDays(3).minusMinutes(1) && ago < Duration.ofDays(3).plusMinutes(1), "$ago")
+            // Three calendar days before the fake started, where it runs, as the device tests' catalogue counts them.
+            assertEquals(started.atZone(clock.zone).minusDays(3).toInstant(), items.single { it.guid == "sp-dated" }.postedAt)
         }
     }
 

@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.time.Clock
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -17,7 +18,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * once they are seeded. It listens on [bind] alone where one is given (the sports indexer, on the loopback address), else on
  * every address. A search finds a release when every word of the query is a whole word of its name; with [repeatedWords]
  * (the sports indexer's) a word the query holds twice must stand twice in the name, so a search dated with three numbers
- * whose day and month are one ("2026 12 12") doesn't find the whole month. Development only.
+ * whose day and month are one ("2026 12 12") doesn't find the whole month. A release without its own posted time lists
+ * its days before the fake started on [clock], calendar days where it runs. Development only.
  */
 class FakeIndexerServer(
     releases: List<Pair<FakeRelease, String>>,
@@ -27,13 +29,14 @@ class FakeIndexerServer(
     private val apiLimit: Int = 1000,
     bind: InetAddress? = null,
     private val repeatedWords: Boolean = false,
+    clock: Clock = Clock.systemDefaultZone(),
 ) : AutoCloseable {
     @Volatile
     private var releases: List<Pair<FakeRelease, String>> = releases
     private val server = HttpServer.create(InetSocketAddress(bind, port), 0)
     private val apiCalls = AtomicInteger()
     private val grabs = AtomicInteger()
-    private val now = ZonedDateTime.now()
+    private val now = ZonedDateTime.now(clock)
 
     val port: Int get() = server.address.port
     val address: InetAddress get() = server.address.address
