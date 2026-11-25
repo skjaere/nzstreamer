@@ -5,6 +5,7 @@
   "bump-minor-pre-major": true,
   "draft": true,
   "force-tag-creation": true,
+  "separate-pull-requests": true,
   "commit-search-depth": 1000,
   "changelog-sections": [
     { "type": "feat", "section": "Features" },

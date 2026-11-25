@@ -8,7 +8,8 @@ release-please action's paths_released, with a fake gh for GitHub's API (and jq,
 
 - release-please-config.json: every package but the root's is a plugin's folder, plugins/<id>, released as component
   plugin-<id> with the component in its tag (plugin-<id>-v1.2.3), and its path in the root's exclude-paths, so a commit
-  that touches a plugin alone never bumps the app. Sportarr's is the first (L658).
+  that touches a plugin alone never bumps the app. Sportarr's is the first (L658). Each package has its own release pull
+  request, so the app is released alone and a plugin's first release waits on its own.
 - .release-please-manifest.json and each plugin's version.txt agree (L658): never released, version.txt holds the version
   release-please gives its first release, its package's initial-version; and its listing.json reads as the release reads
   it, with plugin_index.py's listing().
@@ -168,6 +169,9 @@ def config_problems(config, manifest, root):
     if config.get("draft") is not True:
         problems.append("releases must be made as drafts: the release workflows attach the APK before publishing")
     excluded = app.get("exclude-paths", [])
+    if len(packages) > 1 and config.get("separate-pull-requests") is not True:
+        problems.append("separate-pull-requests must be true: in one grouped pull request, releasing the app would release "
+                        "every plugin with a change waiting, and a plugin's first release waits on its own pull request")
     if set(manifest) != set(packages):
         problems.append(f"the manifest's packages ({sorted(manifest)}) are not the config's ({sorted(packages)})")
     for path, package in packages.items():
@@ -317,7 +321,7 @@ class ReleaseConfigTest(unittest.TestCase):
         for name, text in (("version.txt", "0.0.0\n"), ("listing.json", '{"name": "Kestrel", "summary": ""}\n')):
             with open(os.path.join(root, "plugins", "kestrel", name), "w") as f:
                 f.write(text)
-        good_config = {"include-component-in-tag": False, "draft": True, "packages": {
+        good_config = {"include-component-in-tag": False, "draft": True, "separate-pull-requests": True, "packages": {
             ".": {"release-type": "simple", "package-name": "nzstreamer", "exclude-paths": ["plugins/kestrel"]},
             "plugins/kestrel": {"release-type": "simple", "component": "plugin-kestrel", "include-component-in-tag": True},
         }}
@@ -349,6 +353,7 @@ class ReleaseConfigTest(unittest.TestCase):
             "an excluded path with no package": (lambda c: c["packages"]["."]["exclude-paths"].append("plugins/quillmere"),
                                                  "never be released"),
             "the app's tags with a component": (lambda c: c.update({"include-component-in-tag": True}), "v<version>"),
+            "one grouped pull request": (lambda c: c.pop("separate-pull-requests"), "separate-pull-requests"),
         }
         for case, (change, word) in cases.items():
             with self.subTest(case):
