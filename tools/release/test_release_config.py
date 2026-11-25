@@ -500,6 +500,18 @@ class ReadmePluginsTest(unittest.TestCase):
     def test_privacy_names_github_for_plugins(self):
         self.assertIn("to GitHub when you use plugins", self.section("Privacy"))
 
+    def test_each_plugin_with_a_listing_has_a_bullet_named_as_the_list_names_it(self):
+        # L659: a plugin's bullet in Plugins starts with the name its listing.json gives the plugin list (Sportarr's
+        # first), so the README and the Plugins page call it the same.
+        plugins = self.section("Plugins")
+        listed = [folder for folder in sorted(os.listdir(os.path.join(ROOT, "plugins")))
+                  if os.path.isfile(os.path.join(ROOT, "plugins", folder, "listing.json"))]
+        self.assertIn("sportarr", listed)
+        for folder in listed:
+            with self.subTest(folder):
+                name = json.loads(read(os.path.join(ROOT, "plugins", folder, "listing.json")))["name"]
+                self.assertRegex(plugins, r"(?m)^- " + re.escape(name) + r": ")
+
     def test_install_says_only_the_apps_releases_hold_its_apk(self):
         # Plugin prereleases sit among the app's releases, each with its own <id>.apk and no NZStreamer.apk.
         install = re.search(r"^## Install\n(.*?)(?=^### )", self.readme, re.M | re.S)

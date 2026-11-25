@@ -40,6 +40,9 @@ internal const val DEBRID_HEADING = "Your torrent indexers and debrid services"
  * downloads from GitHub, what GitHub sees, that a plugin runs with the app's access, and that its settings and keys stay
  * on the device; "On this device" says plugins aren't copied to a new phone. In both forms, every apostrophe the file's
  * own (’), and GitHub and plugins named nowhere else.
+ *
+ * L659 (the Sportarr plugin): the Plugins part's second paragraph ends with what Sportarr sends, and to whom, after
+ * L632's words, which stay as they were; Sportarr is named in those sentences alone.
  */
 class PrivacyTextTest {
     private val file = File("src/main/assets/privacy.txt")
@@ -156,7 +159,7 @@ class PrivacyTextTest {
         }
     }
 
-    /** L632: Plugins, just before On this device, holds the two paragraphs word for word, in both forms, with ’. */
+    /** L632, L659: Plugins, just before On this device, holds the two paragraphs word for word, in both forms, with ’. */
     @Test
     fun `the Plugins part holds both paragraphs word for word, just before On this device, in both forms`() {
         listOf(sections, hidden).forEach { form ->
@@ -168,6 +171,29 @@ class PrivacyTextTest {
         assertTrue("GitHub’s privacy statement applies." in PLUGINS_PART[0])
         assertTrue("A plugin’s own settings and keys stay on this device." in PLUGINS_PART[1])
         assertFalse(PLUGINS_PART.any { '\'' in it }, "the file's apostrophes are ’")
+    }
+
+    /**
+     * L659: the second paragraph ends with the Sportarr plugin's sentences word for word, after L632's words, which stay as
+     * they were, in both forms; the first paragraph is L632's.
+     */
+    @Test
+    fun `the Plugins part's second paragraph ends with Sportarr's sentences, after the platform's words, in both forms`() {
+        listOf(sections, hidden).forEach { form ->
+            val paragraphs = form.single { it.heading == "Plugins" }.paragraphs
+            assertEquals(2, paragraphs.size, paragraphs.toString())
+            assertEquals(PLUGINS_PART[0], paragraphs[0], "the first paragraph, as it was")
+            assertTrue(paragraphs[1].endsWith(" $SPORTARR_SENTENCES"), paragraphs[1])
+            assertEquals(PLUGINS_KEYS, paragraphs[1].removeSuffix(" $SPORTARR_SENTENCES"), "L632's words before them, as they were")
+        }
+    }
+
+    /** L659: Sportarr's sentences are in the file once, and Sportarr is named nowhere else, so nothing else moved. */
+    @Test
+    fun `Sportarr is named in its sentences alone`() {
+        assertEquals(1, text.split(SPORTARR_SENTENCES).size - 1, "the sentences, once")
+        assertNull(Regex("(?i)sportarr").find(text.replace(SPORTARR_SENTENCES, ""))?.value, "Sportarr outside its sentences")
+        assertFalse('\'' in SPORTARR_SENTENCES, "the file's apostrophes are ’")
     }
 
     /** L632: GitHub and plugins are named in the opening, the Plugins part and On this device alone; nothing else moved. */
@@ -233,15 +259,24 @@ class PrivacyTextTest {
             "to TheIntroDB while its switch is on, to Google while its Cast software runs, and to GitHub when you use plugins, " +
                 "and to the services a plugin you install is set up with."
 
-        /** L632's Plugins part, word for word, with the file's ’. A plugin's own sentences come with that plugin. */
+        /** L632's second paragraph of the Plugins part, word for word, with the file's ’: a plugin's access and its keys. */
+        const val PLUGINS_KEYS =
+            "A plugin runs inside the app, with the same access as the app, so the app runs only plugins signed with its own " +
+                "key. A plugin you install talks to the services you set it up with, such as your own server. A plugin’s own " +
+                "settings and keys stay on this device."
+
+        /** L659: what the Sportarr plugin sends, and to whom, as approved (PlPhonePrivacy's words). */
+        const val SPORTARR_SENTENCES =
+            "Sportarr asks your own Sportarr server, with your API key, for the leagues, teams and events you follow; its " +
+                "searches go to your indexers like any other. It sends nothing anywhere else."
+
+        /** L632's Plugins part, word for word, with the file's ’, and L659's sentences at the second paragraph's end. */
         val PLUGINS_PART = listOf(
             "The app reads the list of plugins from GitHub when you open Settings › Plugins, and once a day while a plugin is " +
                 "installed. Installing or updating a plugin downloads it from GitHub. GitHub sees your internet address, the time " +
                 "and what is downloaded; the app sends it nothing else, and names no device or version. With no plugin installed " +
                 "and Plugins never opened, the app never contacts GitHub. GitHub’s privacy statement applies.",
-            "A plugin runs inside the app, with the same access as the app, so the app runs only plugins signed with its own " +
-                "key. A plugin you install talks to the services you set it up with, such as your own server. A plugin’s own " +
-                "settings and keys stay on this device.",
+            "$PLUGINS_KEYS $SPORTARR_SENTENCES",
         )
 
         /** L374's sentence in "On this device". */

@@ -101,6 +101,8 @@ offline. It comes with no providers, indexers or content of its own.
   once its tab isn't on screen.
 - A plugin runs inside the app, with the same access as the app: that is why the app runs only plugins signed with its
   own key. Plugins are built from this repository, under `plugins/`.
+- Sportarr: a Sports tab with the leagues, teams and sessions you follow in your own Sportarr, 4.1.1 or newer. It reads
+  your Sportarr with your API key, searches your indexers only when you play or ask, and sends nothing anywhere else.
 
 ### Requirements
 Android 8.0 (API 26) or later: phones, tablets, Android TV / Google TV, and Fire TV with Fire OS 7 or later (not Vega
