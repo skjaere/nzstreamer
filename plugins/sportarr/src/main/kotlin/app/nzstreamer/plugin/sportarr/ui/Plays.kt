@@ -52,8 +52,8 @@ internal sealed interface Chosen {
  * - Mark watched and unwatched go to the host's [watch], under the part's key with the title its play stores.
  *
  * When Play or Choose release finds nothing for a part, the time is kept ([nothing]) for the plugin's run, so the page
- * says when it last found nothing until a release of the part plays; not when no indexer answered (each failed, was skipped
- * or paused, or none is on), which says nothing of the releases. Each item is made on [work], off the main thread, as
+ * says when it last found nothing until a release of the part plays, or a later Play or Choose release finds some; not
+ * when no indexer answered (each failed, was skipped or paused, or none is on), which says nothing of the releases. Each item is made on [work], off the main thread, as
  * its matcher reads the whole list; a play and a mark go on in [scope], the host's, as the page may close meanwhile;
  * [clock] says when nothing was found.
  */
@@ -80,7 +80,10 @@ internal class Plays(
         val (item, matcher) = withContext(work) { prepared(sports, event, part) }
         play.play(item) {
             val run = runner.run(matcher, event, part)
-            if (run.releases.note != null && run.answered) noted(part)
+            when {
+                run.releases.note == null -> cleared(part)
+                run.answered -> noted(part)
+            }
             run.releases
         }
     }
@@ -99,6 +102,7 @@ internal class Plays(
             noted(part)
             return Chosen.NoneFound
         }
+        cleared(part)
         nav.openReleases(item, answer.accepted, answer.offered, answer.leftOut)
         return Chosen.Opened
     }
@@ -115,6 +119,9 @@ internal class Plays(
     }
 
     private fun noted(part: Part) = found.update { it + (part.key to clock()) }
+
+    /** Releases of [part] were found: its line no longer holds. */
+    private fun cleared(part: Part) = found.update { it - part.key }
 
     /** The item and the matcher its releases are found by, made together: the item's words and picker come from the matcher. */
     private fun prepared(sports: Sports, event: SportsEvent, part: Part): Pair<PlayItem, FamilyMatcher> {

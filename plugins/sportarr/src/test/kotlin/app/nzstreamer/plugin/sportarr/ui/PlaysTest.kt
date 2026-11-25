@@ -194,6 +194,31 @@ class PlaysTest {
     }
 
     @Test
+    fun `the line goes once a later Play or Choose release finds releases for the part`() = runBlocking<Unit> {
+        var there = false
+        val search = AnsweringSearch { if (there) listOf(release(ACCEPTED)) else emptyList() }
+        val play = RecordingPlay()
+        val nav = RecordingNav()
+        val plays = Plays(play, RecordingWatch(), search, this, { NOW }, EmptyCoroutineContext)
+        val (library, game) = game()
+
+        assertEquals(Chosen.NoneFound, plays.choose(library, game, game.headline, nav))
+        assertEquals(mapOf("ev-000012:full" to NOW), plays.nothing.value)
+        there = true
+        assertEquals(Chosen.Opened, plays.choose(library, game, game.headline, nav))
+        assertEquals(emptyMap(), plays.nothing.value, "Choose release listed releases: no line says there are none")
+
+        there = false
+        plays.play(library, game, game.headline).join()
+        play.releases.last()()
+        assertEquals(mapOf("ev-000012:full" to NOW), plays.nothing.value)
+        there = true
+        plays.play(library, game, game.headline).join()
+        assertTrue(play.releases.last()().accepted.isNotEmpty())
+        assertEquals(emptyMap(), plays.nothing.value, "Play found releases: no line says there are none")
+    }
+
+    @Test
     fun `a search no indexer answered keeps no line, and Choose release opens nothing`() = runBlocking<Unit> {
         // Paused by the host's cap, failed, or none switched on: nothing says the releases aren't there yet.
         listOf(
