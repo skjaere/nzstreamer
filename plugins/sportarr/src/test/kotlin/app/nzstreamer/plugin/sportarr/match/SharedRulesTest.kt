@@ -87,6 +87,24 @@ class SharedRulesTest {
     }
 
     @Test
+    fun `a score joined by a hyphen, colon or dash is one wherever it stands, between a date and the tail too`() {
+        val names = listOf(
+            "Lantern.Bay.FC.vs.Copper.Crown.United.21.11.2026.3-1.720p.WEB.h264-WREN",
+            "Lantern.Bay.FC.vs.Copper.Crown.United.2026.11.21.3-1.1080p.WEB.h264-KESTREL",
+            "Lantern Bay FC vs Copper Crown United 21.11.2026 (3-1) 720p",
+            "Lantern Bay FC vs Copper Crown United 2026 11 21 3:1 720p",
+        )
+        // The same game on the day "3:1" would make after a year: still a score, never that date.
+        val march = sports(PREMIER to listOf(on(PREMIER, 1001, at("2027-03-01T15:00"), "Lantern Bay FC vs Copper Crown United"))).byId(1001)
+        val rows = names.map { game to it } +
+            listOf("Lantern Bay FC vs Copper Crown United 2027 3:1 720p", "Lantern Bay FC vs Copper Crown United 2027 3 - 1 720p").map { march to it }
+        val wrong = rows.flatMap { (event, name) ->
+            listOf(accepting, offering).mapNotNull { family -> "$name: ${judge(event, name, family)}".takeIf { judge(event, name, family) != left(RejectKind.Score) } }
+        }
+        assertTrue(wrong.isEmpty(), wrong.joinToString("\n"))
+    }
+
+    @Test
     fun `a result word of the event's own title is no result`() {
         val named = sports(VELMORA to listOf(on(VELMORA, 2006, at("2026-11-14T23:00"), "Velmora Iron Crown: Victory Night"))).byId(2006)
         val name = "Velmora.Iron.Crown.Victory.Night.2026.11.14.1080p.WEB.h264-KESTREL"

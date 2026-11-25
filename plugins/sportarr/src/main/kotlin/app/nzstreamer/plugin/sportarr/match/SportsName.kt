@@ -616,13 +616,15 @@ private class Reader(private val name: String, private val context: NameContext)
 
     /**
      * A score (L646) in the identity: two numbers of one to three digits that no reading took and that aren't the event's
-     * own, joined by a dot, space, underscore, hyphen, colon or dash ("3.1", "3 - 1", "1-2"), or glued with an x ("3x1"),
-     * with a word beside them. Channels right before the tail ("5.1", "7.1", "2.0") are audio, not a score.
+     * own, joined by a hyphen, colon or dash wherever they stand ("1-2", "3:1", "(3-1)" after a date); or joined by a dot,
+     * space or underscore ("3.1", "3 1"), or glued with an x ("3x1"), with a word beside them. Channels right before the
+     * tail ("5.1", "7.1", "2.0") are audio, not a score.
      */
     private fun readScore(): Boolean {
         for (i in 0 until tailStart) {
             if (!used[i] && !masked[i] && crossed(all[i].word) && (wordBeside(i - 1) || wordBeside(i + 1))) return true
             if (!scoreNumber(i) || !scoreNumber(i + 1) || !joins(all[i + 1].sep)) continue
+            if (dashed(all[i + 1].sep)) return true
             val channels = all[i + 1].sep == "." && "${all[i].word}.${all[i + 1].word}" in CHANNELS && i + 2 == tailStart && tailStart < all.size
             if (!channels && (wordBeside(i - 1) || wordBeside(i + 2))) return true
         }
@@ -641,8 +643,10 @@ private class Reader(private val name: String, private val context: NameContext)
     }
 
     /** A score's join: a dot, an underscore or spaces, or a hyphen, colon or dash with or without spaces around it. */
-    private fun joins(sep: String): Boolean =
-        sep in PLAIN_JOINS || (sep.isNotEmpty() && sep.isBlank()) || sep.trim().let { it.length == 1 && it in DASHES }
+    private fun joins(sep: String): Boolean = sep in PLAIN_JOINS || (sep.isNotEmpty() && sep.isBlank()) || dashed(sep)
+
+    /** A hyphen, colon or dash, with or without spaces around it: what joins a score's numbers and nothing else of a name's. */
+    private fun dashed(sep: String): Boolean = sep.trim().let { it.length == 1 && it in DASHES }
 
     /** The number at [i] when no reading took it and it has at most [max] digits; the event's own numbers count here. */
     private fun number(i: Int, max: Int = 2): Int? {

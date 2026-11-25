@@ -642,6 +642,17 @@ class SportsNameTest {
             Row("Lantern.Bay.FC.vs.Copper.Crown.United.2.1.1080p.WEB.h264-WREN", "score"),
             Row("NBA.2026.11.20.Easton.Comets.112.98.Marrowby.Lynx.1080p.WEB.h264-KESTREL", "score"),
             Row("Lantern.Bay.FC.2.0.Copper.Crown.United.1080p.WEB.h264-WREN", "score"),
+            // Joined by a hyphen, colon or dash, a score wherever it stands: between a date and the tail, at the end, in brackets.
+            Row("Lantern.Bay.FC.vs.Copper.Crown.United.21.11.2026.3-1.720p.WEB.h264-WREN", "score"),
+            Row("Lantern.Bay.FC.vs.Copper.Crown.United.2026.11.21.3-1.1080p.WEB.h264-KESTREL", "score"),
+            Row("Lantern.Bay.FC.vs.Copper.Crown.United.2026.11.21.3-1", "score"),
+            Row("Lantern Bay FC vs Copper Crown United 21.11.2026 (3-1) 720p", "score"),
+            Row("Lantern Bay FC vs Copper Crown United 2026 11 21 3:1 720p", "score"),
+            Row("Lantern Bay FC vs Copper Crown United 2027 3:1 720p", "score"),
+            Row("Lantern Bay FC vs Copper Crown United 2027 3 - 1 720p", "score"),
+            Row("Lantern Bay FC vs Copper Crown United 2027.3-1 720p", "score"),
+            // A dotted pair there has no side's word beside it: no score, as L646 reads it.
+            Row("Lantern.Bay.FC.vs.Copper.Crown.United.2026.11.21.3.1.1080p.WEB.h264-KESTREL", "none"),
             // A day and month with no year elsewhere is no date: two numbers beside a side.
             Row("Lantern.Bay.vs.Copper.Crown.21.11.720p50.WEB.h264-WREN", "score"),
             // With a year elsewhere, a pair beside a side that reads two ways is a score, never only a date.
