@@ -8,7 +8,9 @@ release-please action's paths_released, with a fake gh for GitHub's API (and jq,
 
 - release-please-config.json: every package but the root's is a plugin's folder, plugins/<id>, released as component
   plugin-<id> with the component in its tag (plugin-<id>-v1.2.3), and its path in the root's exclude-paths, so a commit
-  that touches a plugin alone never bumps the app. With no plugin package (none is released before Sports A), it passes.
+  that touches a plugin alone never bumps the app. Sportarr's is the first (L658).
+- .release-please-manifest.json and each plugin's version.txt agree (L658), and its listing.json reads as the release
+  reads it, with plugin_index.py's listing().
 - release-please.yml: the apk job still follows the root's release alone; the plugins output lists each released plugin
   and its tag, built from paths_released alone, and the plugins job runs release-plugin.yml once for each.
 - release-plugin.yml: no test runs while the key is in the runner, the signed build makes the APK alone, and the release
@@ -20,10 +22,14 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import plugin_index  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(HERE))
 WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
 PLUGIN_SOURCE = os.path.join(ROOT, "app", "src", "main", "kotlin", "io", "skjaere", "usenet", "app", "plugins",
@@ -193,11 +199,78 @@ def config_problems(config, manifest, root):
     return problems
 
 
+# A plugin never released: 0.0.0 in the manifest, and in its version.txt the version release-please's first feat release
+# gives it from there (bump-minor-pre-major), which its builds already carry (L658).
+NEVER_RELEASED = "0.0.0"
+FIRST_RELEASE = "0.1.0"
+
+
+def version_problems(manifest, root):
+    """Where a plugin package's version.txt and the manifest disagree (L658): never released, the manifest's 0.0.0 and
+    version.txt's 0.1.0; once released, release-please writes both in its release pull request, the same version."""
+    problems = []
+    for path, released in manifest.items():
+        if path == ".":
+            continue
+        try:
+            version = read(os.path.join(root, path, "version.txt")).strip()
+        except OSError:
+            problems.append(f"{path}: it has no version.txt")
+            continue
+        if released == NEVER_RELEASED and version != FIRST_RELEASE:
+            problems.append(f"{path}: never released, its version.txt must hold {FIRST_RELEASE}, the version "
+                            f"release-please gives its first release, not {version}")
+        elif released != NEVER_RELEASED and version != released:
+            problems.append(f"{path}: released as {released} in the manifest, but its version.txt holds {version}")
+    return problems
+
+
 class ReleaseConfigTest(unittest.TestCase):
+    def setUp(self):
+        self.config = json.loads(read(os.path.join(ROOT, "release-please-config.json")))
+        self.manifest = json.loads(read(os.path.join(ROOT, ".release-please-manifest.json")))
+
     def test_the_configs_packages_keep_the_rules(self):
-        config = json.loads(read(os.path.join(ROOT, "release-please-config.json")))
-        manifest = json.loads(read(os.path.join(ROOT, ".release-please-manifest.json")))
-        self.assertEqual([], config_problems(config, manifest, ROOT))
+        self.assertEqual([], config_problems(self.config, self.manifest, ROOT))
+
+    def test_sportarrs_package_is_the_one_l658_writes(self):
+        self.assertEqual({"release-type": "simple", "component": "plugin-sportarr", "include-component-in-tag": True},
+                         self.config["packages"].get("plugins/sportarr"))
+        self.assertIn("plugins/sportarr", self.config["packages"]["."].get("exclude-paths", []))
+
+    def test_each_plugins_version_agrees_with_the_manifest(self):
+        # Sportarr's among them: 0.0.0 in the manifest and 0.1.0 in version.txt until its first release.
+        self.assertIn("plugins/sportarr", self.manifest)
+        self.assertIs(True, self.config.get("bump-minor-pre-major"), "a first feat release from 0.0.0 is 0.1.0")
+        self.assertEqual([], version_problems(self.manifest, ROOT))
+
+    def test_the_version_rule_catches_a_plugin_out_of_step_with_the_manifest(self):
+        root = tempfile.mkdtemp(prefix="release-versions-")
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        os.makedirs(os.path.join(root, "plugins", "kestrel"))
+        cases = {
+            ("0.0.0", "0.1.0"): True, ("0.1.0", "0.1.0"): True, ("1.2.3", "1.2.3"): True,
+            ("0.0.0", "0.0.0"): False, ("0.0.0", "0.2.0"): False, ("0.1.0", "0.2.0"): False, ("0.2.0", "0.1.0"): False,
+        }
+        for (released, version), agrees in cases.items():
+            with self.subTest(released=released, version=version):
+                with open(os.path.join(root, "plugins", "kestrel", "version.txt"), "w") as f:
+                    f.write(version + "\n")
+                self.assertEqual(agrees, not version_problems({".": "0.2.0", "plugins/kestrel": released}, root))
+        self.assertTrue(version_problems({".": "0.2.0", "plugins/quillmere": "0.0.0"}, root), "no version.txt")
+
+    def test_each_plugins_listing_reads_as_the_release_reads_it(self):
+        # release-plugin.yml's describe reads plugins/<id>/listing.json with plugin_index.py's listing() for the plugin
+        # list's name and summary: each package's must pass it now, not first at its release.
+        plugins = [path for path in self.config["packages"] if path != "."]
+        self.assertIn("plugins/sportarr", plugins)
+        for path in plugins:
+            with self.subTest(path):
+                try:
+                    name, summary = plugin_index.listing(os.path.join(ROOT, path, "listing.json"))
+                except plugin_index.Bad as error:
+                    self.fail(f"{path}: {error}")
+                self.assertTrue(name.strip() and summary.strip(), "the Plugins page shows both")
 
     def test_the_rules_catch_each_way_a_plugin_package_breaks_them(self):
         root = tempfile.mkdtemp(prefix="release-config-")

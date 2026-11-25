@@ -21,7 +21,13 @@
     ".": {
       "release-type": "simple",
       "package-name": "nzstreamer",
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "exclude-paths": ["plugins/sportarr"]
+    },
+    "plugins/sportarr": {
+      "release-type": "simple",
+      "component": "plugin-sportarr",
+      "include-component-in-tag": true
     }
   }
 }
