@@ -63,6 +63,8 @@ class SharedRulesTest {
     fun `a score or a result word leaves a name out in every family, Generic included, before the family is asked`() {
         val rows = listOf(
             Triple(game, "Premier.League.2026.11.21.Lantern.Bay.FC.3.1.Copper.Crown.United.1080p.WEB.h264-KESTREL", RejectKind.Score),
+            Triple(game, "Premier.League.2026.11.21.Lantern.Bay.FC.vs.Copper.Crown.United.2.0.1080p.WEB.h264-KESTREL", RejectKind.Score),
+            Triple(game, "Lantern.Bay.FC.vs.Copper.Crown.United.2.0.1080p.WEB.h264-WREN", RejectKind.Score),
             Triple(game, "Premier.League.2026.11.21.Lantern.Bay.FC.vs.Copper.Crown.United.Result.720p.WEB.h264-ORCHID", RejectKind.Result),
             Triple(nba, "NBA.2026.11.21.Saltmere.Gulls.vs.Marrowby.Lynx.1080p.WEB.h264-WREN", null),
             Triple(nba, "NBA.2026.11.21.Saltmere.Gulls.Beat.Marrowby.Lynx.1080p.WEB.h264-WREN", RejectKind.Result),

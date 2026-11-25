@@ -617,16 +617,14 @@ private class Reader(private val name: String, private val context: NameContext)
     /**
      * A score (L646) in the identity: two numbers of one to three digits that no reading took and that aren't the event's
      * own, joined by a hyphen, colon or dash wherever they stand ("1-2", "3:1", "(3-1)" after a date); or joined by a dot,
-     * space or underscore ("3.1", "3 1"), or glued with an x ("3x1"), with a word beside them. Channels right before the
-     * tail ("5.1", "7.1", "2.0") are audio, not a score.
+     * space or underscore ("3.1", "3 1"), or glued with an x ("3x1"), with a word beside them. Audio channels follow an
+     * audio word, in the tail ("DD.5.1", "AAC2.0"), which this never reads: a bare "2.0" beside a side's word is a score.
      */
     private fun readScore(): Boolean {
         for (i in 0 until tailStart) {
             if (!used[i] && !masked[i] && crossed(all[i].word) && (wordBeside(i - 1) || wordBeside(i + 1))) return true
             if (!scoreNumber(i) || !scoreNumber(i + 1) || !joins(all[i + 1].sep)) continue
-            if (dashed(all[i + 1].sep)) return true
-            val channels = all[i + 1].sep == "." && "${all[i].word}.${all[i + 1].word}" in CHANNELS && i + 2 == tailStart && tailStart < all.size
-            if (!channels && (wordBeside(i - 1) || wordBeside(i + 2))) return true
+            if (dashed(all[i + 1].sep) || wordBeside(i - 1) || wordBeside(i + 2)) return true
         }
         return false
     }
@@ -677,7 +675,6 @@ private class Reader(private val name: String, private val context: NameContext)
     private companion object {
         /** The years a name's four digits may be. */
         val YEARS = 1900..2099
-        val CHANNELS = setOf("5.1", "7.1", "2.0")
         val PLAIN_JOINS = setOf(".", "_")
         val DAY_MONTH_JOINS = setOf(".", "_", "/")
 
