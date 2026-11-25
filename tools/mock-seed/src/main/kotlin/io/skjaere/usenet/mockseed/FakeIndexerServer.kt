@@ -2,6 +2,7 @@ package io.skjaere.usenet.mockseed
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -12,7 +13,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * A minimal Newznab API over [releases] (`caps`, `search`, `tvsearch`, `movie`, `get`),
  * answering the way common indexers do: XML, error documents with Newznab codes, API and
  * grab counters. Its port is taken when it is made; [serve] can give it its releases later,
- * once they are seeded. Development only.
+ * once they are seeded. It listens on [bind] alone where one is given (the sports indexer, on the loopback address), else on
+ * every address. Development only.
  */
 class FakeIndexerServer(
     releases: List<Pair<FakeRelease, String>>,
@@ -20,15 +22,17 @@ class FakeIndexerServer(
     port: Int,
     private val grabLimit: Int? = null,
     private val apiLimit: Int = 1000,
+    bind: InetAddress? = null,
 ) : AutoCloseable {
     @Volatile
     private var releases: List<Pair<FakeRelease, String>> = releases
-    private val server = HttpServer.create(InetSocketAddress(port), 0)
+    private val server = HttpServer.create(InetSocketAddress(bind, port), 0)
     private val apiCalls = AtomicInteger()
     private val grabs = AtomicInteger()
     private val now = ZonedDateTime.now()
 
     val port: Int get() = server.address.port
+    val address: InetAddress get() = server.address.address
 
     init {
         server.createContext("/api") { exchange -> exchange.use { handle(it) } }

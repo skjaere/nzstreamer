@@ -1,0 +1,102 @@
+{
+  "format": 1,
+  "about": "The sports fakes' invented library (L655), format 1: the fake Sportarr serves the leagues and their events, the sports indexer the releases. Every name is invented but the real leagues'. An event's start is its day from the anchor and its UTC time; its broadcast date is the UTC date (Sportarr's fallback) unless 'broadcast' moves it that many days; 'listed' false is stored in Sportarr but not on the league's filtered page; 'parts' is eventTypePartNames as Sportarr sends it (null where absent). A release's name takes {date}, {date-N}, {date+N} and {year} from its event's UTC start, and is posted 'posted' hours from that start.",
+  "leagues": [
+    {"id": 1, "externalId": "4001", "name": "Premier League", "sport": "Soccer", "monitored": true, "monitorType": "Future", "keepAllEvents": false, "alternateName": "EPL", "teamless": false, "events": [
+      {"id": 1001, "externalId": "ev-001001", "title": "Lantern Bay FC vs Copper Crown United", "day": -1, "time": "15:00", "season": "{split}", "round": "13", "home": "Lantern Bay FC", "away": "Copper Crown United", "monitored": true, "hasFile": false},
+      {"id": 1002, "externalId": "ev-001002", "title": "Northfield Rovers vs Easton Athletic", "day": -1, "time": "12:30", "season": "{split}", "round": "13", "home": "Northfield Rovers", "away": "Easton Athletic", "monitored": true, "hasFile": true},
+      {"id": 1003, "externalId": "ev-001003", "title": "Wrenford Albion vs Brackenmoor FC", "day": -1, "time": "15:00", "season": "{split}", "round": "13", "home": "Wrenford Albion", "away": "Brackenmoor FC", "monitored": true, "hasFile": false},
+      {"id": 1004, "externalId": "ev-001004", "title": "Saltmere City vs Lowmarsh Rovers", "day": -1, "time": "15:00", "season": "{split}", "round": "13", "home": "Saltmere City", "away": "Lowmarsh Rovers", "monitored": true, "hasFile": false},
+      {"id": 1005, "externalId": "ev-001005", "title": "Orvanne FC vs Tollendale FC", "day": -1, "time": "15:00", "season": "{split}", "round": "13", "home": "Orvanne FC", "away": "Tollendale FC", "monitored": true, "hasFile": true},
+      {"id": 1006, "externalId": "ev-001006", "title": "Thistlecombe FC vs Kestrel Vale", "day": -1, "time": "15:00", "season": "{split}", "round": "13", "home": "Thistlecombe FC", "away": "Kestrel Vale", "monitored": true, "hasFile": false},
+      {"id": 1007, "externalId": "ev-001007", "title": "Duskwater FC vs Corvane Athletic", "day": -1, "time": "15:00", "season": "{split}", "round": "13", "home": "Duskwater FC", "away": "Corvane Athletic", "monitored": true, "hasFile": false},
+      {"id": 1008, "externalId": "ev-001008", "title": "Ravensholt United vs Hollowmere Town", "day": -1, "time": "15:00", "season": "{split}", "round": "13", "home": "Ravensholt United", "away": "Hollowmere Town", "monitored": true, "hasFile": false},
+      {"id": 1009, "externalId": "ev-001009", "title": "Pellbrook Town vs Ostrey City", "day": -1, "time": "17:30", "season": "{split}", "round": "13", "home": "Pellbrook Town", "away": "Ostrey City", "monitored": false, "hasFile": false},
+      {"id": 1010, "externalId": "ev-001010", "title": "Pyrecombe United vs Halvering City", "day": -1, "time": "17:30", "season": "{split}", "round": "13", "home": "Pyrecombe United", "away": "Halvering City", "monitored": true, "hasFile": false},
+      {"id": 1011, "externalId": "ev-001011", "title": "Quillon Rovers vs Sorrelton FC", "day": -1, "time": "20:00", "season": "{split}", "round": "13", "home": "Quillon Rovers", "away": "Sorrelton FC", "monitored": true, "hasFile": false},
+      {"id": 1012, "externalId": "ev-001012", "title": "Gildenford FC vs Marrowby United", "day": 0, "time": "14:00", "season": "{split}", "round": "13", "home": "Gildenford FC", "away": "Marrowby United", "monitored": true, "hasFile": false},
+      {"id": 1013, "externalId": "ev-001013", "title": "Brindlecote FC vs Yarrowmede City", "day": 1, "time": "20:00", "season": "{split}", "round": "13", "home": "Brindlecote FC", "away": "Yarrowmede City", "monitored": true, "hasFile": false},
+      {"id": 1014, "externalId": "ev-001014", "title": "Wrenford Albion vs Lantern Bay FC", "day": 6, "time": "15:00", "season": "{split}", "round": "14", "home": "Wrenford Albion", "away": "Lantern Bay FC", "monitored": true, "hasFile": false},
+      {"id": 1015, "externalId": "ev-001015", "title": "Copper Crown United vs Saltmere City", "day": 6, "time": "15:00", "season": "{split}", "round": "14", "home": "Copper Crown United", "away": "Saltmere City", "monitored": true, "hasFile": false},
+      {"id": 1016, "externalId": "ev-001016", "title": "Quarrydown FC vs. Ellerholt United", "day": -2, "time": "17:30", "season": "{split}", "round": "13", "home": "Quarrydown FC", "away": "Ellerholt United", "monitored": true, "hasFile": false},
+      {"id": 1017, "externalId": "ev-001017", "title": "Kelderby FC vs Amberlow Rovers", "day": -3, "time": "15:00", "season": "{split}", "round": "13", "home": "Kelderby FC", "away": "Amberlow Rovers", "monitored": true, "hasFile": false}
+    ]},
+    {"id": 2, "externalId": "4002", "name": "Kestrel Premier Division", "sport": "Soccer", "monitored": true, "monitorType": "Future", "keepAllEvents": true, "alternateName": null, "teamless": false, "events": [
+      {"id": 1101, "externalId": "ev-001101", "title": "Kestrel Vale vs Duskwater FC", "day": -6, "time": "15:00", "season": "{split}", "round": "9", "home": "Kestrel Vale", "away": "Duskwater FC", "monitored": true, "hasFile": false},
+      {"id": 1102, "externalId": "ev-001102", "title": "Corvane Athletic vs Kestrel Vale", "day": 5, "time": "15:00", "season": "{split}", "round": "11", "home": "Corvane Athletic", "away": "Kestrel Vale", "monitored": true, "hasFile": false},
+      {"id": 1103, "externalId": "ev-001103", "title": "Hollowmere Town vs Ravensholt United", "day": -6, "time": "15:00", "season": "{split}", "round": "9", "home": "Hollowmere Town", "away": "Ravensholt United", "monitored": false, "hasFile": true, "listed": false},
+      {"id": 1104, "externalId": "ev-001104", "title": "Duskwater FC vs Hollowmere Town", "day": -13, "time": "15:00", "season": "{split}", "round": "8", "home": "Duskwater FC", "away": "Hollowmere Town", "monitored": false, "hasFile": false, "listed": false},
+      {"id": 1105, "externalId": "ev-001105", "title": "Kestrel Vale vs Ravensholt United", "day": -13, "time": "15:00", "season": "{split}", "round": "8", "home": "Kestrel Vale", "away": "Ravensholt United", "monitored": false, "hasFile": false}
+    ]},
+    {"id": 3, "externalId": "4003", "name": "Kestrel Hockey League", "sport": "Ice Hockey", "monitored": false, "monitorType": "Future", "keepAllEvents": false, "alternateName": null, "teamless": false, "events": [
+      {"id": 1201, "externalId": "ev-001201", "title": "Kestrel Club 11 vs Kestrel Club 12", "day": -3, "time": "18:00", "season": "{split}", "round": null, "home": "Kestrel Club 11", "away": "Kestrel Club 12", "monitored": true, "hasFile": false},
+      {"id": 1202, "externalId": "ev-001202", "title": "Kestrel Club 13 vs Kestrel Club 11", "day": 2, "time": "18:00", "season": "{split}", "round": null, "home": "Kestrel Club 13", "away": "Kestrel Club 11", "monitored": true, "hasFile": false}
+    ]},
+    {"id": 4, "externalId": "4004", "name": "KCL", "sport": "Fighting", "monitored": true, "monitorType": "None", "keepAllEvents": false, "alternateName": null, "teamless": true, "events": [
+      {"id": 1301, "externalId": "ev-001301", "title": "KCL 41", "day": -20, "time": "20:00", "season": "{year}", "round": null, "home": null, "away": null, "monitored": false, "hasFile": false, "parts": ["Early Prelims", "Prelims", "Main Card", "Post Show"]},
+      {"id": 1302, "externalId": "ev-001302", "title": "KCL 42", "day": -6, "time": "20:00", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Early Prelims", "Prelims", "Main Card", "Post Show"]},
+      {"id": 1303, "externalId": "ev-001303", "title": "KCL 43", "day": 8, "time": "20:00", "season": "{year}", "round": null, "home": null, "away": null, "monitored": false, "hasFile": false, "parts": ["Early Prelims", "Prelims", "Main Card", "Post Show"]}
+    ]},
+    {"id": 5, "externalId": "4005", "name": "Kestrel Baseball League", "sport": "Baseball", "monitored": true, "monitorType": "Future", "keepAllEvents": false, "alternateName": null, "teamless": false, "events": [
+      {"id": 1401, "externalId": "ev-001401", "title": "Kestrel Club 03 vs Kestrel Club 07 - Game 1", "day": -2, "time": "15:00", "season": "{year}", "round": null, "home": "Kestrel Club 03", "away": "Kestrel Club 07", "monitored": true, "hasFile": false},
+      {"id": 1402, "externalId": "ev-001402", "title": "Kestrel Club 03 vs Kestrel Club 07 - Game 2", "day": -2, "time": "19:00", "season": "{year}", "round": null, "home": "Kestrel Club 03", "away": "Kestrel Club 07", "monitored": true, "hasFile": false},
+      {"id": 1403, "externalId": "ev-001403", "title": "Kestrel Club 07 vs Kestrel Club 05", "day": -4, "time": "17:00", "season": "{year}", "round": null, "home": "Kestrel Club 07", "away": "Kestrel Club 05", "monitored": true, "hasFile": false}
+    ]},
+    {"id": 6, "externalId": "4006", "name": "NBA", "sport": "Basketball", "monitored": true, "monitorType": "Future", "keepAllEvents": false, "alternateName": null, "teamless": false, "events": [
+      {"id": 1501, "externalId": "ev-001501", "title": "Easton Comets vs Lantern Bay Herons", "day": -2, "time": "01:30", "season": "{splitShort}", "round": null, "home": "Easton Comets", "away": "Lantern Bay Herons", "monitored": true, "hasFile": false},
+      {"id": 1502, "externalId": "ev-001502", "title": "Saltmere Gulls vs Marrowby Lynx", "day": -4, "time": "01:30", "broadcast": -1, "timezone": "Etc/GMT+5", "season": "{splitShort}", "round": null, "home": "Saltmere Gulls", "away": "Marrowby Lynx", "monitored": true, "hasFile": false},
+      {"id": 1503, "externalId": "ev-001503", "title": "Marrowby Lynx vs Easton Comets", "day": -3, "time": "01:00", "season": "{splitShort}", "round": null, "home": "Marrowby Lynx", "away": "Easton Comets", "monitored": true, "hasFile": false, "listed": false},
+      {"id": 1504, "externalId": "ev-001504", "title": "Lantern Bay Herons vs Saltmere Gulls", "day": 3, "time": "00:30", "broadcast": -1, "timezone": "Etc/GMT+5", "season": "{splitShort}", "round": null, "home": "Lantern Bay Herons", "away": "Saltmere Gulls", "monitored": true, "hasFile": false}
+    ]},
+    {"id": 7, "externalId": "4007", "name": "Formula 1", "sport": "Motorsport", "monitored": true, "monitorType": "All", "keepAllEvents": false, "alternateName": "F1", "teamless": false, "events": [
+      {"id": 1601, "externalId": "ev-001601", "title": "Grand Prix of Kestrel - Practice 1", "day": -3, "time": "12:30", "season": "{year}", "round": "20", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1602, "externalId": "ev-001602", "title": "Grand Prix of Kestrel - Practice 2", "day": -3, "time": "16:00", "season": "{year}", "round": "20", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1603, "externalId": "ev-001603", "title": "Grand Prix of Kestrel - Practice 3", "day": -2, "time": "11:30", "season": "{year}", "round": "20", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1604, "externalId": "ev-001604", "title": "Grand Prix of Kestrel - Qualifying", "day": -2, "time": "15:00", "season": "{year}", "round": "20", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1605, "externalId": "ev-001605", "title": "Grand Prix of Kestrel", "day": -1, "time": "14:00", "season": "{year}", "round": "20", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1611, "externalId": "ev-001611", "title": "Grand Prix of Vellmar - Practice 1", "day": -17, "time": "11:30", "season": "{year}", "round": "Round 19", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1612, "externalId": "ev-001612", "title": "Grand Prix of Vellmar - Practice 2", "day": -17, "time": "15:00", "season": "{year}", "round": "Round 19", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1613, "externalId": "ev-001613", "title": "Grand Prix of Vellmar - Practice 3", "day": -16, "time": "11:30", "season": "{year}", "round": "Round 19", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1614, "externalId": "ev-001614", "title": "Grand Prix of Vellmar - Qualifying", "day": -16, "time": "15:00", "season": "{year}", "round": "Round 19", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1615, "externalId": "ev-001615", "title": "Grand Prix of Vellmar - Race", "day": -15, "time": "15:00", "season": "{year}", "round": "Round 19", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1621, "externalId": "ev-001621", "title": "Grand Prix of Tarnholm - Practice 1", "day": 4, "time": "12:30", "season": "{year}", "round": "21", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1622, "externalId": "ev-001622", "title": "Grand Prix of Tarnholm - Practice 2", "day": 4, "time": "16:00", "season": "{year}", "round": "21", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1623, "externalId": "ev-001623", "title": "Grand Prix of Tarnholm - Practice 3", "day": 5, "time": "11:30", "season": "{year}", "round": "21", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1624, "externalId": "ev-001624", "title": "Grand Prix of Tarnholm - Qualifying", "day": 5, "time": "15:00", "season": "{year}", "round": "21", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1625, "externalId": "ev-001625", "title": "Grand Prix of Tarnholm - Race", "day": 6, "time": "14:00", "season": "{year}", "round": "21", "home": null, "away": null, "monitored": true, "hasFile": false}
+    ]},
+    {"id": 8, "externalId": "4008", "name": "MotoGP", "sport": "Motorsport", "monitored": true, "monitorType": "Future", "keepAllEvents": false, "alternateName": null, "teamless": false, "events": [
+      {"id": 1701, "externalId": "ev-001701", "title": "Grand Prix of Oskelund - Practice 1", "day": -10, "time": "10:45", "season": "{year}", "round": "19", "home": null, "away": null, "monitored": true, "hasFile": false, "listed": false},
+      {"id": 1702, "externalId": "ev-001702", "title": "Grand Prix of Oskelund - Practice 2", "day": -10, "time": "14:00", "season": "{year}", "round": "19", "home": null, "away": null, "monitored": true, "hasFile": false, "listed": false},
+      {"id": 1703, "externalId": "ev-001703", "title": "Grand Prix of Oskelund - Qualifying", "day": -9, "time": "10:50", "season": "{year}", "round": "19", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1704, "externalId": "ev-001704", "title": "Grand Prix of Oskelund - Race", "day": -8, "time": "13:00", "season": "{year}", "round": "19", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1711, "externalId": "ev-001711", "title": "Grand Prix of Tarnby - Practice 1", "day": -24, "time": "10:45", "season": "{year}", "round": "18", "home": null, "away": null, "monitored": true, "hasFile": false, "listed": false},
+      {"id": 1712, "externalId": "ev-001712", "title": "Grand Prix of Tarnby - Qualifying", "day": -23, "time": "10:50", "season": "{year}", "round": "18", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1713, "externalId": "ev-001713", "title": "Grand Prix of Tarnby - Race", "day": -22, "time": "13:00", "season": "{year}", "round": "18", "home": null, "away": null, "monitored": true, "hasFile": false}
+    ]},
+    {"id": 9, "externalId": "4009", "name": "Kestrel Endurance Series", "sport": "Motorsport", "monitored": true, "monitorType": null, "keepAllEvents": null, "alternateName": null, "teamless": false, "events": [
+      {"id": 1801, "externalId": "ev-001801", "title": "6 Hours of Oskelund - Qualifying", "day": -31, "time": "14:00", "season": "{year}", "round": "7", "home": null, "away": null, "monitored": true, "hasFile": false},
+      {"id": 1802, "externalId": "ev-001802", "title": "6 Hours of Oskelund", "day": -30, "time": "11:00", "season": "{year}", "round": "7", "home": null, "away": null, "monitored": true, "hasFile": false}
+    ]},
+    {"id": 10, "externalId": "4010", "name": "UFC", "sport": "Fighting", "monitored": true, "monitorType": "Future", "keepAllEvents": false, "alternateName": null, "teamless": true, "events": [
+      {"id": 1901, "externalId": "ev-001901", "title": "UFC 999: Quessel vs. Halde", "day": -1, "time": "23:00", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Early Prelims", "Prelims", "Main Card", "Post Show"]},
+      {"id": 1902, "externalId": "ev-001902", "title": "UFC Fight Night: Brisk vs. Loam", "day": 6, "time": "19:00", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Prelims", "Main Card"]}
+    ]},
+    {"id": 11, "externalId": "4011", "name": "Velmora Wrestling", "sport": "Wrestling", "monitored": true, "monitorType": "Future", "keepAllEvents": false, "alternateName": null, "teamless": true, "events": [
+      {"id": 2001, "externalId": "ev-002001", "title": "Velmora Monday Brawl", "day": -15, "time": "01:00", "broadcast": -1, "timezone": "Etc/GMT+5", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Early Prelims", "Prelims", "Main Card", "Post Show"]},
+      {"id": 2002, "externalId": "ev-002002", "title": "Velmora Monday Brawl", "day": -8, "time": "01:00", "broadcast": -1, "timezone": "Etc/GMT+5", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Early Prelims", "Prelims", "Main Card", "Post Show"]},
+      {"id": 2003, "externalId": "ev-002003", "title": "Velmora Monday Brawl", "day": -1, "time": "01:00", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Early Prelims", "Prelims", "Main Card", "Post Show"]},
+      {"id": 2004, "externalId": "ev-002004", "title": "Velmora Iron Crown", "day": -11, "time": "23:00", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Early Prelims", "Prelims", "Main Card", "Post Show"]},
+      {"id": 2005, "externalId": "ev-002005", "title": "Velmora Iron Crown: Night 2", "day": -10, "time": "23:00", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Countdown", "Main Show"]}
+    ]},
+    {"id": 12, "externalId": "4012", "name": "Kestrel Boxing", "sport": "Boxing", "monitored": true, "monitorType": "All", "keepAllEvents": false, "alternateName": null, "teamless": true, "events": [
+      {"id": 2101, "externalId": "ev-002101", "title": "Halde vs. Brisk", "day": -4, "time": "20:00", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Early Prelims", "Prelims", "Main Card", "Post Show"]}
+    ]},
+    {"id": 13, "externalId": "4013", "name": "FIS Alpine Ski World Cup", "sport": "Skiing", "monitored": true, "monitorType": "Future", "keepAllEvents": false, "alternateName": null, "teamless": false, "events": [
+      {"id": 2201, "externalId": null, "title": "Kestrel · Men's Downhill", "day": -1, "time": "10:30", "season": "{split}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false}
+    ]},
+    {"id": 14, "externalId": "4014", "name": "Kestrel Cup", "sport": "Soccer", "monitored": true, "monitorType": "Future", "keepAllEvents": false, "alternateName": null, "teamless": false, "events": [
+    ]}
+  ],
+  "releases": []
+}

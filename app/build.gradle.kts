@@ -559,7 +559,8 @@ dependencies {
 // skeleton-foreign.apk (v2 signed with a throwaway key) and skeleton-newer.apk (built against the next plugin API minor);
 // and the Sportarr plugin's debug build as sportarr.apk (L657), signed as the app under test is. The tests install them as
 // the Plugins page installs a download, and none of these builds is ever released. Copied before the test APK's assets are
-// merged; plugin-check's rules run on each as it is built.
+// merged; plugin-check's rules run on each as it is built. Beside them, the sports fakes' catalogue (L655), whose titles
+// and expectations the Sportarr plugin's device classes read: one Sync for both, so the wiring below covers it too.
 val testPluginApks: Configuration by configurations.creating {
     isCanBeConsumed = false
 }
@@ -575,6 +576,7 @@ val copyTestPlugins by tasks.registering(Sync::class) {
         rename("""skeleton-(\w+)-debug\.apk""", "skeleton-$1.apk")
         rename("""sportarr-debug\.apk""", "sportarr.apk")
     }
+    from(rootProject.file("tools/mock-seed/src/main/resources/sports-catalogue.json"))
     into(layout.buildDirectory.dir("test-plugins"))
 }
 // Lint's androidTest model and analysis read the same folder, so they wait for it too.
