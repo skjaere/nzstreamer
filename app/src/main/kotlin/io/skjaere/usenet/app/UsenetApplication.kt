@@ -7,6 +7,7 @@ import android.os.Debug
 import android.os.SystemClock
 import androidx.annotation.VisibleForTesting
 import androidx.annotation.WorkerThread
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
@@ -51,6 +52,7 @@ import io.skjaere.usenet.app.home.SetupState
 import io.skjaere.usenet.app.search.IndexerConfigs
 import io.skjaere.usenet.app.search.NamedAccount
 import io.skjaere.usenet.app.search.accountsInOrder
+import io.skjaere.usenet.app.link.CastButton
 import io.skjaere.usenet.app.link.InFront
 import io.skjaere.usenet.app.link.PhoneFinals
 import io.skjaere.usenet.app.link.PhoneFinalsDeps
@@ -67,6 +69,7 @@ import io.skjaere.usenet.app.casting.rankingTargetOf
 import io.skjaere.usenet.app.link.PlayOn
 import io.skjaere.usenet.app.link.PlayRouter
 import io.skjaere.usenet.app.link.PlayRouterDeps
+import io.skjaere.usenet.app.link.SheetPlace
 import io.skjaere.usenet.app.link.NoRemote
 import io.skjaere.usenet.app.link.RemotePlaying
 import io.skjaere.usenet.app.link.RemotePlays
@@ -500,9 +503,18 @@ class AppContainer(private val context: Context) {
     /**
      * Plugins' items played (L627): where Play goes ([playRouter]), as a release chosen by hand is, on the main thread as the
      * app's own Play buttons start their plays, whichever thread the plugin asked from; their releases mapped back through
-     * [pluginSearch]'s tables, and their Choose release kept in [pluginReleases].
+     * [pluginSearch]'s tables, and their Choose release kept in [pluginReleases]. A plugin's page gets the app's Cast button
+     * (L654), none on a TV: as an item plays on this phone with a TV chosen, its face and its list are those of a screen
+     * whose Play stays on this phone, as Search's are (L148).
      */
-    val pluginPlay = PluginPlayService(pluginSearch::ranked, pluginReleases) { item, releases ->
+    val pluginPlay = PluginPlayService(
+        pluginSearch::ranked,
+        pluginReleases,
+        castButton = { modifier ->
+            val target = playOn.target.collectAsStateWithLifecycle().value
+            CastButton(target, { playOn.openSheet(SheetPlace.PhoneOnly) }, modifier, place = SheetPlace.PhoneOnly)
+        },
+    ) { item, releases ->
         appScope.launch(Dispatchers.Main.immediate) { playRouter.playItem(item, releases) }
     }
 

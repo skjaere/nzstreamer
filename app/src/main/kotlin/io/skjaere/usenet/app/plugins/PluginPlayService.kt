@@ -1,5 +1,7 @@
 package io.skjaere.usenet.app.plugins
 
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import io.skjaere.usenet.app.play.ItemFound
 import io.skjaere.usenet.app.play.ItemTarget
 import io.skjaere.usenet.core.FilePicker
@@ -15,11 +17,14 @@ import io.skjaere.usenet.search.RankedItem
  * The plugin's releases() is asked by the play at most once, inside the guard ([PluginCalls.calling], L619): one that throws
  * is nothing found, and turns the calling instance's version off. What it answers is copied inside the guard, as the
  * plugin's own lists are its code, and its handles are mapped back through its own table only ([ranked]). A plugin's
- * Choose release ([chooser], L628) is kept in [lists] the same way, for its page.
+ * Choose release ([chooser], L628) is kept in [lists] the same way, for its page. [castButton] is the app's Cast button,
+ * drawn where a plugin's page asks for it (PluginPlay.PlayOnButton, L654); none by default, as in the JVM tests.
  */
 class PluginPlayService(
     private val ranked: (id: String, handles: List<ReleaseHandle>) -> List<RankedItem>,
     private val lists: PluginReleases = PluginReleases(),
+    // Before route, which the tests pass as a trailing lambda.
+    private val castButton: @Composable (Modifier) -> Unit = {},
     private val route: (ItemTarget, suspend () -> ItemFound) -> Unit,
 ) {
     /** The play of [version]'s instance, whose calls into the plugin's code [calls] guards. */
@@ -76,6 +81,11 @@ class PluginPlayService(
                     ?.let { found(version.id, it.accepted, it.offered, it.leftOut, it.lines, it.note) }
                     ?: ItemFound.NOTHING
             }
+        }
+
+        @Composable
+        override fun PlayOnButton(modifier: Modifier) {
+            castButton(modifier)
         }
     }
 

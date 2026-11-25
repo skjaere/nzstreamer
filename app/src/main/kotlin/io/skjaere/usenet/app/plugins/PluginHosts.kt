@@ -1,5 +1,7 @@
 package io.skjaere.usenet.app.plugins
 
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import io.ktor.client.HttpClient
 import io.skjaere.usenet.newznab.UrlSecurity
 import io.skjaere.usenet.plugin.AddressSafety
@@ -122,9 +124,13 @@ private object NoSearch : PluginSearch {
     override fun search(words: String, runtimeMinutes: Int?, fresh: Boolean): Flow<Found> = emptyFlow()
 }
 
-/** Nothing played, and the plugin's releases never asked for. */
+/** Nothing played, and the plugin's releases never asked for; no Cast button drawn. */
 private object NoPlay : PluginPlay {
     override fun play(item: PlayItem, releases: suspend () -> ItemReleases) {
+    }
+
+    @Composable
+    override fun PlayOnButton(modifier: Modifier) {
     }
 }
 

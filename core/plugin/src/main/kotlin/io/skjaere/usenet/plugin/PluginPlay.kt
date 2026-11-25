@@ -1,19 +1,33 @@
 package io.skjaere.usenet.plugin
 
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+
 /** Plays a plugin's items through NZStreamer's own play: its sheet, its player, its Cast and its watch state. */
 interface PluginPlay {
     /**
      * Plays [item] as a film's Play does: on this phone, or on the Cast device when one is chosen (here with a TV chosen,
      * which can't play an item yet). While the release that played the item last is still stored, it goes alone; else, or
-     * once it fails, the host asks [releases] and tries the accepted ones in the plugin's order. With none accepted but some offered, Choose release opens with
-     * them as possible matches ([PluginNav.openReleases]); with none at all, the host's no-release sheet shows the
-     * plugin's lines and note, and Search indexers when the item has a [PlayItem.search].
+     * once it fails, the host asks [releases] and tries the accepted ones in the plugin's order, the one that just failed
+     * left out. With none of them to try but some offered that play here, Choose release opens with those as possible
+     * matches ([PluginNav.openReleases]). With nothing at all, the host's no-release sheet shows the plugin's lines and
+     * note, and Search indexers when the item has a [PlayItem.search]; but where the release that played the item last has
+     * just failed, the sheet shows that failure instead, as a film's does, with the item's Search and its note and without
+     * the plugin's lines and note.
      *
      * [releases] is asked at most once a play, and let go as the play ends. A throw from it counts as nothing found and
      * turns the version off ("Turned off after an error"). What plays is kept under the item's key: its progress, and the
      * release, which Up next's Resume plays again with no plugin needed.
      */
     fun play(item: PlayItem, releases: suspend () -> ItemReleases)
+
+    /**
+     * NZStreamer's Cast button, for a plugin's page's top bar, as the app's own pages have it: it says where Play goes, this
+     * phone or the Cast device chosen, and opens the Play on list. It draws nothing on a TV, nor where the host's own
+     * button would draw nothing. [modifier] is laid on the button.
+     */
+    @Composable
+    fun PlayOnButton(modifier: Modifier)
 }
 
 /**
@@ -28,8 +42,9 @@ class PlayItem(
     /** Under the title on the play sheet and in the player. */
     val subtitle: String?,
     /**
-     * How long the item runs, as the plugin expects it; null when it doesn't know. Kept with the play as a film's runtime
-     * is; the releases were ranked by the plugin's searches, which take the runtime themselves ([PluginSearch.search]).
+     * How long the item runs, as the plugin expects it; null when it doesn't know. The releases a play tries come from the
+     * plugin's own searches, ranked by the runtime each search was given ([PluginSearch.search]), so a plugin gives its
+     * searches this same number. The host reads nothing else from it: no ranking and nothing kept goes by this value.
      */
     val runtimeMinutes: Int?,
     /**

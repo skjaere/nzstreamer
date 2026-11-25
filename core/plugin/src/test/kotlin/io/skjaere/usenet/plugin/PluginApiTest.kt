@@ -1,5 +1,6 @@
 package io.skjaere.usenet.plugin
 
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import org.junit.jupiter.api.Test
@@ -25,6 +26,21 @@ class PluginApiTest {
         assertTrue(Regex("""(0|[1-9]\d*)\.(0|[1-9]\d*)""").matches(file), "plugin-api.txt holds '$file', not MAJOR.MINOR")
         assertEquals(file, PluginApi.VERSION)
         assertEquals("${PluginApi.MAJOR}.${PluginApi.MINOR}", PluginApi.VERSION)
+    }
+
+    /**
+     * L654: a plugin's pages show NZStreamer's Cast button through the host's play, as the app's pages have it in their top
+     * bars. PluginPlay is the host's to implement, so API 1.0 takes the member before the first plugin release without a
+     * body, and its version stays (L614).
+     */
+    @Test
+    fun `the host's play draws the Cast button for a plugin's pages, and the API's version stays`() {
+        val button = PluginPlay::class.java.methods.filter { it.name == "PlayOnButton" }
+        assertEquals(1, button.size, "PluginPlay declares PlayOnButton once: ${PluginPlay::class.java.methods.map { it.name }}")
+        assertEquals(Modifier::class.java, button.single().parameterTypes.first(), "its first parameter, the modifier")
+        assertTrue(java.lang.reflect.Modifier.isAbstract(button.single().modifiers), "the host's to implement")
+        assertEquals("1.0", PluginApi.VERSION)
+        assertEquals("1.0", File("plugin-api.txt").readText().trim())
     }
 
     /** The plugin build writes these and the host reads them: a rename would refuse every plugin built before it. */

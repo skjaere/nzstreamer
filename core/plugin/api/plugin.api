@@ -161,6 +161,7 @@ public abstract interface class io/skjaere/usenet/plugin/PluginNav {
 }
 
 public abstract interface class io/skjaere/usenet/plugin/PluginPlay {
+	public abstract fun PlayOnButton (Landroidx/compose/ui/Modifier;Landroidx/compose/runtime/Composer;I)V
 	public abstract fun play (Lio/skjaere/usenet/plugin/PlayItem;Lkotlin/jvm/functions/Function1;)V
 }
 
