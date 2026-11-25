@@ -33,8 +33,9 @@ import app.nzstreamer.plugin.sportarr.match.Words as NameWords
  *
  * A name with all but the place and the round, or the session in another language, is a possible match; so are an
  * endurance race and testing, which no runtime checks. Another round, session, race number or listed place leaves a name
- * out as another session's. The series' later forms (its initials, its third name on) are read in names but never searched
- * for, so a play makes three searches at most.
+ * out as another session's; where two rounds are held at one place, the name's date or round tells them apart. The
+ * series' later forms (its initials, its third name on) are read in names but never searched for, so a play makes three
+ * searches at most.
  *
  * It reads the kept list ([sports]) for the other followed series, the round's other sessions and the league's other places.
  */
@@ -54,6 +55,12 @@ class Motorsport(private val sports: Sports) : FamilyMatcher {
             .mapValues { (_, sessions) -> sessions.map(::placeWords).filter { it.isNotEmpty() }.distinct() }
     }
 
+    /** Each league's places, as their words, with the weekends held at each: two rounds at one place share it. */
+    private val weekendsAt: Map<Pair<Int, List<String>>, Set<String>> by lazy {
+        sports.events.filter { it.family == Family.Motorsport }.groupBy { it.league.id to placeWords(it) }
+            .mapValues { (_, sessions) -> sessions.mapTo(HashSet(), ::weekendKey) }
+    }
+
     override fun context(event: SportsEvent): NameContext =
         NameContext(title = event.title, league = event.league.name, series = seriesOf(event.league).written, years = eventYears(event))
 
@@ -66,6 +73,19 @@ class Motorsport(private val sports: Sports) : FamilyMatcher {
         val first = forms.firstOrNull() ?: return Queries(emptyList())
         val place = placeTokens(event).joinToString(" ") { it.written }
         return Queries(forms.take(2).map { "$it $place".trim() }, event.roundNumber?.let { "$first $it" })
+    }
+
+    /**
+     * Where another round of the league is held at the same place, its sessions of this one's kind: a date in a name that
+     * is one of theirs is theirs (L647 rule 5). None where the place is held once, as the place then names the round.
+     */
+    override fun related(event: SportsEvent): List<SportsEvent> {
+        if (!placeShared(event)) return emptyList()
+        val place = placeWords(event)
+        return sports.events.filter { other ->
+            other.family == Family.Motorsport && other.league.id == event.league.id && weekendKey(other) != weekendKey(event) &&
+                other.session?.kind == event.session?.kind && placeWords(other) == place
+        }
     }
 
     override fun judge(event: SportsEvent, part: Part, name: SportsName, posted: Instant?, size: Long?): Verdict {
@@ -85,7 +105,10 @@ class Motorsport(private val sports: Sports) : FamilyMatcher {
         val elsewhere = places[event.league.id].orEmpty().filter { it != place }
             .any { other -> outside.containsAll(other) && !(atPlace && place.containsAll(other)) }
         if (elsewhere) return OTHER_SESSION
-        val verdict = sessionVerdict(event, session, name, posted, placed = atPlace || (round != null && round in rounds))
+        // A place held by two rounds names neither alone: the name's date, which the shared rules held to this round's, or
+        // its round's number must.
+        val placed = (atPlace && (!placeShared(event) || name.dates.isNotEmpty())) || (round != null && round in rounds)
+        val verdict = sessionVerdict(event, session, name, posted, placed)
         return when {
             verdict !is Verdict.Accept -> verdict
             session.kind == SessionKind.Testing -> Verdict.Offer(Words.TESTING)
@@ -155,6 +178,12 @@ class Motorsport(private val sports: Sports) : FamilyMatcher {
             letters.length >= 2 && number.length <= 2 && !numberWord && formWords.any { it.startsWith(letters) }
         }
     }
+
+    /** Whether another weekend of [event]'s league is held at its place. */
+    private fun placeShared(event: SportsEvent): Boolean = (weekendsAt[event.league.id to placeWords(event)]?.size ?: 0) > 1
+
+    /** The weekend [event] is a session of, or the event itself where it is none's. */
+    private fun weekendKey(event: SportsEvent): String = sports.weekendOf(event)?.key ?: event.key
 
     /** The season's year in the name: a year, a running number's or an episode's, a season span's, or a date's. */
     private fun seasonYear(name: SportsName, event: SportsEvent): Boolean {

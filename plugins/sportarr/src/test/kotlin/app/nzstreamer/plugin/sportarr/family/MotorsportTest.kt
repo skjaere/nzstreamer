@@ -280,6 +280,27 @@ class MotorsportTest {
     }
 
     @Test
+    fun `two rounds at one place are told apart by their date or their round, never by the place alone`() {
+        val formulaE = KeptLeague(11, "Formula E", "Motorsport")
+        val double = sports(
+            formulaE to listOf(
+                on(formulaE, 1631, at("2026-11-21T14:00"), "Tarnholm E-Prix - Race", round = "5"),
+                on(formulaE, 1632, at("2026-11-22T14:00"), "Tarnholm E-Prix - Race", round = "6"),
+            ),
+        )
+        val matcher = Motorsport(double)
+        val saturday = "Formula.E.2026.11.21.Tarnholm.E-Prix.Race.1080p.WEB.h264-KESTREL"
+        val sunday = "Formula.E.2026.11.22.Tarnholm.E-Prix.Race.1080p.WEB.h264-KESTREL"
+        val undated = "Formula.E.2026.Tarnholm.E-Prix.Race.1080p.WEB.h264-WREN"
+        val roundSix = "Formula.E.2026.Round.6.Tarnholm.E-Prix.Race.1080p.WEB.h264-WREN"
+        val noPlace = offered("No place or round in the name")
+        assertEquals("", wrong(double.byId(1631), listOf(saturday to accepted, sunday to otherSession, undated to noPlace, roundSix to otherSession), matcher))
+        assertEquals("", wrong(double.byId(1632), listOf(saturday to otherSession, sunday to accepted, undated to noPlace, roundSix to accepted), matcher))
+        assertEquals(listOf(double.byId(1632)), matcher.related(double.byId(1631)))
+        assertEquals(emptyList(), motorsport.related(race), "a place held once")
+    }
+
+    @Test
     fun `an endurance race and testing are possible matches, you pick`() {
         val endurance = sports(
             ENDURANCE to listOf(

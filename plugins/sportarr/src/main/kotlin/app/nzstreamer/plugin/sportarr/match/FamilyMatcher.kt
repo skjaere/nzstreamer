@@ -22,7 +22,7 @@ interface FamilyMatcher {
 
     /**
      * The other listed events a date in a name could name as well (L647 rule 5): the same sides' other meetings, the same
-     * weekly show's other nights. A name dated one of their days is theirs. None by default.
+     * weekly show's other nights, the same place's other rounds. A name dated one of their days is theirs. None by default.
      */
     fun related(event: SportsEvent): List<SportsEvent> = emptyList()
 
