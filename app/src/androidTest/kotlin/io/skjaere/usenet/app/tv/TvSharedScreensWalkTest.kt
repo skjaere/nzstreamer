@@ -252,6 +252,7 @@ class TvSharedScreensWalkTest {
     private fun walk(
         screen: String, problems: MutableList<String>, required: (String) -> Boolean, reach: Boolean, area: Boolean, clipping: Boolean,
         intended: (String) -> Boolean, scrollBack: Boolean, mustReach: List<String> = emptyList(), sideways: Boolean = false,
+        counted: (String) -> Boolean = required,
     ) {
         val seen = linkedSetOf<String>()
         val reached = linkedSetOf<String>()
@@ -263,7 +264,7 @@ class TvSharedScreensWalkTest {
         fun onRail() = focusedNode()?.isRailItem() == true
         fun focused() = focusedNode()?.let(::walkLabel) ?: "(nothing)"
         fun look() {
-            focusables().map(::walkLabel).filter(required).forEach { seen += it }
+            focusables().map(::walkLabel).filter(counted).forEach { seen += it }
             if (area) outside += compose.outsideTheSafeArea()
             if (clipping) clipped += clippedTexts(intended)
         }
@@ -291,7 +292,8 @@ class TvSharedScreensWalkTest {
             // Off the rail first, as the user goes back: a request from the rail is turned, on its way into the content,
             // to the element the content last had focused (the shell's focus restorer).
             if (onRail()) remote.press(KeyEvent.KEYCODE_DPAD_RIGHT)
-            nodes[0].requestFocus()
+            // Gone between the look and the request (its lazy item disposed as the list settled): not there to go back to.
+            if (runCatching { nodes[0].requestFocus() }.isFailure) return false
             compose.waitForIdle()
             return focused() == label
         }
@@ -335,11 +337,12 @@ class TvSharedScreensWalkTest {
      * [intended]: texts made to end in an ellipsis when there is no room (a poster's name and line), not counted as cut at
      * 2x. [scrollBack]: the screen's one list is long enough to dispose of its first lines as the walk goes down it, which
      * the walk scrolls back to. [mustReach]: elements the walk must reach at 1x and 1.3x, by how their labels start.
-     * [sideways]: its lines that scroll sideways do the same as the walk goes along them.
+     * [sideways]: its lines that scroll sideways do the same as the walk goes along them. [counted]: of what the walk goes
+     * through ([required]), what it must have reached where it saw it (all of it by default).
      */
     private fun check(
         screen: String, required: (String) -> Boolean = { true }, intended: (String) -> Boolean = { false }, scrollBack: Boolean = false,
-        mustReach: List<String> = emptyList(), sideways: Boolean = false, show: () -> Unit,
+        mustReach: List<String> = emptyList(), sideways: Boolean = false, counted: (String) -> Boolean = required, show: () -> Unit,
     ) {
         val problems = mutableListOf<String>()
         listOf(1f, 1.3f, 2f).forEach { s ->
@@ -350,7 +353,7 @@ class TvSharedScreensWalkTest {
                 val large = s >= 2f
                 walk(
                     screen, problems, required, reach = !large, area = !large, clipping = large, intended = intended, scrollBack = scrollBack,
-                    mustReach = mustReach, sideways = sideways,
+                    mustReach = mustReach, sideways = sideways, counted = counted,
                 )
             } catch (e: Exception) {
                 problems += "$screen at ${s}x: ${e.javaClass.simpleName}: ${e.message?.lineSequence()?.take(3)?.joinToString(" ")}"
@@ -861,6 +864,53 @@ class TvSharedScreensWalkTest {
         }
     }
 
+    /**
+     * The Sports list's rows of the other families, and Up next, for the safe area at 1x and 1.3x and words cut at 2x as
+     * the walk checks every screen (the Fighting walk, [sportsList], sees cards alone): with Motorsport picked, a weekend's
+     * line with its round, its count and what is left of a race begun.
+     */
+    @Test
+    fun sportsListMotorsportRows() = sportsListWith("Motorsport")
+
+    /** The same with Soccer picked: a game's row, with what is left of one begun. */
+    @Test
+    fun sportsListSoccerRows() = sportsListWith("Soccer")
+
+    /** The same with every sport: Up next's rows, a session's and a game's. */
+    @Test
+    fun sportsListUpNext() = sportsListWith("All")
+
+    /**
+     * The list with [sport]'s chip picked, a race and a game begun, walked at each text size. What the walk must reach:
+     * the rows, a day's ("15:00 | ...") or with every sport Up next's ("title | line"); the title line's chips are the
+     * Fighting walk's, and with these sports' rows it would stop short of them.
+     */
+    private fun sportsListWith(sport: String) {
+        val device = sportarr(connected = true)
+        val race = device.catalogue.event(SPORTS_RACE)
+        val game = device.catalogue.event(SPORTS_GAME)
+        device.progress(race.part(), "Grand Prix of Kestrel · Race", 3_000_000, 7_200_000)
+        device.progress(game.part(), game.title, 2_400_000, 6_600_000)
+        showTheApp()
+        val counted = if (sport == "All") {
+            { label: String -> label.startsWith("Grand Prix of Kestrel · Race | ") || label.startsWith("${game.title} | ") }
+        } else {
+            { label: String -> " | " in label }
+        }
+        val chip = hasText(sport) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton)
+        check("The Sports list, $sport", counted = counted, scrollBack = true, sideways = true) {
+            openSports(chip)
+            // Picked once: the choice is kept for the tab (view.json), and the walk comes back to it at each text size.
+            if (compose.onAllNodes(chip and isSelected()).fetchSemanticsNodes().isEmpty()) {
+                val chips = hasScrollToNodeAction() and SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
+                compose.onAllNodes(chips).onFirst().performScrollToNode(chip)
+                compose.onNode(chip).performClick()
+            }
+            compose.waitUntil(SPORTS_WAIT_MS) { compose.onAllNodes(chip and isSelected()).fetchSemanticsNodes().isNotEmpty() }
+            compose.waitForIdle()
+        }
+    }
+
     /** A game's page: its two panes, Play, Choose release and Search indexers on the left, Mark watched on the right. */
     @Test
     fun sportsGamePage() {
@@ -1098,6 +1148,9 @@ class TvSharedScreensWalkTest {
         const val LOAD_MS = 400L
         /** The fake Sportarr's library's game of Lantern Bay FC, and how long its list or page may take to come. */
         const val SPORTS_GAME = 1001
+
+        /** The Grand Prix of Kestrel's race, aired yesterday. */
+        const val SPORTS_RACE = 1605
         const val SPORTS_WAIT_MS = 30_000L
         /** FakeDiscover's invented names, each with its page's number. */
         val DISCOVER_NAME = Regex("""\D+ \d+""")
