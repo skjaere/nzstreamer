@@ -1,5 +1,6 @@
 package app.nzstreamer.plugin.sportarr.source
 
+import app.nzstreamer.plugin.sportarr.model.CardType
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -37,6 +38,7 @@ class KeptListTest {
                 .copy(externalId = null, eventTypePartNames = listOf("Early Prelims", "Prelims", "Main Card", "Post Show")),
         ),
         cut = true,
+        cardTypes = mapOf("local:5" to CardType.Numbered),
     )
 
     private val kept get() = KeptList(dir)
@@ -78,6 +80,17 @@ class KeptListTest {
         file.delete()
         file.mkdirs()
         assertNull(kept.read(), "a folder where the file should be")
+    }
+
+    @Test
+    fun `a card's type is kept by its name, one this version doesn't know is left out, and an older file has none`() = runBlocking<Unit> {
+        kept.write(list)
+        val file = File(dir, "list.json")
+        assertTrue(""""local:5":"Numbered"""" in file.readText())
+        file.writeText(file.readText().replace(""""Numbered"""", """"Tournament""""))
+        assertEquals(list.copy(cardTypes = emptyMap()), kept.read(), "the list itself still reads")
+        file.writeText("""{"format":1,"readAt":"2026-11-24T09:41:07Z"}""")
+        assertEquals(SportsList(list.readAt, emptyList(), emptyList(), cut = false), kept.read())
     }
 
     @Test

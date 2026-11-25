@@ -58,6 +58,28 @@ class SportsTest {
     }
 
     @Test
+    fun `a fight card keeps the type its list kept for it, and one seen first is typed against its league`() {
+        val nights = listOf(
+            on(VELMORA, 51, at("2026-11-23T01:00"), "Velmora Monday Brawl"),
+            on(VELMORA, 52, at("2026-11-16T01:00"), "Velmora Monday Brawl"),
+        )
+        val list = SportsList(at("2026-11-23T20:41"), listOf(VELMORA), nights, cut = false)
+        assertEquals(listOf(CardType.WeeklyShow, CardType.WeeklyShow), Sports.of(list).events.map { it.cardType })
+
+        // The night before was read alone once, and kept as a named event: it stays one, with its two parts.
+        val kept = Sports.of(list.copy(cardTypes = mapOf("ev-000052" to CardType.Premium, "ev-000099" to CardType.Numbered)))
+        assertEquals(listOf("ev-000052:pre-show", "ev-000052:main-show"), kept.event("ev-000052")!!.parts.map { it.key })
+        assertEquals(CardType.WeeklyShow, kept.event("ev-000051")!!.cardType, "seen for the first time")
+        assertEquals(mapOf("ev-000051" to CardType.WeeklyShow, "ev-000052" to CardType.Premium), kept.cardTypes, "what the list keeps next")
+
+        // A type kept for an event that isn't a fight card now is never used, nor kept.
+        val game = SportsList(at("2026-11-23T20:41"), listOf(PREMIER), listOf(on(PREMIER, 1, at("2026-11-21T15:00"), "Lantern Bay FC vs Copper Crown United")), false)
+        val built = Sports.of(game.copy(cardTypes = mapOf("ev-000001" to CardType.Premium)))
+        assertEquals(listOf("ev-000001:full"), built.event("ev-000001")!!.parts.map { it.key })
+        assertEquals(emptyMap(), built.cardTypes)
+    }
+
+    @Test
     fun `the season's years are its four-digit years, a split season's two, else the start's UTC year`() {
         fun years(season: String?, start: Instant = at("2026-11-21T15:00")): List<Int> =
             sports(PREMIER to listOf(on(PREMIER, 1, start, "Lantern Bay FC vs Copper Crown United").copy(season = season))).events.single().seasonYears

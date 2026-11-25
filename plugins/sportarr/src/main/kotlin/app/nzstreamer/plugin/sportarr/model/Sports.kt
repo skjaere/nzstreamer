@@ -45,6 +45,9 @@ data class Sports(
     val weekends: List<Weekend>,
 ) {
     private val eventsByKey = events.associateBy { it.key }
+
+    /** Each fight card's type by its key: kept with the list, so a later build gives the card the same parts (L644). */
+    val cardTypes: Map<String, CardType> get() = events.mapNotNull { event -> event.cardType?.let { event.key to it } }.toMap()
     private val weekendsByKey = weekends.associateBy { it.key }
     private val weekendOfEvent = weekends.flatMap { weekend -> weekend.sessions.map { it.key to weekend } }.toMap()
 
@@ -64,8 +67,10 @@ data class Sports(
     companion object {
         /**
          * The model of [list]: each event under the league whose route listed it (one listed under no kept league is left
-         * out), its family stepped down where its title can't carry it, a fight card's type read against its league's other
-         * events, and each key kept once, the first the list holds (newest first).
+         * out), its family stepped down where its title can't carry it, and each key kept once, the first the list holds
+         * (newest first). A fight card keeps the type the list kept for its key; one seen for the first time is typed
+         * against its league's other events. A weekly show is one only while another night of it is listed a week away, so
+         * typing a card again on each read would move its parts to other keys and leave their watch state behind.
          */
         fun of(list: SportsList): Sports {
             val leagues = list.leagues.map { League(it.id, it.name, it.sport, it.alternateName) }
@@ -75,7 +80,8 @@ data class Sports(
             val seen = HashSet<String>()
             val events = list.events.mapNotNull { event ->
                 val league = byId[event.leagueId] ?: return@mapNotNull null
-                build(league, event, cardTypes[league.id]?.get(event.id)).takeIf { seen.add(it.key) }
+                val cardType = list.cardTypes[Keys.event(event.externalId, event.id)] ?: cardTypes[league.id]?.get(event.id)
+                build(league, event, cardType).takeIf { seen.add(it.key) }
             }
             val sessions = events.filter { it.family == Family.Motorsport }.groupBy { it.league.id }
             val weekends = leagues.flatMap { league -> Weekends.of(league, sessions[league.id].orEmpty()) }

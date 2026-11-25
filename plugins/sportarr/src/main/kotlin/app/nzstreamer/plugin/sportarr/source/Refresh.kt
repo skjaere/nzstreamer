@@ -27,7 +27,8 @@ import kotlin.coroutines.CoroutineContext
  *
  * It runs in [scope], the host's, on the main thread; the read ([read], a [ListReader]'s) decodes off it, [kept] reads
  * and writes list.json off it, and each list, read or kept, is built into the model ([build]) on [work], so only the state
- * it ends in is set here. [clock] says when a list is too old.
+ * it ends in is set here. A read is built with the fight cards' types of the list before it, and kept with the types its
+ * model holds, so a card's parts keep their keys from one read to the next. [clock] says when a list is too old.
  */
 class Refresh(
     private val scope: CoroutineScope,
@@ -80,8 +81,9 @@ class Refresh(
             if (sports == null) current.value = ListState.Loading
             current.value = when (val result = read(saved)) {
                 is ListRead.Read -> {
-                    val built = withContext(work) { build(result.list) }
-                    kept.write(result.list)
+                    val list = result.list.copy(cardTypes = sports?.cardTypes.orEmpty())
+                    val built = withContext(work) { build(list) }
+                    kept.write(list.copy(cardTypes = built.cardTypes))
                     sports = built
                     settled(built)
                 }

@@ -335,6 +335,46 @@ class RefreshTest {
         }
     }
 
+    @Test
+    fun `a fight card keeps its parts' keys whatever its neighbours in a later read, and after a restart`() = runTest {
+        // A weekly show back from a break: its first night listed alone reads as a named event, with a pre-show and a
+        // main show; the week after, once listed, would make it a weekly show of one part.
+        val velmora = league(5, "Velmora Wrestling", "Wrestling")
+        fun brawl(id: Int, days: Long) = event(id, START.plus(Duration.ofDays(days)), 5, title = "Velmora Monday Brawl", sport = "Wrestling")
+        sportarr.leagues = listOf(velmora)
+        sportarr.events = mapOf(5 to listOf(brawl(51, -1)))
+        val kept = KeptList(dir, EmptyCoroutineContext)
+        val refresh = refresh(kept = kept)
+        refresh.shown().join()
+        fun keys(state: ListState, id: Int) = assertIs<ListState.Ready>(state).sports.events.single { it.id == id }.parts.map { it.key }
+        val first = keys(refresh.state.value, 51)
+        assertEquals(listOf("ev-000051:pre-show", "ev-000051:main-show"), first)
+
+        sportarr.events = mapOf(5 to listOf(brawl(52, 6), brawl(51, -1)))
+        refresh.refresh().join()
+        assertEquals(first, keys(refresh.state.value, 51), "next week's night listed")
+
+        // A restart reads list.json first, then Sportarr again: the night keeps its keys both times.
+        advanceTimeBy(20.minutes)
+        val again = refresh(kept = kept)
+        val shown = again.shown()
+        runCurrent()
+        assertEquals(first, keys(again.state.value, 51), "from list.json")
+        shown.join()
+        assertEquals(3 * 2, sportarr.http.requests.size, "a third read, after the restart: the leagues and one page each time")
+        assertEquals(first, keys(again.state.value, 51), "read again after the restart")
+
+        // The other way: two nights a week apart are each a weekly show, and the later one stays one when the earlier one
+        // leaves the list.
+        sportarr.events = mapOf(5 to listOf(brawl(53, 13), brawl(52, 6)))
+        again.refresh().join()
+        assertEquals(listOf("ev-000052:full"), keys(again.state.value, 52))
+        assertEquals(listOf("ev-000053:full"), keys(again.state.value, 53))
+        sportarr.events = mapOf(5 to listOf(brawl(53, 13)))
+        again.refresh().join()
+        assertEquals(listOf("ev-000053:full"), keys(again.state.value, 53), "its neighbour gone")
+    }
+
     private companion object {
         val START: Instant = Instant.parse("2026-11-24T12:00:00Z")
         const val KEY = "kestrel0123456789abcdef0123456789"

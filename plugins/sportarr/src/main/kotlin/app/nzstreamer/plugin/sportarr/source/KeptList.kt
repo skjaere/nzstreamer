@@ -1,5 +1,6 @@
 package app.nzstreamer.plugin.sportarr.source
 
+import app.nzstreamer.plugin.sportarr.model.CardType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -11,9 +12,17 @@ import kotlin.coroutines.CoroutineContext
 
 /**
  * The list as one read gave it (L641): the time it was read, the leagues that count, their events in the window (the
- * declared fields alone, L653), newest first, and whether a page budget or the cap of 5,000 cut anything.
+ * declared fields alone, L653), newest first, and whether a page budget or the cap of 5,000 cut anything. [cardTypes]
+ * are the fight cards' types the model decided before, by event key: kept with the list, as a card's type names its
+ * parts and so its parts' keys, which never change (L644), while a weekly show's type depends on what else is listed.
  */
-data class SportsList(val readAt: Instant, val leagues: List<KeptLeague>, val events: List<WireEvent>, val cut: Boolean)
+data class SportsList(
+    val readAt: Instant,
+    val leagues: List<KeptLeague>,
+    val events: List<WireEvent>,
+    val cut: Boolean,
+    val cardTypes: Map<String, CardType> = emptyMap(),
+)
 
 /**
  * A league the list keeps: its id, name and sport, and its other names, which the motorsport rules read as the series'
@@ -34,7 +43,10 @@ class KeptList(private val dir: File, private val io: CoroutineContext = Dispatc
     suspend fun read(): SportsList? = withContext(io) {
         try {
             val kept = Wire.json.decodeFromString(ListFile.serializer(), file.readText())
-            if (kept.format == FORMAT) SportsList(kept.readAt, kept.leagues, kept.events, kept.cut) else null
+            if (kept.format != FORMAT) return@withContext null
+            // A type this version doesn't know is left out: the card is typed again, rather than the list lost.
+            val cardTypes = kept.cardTypes.mapNotNull { (key, name) -> CardType.entries.firstOrNull { it.name == name }?.let { key to it } }.toMap()
+            SportsList(kept.readAt, kept.leagues, kept.events, kept.cut, cardTypes)
         } catch (e: IOException) {
             // No file yet, or one that can't be read: no list.
             null
@@ -49,7 +61,7 @@ class KeptList(private val dir: File, private val io: CoroutineContext = Dispatc
         val temporary = File(dir, "$NAME.tmp")
         try {
             dir.mkdirs()
-            val written = ListFile(FORMAT, list.readAt, list.cut, list.leagues, list.events)
+            val written = ListFile(FORMAT, list.readAt, list.cut, list.leagues, list.events, list.cardTypes.mapValues { it.value.name })
             temporary.writeText(Wire.json.encodeToString(ListFile.serializer(), written))
             if (!temporary.renameTo(file)) throw IOException("Not renamed")
             true
@@ -59,7 +71,10 @@ class KeptList(private val dir: File, private val io: CoroutineContext = Dispatc
         }
     }
 
-    /** list.json as written: what L645's format 1 holds. */
+    /**
+     * list.json as written: what L645's format 1 holds, and the fight cards' types by event key, by name; a file without
+     * them reads as one with none.
+     */
     @Serializable
     private class ListFile(
         val format: Int,
@@ -67,6 +82,7 @@ class KeptList(private val dir: File, private val io: CoroutineContext = Dispatc
         val cut: Boolean = false,
         val leagues: List<KeptLeague> = emptyList(),
         val events: List<WireEvent> = emptyList(),
+        val cardTypes: Map<String, String> = emptyMap(),
     )
 
     private companion object {
