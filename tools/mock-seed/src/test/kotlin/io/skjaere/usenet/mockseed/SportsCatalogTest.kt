@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -71,14 +72,39 @@ class SportsCatalogTest {
         assertEquals("2026-2027", event(1001).season, "Premier League: a split season")
         assertEquals("2026-27", event(1501).season, "NBA: a split season, written short")
         assertEquals("2026", event(1605).season)
-        // Across a new year: the year of each start, and the split season from July on.
+        // Across a new year: the year of each start, and the split season from July on; a round's, its last event's.
         val january = catalog.leagues(LocalDate.of(2027, 1, 1)).flatMap { it.events }
         assertEquals("2026", january.single { it.id == 1605 }.season, "the race a day before the anchor, on 31 December")
         assertEquals("2027", january.single { it.id == 1625 }.season)
         assertEquals("2026-2027", january.single { it.id == 1001 }.season)
         val july = catalog.leagues(LocalDate.of(2026, 7, 1)).flatMap { it.events }
-        assertEquals("2025-2026", july.single { it.id == 1001 }.season, "30 June closes a season")
-        assertEquals("2026-2027", july.single { it.id == 1012 }.season, "1 July opens one")
+        assertEquals("2025-26", july.single { it.id == 1501 }.season, "30 June closes a season")
+        assertEquals("2026-27", july.single { it.id == 1504 }.season, "1 July opens one")
+        // A matchday from 28 June to 2 July: the season its last game opens.
+        assertEquals(setOf("2026-2027"), july.filter { it.round == "13" }.map { it.season }.toSet())
+    }
+
+    @Test
+    fun `a round has one season however its days fall, and a release's year is its events' season`() {
+        val rows = Json.parseToJsonElement(javaClass.classLoader.getResource(SportsCatalog.RESOURCE)!!.readText()).jsonObject
+            .getValue("releases").jsonArray.map { it.jsonObject }
+        val yearly = rows.filter { "{year}" in it.getValue("name").toString() }.map { it.getValue("id").jsonPrimitive.content }.toSet()
+        assertTrue(yearly.isNotEmpty())
+        // Grand Prix of Vellmar's weekend across New Year: Qualifying on 31 December, the race on the 1st; then the
+        // practices on the 31st. A season's turn in July too, and the usual anchor.
+        listOf(LocalDate.of(2027, 1, 16), LocalDate.of(2027, 1, 17), LocalDate.of(2027, 1, 2), LocalDate.of(2026, 7, 2), anchor).forEach { day ->
+            val leagues = catalog.leagues(day)
+            leagues.forEach { league ->
+                league.events.filter { it.round != null }.groupBy { it.round }.forEach { (round, events) ->
+                    assertEquals(1, events.map { it.season }.distinct().size, "${league.name}'s round $round at $day: ${events.map { it.season }}")
+                }
+            }
+            val library = leagues.flatMap { it.events }.associateBy { it.id }
+            catalog.releases(day).filter { it.id in yearly }.forEach { release ->
+                val years = Regex("""(?<!\d)(?:19|20)\d{2}(?!\d)""").findAll(release.name).map { it.value }.toSet()
+                release.verdicts.forEach { row -> assertEquals(setOf(library.getValue(row.eventId).season), years, "${release.id} for ${row.eventId} at $day") }
+            }
+        }
     }
 
     @Test

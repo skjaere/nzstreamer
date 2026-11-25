@@ -37,7 +37,10 @@ class SportsCatalog private constructor(private val root: JsonObject) {
     }
 
     /** The library, its events' starts and broadcast dates [anchor]'s. */
-    fun leagues(anchor: LocalDate): List<SportsLeague> = root.getValue("leagues").jsonArray.map { it.jsonObject.league(anchor) }
+    fun leagues(anchor: LocalDate): List<SportsLeague> {
+        val seasons = seasonDates(anchor)
+        return root.getValue("leagues").jsonArray.map { it.jsonObject.league(anchor, seasons) }
+    }
 
     /**
      * The busy league (`/control/busy`): baseball games between numbered invented clubs, Kestrel Club 01 to 30, [events] of
@@ -71,14 +74,16 @@ class SportsCatalog private constructor(private val root: JsonObject) {
 
     /**
      * The releases, each name and file taking its dates from its event's UTC start at [anchor]: `{date}` is that date
-     * (2026.11.21), `{date-1}` and `{date+1}` a day either side (a US evening's date, the day before), `{year}` its year.
+     * (2026.11.21), `{date-1}` and `{date+1}` a day either side (a US evening's date, the day before), `{year}` the year of
+     * its event's season, as its round has one ("Formula1.2026.Round19…" for each session of a weekend across New Year).
      */
     fun releases(anchor: LocalDate): List<SportsRelease> {
         val starts = leagues(anchor).flatMap { it.events }.associate { it.id to it.start }
+        val seasons = seasonDates(anchor)
         return root.getValue("releases").jsonArray.map { it.jsonObject }.map { row ->
             val event = row.int("event")
             val start = requireNotNull(starts[event]) { "release ${row.string("id")} names no event of the library: $event" }
-            fun dated(template: String) = expand(template, start)
+            fun dated(template: String) = expand(template, start, seasons.getValue(event).year)
             val name = dated(row.string("name")!!)
             SportsRelease(
                 id = row.string("id")!!,
@@ -100,24 +105,36 @@ class SportsCatalog private constructor(private val root: JsonObject) {
         }
     }
 
-    private fun JsonObject.league(anchor: LocalDate): SportsLeague {
+    /**
+     * The date each event's season is told by, by event id: its UTC date, or for an event of a round the UTC date of the
+     * round's last event, as a round is one season's however its days fall (a weekend across New Year, a matchday across
+     * the first of July).
+     */
+    private fun seasonDates(anchor: LocalDate): Map<Int, LocalDate> = root.getValue("leagues").jsonArray.flatMap { league ->
+        val events = league.jsonObject.getValue("events").jsonArray.map { it.jsonObject }
+        val roundEnds = events.filter { it.string("round") != null }.groupBy { it.string("round") }
+            .mapValues { (_, round) -> round.maxOf { it.date(anchor) } }
+        events.map { it.int("id") to (roundEnds[it.string("round")] ?: it.date(anchor)) }
+    }.toMap()
+
+    private fun JsonObject.league(anchor: LocalDate, seasons: Map<Int, LocalDate>): SportsLeague {
         val id = int("id")
         return SportsLeague(
             id = id, externalId = string("externalId")!!, name = string("name")!!, sport = string("sport"), monitored = bool("monitored")!!,
             monitorType = string("monitorType"), keepAllEvents = bool("keepAllEvents"), alternateName = string("alternateName"),
             teamless = bool("teamless") ?: false,
-            events = getValue("events").jsonArray.map { it.jsonObject.event(id, anchor) },
+            events = getValue("events").jsonArray.map { it.jsonObject.event(id, anchor, seasons.getValue(it.jsonObject.int("id"))) },
         )
     }
 
-    private fun JsonObject.event(leagueId: Int, anchor: LocalDate): SportsEvent {
-        val start = anchor.plusDays(int("day").toLong()).atTime(LocalTime.parse(string("time"))).toInstant(ZoneOffset.UTC)
+    private fun JsonObject.event(leagueId: Int, anchor: LocalDate, seasonDate: LocalDate): SportsEvent {
+        val start = start(anchor)
         val date = start.atZone(ZoneOffset.UTC).toLocalDate()
         return SportsEvent(
             id = int("id"), externalId = string("externalId"), leagueId = leagueId, title = string("title")!!, start = start,
             // Sportarr stores the UTC date where it has no broadcast date: the fallback looks the same on the wire.
             broadcastDate = date.plusDays((this["broadcast"]?.jsonPrimitive?.int ?: 0).toLong()), broadcastTimezone = string("timezone"),
-            season = string("season")?.let { season(it, date) }, round = string("round"), homeTeamName = string("home"),
+            season = string("season")?.let { season(it, seasonDate) }, round = string("round"), homeTeamName = string("home"),
             awayTeamName = string("away"), monitored = bool("monitored")!!, hasFile = bool("hasFile")!!,
             partNames = (this["parts"] as? JsonArray)?.map { it.jsonPrimitive.content }, listed = bool("listed") ?: true,
         )
@@ -145,20 +162,27 @@ class SportsCatalog private constructor(private val root: JsonObject) {
 
         private fun club(number: Int) = "Kestrel Club ${number.toString().padStart(2, '0')}"
 
+        /** An event row's start at [anchor]: its day from the anchor, at its UTC time. */
+        private fun JsonObject.start(anchor: LocalDate): Instant =
+            anchor.plusDays(int("day").toLong()).atTime(LocalTime.parse(string("time"))).toInstant(ZoneOffset.UTC)
+
+        private fun JsonObject.date(anchor: LocalDate): LocalDate = start(anchor).atZone(ZoneOffset.UTC).toLocalDate()
+
         private val DATE = Regex("""\{date([+-]\d+)?}""")
 
-        /** [template]'s {date}, {date-N}, {date+N} and {year} from [start]'s UTC date. */
-        private fun expand(template: String, start: Instant): String {
+        /** [template]'s {date}, {date-N} and {date+N} from [start]'s UTC date, and {year}, [seasonYear]. */
+        private fun expand(template: String, start: Instant, seasonYear: Int): String {
             val date = start.atZone(ZoneOffset.UTC).toLocalDate()
             return DATE.replace(template) { match ->
                 val day = date.plusDays(match.groupValues[1].takeIf { it.isNotEmpty() }?.removePrefix("+")?.toLong() ?: 0)
                 "%04d.%02d.%02d".format(day.year, day.monthValue, day.dayOfMonth)
-            }.replace("{year}", "${date.year}")
+            }.replace("{year}", "$seasonYear")
         }
 
         /**
-         * A season as written: "{year}" is the start's UTC year, "{split}" the split season it falls in from July on
-         * ("2026-2027"), "{splitShort}" the same with the second year short ("2026-27"); anything else as it is.
+         * A season as written, told by [date] (the event's, or its round's last): "{year}" is its year, "{split}" the split
+         * season it falls in from July on ("2026-2027"), "{splitShort}" the same with the second year short ("2026-27");
+         * anything else as it is.
          */
         private fun season(written: String, date: LocalDate): String {
             val first = if (date.monthValue >= 7) date.year else date.year - 1
