@@ -241,6 +241,37 @@ class TeamMatchTest {
     }
 
     @Test
+    fun `a date's numbers name no side, though a listed club is numbered like its day or month`() {
+        fun numbered(id: Int, start: String, number: Int) = game(
+            baseball, id, start, "Kestrel Club 03", "Kestrel Club 07", round = null, season = "2026", title = "Kestrel Club 03 vs Kestrel Club 07 - Game $number",
+        )
+        // Kestrel Club 05 is listed too: "Kestrel" stands in every name of these clubs, so a date's 05 beside it would
+        // name it, and the double header's own names would read as Kestrel Club 05's game with Kestrel Club 07.
+        fun doubleHeader(day: String, before: String) = sports(
+            baseball to listOf(
+                numbered(1401, "${day}T15:00", 1),
+                numbered(1402, "${day}T19:00", 2),
+                game(baseball, 1403, "${before}T17:00", "Kestrel Club 07", "Kestrel Club 05", round = null, season = "2026"),
+            ),
+        )
+        listOf("2026-12-05" to "2026-12-03", "2026-05-08" to "2026-05-06").forEach { (day, before) ->
+            val list = doubleHeader(day, before)
+            val matcher = TeamMatch(list)
+            val date = day.replace('-', '.')
+            val rows = listOf(
+                "Kestrel.Club.03.vs.Kestrel.Club.07.$date.Game.1.1080p.WEB.h264-KESTREL" to accepted,
+                "Kestrel.Club.03.vs.Kestrel.Club.07.$date.Game.2.1080p.WEB.h264-KESTREL" to otherGame,
+                "Kestrel.Club.03.vs.Kestrel.Club.07.$date.720p.WEB.h264-WREN" to offered("No game number"),
+            )
+            assertEquals("", wrong(list.byId(1401), rows, matcher), day)
+            // A club's own number still names it: Kestrel Club 05's game is that game's, and another game's here.
+            val theirs = "Kestrel.Club.07.vs.Kestrel.Club.05.${before.replace('-', '.')}.1080p.WEB.h264-KESTREL"
+            assertEquals(accepted, judge(list.byId(1403), theirs, matcher), day)
+            assertEquals(otherGame, judge(list.byId(1401), "Kestrel.Club.07.vs.Kestrel.Club.05.1080p.WEB.h264-KESTREL", matcher), day)
+        }
+    }
+
+    @Test
     fun `a women's, youth or reserve side's game is another game, unless the event is that side's`() {
         val womens = KeptLeague(2, "Kestrel Premier Division", "Soccer")
         val both = sports(

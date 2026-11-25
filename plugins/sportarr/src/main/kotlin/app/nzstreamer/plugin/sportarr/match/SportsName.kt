@@ -119,10 +119,16 @@ data class NameContext(
  */
 data class NameDate(val readings: List<LocalDate>, val form: DateForm, val at: Int) {
     val ambiguous: Boolean get() = readings.size > 1
+
+    /** The places of its words in the identity. */
+    val places: IntRange get() = at until at + form.words
 }
 
-/** How a date was written: "2026.11.21", "20261121", "21.11.2026", or a trailing "21.11" with the year elsewhere. */
-enum class DateForm { YearFirst, Compact, DayFirst, DayMonth }
+/**
+ * How a date was written: "2026.11.21", "20261121", "21.11.2026", or a trailing "21.11" with the year elsewhere; [words]
+ * is how many of the name's words it takes.
+ */
+enum class DateForm(val words: Int) { YearFirst(3), Compact(1), DayFirst(3), DayMonth(2) }
 
 /** A season span, "2026.2027" or "2026-27": two years, never a date. */
 data class SeasonSpan(val first: Int, val second: Int)

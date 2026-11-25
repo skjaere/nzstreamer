@@ -197,10 +197,16 @@ class TeamMatch(private val sports: Sports) : FamilyMatcher {
         val cricket: Boolean get() = Families.fold(event.league.sport) == CRICKET
     }
 
-    /** A release name's identity words, read once for every side's search in it. */
+    /**
+     * A release name's identity words, read once for every side's search in it. A date's numbers are no side's words:
+     * "05" of a name dated the 5th would otherwise name a listed "Kestrel Club 05" wherever "Kestrel" stands too.
+     */
     private class Read(val name: SportsName) {
-        val words: List<String> = name.identity.map { it.word }
-        val present: Set<String> = words.toSet()
+        private val dated: Set<Int> = name.dates.flatMap { it.places }.toSet()
+
+        /** The words in their places, a date's as none, so no side's words run across a date. */
+        val words: List<String?> = name.identity.mapIndexed { place, token -> token.word.takeUnless { place in dated } }
+        val present: Set<String> = words.filterNotNull().toSet()
 
         /** Whether [phrase] stands together among the words. */
         fun has(phrase: List<String>): Boolean =

@@ -30,16 +30,17 @@ class SportsNameTest {
 
     @Test
     fun `a date says how it was written and where it stands`() {
+        // Where it stands: the places of the words it takes, from its first.
         val rows = listOf(
-            "Premier.League.2026.11.21.Lantern.Bay.FC.vs.Copper.Crown.United.1080p50.WEB.h264-KESTREL" to "YearFirst at 2",
-            "Lantern.Bay.vs.Copper.Crown.2026.11.21.720p50.WEB.h264-WREN" to "YearFirst at 5",
-            "EPL.20261121.Lantern.Bay.FC.v.Copper.Crown.United.1080p.HDTV.x264-ORCHID" to "Compact at 1",
-            "Premier.League.21.11.2026.Lantern.Bay.FC.vs.Copper.Crown.United.720p" to "DayFirst at 2",
-            "Kestrel.Hockey.League.2026.Easton.Comets.Saltmere.Gulls.22.11.720p.WEB.h264-WREN" to "DayMonth at 8",
+            "Premier.League.2026.11.21.Lantern.Bay.FC.vs.Copper.Crown.United.1080p50.WEB.h264-KESTREL" to "YearFirst at 2, 2..4",
+            "Lantern.Bay.vs.Copper.Crown.2026.11.21.720p50.WEB.h264-WREN" to "YearFirst at 5, 5..7",
+            "EPL.20261121.Lantern.Bay.FC.v.Copper.Crown.United.1080p.HDTV.x264-ORCHID" to "Compact at 1, 1..1",
+            "Premier.League.21.11.2026.Lantern.Bay.FC.vs.Copper.Crown.United.720p" to "DayFirst at 2, 2..4",
+            "Kestrel.Hockey.League.2026.Easton.Comets.Saltmere.Gulls.22.11.720p.WEB.h264-WREN" to "DayMonth at 8, 8..9",
         )
         rows.forEach { (name, expected) ->
             val date = SportsName.read(name).dates.single()
-            assertEquals(expected, "${date.form} at ${date.at}", name)
+            assertEquals(expected, "${date.form} at ${date.at}, ${date.places}", name)
         }
         assertTrue(SportsName.read("Premier.League.10.11.2026.Lantern.Bay.FC.vs.Copper.Crown.United.720p").dates.single().ambiguous)
         assertFalse(SportsName.read("Premier.League.21.11.2026.Lantern.Bay.FC.vs.Copper.Crown.United.720p").dates.single().ambiguous)
