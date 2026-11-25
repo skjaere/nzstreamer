@@ -420,9 +420,9 @@ class SportsCatalogTest {
         }
 
         /**
-         * The plugin's searches for each event the catalogue judges releases for, as L648 to L651 write them (item 16 holds
-         * the runner's own to the rows): stage 1, then stage 2 only where stage 1 finds no name the rows accept for the
-         * part.
+         * The plugin's searches for each event the catalogue judges releases for, as L648 to L651 write them (the
+         * plugin's QueriesAgainstFakeIndexerTest holds the runner's own searches to the same rows, L655's `reached`):
+         * stage 1, then stage 2 only where stage 1 finds no name the rows accept for the part.
          */
         val ASKED: Map<Int, Pair<List<String>, List<String>>> = buildMap {
             put(1001, listOf("Lantern Bay Copper Crown", "Premier League {bc}") to listOf("Copper Lantern"))
