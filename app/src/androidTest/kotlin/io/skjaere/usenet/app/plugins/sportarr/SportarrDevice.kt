@@ -43,6 +43,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.util.UUID
+import kotlin.concurrent.thread
 import kotlin.math.abs
 
 /** The Sportarr plugin's id, as its builds carry it (L639). */
@@ -128,6 +129,7 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
     private val by = "$owner-${UUID.randomUUID()}"
     private val undo = mutableListOf<String>()
     private var held = false
+    private var keeping: Thread? = null
     private var indexed = false
     private val mock = PluginMockSetup(INDEXER_ID, INDEXER_NAME, SportsFakes.INDEXER_PORT)
 
@@ -142,7 +144,10 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
 
     /**
      * Holds the fake Sportarr for this test, waiting while another emulator's test holds it: its switches and counts are
-     * one set for every emulator. Given back by [restore]; the fake lets go by itself of a hold past its time.
+     * one set for every emulator. Taken, it is reset: every switch off and the counts at nought, whatever a test before
+     * left (one stopped by the run's watchdog, or that crashed, never ran its restore). The hold is short and kept up while
+     * the test runs, so one whose process died lets go before the watchdog takes the next for hung. Given back by
+     * [restore].
      */
     fun hold() {
         val until = System.nanoTime() + HOLD_WAIT_MS * 1_000_000
@@ -155,6 +160,17 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
             Thread.sleep(250)
         }
         held = true
+        control("reset")
+        keeping = thread(isDaemon = true, name = "fake-sportarr-hold") {
+            try {
+                while (true) {
+                    Thread.sleep(RENEW_MS)
+                    ask("take?by=$by&ms=$HOLD_MS")
+                }
+            } catch (e: InterruptedException) {
+                // Given back.
+            }
+        }
     }
 
     /** The fake's anchor and now. */
@@ -269,6 +285,8 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
             { undo.asReversed().toList().forEach { control(it) } },
             { undo.clear() },
             { mock.restore() },
+            { keeping?.interrupt() },
+            { keeping = null },
             { if (held) control("give-back?by=$by") },
             { held = false },
         )
@@ -317,8 +335,12 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
         const val INDEXER_ID = "sportarr-device-test"
         const val INDEXER_NAME = "Sports (device tests)"
 
-        /** A test's hold of the fake: longer than any one test, shorter than a run of them. */
-        private const val HOLD_MS = 10 * 60_000L
+        /**
+         * A test's hold of the fake, kept up every [RENEW_MS] while it runs: shorter than the sharded run's watchdog (four
+         * minutes with no output), so the hold of a test whose process died runs out before the next waits that long.
+         */
+        private const val HOLD_MS = 2 * 60_000L
+        private const val RENEW_MS = 30_000L
 
         /** How long a test waits for another's turn at the fake. */
         private const val HOLD_WAIT_MS = 12 * 60_000L
