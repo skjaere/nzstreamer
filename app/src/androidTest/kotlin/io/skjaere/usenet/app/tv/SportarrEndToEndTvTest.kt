@@ -23,6 +23,7 @@ import io.skjaere.usenet.app.HomeContentShown
 import io.skjaere.usenet.app.TvDevice
 import io.skjaere.usenet.app.assumeTv
 import io.skjaere.usenet.app.container
+import io.skjaere.usenet.app.everyStep
 import io.skjaere.usenet.app.play.OkGuard
 import io.skjaere.usenet.app.pluginTabsFollow
 import io.skjaere.usenet.app.plugins.InstalledPlugin
@@ -113,22 +114,28 @@ class SportarrEndToEndTvTest {
         sportarr.indexers(plays = true)
     }
 
+    /** Each step whatever the ones before it did: a fake that stopped answering mustn't leave Home's setting changed. */
     @After
-    fun restore() {
-        // A player a failure left open, closed before the rows are put back: its save as it closes would come after.
-        sportarr.closePlayers()
-        instrumentation.setInTouchMode(true)
-        container.playback.cancel()
-        // The runner's source for the whole run: an address that answers nothing (L622).
-        PluginSource.override = PluginSource.CLOSED
-        server.close()
-        try {
-            tmdb?.close()
-        } catch (e: AssertionError) {
-            // What Home asked of other titles was refused, never sent.
-        }
-        sportarr.restore()
-        home.restore()
+    fun restore() = runBlocking<Unit> {
+        everyStep(
+            // A player a failure left open, closed before the rows are put back: its save as it closes would come after.
+            { sportarr.closePlayers() },
+            // Touch mode outlasts the test's process.
+            { instrumentation.setInTouchMode(true) },
+            { container.playback.cancel() },
+            // The runner's source for the whole run: an address that answers nothing (L622).
+            { PluginSource.override = PluginSource.CLOSED },
+            { server.close() },
+            {
+                try {
+                    tmdb?.close()
+                } catch (e: AssertionError) {
+                    // What Home asked of other titles was refused, never sent.
+                }
+            },
+            { sportarr.restore() },
+            { home.restore() },
+        )
     }
 
     private val library get() = sportarr.catalogue
