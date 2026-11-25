@@ -176,6 +176,11 @@ object Words {
             listOf("grand prix", "gp").map { Phrase(it.split(' '), SessionEntry(null, foreign = false, number = null)) },
     )
 
+    /** Club forms and words many clubs share (L648), which tell no side from another: "FC", "City", "United". */
+    val clubWords: Set<String> = setOf(
+        "fc", "afc", "cf", "sc", "ac", "cd", "fk", "club", "the", "city", "united", "town", "athletic", "rovers", "county",
+    )
+
     /** Result words (L646), as whole tokens: a name holding one is never offered (W167 a). */
     val results: Set<String> = setOf(
         "result", "results", "winner", "winners", "wins", "won", "beat", "beats", "defeats", "defeated", "victory", "retains", "ko", "tko",

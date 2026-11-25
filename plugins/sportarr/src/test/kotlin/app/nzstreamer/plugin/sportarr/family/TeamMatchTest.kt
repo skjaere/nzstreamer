@@ -343,6 +343,9 @@ class TeamMatchTest {
             "Premier.League.2027.Round.13.Lantern.Bay.FC.vs.Copper.Crown.United.720p.WEB.h264-WREN" to accepted,
             "Premier.League.2026.Week.14.Lantern.Bay.FC.vs.Copper.Crown.United.720p.WEB.h264-WREN" to otherGame,
             "Premier.League.2019.Week.13.Lantern.Bay.FC.vs.Copper.Crown.United.720p.WEB.h264-WREN" to otherGame,
+            // Both sides with no "vs" between them: still one game's, never a pack.
+            "Premier League 2026-27 Matchday 13 Lantern Bay FC - Copper Crown United 720p" to accepted,
+            "Premier.League.2026.11.21.Matchday.13.Lantern.Bay.FC.Copper.Crown.United.720p.WEB.h264-WREN" to accepted,
             // No year: both sides with no date, the sides meeting once in the list.
             "Premier.League.Week.13.Lantern.Bay.FC.vs.Copper.Crown.United.720p.WEB.h264-WREN" to offered("No date in the name"),
             "Lantern.Bay.FC.vs.Copper.Crown.United.2026.1080p.WEB.h264-DRIFTWOOD" to offered("No date in the name"),

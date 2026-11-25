@@ -277,6 +277,4 @@ class Side(val name: String) {
 }
 
 /** Club forms and words many clubs share, which tell no side from another (L648). */
-private val COMMON = setOf(
-    "fc", "afc", "cf", "sc", "ac", "cd", "fk", "club", "the", "city", "united", "town", "athletic", "rovers", "county",
-)
+private val COMMON: Set<String> = NameWords.clubWords

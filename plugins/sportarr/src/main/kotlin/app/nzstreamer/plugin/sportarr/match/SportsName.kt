@@ -291,7 +291,7 @@ private class Reader(private val name: String, private val context: NameContext)
             .map { all[it].word }
         val sides = readSides()
         val weekPack = numbered.values.firstOrNull { it.word == NumberWord.Week || it.word == NumberWord.Matchday }
-            ?.takeIf { sides == null }?.let { it.word.name.lowercase() }
+            ?.takeIf { sides == null && !sideNamed() }?.let { it.word.name.lowercase() }
         return SportsName(
             name = name,
             identity = all.subList(0, tailStart),
@@ -556,6 +556,17 @@ private class Reader(private val name: String, private val context: NameContext)
             }
         }
         return found
+    }
+
+    /**
+     * Whether a side of the event's stands in the identity by a word of its own, whatever stands between the two: no club
+     * form, nor a word of the league's ("Lantern" of "Lantern Bay FC - Copper Crown United"). A week or matchday with one
+     * is that game's, never a pack.
+     */
+    private fun sideNamed(): Boolean {
+        val league = (listOfNotNull(context.league) + context.series).flatMap(::words).toSet()
+        val present = (0 until tailStart).mapTo(HashSet()) { all[it].word }
+        return context.sides.any { side -> words(side).any { it !in Words.clubWords && it !in league && it in present } }
     }
 
     /**

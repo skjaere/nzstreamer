@@ -201,6 +201,7 @@ class SportsNameTest {
         val KCL_21 = NameContext(title = "KCL 21: Brisk vs. Loam")
         val DOUBLE_HEADER = NameContext(title = "Kestrel Club 03 vs Kestrel Club 07 - Game 1", sides = listOf("Kestrel Club 03", "Kestrel Club 07"))
         val IN_A_SHOW = NameContext(show = true)
+        val LBF_CCU = NameContext(league = "Premier League", sides = listOf("Lantern Bay FC", "Copper Crown United"))
         val CROWN_2026 = NameContext(title = "Velmora Iron Crown 2026", years = setOf(2026))
 
         val DATES = listOf(
@@ -502,6 +503,11 @@ class SportsNameTest {
             Row("Premier.League.2026.Week.10.1080p.WEB.h264-WREN", "pack:week"),
             Row("Premier.League.2026.Matchday.12.720p.WEB.h264-WREN", "pack:matchday"),
             Row("Premier.League.2026.Week.10.Lantern.Bay.FC.vs.Copper.Crown.United.720p.WEB.h264-WREN", ""),
+            // A side of the event's named by its own words, whatever stands between the two, makes it one game's.
+            Row("Premier League 2026-27 Matchday 12 Lantern Bay FC - Copper Crown United 720p", "", LBF_CCU),
+            Row("Premier.League.2026.11.21.Matchday.12.Lantern.Bay.Copper.Crown.720p.WEB.h264-WREN", "", LBF_CCU),
+            Row("Premier.League.2026.Week.10.1080p.WEB.h264-WREN", "pack:week", LBF_CCU),
+            Row("Premier.League.2026.Week.10.Saltmere.City.1080p.WEB.h264-WREN", "pack:week", LBF_CCU),
             // Part words.
             Row("$CARD.Early.Prelims.1080p.WEB.h264-KESTREL", "part:early prelims"),
             Row("$CARD.Prelims.1080p.WEB.h264-KESTREL", "part:prelims"),
