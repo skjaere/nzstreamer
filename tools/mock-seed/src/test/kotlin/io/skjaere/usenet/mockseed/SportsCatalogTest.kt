@@ -291,7 +291,7 @@ class SportsCatalogTest {
     }
 
     @Test
-    fun `the plugin's searches find the rows marked reached and none other, whatever the anchor`() {
+    fun `the plugin's searches find the names marked reached for each event and part and no other, whatever the anchor`() {
         sports(mapOf("port" to "0", "indexer-port" to "0", "anchor" to "$anchor", "seed" to "false"), log = {}).use { fakes ->
             val rows = releases.flatMap { release -> release.verdicts.map { release.id to it } }
             val parts = rows.map { (_, row) -> row.eventId to row.part }.distinct()
@@ -308,10 +308,11 @@ class SportsCatalogTest {
                 }
             }
             val usual = found(anchor)
+            // Each name the searches find has its row for that event and part, so a page's lists can be told from the
+            // rows alone; and no row marked unreached is found.
             parts.forEach { (event, part) ->
                 val marked = rows.filter { (_, row) -> row.eventId == event && row.part == part }
-                assertTrue(usual.getValue(event to part).containsAll(marked.filter { it.second.reached }.map { it.first }), "$event $part")
-                assertTrue(usual.getValue(event to part).none { id -> marked.any { it.first == id && !it.second.reached } }, "$event $part")
+                assertEquals(marked.filter { it.second.reached }.map { it.first }.toSet(), usual.getValue(event to part), "$event $part")
             }
             // A year and a month of start dates: every day and month, a new year, a 29 February.
             generateSequence(LocalDate.of(2027, 12, 1)) { it.plusDays(1) }.takeWhile { it.year < 2029 }.forEach { day ->
