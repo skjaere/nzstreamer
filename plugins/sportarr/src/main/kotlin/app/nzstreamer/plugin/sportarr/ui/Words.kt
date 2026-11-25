@@ -8,8 +8,8 @@ import app.nzstreamer.plugin.sportarr.source.TestAnswer
  * Every word the plugin shows (L652, L660), in one file: strings in Kotlin, as a plugin carries no resources (L580), with
  * straight apostrophes as the host's strings have them. Each group holds one screen's words, phone and TV together. A word
  * drawn in an approved design names that design and its frame ("SpPhoneSetup 3") or its notes; a word marked Undrawn is the
- * plugin's own, for a state or case no design shows. The formats of dates, times and lengths, with the few words they are
- * made of ("Today", "Starts", "left", "ago") and the day and month names, are [Times]'.
+ * plugin's own, for a state or case no design shows. The formats of dates, times and lengths are [Times]', written with
+ * the words and the day and month names in [Dates].
  *
  * No word here is a score, a result, a status or anything else of an event's that Sportarr sends besides its title, league,
  * round and times (L653): the plugin shows those as Sportarr gives them.
@@ -495,6 +495,51 @@ internal object Words {
     object SearchWarning {
         /** SpPhoneSearchWarning 1: the note over the host's Search, and over the no-release sheet's Search. */
         const val SCORES = "Indexer results can show scores."
+    }
+
+    /**
+     * The words the dates, times and lengths are made of, and the day and month names, in English whatever the device's
+     * language, as the rest of NZStreamer writes them: [Times] puts them together.
+     */
+    object Dates {
+        /** SpPhoneList 1: today's header, on both sides. */
+        const val TODAY = "Today"
+
+        /** SpPhoneList 1: yesterday's header on Recent. */
+        const val YESTERDAY = "Yesterday"
+
+        /** SpPhoneList 5: tomorrow's header on Upcoming. */
+        const val TOMORROW = "Tomorrow"
+
+        /** SpPhoneGame 3: when an event not started yet starts, "Starts Sat 15:00". */
+        const val STARTS = "Starts"
+
+        /** Undrawn: an event that starts later today, "Starts today 15:00". */
+        const val STARTS_TODAY = "today"
+
+        /** SpPhoneList 1: what is left of a play, "1:04:38 left" on a row, "1 h 5 min left" in Up next. */
+        const val LEFT = "left"
+
+        /** SpPhoneList 1: hours, in Up next's "1 h 5 min left" and the list's age, "3 h ago". */
+        const val HOURS = "h"
+
+        /** SpPhoneList 1: minutes, in Up next's "1 h 5 min left". */
+        const val MINUTES = "min"
+
+        /** SpPhoneListStates 2: the kept list's age, "list from 3 h ago". */
+        const val AGO = "ago"
+
+        /** Undrawn: a list read the day before, as Discover says its lists' age. */
+        const val YESTERDAY_AGO = "yesterday"
+
+        /** Undrawn: a list read days before, "4 days ago". */
+        const val DAYS_AGO = "days ago"
+
+        /** SpPhoneList 1: the days' names, Monday first as java.time numbers them: "Fri 20 Nov". */
+        @JvmField val DAY_NAMES = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+        /** SpPhoneList 1: the months' names, January first: "Fri 20 Nov". */
+        @JvmField val MONTH_NAMES = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
     }
 
     /** The article before [noun]: "an event", "a game". */

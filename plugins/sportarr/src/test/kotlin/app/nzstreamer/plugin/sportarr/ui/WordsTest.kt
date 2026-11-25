@@ -50,6 +50,20 @@ class WordsTest {
     }
 
     @Test
+    fun `the day and month names the dates are written with are Words', named by the design that draws them`() {
+        val lists = groups().flatMap { group ->
+            group.declaredFields.filter { Modifier.isStatic(it.modifiers) && Modifier.isPublic(it.modifiers) && List::class.java.isAssignableFrom(it.type) }
+                .map { "${group.simpleName}.${it.name}" to it.get(null) }
+        }.toMap()
+        assertEquals(NAMES.map { it.key }.toSet(), lists.keys, "the lists of names Words holds")
+        val comments = comments(source("Words.kt"))
+        NAMES.forEach { names ->
+            assertEquals(names.names, lists[names.key], names.key)
+            assertTrue(names.design in comments[names.key].orEmpty(), "${names.key}'s comment doesn't say ${names.design}: ${comments[names.key]}")
+        }
+    }
+
+    @Test
     fun `the left-out lines the designs draw come from the kinds' own words`() {
         assertEquals(
             "6 left out: highlights, a name with a score, other games. Their names aren't shown.",
@@ -101,6 +115,9 @@ class WordsTest {
     /** A template's words for some values: [actual], which should be [expected]. */
     private class Template(val group: String, val name: String, val design: String?, val actual: String, val expected: String)
 
+    /** A list of names in Words, "Group.NAME" ([key]), drawn in [design]. */
+    private class Names(val key: String, val design: String, val names: List<String>)
+
     /** A constant of Words: "Group.NAME" and its words. */
     private class Field(val group: String, val name: String, val value: String) {
         val key get() = "$group.$name"
@@ -145,7 +162,7 @@ class WordsTest {
         const val UNDRAWN = "Undrawn"
         val SOURCES = File("src/main/kotlin/app/nzstreamer/plugin/sportarr/ui")
         val OBJECT = Regex("""^ {4}object (\w+)""")
-        val DECLARATION = Regex("""^( {4}| {8})(?:const val|fun) (\w+)""")
+        val DECLARATION = Regex("""^( {4}| {8})(?:const val|fun|@JvmField val) (\w+)""")
 
         const val SETUP = "Setup"
         const val LIST = "SportsList"
@@ -157,6 +174,7 @@ class WordsTest {
         const val CHOOSE = "Choose"
         const val NOTHING = "NoRelease"
         const val SEARCH = "SearchWarning"
+        const val DATES = "Dates"
 
         val CONSTANTS = listOf(
             Shown(SETUP, "SpPhoneSetup", "Sports"),
@@ -274,6 +292,23 @@ class WordsTest {
             Shown(NOTHING, "SpPhoneNothing", "No results"),
 
             Shown(SEARCH, "SpPhoneSearchWarning", "Indexer results can show scores."),
+
+            Shown(DATES, "SpPhoneList", "Today"),
+            Shown(DATES, "SpPhoneList", "Yesterday"),
+            Shown(DATES, "SpPhoneList", "Tomorrow"),
+            Shown(DATES, "SpPhoneGame", "Starts"),
+            Shown(DATES, null, "today"),
+            Shown(DATES, "SpPhoneList", "left"),
+            Shown(DATES, "SpPhoneList", "h"),
+            Shown(DATES, "SpPhoneList", "min"),
+            Shown(DATES, "SpPhoneListStates", "ago"),
+            Shown(DATES, null, "yesterday"),
+            Shown(DATES, null, "days ago"),
+        )
+
+        val NAMES = listOf(
+            Names("$DATES.DAY_NAMES", "SpPhoneList", listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")),
+            Names("$DATES.MONTH_NAMES", "SpPhoneList", listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")),
         )
 
         val TEMPLATES = listOf(

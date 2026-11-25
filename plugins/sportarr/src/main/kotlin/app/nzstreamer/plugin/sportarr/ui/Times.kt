@@ -1,5 +1,6 @@
 package app.nzstreamer.plugin.sportarr.ui
 
+import app.nzstreamer.plugin.sportarr.ui.Words.Dates
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -8,9 +9,8 @@ import java.time.temporal.ChronoUnit
 
 /**
  * The Sports tab's dates, times and lengths (L652), in the device's zone, with English day and month names as the plugin's
- * designs write them whatever the device's language, as the rest of NZStreamer does. The few words the formats are made of
- * are kept with them here; every other word is [Words]'. Each is given the moment, the time now and the zone, and reads no
- * clock of its own.
+ * designs write them whatever the device's language, as the rest of NZStreamer does: the formats are here, their words
+ * [Words.Dates]'. Each is given the moment, the time now and the zone, and reads no clock of its own.
  *
  * Where a design draws one, its words are its: day headers (SpPhoneList), a page's meta, its Starts line and what is left
  * (SpPhoneGame), a weekend's meta and its top button's position (SpPhoneWeekend), Up next's time left (SpPhoneList 1), the
@@ -26,14 +26,14 @@ internal object Times {
 
     /** A day's header in the list: "Today", "Yesterday", "Tomorrow", else [day]'s "Fri 20 Nov". */
     fun dayHeader(date: LocalDate, today: LocalDate): String = when (ChronoUnit.DAYS.between(today, date)) {
-        0L -> TODAY
-        -1L -> YESTERDAY
-        1L -> TOMORROW
+        0L -> Dates.TODAY
+        -1L -> Dates.YESTERDAY
+        1L -> Dates.TOMORROW
         else -> day(date, today)
     }
 
     /** "Fri 20 Nov"; in another year than [today]'s, with the year after it: "Thu 20 Nov 2025". */
-    fun day(date: LocalDate, today: LocalDate): String = "${DAYS[date.dayOfWeek.ordinal]} ${shortDay(date, today)}"
+    fun day(date: LocalDate, today: LocalDate): String = "${Dates.DAY_NAMES[date.dayOfWeek.ordinal]} ${shortDay(date, today)}"
 
     /** "23 Sep"; in another year than [today]'s, "23 Sep 2025". */
     fun shortDay(date: LocalDate, today: LocalDate): String =
@@ -74,15 +74,15 @@ internal object Times {
         val day = date(start, zone)
         val today = date(now, zone)
         val on = when (ChronoUnit.DAYS.between(today, day)) {
-            0L -> STARTS_TODAY
-            in 1L..WEEK_AHEAD -> DAYS[day.dayOfWeek.ordinal]
+            0L -> Dates.STARTS_TODAY
+            in 1L..WEEK_AHEAD -> Dates.DAY_NAMES[day.dayOfWeek.ordinal]
             else -> shortDay(day, today)
         }
-        return "$STARTS $on ${time(start, zone)}"
+        return "${Dates.STARTS} $on ${time(start, zone)}"
     }
 
     /** What is left of a play on a row, as a show's episode rows say it: "1:04:38 left", "32:10 left". */
-    fun rowLeft(positionMs: Long, durationMs: Long): String = "${clock(durationMs - positionMs)} $LEFT"
+    fun rowLeft(positionMs: Long, durationMs: Long): String = "${clock(durationMs - positionMs)} ${Dates.LEFT}"
 
     /**
      * What is left of a play in Up next, as Home's rows say it, a minute begun counted whole: "1 h 5 min left", "42 min
@@ -90,7 +90,7 @@ internal object Times {
      */
     fun upNextLeft(positionMs: Long, durationMs: Long): String? {
         val minutes = minutesLeft(positionMs, durationMs) ?: return null
-        return if (minutes >= 60) "${minutes / 60} $HOURS ${minutes % 60} $MINUTES $LEFT" else "$minutes $MINUTES $LEFT"
+        return if (minutes >= 60) "${minutes / 60} ${Dates.HOURS} ${minutes % 60} ${Dates.MINUTES} ${Dates.LEFT}" else "$minutes ${Dates.MINUTES} ${Dates.LEFT}"
     }
 
     /**
@@ -99,9 +99,9 @@ internal object Times {
      */
     fun pageLeft(positionMs: Long, durationMs: Long): String? {
         val minutes = minutesLeft(positionMs, durationMs) ?: return null
-        val hours = (minutes / 60).takeIf { it > 0 }?.let { "$it $HOURS" }
-        val rest = (minutes % 60).takeIf { it > 0 || hours == null }?.let { "$it $MINUTES" }
-        return "${listOfNotNull(hours, rest).joinToString(" ")} $LEFT"
+        val hours = (minutes / 60).takeIf { it > 0 }?.let { "$it ${Dates.HOURS}" }
+        val rest = (minutes % 60).takeIf { it > 0 || hours == null }?.let { "$it ${Dates.MINUTES}" }
+        return "${listOfNotNull(hours, rest).joinToString(" ")} ${Dates.LEFT}"
     }
 
     /** A top button that goes on with a part or session, where it stopped: "Resume Prelims · 37:45". */
@@ -120,37 +120,21 @@ internal object Times {
     fun ago(since: Instant, now: Instant): String {
         val age = Duration.between(since, now)
         return when {
-            age.toMinutes() < 60 -> "${age.toMinutes().coerceAtLeast(1)} $MINUTES $AGO"
-            age.toHours() < 24 -> "${age.toHours()} $HOURS $AGO"
-            age.toDays() == 1L -> YESTERDAY_AGO
-            else -> "${age.toDays()} $DAYS_AGO"
+            age.toMinutes() < 60 -> "${age.toMinutes().coerceAtLeast(1)} ${Dates.MINUTES} ${Dates.AGO}"
+            age.toHours() < 24 -> "${age.toHours()} ${Dates.HOURS} ${Dates.AGO}"
+            age.toDays() == 1L -> Dates.YESTERDAY_AGO
+            else -> "${age.toDays()} ${Dates.DAYS_AGO}"
         }
     }
 
     private fun minutesLeft(positionMs: Long, durationMs: Long): Long? =
         if (durationMs <= 0) null else ((durationMs - positionMs).coerceAtLeast(0) + MINUTE_MS - 1) / MINUTE_MS
 
-    private fun dayMonth(date: LocalDate): String = "${date.dayOfMonth} ${MONTHS[date.monthValue - 1]}"
+    private fun dayMonth(date: LocalDate): String = "${date.dayOfMonth} ${Dates.MONTH_NAMES[date.monthValue - 1]}"
 
     private fun two(number: Number): String = number.toString().padStart(2, '0')
-
-    private const val TODAY = "Today"
-    private const val YESTERDAY = "Yesterday"
-    private const val TOMORROW = "Tomorrow"
-    private const val STARTS = "Starts"
-    private const val STARTS_TODAY = "today"
-    private const val LEFT = "left"
-    private const val HOURS = "h"
-    private const val MINUTES = "min"
-    private const val AGO = "ago"
-    private const val YESTERDAY_AGO = "yesterday"
-    private const val DAYS_AGO = "days ago"
 
     /** The days after today a start is said by its day's name. */
     private const val WEEK_AHEAD = 6L
     private const val MINUTE_MS = 60_000L
-
-    /** Monday first, as [java.time.DayOfWeek] numbers them. */
-    private val DAYS = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-    private val MONTHS = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 }
