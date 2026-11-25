@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
@@ -103,7 +104,7 @@ class FakeIndexerServer(
           </searching>
           <categories>
             <category id="2000" name="Movies"><subcat id="${FakeCatalog.MOVIES_HD}" name="HD"/></category>
-            <category id="5000" name="TV"><subcat id="${FakeCatalog.TV_HD}" name="HD"/><subcat id="${FakeCatalog.TV_UHD}" name="UHD"/></category>
+            <category id="5000" name="TV"><subcat id="${FakeCatalog.TV_HD}" name="HD"/><subcat id="${FakeCatalog.TV_UHD}" name="UHD"/><subcat id="${FakeCatalog.TV_SPORT}" name="Sport"/></category>
           </categories>
         </caps>
     """.trimIndent()
@@ -123,7 +124,7 @@ class FakeIndexerServer(
 
     private fun item(release: FakeRelease, nzb: String, host: String): String {
         val size = release.sizeBytes ?: Regex("""bytes="(\d+)"""").findAll(nzb).sumOf { it.groupValues[1].toLong() }
-        val date = now.minusDays(release.ageDays.toLong()).format(DateTimeFormatter.RFC_1123_DATE_TIME)
+        val date = (release.postedAt?.atZone(ZoneOffset.UTC) ?: now.minusDays(release.ageDays.toLong())).format(DateTimeFormatter.RFC_1123_DATE_TIME)
         val link = xmlText("http://$host/api?t=get&id=${release.guid}&apikey=$apiKey")
         val attrs = listOfNotNull(
             "category" to release.category.toString(),

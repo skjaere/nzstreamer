@@ -29,7 +29,7 @@ import kotlin.system.exitProcess
  *   indexer --catalog screens --video <clip> --port <8093 or above> [--mock http://localhost:8081] [--apikey fake-indexer-key] [--segment 750000] [--catalog-file app/src/androidTest/assets/screens/catalog.json]
  *   torznab [--port 8096] [--apikey fake-torznab-key] [--extra-hash <hex> --extra-title <title>] [--fail 429-900] [--delay-ms <n>]
  *   debrid  [--port 8097] [--torbox-key fake-torbox-key] [--premiumize-key fake-premiumize-key] [--media build]
- *   sports  [--port 8098] [--indexer-port 8094] [--anchor <yyyy-mm-dd>] [--mock http://localhost:8081] [--seed true]
+ *   sports  [--port 8098] [--indexer-port 8094] [--anchor <yyyy-mm-dd>] [--mock http://localhost:8081] [--seed true] [--video build/sample.mkv]
  */
 fun main(args: Array<String>) {
     val command = args.firstOrNull() ?: usage()
@@ -60,7 +60,7 @@ private fun usage(): Nothing {
         indexer --catalog screens --video <clip> --port <8093 or above> [--mock http://localhost:8081] [--apikey fake-indexer-key] [--segment 750000] [--catalog-file app/src/androidTest/assets/screens/catalog.json]
         torznab [--port 8096] [--apikey fake-torznab-key] [--extra-hash <hex> --extra-title <title>] [--fail 429-900] [--delay-ms <n>]
         debrid  [--port 8097] [--torbox-key fake-torbox-key] [--premiumize-key fake-premiumize-key] [--media build]
-        sports  [--port 8098] [--indexer-port 8094] [--anchor <yyyy-mm-dd>] [--mock http://localhost:8081] [--seed true]
+        sports  [--port 8098] [--indexer-port 8094] [--anchor <yyyy-mm-dd>] [--mock http://localhost:8081] [--seed true] [--video build/sample.mkv]
         """.trimIndent()
     )
     exitProcess(2)
@@ -358,7 +358,10 @@ class SportsFakes(val sportarr: FakeSportarrServer, val indexer: FakeIndexerServ
  * device tests' 8089 one. Both listen on 127.0.0.1 alone (emulator: 10.0.2.2), on --port and --indexer-port (0 for any
  * free one, never a port another fake or the mock uses), both taken before anything is seeded, so a port in use fails at
  * once. --anchor is the date every start, release name and posted time counts from (the UTC date it starts, unless
- * given). The Sportarr key isn't printed. Throws IllegalArgumentException for options it can't take and for a taken port.
+ * given). The releases marked whole are seeded into the mock with the clip (--video, the sample clip) under their names,
+ * and the others with every article missing, as the screens catalogue's are, so the indexer lists them and a play of one
+ * fails as a broken release would; with --seed false they are listed alone, nothing is posted and no clip is needed. The
+ * Sportarr key isn't printed. Throws IllegalArgumentException for options it can't take and for a taken port.
  */
 internal fun sports(options: Map<String, String>, log: (String) -> Unit = ::println): SportsFakes {
     fun port(name: String, default: Int): Int = options[name]?.let { given ->
@@ -373,11 +376,14 @@ internal fun sports(options: Map<String, String>, log: (String) -> Unit = ::prin
     val anchor = options["anchor"]?.let { given ->
         requireNotNull(runCatching { LocalDate.parse(given) }.getOrNull()) { "--anchor takes a date, yyyy-mm-dd" }
     } ?: LocalDate.now(ZoneOffset.UTC)
-    when (options["seed"] ?: "true") {
-        "true", "false" -> Unit
+    val seed = when (options["seed"] ?: "true") {
+        "true" -> true
+        "false" -> false
         else -> throw IllegalArgumentException("--seed takes true or false")
     }
+    val clip = if (seed) File(options["video"] ?: "build/sample.mkv").also { require(it.isFile) { "${it.path} missing; see README" } } else null
     val catalog = SportsCatalog.load()
+    val releases = catalog.releases(anchor)
     val sportarr = try {
         FakeSportarrServer(catalog, anchor, port, log = log)
     } catch (e: BindException) {
@@ -389,11 +395,56 @@ internal fun sports(options: Map<String, String>, log: (String) -> Unit = ::prin
         sportarr.close()
         throw IllegalArgumentException("port $indexerPort is taken", e)
     }
+    val listed = try {
+        if (clip == null) {
+            releases.map { it to unseededNzb(it.fake()) }
+        } else {
+            val data = clip.readBytes()
+            val parts = (data.size + SEGMENT_BYTES - 1) / SEGMENT_BYTES
+            val seeder = MockSeeder(mockHttpUrl = options["mock"] ?: "http://localhost:8081", segmentSize = SEGMENT_BYTES)
+            releases.map { release ->
+                val fake = release.fake()
+                release to seeder.seed(fake.fileNames.map { SeedFile(it, data) }, tag = fake.guid, missingParts = if (release.whole) emptySet() else (1..parts).toSet())
+            }
+        }
+    } catch (t: Throwable) {
+        sportarr.close()
+        indexer.close()
+        throw t
+    }
+    indexer.serve(listed.map { (release, nzb) -> release.fake() to nzb })
+    releases.forEach { release ->
+        val seeded = when {
+            clip == null -> "listed, nothing seeded"
+            release.whole -> "seeded whole"
+            else -> "listed, every article missing"
+        }
+        log("  ${release.fake().guid.padEnd(32)} ${release.name}  ($seeded)")
+    }
     log(
         "Fake Sportarr on http://127.0.0.1:${sportarr.port} (emulator: http://10.0.2.2:${sportarr.port}), Sportarr ${FakeSportarrServer.VERSION} " +
             "with the device tests' key; anchor $anchor. Switches, the clock, counts and the lease at /control (refuse-key, version, html, " +
             "url-base, slow, fail, remove-league, order, paging, empty, busy, clock, counts, reset; take and give-back).",
     )
-    log("Sports indexer on http://127.0.0.1:${indexer.port}/api (emulator: http://10.0.2.2:${indexer.port}), API key ${SportsFakes.INDEXER_KEY}. Ctrl+C to stop.")
+    log(
+        "Sports indexer on http://127.0.0.1:${indexer.port}/api (emulator: http://10.0.2.2:${indexer.port}), API key ${SportsFakes.INDEXER_KEY}: " +
+            "${releases.size} releases${if (clip == null) ", none seeded" else ", ${releases.count { it.whole }} of them whole"}. Ctrl+C to stop.",
+    )
     return SportsFakes(sportarr, indexer)
+}
+
+/** The sports releases' segments: the size the indexer command seeds. */
+private const val SEGMENT_BYTES = 750_000
+
+/** An NZB for a release listed and never seeded (--seed false): one segment, which no server has. */
+private fun unseededNzb(release: FakeRelease): String = buildString {
+    appendLine("""<?xml version="1.0" encoding="UTF-8"?>""")
+    appendLine("""<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">""")
+    release.fileNames.forEachIndexed { index, name ->
+        appendLine("""  <file poster="seed@mock" date="0" subject="&quot;${xmlText(name)}&quot; yEnc (1/1)">""")
+        appendLine("""    <groups><group>alt.binaries.test</group></groups>""")
+        appendLine("""    <segments><segment bytes="750000" number="1">unseeded-${release.guid}-$index@mock</segment></segments>""")
+        appendLine("  </file>")
+    }
+    appendLine("</nzb>")
 }

@@ -1,5 +1,7 @@
 package io.skjaere.usenet.mockseed
 
+import java.time.Instant
+
 /** Ids of the invented show and movie; real indexers would carry TheTVDB/TMDB/IMDb ids. */
 data class FakeIds(val tvdb: Int? = null, val tmdb: Int? = null, val imdb: String? = null, val tvmaze: Int? = null)
 
@@ -28,6 +30,11 @@ data class FakeRelease(
     val clip: Clip = Clip.Default,
     /** The size the listing gives, as a real release of its kind would have; null for the NZB's own, its segments' sum. */
     val sizeBytes: Long? = null,
+    /**
+     * When it was posted, listed in place of [ageDays] before the fake started: the sports catalogue's, counted from its
+     * events' starts on the one anchor (L655), as a sports release's name carries its event's date.
+     */
+    val postedAt: Instant? = null,
 )
 
 enum class Clip {
@@ -40,6 +47,7 @@ enum class Clip {
 object FakeCatalog {
     const val TV_HD = 5040
     const val TV_UHD = 5045
+    const val TV_SPORT = 5060
     const val MOVIES_HD = 2040
 
     fun releases(show: FakeIds = HARBOR_LIGHTS, movie: FakeIds = COPPER_CROWN): List<FakeRelease> = listOf(

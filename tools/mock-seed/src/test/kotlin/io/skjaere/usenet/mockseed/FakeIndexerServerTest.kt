@@ -21,6 +21,8 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.SocketTimeoutException
 import java.net.URI
+import java.time.Duration
+import java.time.Instant
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -84,6 +86,48 @@ class FakeIndexerServerTest {
         repeat(2) { assertTrue(client.nzb(indexer, item).decodeToString().contains("cc-2019-good")) }
         assertIs<NewznabError.DownloadLimitReached>(assertFailsWith<NewznabException> { client.nzb(indexer, item) }.error)
     }
+
+    /** Every instance, the device tests' and the sports indexer alike, lists TV's sport subcategory (L655). */
+    @Test
+    fun `caps list TV's sport subcategory, 5060, beside HD and UHD`() = runBlocking<Unit> {
+        val tv = client.caps(indexer).categories.single { it.id == 5000 }
+        assertEquals(listOf(FakeCatalog.TV_HD, FakeCatalog.TV_UHD, FakeCatalog.TV_SPORT), tv.subcategories.map { it.id })
+        assertEquals(5060, FakeCatalog.TV_SPORT)
+        FakeIndexerServer(emptyList(), apiKey = "k", port = 0, bind = InetAddress.getLoopbackAddress()).use { sports ->
+            assertTrue(sports.address.isLoopbackAddress)
+            val caps = client.caps(indexer.copy(baseUrl = "http://127.0.0.1:${sports.port}"))
+            assertTrue(FakeCatalog.TV_SPORT in caps.categories.single { it.id == 5000 }.subcategories.map { it.id })
+        }
+    }
+
+    /**
+     * A release posted at a time of its own (the sports catalogue's, from the one anchor) lists it as its pubDate and
+     * usenetdate; one without lists the days before the fake started, as the device tests' catalogue always has.
+     */
+    @Test
+    fun `a release posted at a time of its own lists it as its pubDate and usenetdate`() = runBlocking<Unit> {
+        val posted = Instant.parse("2026-11-21T18:00:00Z")
+        val sports = FakeRelease(
+            guid = "sp-posted", title = "Premier.League.2026.11.21.Lantern.Bay.FC.vs.Copper.Crown.United.1080p50.WEB.h264-KESTREL",
+            category = FakeCatalog.TV_SPORT, ids = FakeIds(), ageDays = 400, fileNames = listOf("posted.mkv"), postedAt = posted,
+        )
+        val dated = FakeRelease(guid = "sp-dated", title = "Lantern.Bay.Copper.Crown.Dated", category = FakeCatalog.TV_SPORT, ids = FakeIds(), ageDays = 3, fileNames = listOf("dated.mkv"))
+        val started = Instant.now()
+        FakeIndexerServer(listOf(sports to fakeNzb(sports.guid), dated to fakeNzb(dated.guid)), apiKey = "k", port = 0).use { server ->
+            val raw = URI("http://127.0.0.1:${server.port}/api?t=search&q=lantern&apikey=k").toURL().readText()
+            val item = raw.substringAfter("<title>${sports.title}</title>").substringBefore("</item>")
+            assertContains(item, "<pubDate>Sat, 21 Nov 2026 18:00:00 GMT</pubDate>")
+            assertContains(item, """<newznab:attr name="usenetdate" value="Sat, 21 Nov 2026 18:00:00 GMT"/>""")
+            assertContains(item, """<newznab:attr name="category" value="5060"/>""")
+            val items = client.search(indexer.copy(baseUrl = "http://127.0.0.1:${server.port}", apiKey = "k"), SearchQuery.Text("lantern")).items
+            assertEquals(posted, items.single { it.guid == "sp-posted" }.postedAt)
+            val ago = Duration.between(items.single { it.guid == "sp-dated" }.postedAt, started)
+            assertTrue(ago > Duration.ofDays(3).minusMinutes(1) && ago < Duration.ofDays(3).plusMinutes(1), "$ago")
+        }
+    }
+
+    private fun fakeNzb(guid: String) =
+        """<?xml version="1.0"?><nzb xmlns="http://www.newzbin.com/DTD/2003/nzb"><file subject="$guid"><segments><segment bytes="1000" number="1">$guid@x</segment></segments></file></nzb>"""
 
     @Test
     fun `wrong key is an auth error`() = runBlocking<Unit> {

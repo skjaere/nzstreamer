@@ -9,6 +9,7 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -17,9 +18,11 @@ import java.time.ZoneOffset
 /**
  * The sports fakes' one catalogue (L655): sports-catalogue.json in mock-seed's resources, format 1, our own. It holds an
  * invented library, the leagues a user follows in Sportarr with their events, each start a day from an anchor date and a
- * UTC time, so the fake Sportarr, the sports indexer's release names and the tests all keep one clock. The fake serves the
- * library ([FakeSportarrServer]), the plugin's tests read it from their classpath, and the device classes read a copy in
- * their assets for its titles and expectations.
+ * UTC time, and the releases of those events, each name a template taking its dates from its event's start and posted
+ * some hours from it, so the fake Sportarr, the sports indexer and the tests all keep one clock. The fake serves the
+ * library ([FakeSportarrServer]), the sports indexer the releases (`mock-seed sports`), the plugin's tests read both from
+ * their classpath and check each release's verdicts, and the device classes read a copy in their assets for its titles
+ * and expectations.
  *
  * What the catalogue says that Sportarr doesn't send: whether an event is on its league's filtered page ([SportsEvent.listed];
  * stored only, it comes with showAll), and whether a league's page lists every event it stores ([SportsLeague.teamless], a
@@ -66,6 +69,37 @@ class SportsCatalog private constructor(private val root: JsonObject) {
         )
     }
 
+    /**
+     * The releases, each name and file taking its dates from its event's UTC start at [anchor]: `{date}` is that date
+     * (2026.11.21), `{date-1}` and `{date+1}` a day either side (a US evening's date, the day before), `{year}` its year.
+     */
+    fun releases(anchor: LocalDate): List<SportsRelease> {
+        val starts = leagues(anchor).flatMap { it.events }.associate { it.id to it.start }
+        return root.getValue("releases").jsonArray.map { it.jsonObject }.map { row ->
+            val event = row.int("event")
+            val start = requireNotNull(starts[event]) { "release ${row.string("id")} names no event of the library: $event" }
+            fun dated(template: String) = expand(template, start)
+            val name = dated(row.string("name")!!)
+            SportsRelease(
+                id = row.string("id")!!,
+                name = name,
+                files = (row["files"] as? JsonArray)?.map { dated(it.jsonPrimitive.content) } ?: listOf("$name.mkv"),
+                postedAt = start.plus(Duration.ofHours(row.int("posted").toLong())),
+                sizeBytes = row.int("sizeMB").toLong() * 1_000_000,
+                grabs = row.int("grabs"),
+                whole = row.bool("whole")!!,
+                verdicts = (listOf(row) + (row["also"] as? JsonArray)?.map { it.jsonObject }.orEmpty()).map { judged ->
+                    SportsVerdict(
+                        eventId = judged.int("event"), part = judged.string("part")!!,
+                        verdict = SportsVerdict.Verdict.entries.single { it.name.equals(judged.string("verdict"), ignoreCase = true) },
+                        reason = judged.string("reason"), kind = judged.string("kind"),
+                        reached = requireNotNull(judged.bool("reached")) { "release ${row.string("id")} doesn't say whether the queries reach it" },
+                    )
+                },
+            )
+        }
+    }
+
     private fun JsonObject.league(anchor: LocalDate): SportsLeague {
         val id = int("id")
         return SportsLeague(
@@ -110,6 +144,17 @@ class SportsCatalog private constructor(private val root: JsonObject) {
         fun parse(text: String): SportsCatalog = SportsCatalog(Json.parseToJsonElement(text).jsonObject)
 
         private fun club(number: Int) = "Kestrel Club ${number.toString().padStart(2, '0')}"
+
+        private val DATE = Regex("""\{date([+-]\d+)?}""")
+
+        /** [template]'s {date}, {date-N}, {date+N} and {year} from [start]'s UTC date. */
+        private fun expand(template: String, start: Instant): String {
+            val date = start.atZone(ZoneOffset.UTC).toLocalDate()
+            return DATE.replace(template) { match ->
+                val day = date.plusDays(match.groupValues[1].takeIf { it.isNotEmpty() }?.removePrefix("+")?.toLong() ?: 0)
+                "%04d.%02d.%02d".format(day.year, day.monthValue, day.dayOfMonth)
+            }.replace("{year}", "${date.year}")
+        }
 
         /**
          * A season as written: "{year}" is the start's UTC year, "{split}" the split season it falls in from July on
@@ -175,4 +220,44 @@ data class SportsEvent(
     private companion object {
         val KEYABLE = Regex("[A-Za-z0-9._-]{1,150}")
     }
+}
+
+/**
+ * A release the sports indexer lists, its [name] and [files] at an anchor, posted at [postedAt]; [whole]: seeded into the
+ * mock with the clip under its names, else with every article missing, so a play of it fails as a broken release would.
+ * Its [verdicts]: for its event and part first, then for any other it is judged for (a full event for each part, a weekend
+ * pack for each session, a double header's name for each game).
+ */
+data class SportsRelease(
+    val id: String,
+    val name: String,
+    val files: List<String>,
+    val postedAt: Instant,
+    val sizeBytes: Long,
+    val grabs: Int,
+    val whole: Boolean,
+    val verdicts: List<SportsVerdict>,
+) {
+    /** As the sports indexer lists it: in TV/Sport, its guid its id's, its size and posted time its own. */
+    fun fake(): FakeRelease = FakeRelease(
+        guid = "sp-$id", title = name, category = FakeCatalog.TV_SPORT, ids = FakeIds(), grabs = grabs, fileNames = files,
+        sizeBytes = sizeBytes, postedAt = postedAt,
+    )
+}
+
+/**
+ * What the plugin's judge should say of a release for [eventId]'s [part] (L647): [verdict], with an offered one's
+ * [reason] or a left-out one's [kind] in L647's words; [reached]: whether the plugin's queries for that event, stage 1 and
+ * then stage 2 as its runner sends them, find it in the sports indexer (which matches whole words alone), or only the
+ * judge's tests see it.
+ */
+data class SportsVerdict(
+    val eventId: Int,
+    val part: String,
+    val verdict: Verdict,
+    val reason: String?,
+    val kind: String?,
+    val reached: Boolean,
+) {
+    enum class Verdict { Accept, Offer, Reject }
 }
