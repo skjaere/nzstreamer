@@ -295,6 +295,29 @@ class TeamMatchTest {
     }
 
     @Test
+    fun `afternoon games in East Asia on consecutive days keep their UTC dates, and none is a double header`() {
+        fun named(start: String) = "Kestrel.Club.03.vs.Kestrel.Club.07.${start.substringBefore('T').replace('-', '.')}.1080p.WEB.h264-KESTREL"
+        // Five in the morning UTC is an afternoon there, no evening in the Americas: names carry the UTC date. The Friday
+        // game in the evening there shares no day with Saturday's.
+        val starts = listOf(1411 to "2026-06-12T09:30", 1412 to "2026-06-13T05:00", 1413 to "2026-06-14T05:00")
+        // With no broadcast date, and with one equal to the UTC date: either may be Sportarr's fallback.
+        val misread = listOf(false, true).flatMap { given ->
+            val series = sports(
+                baseball to starts.map { (id, start) ->
+                    game(baseball, id, start, "Kestrel Club 03", "Kestrel Club 07", round = null, season = "2026")
+                        .copy(broadcastDate = LocalDate.parse(start.substringBefore('T')).takeIf { given })
+                },
+            )
+            val matcher = TeamMatch(series)
+            starts.mapNotNull { (id, _) ->
+                val rows = starts.map { (other, start) -> named(start) to if (other == id) accepted else otherGame }
+                wrong(series.byId(id), rows, matcher).takeIf { it.isNotEmpty() }?.let { "game $id, broadcast date given: $given\n$it" }
+            }
+        }
+        assertTrue(misread.isEmpty(), misread.joinToString("\n"))
+    }
+
+    @Test
     fun `a date's numbers name no side, though a listed club is numbered like its day or month`() {
         fun numbered(id: Int, start: String, number: Int) = game(
             baseball, id, start, "Kestrel Club 03", "Kestrel Club 07", round = null, season = "2026", title = "Kestrel Club 03 vs Kestrel Club 07 - Game $number",

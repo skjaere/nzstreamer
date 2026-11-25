@@ -71,8 +71,9 @@ object SharedRules {
 
     /**
      * The day [event]'s release names most likely carry: its broadcast date where that is exact; else, the date being
-     * unknown, its UTC date, or the day before for a start in UTC's small hours, an evening in the Americas, which names
-     * write by its local date. Two listed events of the same sides are on one day, a double header, when theirs is one.
+     * unknown, its UTC date, or the day before for a start before four in the morning UTC, an evening in the Americas,
+     * which names write by its local date. Two listed events of the same sides are on one day, a double header, when
+     * theirs is one.
      */
     fun localDay(event: SportsEvent): LocalDate {
         val utc = utcDate(event)
@@ -102,8 +103,13 @@ object SharedRules {
 
     private fun utcDate(event: SportsEvent): LocalDate = event.start.atOffset(ZoneOffset.UTC).toLocalDate()
 
-    /** Where UTC's small hours end: an evening in the Americas starts before six in the morning UTC, a day after its local date. */
-    private const val SMALL_HOURS_END = 6
+    /**
+     * Where UTC's small hours end: an evening in the Americas, a late start on the west coast included, begins before four
+     * in the morning UTC, a day after its local date. A start from four on keeps its UTC date, as an afternoon in East Asia
+     * does, so two such games of the same sides on consecutive days stay apart. An afternoon in Australia or New Zealand
+     * that begins before four is read as the evening before.
+     */
+    private const val SMALL_HOURS_END = 4
 
     /** How early a release may be posted: a day before the start covers every time zone's evening. */
     private val EARLY: Duration = Duration.ofDays(1)

@@ -282,6 +282,17 @@ class SharedRulesTest {
     }
 
     @Test
+    fun `a start before four in the morning UTC is named by the evening before, one from four on by its UTC date`() {
+        fun localDay(start: String, broadcast: String? = null) =
+            SharedRules.localDay(sports(NBA to listOf(on(NBA, 1502, at(start), "Saltmere Gulls vs Marrowby Lynx").withBroadcast(broadcast))).byId(1502))
+        assertEquals(LocalDate.parse("2026-06-12"), localDay("2026-06-13T03:59"), "a late evening on the west coast")
+        assertEquals(LocalDate.parse("2026-06-13"), localDay("2026-06-13T04:00"))
+        assertEquals(LocalDate.parse("2026-06-13"), localDay("2026-06-13T05:00", broadcast = "2026-06-13"), "a fallback broadcast date")
+        assertEquals(LocalDate.parse("2026-06-12"), localDay("2026-06-13T05:00", broadcast = "2026-06-12"), "an exact broadcast date")
+        assertEquals(LocalDate.parse("2026-06-12"), localDay("2026-06-13T03:00", broadcast = "2026-06-13"), "a fallback broadcast date")
+    }
+
+    @Test
     fun `a double header's other game on the same day doesn't make the day another game's`() {
         val first = "Kestrel Club 03 vs Kestrel Club 07 - Game 1"
         val baseball = KeptLeague(10, "Kestrel Baseball League", "Baseball")
