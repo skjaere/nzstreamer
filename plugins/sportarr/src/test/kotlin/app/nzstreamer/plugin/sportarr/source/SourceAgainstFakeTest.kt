@@ -63,33 +63,41 @@ class SourceAgainstFakeTest {
 
     @Test
     fun `Test answers each of the fake's switches with L640's line`() {
+        // What the Tests since the last reset asked of the fake: the status, the leagues where they got that far, and
+        // never the health route; then the switches and counts go back.
+        fun resetAfterTests() {
+            val (routes, _) = requests()
+            assertEquals(0, routes.getValue("health"), "Test reads the status and the leagues, nothing else")
+            assertTrue(routes.getValue("status") > 0, "$routes")
+            control("reset")
+        }
         assertEquals(TestAnswer.Connected("4.1.12.1122"), test())
         assertEquals(TestAnswer.Refused, test(key = "a-key-Sportarr-never-gave"))
         control("refuse-key")
         assertEquals(TestAnswer.Refused, test())
-        control("reset")
+        resetAfterTests()
         control("version?v=4.0.998")
         assertEquals(TestAnswer.TooOld("4.0.998"), test())
-        control("reset")
+        resetAfterTests()
         control("html")
         assertEquals(TestAnswer.NotSportarr, test(), "a page where Sportarr's answer should be")
-        control("reset")
+        resetAfterTests()
         control("url-base?base=/sportarr")
         assertEquals(TestAnswer.Connected("4.1.12.1122"), test("$address/sportarr/"), "the base kept, its trailing slash dropped")
         assertEquals(TestAnswer.NotSportarr, test(), "without the base: Sportarr's 404")
-        control("reset")
+        resetAfterTests()
         control("fail?status=500&route=status")
         assertEquals(TestAnswer.ServerError(500), test())
         control("fail?status=503&route=leagues")
         assertEquals(TestAnswer.ServerError(503), test(), "Test's second request")
         control("fail?status=401&route=leagues")
         assertEquals(TestAnswer.Refused, test(), "the key proved on the leagues")
-        control("reset")
+        resetAfterTests()
         val closed = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { it.localPort }
         assertEquals(TestAnswer.Unreachable("127.0.0.1:$closed"), test("http://127.0.0.1:$closed"))
         assertEquals(TestAnswer.InvalidAddress, test("$address/?apikey=${FakeSportarrServer.KEY}"))
         val (routes, _) = requests()
-        assertEquals(0, routes.getValue("health"), "Test reads the status and the leagues, nothing else")
+        assertEquals(mapOf("status" to 0, "health" to 0, "leagues" to 0, "events" to 0), routes, "an address refused before anything is sent")
     }
 
     @Test
