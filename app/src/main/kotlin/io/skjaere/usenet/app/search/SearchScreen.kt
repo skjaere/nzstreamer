@@ -293,9 +293,9 @@ fun SearchScreen(
         openGroup = null
         vm.clearMarks()
     }
-    // On a TV the release list sits beside the field: the field opened, or words typed or said, start another search:
-    // the list goes and what the words find shows instead. The focus stays where the user is, not sent back to the
-    // group that opened the list.
+    // On a TV the release list sits beside the field: the field opened (not over a plugin's noted search, whose words
+    // stay the plugin's until changed, L659), or words typed or said, start another search: the list goes and what the
+    // words find shows instead. The focus stays where the user is, not sent back to the group that opened the list.
     fun closeReleasesForWords() {
         if (openGroup == null) return
         returnTo = null
