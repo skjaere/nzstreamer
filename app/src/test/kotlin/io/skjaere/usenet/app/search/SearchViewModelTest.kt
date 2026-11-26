@@ -1019,6 +1019,35 @@ class SearchViewModelTest {
         assertEquals(TitleLookup("quiet marsh", emptyList(), settled = true, NoTitles.NotFound), vm.titles.value)
     }
 
+    /**
+     * L659: "Search without the episode" under a plugin's noted search that found nothing searches part of the plugin's
+     * words, which the user never typed either: the note goes with them, so TMDB isn't asked for them, no strip of its
+     * titles shows, and they aren't kept in the recent searches (L629).
+     */
+    @Test
+    fun `a noted search searched without the episode keeps its note and asks TMDB nothing`() = runTest {
+        val f = fixture()
+        f.releases = emptyList()
+        val vm = f.vm(SearchRequest("lantern s02", note = NOTE))
+        advanceTimeBy(1_000)
+        runCurrent()
+        val nothing = assertNotNull(vm.results.value)
+        assertTrue(nothing.nothingPlayable)
+        assertEquals("lantern", nothing.withoutEpisode.text)
+
+        vm.searchWithoutEpisode()
+        // Well past the lookup's 300 ms.
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertEquals(emptyList(), f.tmdbAsked, "TMDB asked for part of a plugin's words")
+        assertEquals(emptyList(), vm.strip.value, "TMDB's titles over the plugin's words")
+        assertEquals(emptyList(), f.history.entries.value, "part of a plugin's words kept in the recent searches")
+        val shown = assertNotNull(vm.results.value)
+        assertTrue(shown.done)
+        assertEquals("lantern", shown.query)
+        assertEquals(NOTE, shown.note, "the note of the words it came from")
+    }
+
     /** Every release a search's results hold, playable or hidden. */
     private fun SearchResults.listed(): Set<String> = grouped.sections.flatMap { s -> s.groups.flatMap { g -> (g.playable + g.hidden).map { it.item.title } } }.toSet()
 

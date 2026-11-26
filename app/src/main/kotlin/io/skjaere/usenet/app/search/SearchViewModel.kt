@@ -224,9 +224,13 @@ data class SearchResults(
      */
     val retry: SearchRequest get() = SearchRequest(query, pick, title, language, fallback, note)
 
-    /** "Search without the episode": the whole show, still by the picked title; a pasted release name by its title. */
+    /**
+     * "Search without the episode": the whole show, still by the picked title; a pasted release name by its title. A
+     * plugin's noted words keep their note (L629): part of them is no more the user's own than the whole, so TMDB isn't
+     * asked for it either (L659).
+     */
     val withoutEpisode: SearchRequest
-        get() = SearchRequest(if (parsed.isReleaseName) ReleaseParser.parse(query).title else parsed.title, pick, title, language)
+        get() = SearchRequest(if (parsed.isReleaseName) ReleaseParser.parse(query).title else parsed.title, pick, title, language, note = note)
 
     /** A search of the words alone, sent on purpose: not by a picked title, not the preview's own. TMDB's titles for them show on top. */
     val byWords: Boolean get() = pick == null && !fallback
@@ -393,7 +397,8 @@ class SearchViewModel(private val deps: SearchDeps, initial: SearchRequest?) : V
 
     /**
      * A plugin's note and the words it came with (L629): the note stays with its words, searched again however (Try again,
-     * typed again, the preview's own), and new words searched clear it for good.
+     * typed again, the preview's own), goes on to the part of them searched without the episode, and new words searched
+     * clear it for good.
      */
     private var noted: Pair<String, String>? = null
 
