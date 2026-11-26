@@ -287,7 +287,7 @@ class SearchTvTest {
      * L629 on a TV (SpPhoneSearchWarning's line, in TV sizes): a search a plugin opened with a note shows ⚠ and the note in
      * the right pane, under what was searched and above the results, and isn't kept in the recent searches. The remote's
      * focus onto the field, into it (its keyboard up) and away again, nothing typed, leaves the right pane as it is and asks
-     * TMDB nothing for the plugin's words (L659).
+     * TMDB nothing for the plugin's words (L659); a release list opened from the search stays beside the field opened.
      */
     @Test
     fun aNotedSearchShowsItsNoteUnderWhatWasSearched() = withFakeIndexer {
@@ -343,6 +343,23 @@ class SearchTvTest {
         Thread.sleep(PAST_THE_PREVIEW_MS)
         compose.waitForIdle()
         unchanged("the field left")
+
+        // A release list opened from the search, then the field opened beside it, nothing typed: no other search starts,
+        // so the list stays where it was, its note over it.
+        assertTrue("Right from the group: its releases; focus on ${remote.focused()}", "release" in remote.press(KeyEvent.KEYCODE_DPAD_RIGHT))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        val releaseList = hasText("Size") and hasClickAction()
+        compose.waitUntil(5_000) { exists(releaseList) }
+        Thread.sleep(SETTLE_MS)
+        compose.waitForIdle()
+        assertTrue("Left from the release: the field's gate; focus on ${remote.focused()}", remote.press(KeyEvent.KEYCODE_DPAD_LEFT) == "Search")
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        compose.waitUntil(5_000) { exists(hasSetTextAction() and isFocused()) }
+        Thread.sleep(PAST_THE_PREVIEW_MS)
+        compose.waitForIdle()
+        assertEquals("TMDB asked for the plugin's words, the field open beside a release list", emptyList<String>(), fixture.tmdb.searched.toList())
+        assertTrue("the release list went as the field opened beside it", exists(releaseList))
+        assertTrue("the note went from over the release list", exists(note))
     }
 
     /** [test] with the fake indexer (10.0.2.2:8089) switched on, the fixture's being off; it goes again after, with its key. */
