@@ -478,8 +478,13 @@ fun SearchScreen(
         SearchTextField(
             gate, query, tv,
             onChange = { closeReleasesForWords(); vm.onQueryChange(it) },
-            // Back in the field: what Search left for is behind the user.
-            onFocus = { cameBack = false; closeReleasesForWords(); vm.startEditing() },
+            // Back in the field: what Search left for is behind the user. A plugin's noted search stays as it shows, a TV's
+            // release list from it too, until its words are changed (L659).
+            onFocus = {
+                cameBack = false
+                vm.startEditing()
+                if (vm.editing.value) closeReleasesForWords()
+            },
             onSubmit = { focus.clearFocus(); vm.keep() },
             modifier = modifier,
         )

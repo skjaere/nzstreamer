@@ -285,7 +285,9 @@ class SearchTvTest {
 
     /**
      * L629 on a TV (SpPhoneSearchWarning's line, in TV sizes): a search a plugin opened with a note shows ⚠ and the note in
-     * the right pane, under what was searched and above the results, and isn't kept in the recent searches.
+     * the right pane, under what was searched and above the results, and isn't kept in the recent searches. The remote's
+     * focus onto the field, into it (its keyboard up) and away again, nothing typed, leaves the right pane as it is and asks
+     * TMDB nothing for the plugin's words (L659).
      */
     @Test
     fun aNotedSearchShowsItsNoteUnderWhatWasSearched() = withFakeIndexer {
@@ -309,6 +311,38 @@ class SearchTvTest {
         // By when each was searched: a noted search kept would add its words, or, where they were searched before (an
         // earlier case, a run stopped before its clean-up), search them again.
         assertEquals("a noted search kept in the recent searches", searchedAt, runBlocking { library.recentSearches.first().associate { it.key to it.searchedAt } })
+
+        val titlesLine = hasText("No titles on TMDB", substring = true)
+        fun unchanged(step: String) {
+            assertEquals("TMDB asked for the plugin's words, $step", emptyList<String>(), fixture.tmdb.searched.toList())
+            compose.onNode(list).performScrollToIndex(0)
+            compose.waitForIdle()
+            assertTrue("what was searched went, $step", exists(header))
+            assertTrue("the note went, $step", exists(note))
+            assertTrue("the results went, $step", exists(playsAGroup))
+            assertFalse("the preview's own search of the words, $step", exists(titlesLine))
+        }
+        compose.waitUntil(5_000) { exists(playsAGroup and isFocused()) }
+        // Left into the left pane, then Up past any recent searches to the field's gate.
+        remote.press(KeyEvent.KEYCODE_DPAD_LEFT)
+        repeat(10) { if (!remote.isFocused(fieldGate("Search"))) remote.press(KeyEvent.KEYCODE_DPAD_UP) }
+        assertTrue("the remote never reached the field's gate; focus on ${remote.focused()}", remote.isFocused(fieldGate("Search")))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        compose.waitUntil(5_000) { exists(hasSetTextAction() and isFocused()) }
+        Thread.sleep(PAST_THE_PREVIEW_MS)
+        compose.waitForIdle()
+        unchanged("the field open")
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+        try {
+            compose.waitUntil(5_000) { exists(fieldGate("Search") and isFocused()) }
+        } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
+            throw AssertionError("Back from the field: focus on \"${remote.focused()}\"", e)
+        }
+        remote.press(KeyEvent.KEYCODE_DPAD_RIGHT)
+        compose.waitUntil(5_000) { exists(playsAGroup and isFocused()) }
+        Thread.sleep(PAST_THE_PREVIEW_MS)
+        compose.waitForIdle()
+        unchanged("the field left")
     }
 
     /** [test] with the fake indexer (10.0.2.2:8089) switched on, the fixture's being off; it goes again after, with its key. */
@@ -352,5 +386,8 @@ class SearchTvTest {
 
         /** A plugin's note over a search it opened. */
         const val NOTE = "Indexer results can show scores."
+
+        /** Past TMDB's lookup, 300 ms after the words, and the preview's own search, about a second after them. */
+        const val PAST_THE_PREVIEW_MS = 2_000L
     }
 }

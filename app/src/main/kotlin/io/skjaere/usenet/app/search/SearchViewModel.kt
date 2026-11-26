@@ -418,8 +418,14 @@ class SearchViewModel(private val deps: SearchDeps, initial: SearchRequest?) : V
         if (changed) previewChanged()
     }
 
+    /**
+     * The field focused (tapped on a phone, opened from its gate on a TV): the preview shows, for the words in it. Not
+     * over a plugin's noted search (L629), whose words the field holds as the plugin gave them: focusing it types
+     * nothing, so its results stay and TMDB isn't asked for its words (L659) until the user changes them
+     * ([onQueryChange], [clear]), which makes them the user's own.
+     */
     fun startEditing() {
-        if (editing.value) return
+        if (editing.value || results.value?.note != null) return
         editing.value = true
         previewChanged()
     }

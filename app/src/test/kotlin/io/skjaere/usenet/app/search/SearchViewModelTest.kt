@@ -978,6 +978,47 @@ class SearchViewModelTest {
         assertEquals(emptyList(), vm.strip.value, "TMDB's titles over a noted search")
     }
 
+    /**
+     * L659: the field of a plugin's noted search focused (tapped on a phone, opened from its gate on a TV) with nothing
+     * typed asks TMDB nothing for the plugin's words and leaves the search as it shows, its note with it: no preview, so
+     * neither TMDB's titles nor the preview's own search of the words. Enter leaves it too. The first change to the words
+     * makes them the user's own, looked up as any typing.
+     */
+    @Test
+    fun `the field of a noted search focused asks TMDB nothing until its words change`() = runTest {
+        val f = fixture()
+        val vm = f.vm(SearchRequest("quiet marsh", note = NOTE))
+        advanceTimeBy(1_000)
+        runCurrent()
+        val shown = assertNotNull(vm.results.value)
+        assertTrue(shown.done)
+        assertEquals(NOTE, shown.note)
+
+        // Well past the lookup's 300 ms and the preview's pause.
+        vm.startEditing()
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertEquals(emptyList(), f.tmdbAsked, "TMDB asked for a plugin's words, the field focused")
+        assertFalse(vm.editing.value, "the preview in place of the noted search")
+        assertEquals(shown, vm.results.value, "the noted search's results, with its note")
+        assertEquals(TitleLookup.None, vm.titles.value, "TMDB's answer for the words, or why it has none")
+        assertNull(vm.fallback.value)
+        assertEquals(emptyList(), vm.strip.value)
+        assertEquals(listOf(Asked(SearchQuery.Text("quiet marsh"), fresh = false)), f.asked, "the preview's own search of the words")
+
+        vm.keep()
+        advanceTimeBy(5_000)
+        runCurrent()
+        assertEquals(shown, vm.results.value, "Enter with nothing typed")
+        assertEquals(emptyList(), f.tmdbAsked)
+
+        // A space typed: the words are the user's.
+        type(vm, "quiet marsh ")
+        assertTrue(vm.editing.value)
+        assertEquals(listOf("quiet marsh"), f.tmdbAsked, "TMDB asked for the words typed")
+        assertEquals(TitleLookup("quiet marsh", emptyList(), settled = true, NoTitles.NotFound), vm.titles.value)
+    }
+
     /** Every release a search's results hold, playable or hidden. */
     private fun SearchResults.listed(): Set<String> = grouped.sections.flatMap { s -> s.groups.flatMap { g -> (g.playable + g.hidden).map { it.item.title } } }.toSet()
 

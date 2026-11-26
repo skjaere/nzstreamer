@@ -19,9 +19,10 @@ import java.util.concurrent.atomic.AtomicInteger
  * TMDB for the app's device tests: TmdbLookup's seams answer for the given invented titles (the fake
  * catalogue's, which TMDB doesn't know), or fail for [movieErrors]'s, and pass everything else to the
  * real lookups. Screens, Home, the lists' refresher and Search's suggestions all read the seams, so one
- * swap covers them; [close] puts the real ones back. [lookups] counts the answers it gave. Its answers
- * are [age] old, as TmdbClient's cache would give them (from TMDB just now by default). [keys] answers
- * a key's check (Settings › Metadata's, the phone setup's) for invented keys; null asks TMDB.
+ * swap covers them; [close] puts the real ones back. [lookups] counts the answers it gave, and [searched]
+ * keeps the words Search asked about. Its answers are [age] old, as TmdbClient's cache would give them
+ * (from TMDB just now by default). [keys] answers a key's check (Settings › Metadata's, the phone setup's)
+ * for invented keys; null asks TMDB.
  *
  * [strict], as the README screenshots have it, passes nothing on: an id, query or key it has no answer for throws
  * [Unknown] and is kept in [misses], and [close] then fails with the list, even where the app caught the throw and
@@ -49,6 +50,9 @@ class FakeTmdb(
     private val realSegments = PlayerActivity.lookUpSegments
     val lookups = AtomicInteger()
 
+    /** The words TMDB's search was asked about, answered or not, in order. */
+    val searched = CopyOnWriteArrayList<String>()
+
     /** What a strict fake was asked for and had no answer to, in order. A key's check is said without the key. */
     val misses = CopyOnWriteArrayList<String>()
 
@@ -61,7 +65,10 @@ class FakeTmdb(
             movieErrors[id]?.let { throw TmdbException(it) }
             movies[id]?.let { lookups.incrementAndGet(); Aged(it, age) } ?: orReal("movie $id") { realMovie(c, id) }
         }
-        TmdbLookup.searchTitles = { c, query -> suggestions(query)?.also { lookups.incrementAndGet() } ?: orReal("search \"$query\"") { realSearch(c, query) } }
+        TmdbLookup.searchTitles = { c, query ->
+            searched += query
+            suggestions(query)?.also { lookups.incrementAndGet() } ?: orReal("search \"$query\"") { realSearch(c, query) }
+        }
         TmdbLookup.validateKey = { c, key -> keys(key)?.also { lookups.incrementAndGet() } ?: orReal("a key's check") { realValidate(c, key) } }
         if (strict) {
             PlayerActivity.nextEpisode = { c, e ->

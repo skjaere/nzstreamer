@@ -12,10 +12,12 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -47,12 +49,13 @@ import java.net.Socket
  * A search a plugin opened with a note, on a phone (L629; SpPhoneSearchWarning): ⚠ and the note in the warning colour
  * under "Releases for “Copper Crown” on your indexers", above the indexers' lines; still there over a release list opened
  * from its results, under its sorts; gone once other words are searched; and the search not kept in the recent searches.
- * A plugin's item's no-release sheet (SpPhoneNothing) offers Search “<words>”, which opens that noted search. The fake
- * indexer (10.0.2.2:8089) answers; TMDB is the fake, with no titles for the words. The Search tab and its pages are the
- * app's graph, with the play sheet's host over them as AppNav has it.
+ * Its field tapped asks TMDB nothing for the plugin's words until they are changed (L659). A plugin's item's no-release
+ * sheet (SpPhoneNothing) offers Search “<words>”, which opens that noted search. The fake indexer (10.0.2.2:8089)
+ * answers; TMDB is the fake, with no titles for the words. The Search tab and its pages are the app's graph, with the play
+ * sheet's host over them as AppNav has it.
  *
  * The saved providers are hidden for the test and put back as they were; the test's own provider and indexer are deleted
- * with their secrets, and the recent searches put back as they were.
+ * with their secrets, the recent searches put back as they were, and a TMDB key the test added removed.
  */
 @RunWith(AndroidJUnit4::class)
 class SearchNoteDeviceTest {
@@ -67,6 +70,7 @@ class SearchNoteDeviceTest {
     private lateinit var nav: NavHostController
     private lateinit var saved: AppSettings
     private lateinit var recent: Set<String>
+    private var keyAdded = false
 
     /**
      * The recent searches by when each was searched, as the test began: a noted search kept would add its words, or, where
@@ -89,6 +93,11 @@ class SearchNoteDeviceTest {
         settings.indexers.first().filter { it.enabled }.forEach { settings.setIndexerEnabled(it.id, false) }
         settings.saveIndexer(FAKE_INDEXER, "Fake (search note test)", "http://10.0.2.2:8089", "fake-indexer-key")
         engineSetup("the engine on the saved mock") { container.engine.configuredProviders.first { it == listOf(mock) } }
+        // TMDB is asked only with a key: the fake answers in its place.
+        if (settings.tmdbKey() == null) {
+            settings.setTmdbKey("search-note-device-test")
+            keyAdded = true
+        }
         tmdb = FakeTmdb(suggestions = { emptyList() })
     }
 
@@ -102,6 +111,7 @@ class SearchNoteDeviceTest {
         settings.settings.first().providers.forEach { container.providerTests.forget(it.id) }
         if (saved.indexers.none { it.id == FAKE_INDEXER } && settings.indexer(FAKE_INDEXER) != null) settings.deleteIndexer(FAKE_INDEXER)
         settings.restore(saved)
+        if (keyAdded) settings.setTmdbKey(null)
         library.recentSearches.first().filter { it.key !in recent }.forEach { library.removeSearch(it.key) }
         engineOnSavedProviders()
     }
@@ -135,6 +145,35 @@ class SearchNoteDeviceTest {
         waitFor(hasText("Releases for “$OTHER” on your indexers"), 60_000)
         waitFor(group, 60_000)
         assertTrue("the note over other words' results", !exists(note))
+    }
+
+    /**
+     * L659: the field of a noted search tapped, nothing typed: the keyboard comes up over the search as it shows, its
+     * note and results staying, and TMDB isn't asked for the plugin's words, nor does the preview search them itself.
+     * Words typed are the user's own: TMDB is asked for them, and the preview shows, as for any typing.
+     */
+    @Test
+    fun theFieldOfANotedSearchTappedAsksTmdbNothingUntilItsWordsAreChanged() {
+        showSearch()
+        compose.runOnIdle { nav.switchTab(SearchRoute(query = WORDS, note = NOTE), restore = false) }
+        waitFor(header, 60_000)
+        waitFor(group, 60_000)
+        waitFor(note)
+        val tmdb = tmdb!!
+        compose.onNode(hasSetTextAction()).performClick()
+        waitFor(hasSetTextAction() and isFocused())
+        Thread.sleep(PAST_THE_PREVIEW_MS)
+        compose.waitForIdle()
+        assertEquals("TMDB asked for the plugin's words", emptyList<String>(), tmdb.searched.toList())
+        assertTrue("what was searched went", exists(header))
+        assertTrue("the note went", exists(note))
+        assertTrue("the results went", exists(group))
+        assertTrue("the preview's own search of the words", !exists(hasText("No titles on TMDB", substring = true)))
+
+        compose.onNode(hasSetTextAction()).performTextReplacement(TYPED)
+        waitFor(hasText("No titles on TMDB for “$TYPED”", substring = true), 60_000)
+        assertEquals("TMDB asked for the words typed", listOf(TYPED), tmdb.searched.toList())
+        assertTrue("what was searched, over the preview", !exists(header))
     }
 
     /** SpPhoneNothing: a plugin's item that found nothing offers Search “<words>”, which opens Search with the note. */
@@ -198,9 +237,13 @@ class SearchNoteDeviceTest {
         const val KESTREL = "kestrel"
         const val WORDS = "Copper Crown"
         const val OTHER = "Harbor Lights"
+        const val TYPED = "Copper Crown final"
         const val NOTE = "Indexer results can show scores."
         const val GOOD = "Copper.Crown.2019.1080p.BluRay.x264-GOOD"
         val RELEASES_FOR = Regex("""^\d+ releases? for """)
+
+        /** Past TMDB's lookup, 300 ms after the words, and the preview's own search, about a second after them. */
+        const val PAST_THE_PREVIEW_MS = 2_000L
     }
 }
 
