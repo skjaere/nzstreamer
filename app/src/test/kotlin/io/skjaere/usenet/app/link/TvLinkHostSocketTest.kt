@@ -147,6 +147,10 @@ class TvLinkHostSocketTest {
 
     private fun open(address: Inet4Address, port: Int) = runCatching { Socket().use { it.connect(InetSocketAddress(address, port), 1_000) } }.isSuccess
 
+    // A listener closed while its thread is blocked in accept() keeps the port until that thread wakes (backlog 301), so a
+    // connect just after the host has let it go can still be answered: wait for the refusal.
+    private fun refused(address: Inet4Address, port: Int, what: String) = eventually(what) { !open(address, port) }
+
     private class Heard : LinkHandler {
         val closed = CopyOnWriteArrayList<LinkClose>()
         val received = CopyOnWriteArrayList<LinkMessage>()
@@ -283,7 +287,7 @@ class TvLinkHostSocketTest {
         assertIs<Connect.Linked>(link(on.address, on.port, heard))
         inFront.value = false
         eventually("off") { host.state.value == TvListener.Off }
-        assertTrue(!open(on.address, on.port), "the port closed")
+        refused(on.address, on.port, "the port closed")
         eventually("the phone's link closed") { heard.closed.isNotEmpty() }
         eventually("the record taken off") { advertiser.live.isEmpty() }
         inFront.value = true
@@ -317,7 +321,7 @@ class TvLinkHostSocketTest {
         eventually("on the new address") { (host.state.value as? TvListener.Listening)?.address == ip("127.0.0.2") }
         val second = host.state.value as TvListener.Listening
         assertEquals(first.port, second.port)
-        assertTrue(!open(ip("127.0.0.1"), first.port), "not on the old one")
+        refused(ip("127.0.0.1"), first.port, "not on the old one")
         assertIs<Connect.Linked>(link(second.address, second.port))
         eventually("the record says the new one") { advertiser.live.singleOrNull()?.record?.txt?.get("v4") == "127.0.0.2" }
         addresses.value = null
@@ -494,7 +498,7 @@ class TvLinkHostSocketTest {
         host.closePairing(page)
         eventually("off: no phone and no pairing") { host.state.value == TvListener.Off }
         eventually("the record gone") { advertiser.live.isEmpty() }
-        assertTrue(!open(on.address, on.port))
+        refused(on.address, on.port, "the port closed")
         // Another page's close doesn't close this one's.
         host.openPairing(page)
         listening()
@@ -605,7 +609,7 @@ class TvLinkHostSocketTest {
         eventually("off: no phone and no pairing") { host.state.value == TvListener.Off }
         eventually("the record gone") { advertiser.live.isEmpty() }
         assertEquals(null, store.file.first().removedAt, "no Remove noted")
-        assertTrue(!open(on.address, on.port))
+        refused(on.address, on.port, "the port closed")
     }
 
     /** L4a: the 30 days end while the TV listens: it stops, as L4 alone says. */
