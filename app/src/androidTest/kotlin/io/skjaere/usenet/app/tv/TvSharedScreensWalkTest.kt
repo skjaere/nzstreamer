@@ -839,30 +839,43 @@ class TvSharedScreensWalkTest {
     }
 
     /**
-     * The Sports list (L652), its view narrowed to Combat (the fake's fight leagues, as Sportarr names them) so the walk
-     * reaches all of it: the title line with Recent | Upcoming, the sport chips and the ⋮, the sport's leagues, and its
-     * days' rows.
+     * The Sports list (L652), its view narrowed to Combat (the fake's fight leagues, as Sportarr names them) and its
+     * league UFC so the walk reaches all of it: the title line with Recent | Upcoming, the sport chips to the line's
+     * end (Exhibition's, a sport in no family, among them) and the ⋮, the sport's leagues, and UFC's card. The walk
+     * knows an element by its words, and Velmora Wrestling's weekly show has a row each week in the same words (its
+     * title, at the same hour): with every league of Combat, the walk would take each of those rows for the first and
+     * stop.
      */
     @Test
     fun sportsList() {
         sportarr(connected = true)
         showTheApp()
-        val combat = hasText("Combat") and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton)
         check(
             "The Sports list", scrollBack = true, sideways = true,
-            mustReach = listOf("All", "Recent", "Upcoming", "More", "Soccer", "Combat", "Skiing", "All leagues", "UFC"),
+            mustReach = listOf(
+                "All", "Recent", "Upcoming", "More", "Soccer", "Combat", "Exhibition", "Skiing", "All leagues", "Velmora Wrestling",
+                "UFC", "Kestrel Boxing",
+            ),
         ) {
             openSports(hasText("TODAY"))
-            // Picked once: the choice is kept for the tab (view.json), and the walk comes back to it at each text size.
-            if (compose.onAllNodes(combat and isSelected()).fetchSemanticsNodes().isEmpty()) {
-                // Its chip brought into its line's view first: the line scrolls sideways.
-                val chips = hasScrollToNodeAction() and SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
-                compose.onAllNodes(chips).onFirst().performScrollToNode(combat)
-                compose.onNode(combat).performClick()
-            }
-            compose.waitUntil(SPORTS_WAIT_MS) { compose.onAllNodes(hasText("All leagues")).fetchSemanticsNodes().isNotEmpty() }
-            compose.waitForIdle()
+            pickChip("Combat", SPORTS_LINE)
+            pickChip("UFC", LEAGUES_LINE)
         }
+    }
+
+    /**
+     * [label]'s chip on the title line's [line] of chips, brought into view (the lines scroll sideways) and picked
+     * unless it is already: picked once, the choice is kept for the tab (view.json), and the walk comes back to it at
+     * each text size.
+     */
+    private fun pickChip(label: String, line: Int) {
+        val chip = hasText(label) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton)
+        val lines = hasScrollToNodeAction() and SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
+        compose.onAllNodes(lines)[line].performScrollToNode(chip)
+        // Not picked again: a sport picked again lets its league go.
+        if (compose.onAllNodes(chip and isSelected()).fetchSemanticsNodes().isEmpty()) compose.onNode(chip).performClick()
+        compose.waitUntil(SPORTS_WAIT_MS) { compose.onAllNodes(chip and isSelected()).fetchSemanticsNodes().isNotEmpty() }
+        compose.waitForIdle()
     }
 
     /**
@@ -1153,6 +1166,10 @@ class TvSharedScreensWalkTest {
         /** The Grand Prix of Kestrel's race, aired yesterday. */
         const val SPORTS_RACE = 1605
         const val SPORTS_WAIT_MS = 30_000L
+
+        /** The Sports list's lines of chips, by their place down its top: the sports', then a sport's leagues'. */
+        const val SPORTS_LINE = 0
+        const val LEAGUES_LINE = 1
         /** FakeDiscover's invented names, each with its page's number. */
         val DISCOVER_NAME = Regex("""\D+ \d+""")
         const val WALK_INDEXER = "tv-walk-test"
