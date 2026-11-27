@@ -511,14 +511,29 @@ class FightCardTest {
         val rows = listOf(
             "UFC.Brisk.vs.Loam.1080p.WEB.h264-KESTREL" to mapOf(Parts.PRELIMS to otherParts, Parts.MAIN_CARD to accepted),
             "UFC.Loam.vs.Brisk.Prelims.1080p.WEB.h264-WREN" to mapOf(Parts.PRELIMS to accepted, Parts.MAIN_CARD to otherParts),
+            "UFC.Fight.Night.888.Brisk.vs.Loam.Prelims.1080p.WEB.h264-WREN" to mapOf(Parts.PRELIMS to accepted, Parts.MAIN_CARD to otherParts),
+            // Another year, night number, card number, date or pair: another card's.
             "UFC.Brisk.vs.Loam.2025.1080p.WEB.h264-WREN" to every(other, parts),
+            "UFC.Fight.Night.887.Brisk.vs.Loam.1080p.WEB.h264-WREN" to every(other, parts),
+            "UFC.999.Brisk.vs.Loam.1080p.WEB.h264-WREN" to every(other, parts),
+            "UFC.Fight.Night.2026.12.05.Brisk.vs.Loam.1080p.WEB.h264-WREN" to every(other, parts),
+            "UFC.Brisk.vs.Halde.1080p.WEB.h264-WREN" to every(other, parts),
         )
         assertEquals("", wrong(night, rows, FightCard(sent)))
         assertEquals(listOf("Brisk", "Loam"), FightCard(sent).context(night).sides)
 
         // A numbered card's too, and full names give their last words.
         val (numbered, card) = untitled("UFC 997", "Ana Quessel", "Mira Halde", listOf("Early Prelims", "Prelims", "Main Card"))
-        assertEquals("", wrong(card, listOf("UFC.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD)), FightCard(numbered)))
+        val cardRows = listOf(
+            "UFC.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD),
+            "UFC.997.Quessel.vs.Halde.Prelims.1080p.WEB.h264-KESTREL" to only(Parts.PRELIMS),
+            "UFC.998.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to every(other),
+            "UFC.Quessel.vs.Halde.2025.1080p.WEB.h264-KESTREL" to every(other),
+            "UFC.2026.12.05.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to every(other),
+            "UFC.Fight.Night.888.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to every(other),
+            "UFC.Quessel.vs.Brisk.1080p.WEB.h264-KESTREL" to every(other),
+        )
+        assertEquals("", wrong(card, cardRows, FightCard(numbered)))
 
         // Without them, with one alone, or with a side of one letter or a number alone, which is no surname: as before.
         listOf(null to null, "Brisk" to null, "Brisk" to "L", "Brisk" to "7").forEach { (home, away) ->
