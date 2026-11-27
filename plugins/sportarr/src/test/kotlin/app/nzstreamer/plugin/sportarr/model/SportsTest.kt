@@ -1,5 +1,6 @@
 package app.nzstreamer.plugin.sportarr.model
 
+import app.nzstreamer.plugin.sportarr.source.KeptLeague
 import app.nzstreamer.plugin.sportarr.source.SportsList
 import org.junit.jupiter.api.Test
 import java.time.Instant
@@ -36,6 +37,27 @@ class SportsTest {
         assertNull(event(1).session)
         assertEquals(at("2026-11-21T15:00"), event(1).start)
         assertEquals("Lantern Bay FC vs Copper Crown United", event(1).title)
+    }
+
+    @Test
+    fun `a Combat league's card has the parts and runtimes it has under Fighting, where it was one Generic part`() {
+        val combat = KeptLeague(UFC.id, UFC.name, "Combat")
+        fun parts(league: KeptLeague) = sports(league to listOf(ufc999().copy(sport = league.sport))).events.single().let { event ->
+            Triple(event.family, event.cardType, event.parts.map { Triple(it.key, it.label, it.runtimeMinutes) })
+        }
+        assertEquals(
+            Triple(
+                Family.FightCard,
+                CardType.Numbered,
+                listOf(
+                    Triple("ev-000031:early-prelims", "Early Prelims", 90),
+                    Triple("ev-000031:prelims", "Prelims", 120),
+                    Triple("ev-000031:main-card", "Main Card", 180),
+                ),
+            ),
+            parts(combat),
+        )
+        assertEquals(parts(UFC), parts(combat), "as under Fighting")
     }
 
     @Test

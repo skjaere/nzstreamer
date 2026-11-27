@@ -34,7 +34,7 @@ class FamiliesTest {
         val fights = listOf(
             "boxing", "bare knuckle boxing", "bareknuckle boxing", "mixed martial arts", "mma", "kickboxing", "kick boxing", "muay thai",
             "thai boxing", "lethwei", "submission grappling", "grappling", "brazilian jiu jitsu", "jiu jitsu", "combat sports", "combat sport",
-            "fighting", "wrestling", "professional wrestling", "pro wrestling",
+            "combat", "fighting", "wrestling", "professional wrestling", "pro wrestling",
         )
         fights.forEach { assertEquals(Family.FightCard, Families.ofSport(it), it) }
         motorsport.forEach { assertEquals(Family.Motorsport, Families.ofSport(it), it) }
@@ -54,6 +54,36 @@ class FamiliesTest {
         assertEquals(Family.Motorsport, Families.ofSport("Car-Racing"))
         assertEquals(Family.Motorsport, Families.ofSport("Motorsport"))
         assertEquals(Family.Motorsport, Families.ofSport("AUTO RACING"))
+    }
+
+    @Test
+    fun `Combat, the one word Sportarr now gives every fighting league, is a fight card's sport, folded`() {
+        listOf("Combat", "COMBAT", " combat ", "combat").forEach { assertEquals(Family.FightCard, Families.ofSport(it), it) }
+        // The older servers' word, and every other already listed, stay fight cards.
+        listOf("Fighting", "Combat Sports", "Mixed Martial Arts", "Boxing", "Wrestling")
+            .forEach { assertEquals(Family.FightCard, Families.ofSport(it), it) }
+    }
+
+    @Test
+    fun `under Combat a card's type comes from its title and league, as under Fighting, and dates alone step down`() {
+        val cards = listOf(
+            event(1, AT, title = "UFC 999: Quessel vs. Halde", sport = "Combat"),
+            event(2, AT.minus(WEEK), title = "UFC Fight Night 888", sport = "Combat"),
+            event(3, AT.plus(WEEK), title = "Quessel vs. Halde", sport = "Combat"),
+        )
+        val show = listOf(event(4, AT, title = "Velmora Iron Crown", sport = "Combat"))
+        cards.forEach { assertEquals(Family.FightCard, Families.of("Combat", it), it.title) }
+        show.forEach { assertEquals(Family.FightCard, Families.of("Combat", it), it.title) }
+        assertEquals(
+            listOf(CardType.Numbered, CardType.FightNight, CardType.Matchup),
+            cards.map { Families.cardType("UFC", it, cards) },
+        )
+        assertEquals(CardType.Premium, Families.cardType("Velmora Wrestling", show[0], show))
+        // The same titles under Fighting, as before: the same families.
+        (cards + show).forEach { assertEquals(Families.of("Fighting", it), Families.of("Combat", it), it.title) }
+        listOf("999", "2026-11-21", "21 November 2026", "").forEach {
+            assertEquals(Family.Generic, Families.of("Combat", event(5, AT, title = it, sport = "Combat")), it)
+        }
     }
 
     @Test

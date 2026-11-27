@@ -179,7 +179,9 @@ object Families {
             "kickboxing", "kick boxing",
             "muay thai", "thai boxing", "lethwei",
             "submission grappling", "grappling", "brazilian jiu jitsu", "jiu jitsu",
-            "combat sports", "combat sport", "fighting",
+            // Sportarr's own words for every fighting league: "Combat" since 4.1.12, which renames them at each start;
+            // "Fighting" on the servers before it.
+            "combat sports", "combat sport", "combat", "fighting",
             "wrestling", "professional wrestling", "pro wrestling",
         ).forEach { put(it, Family.FightCard) }
     }
