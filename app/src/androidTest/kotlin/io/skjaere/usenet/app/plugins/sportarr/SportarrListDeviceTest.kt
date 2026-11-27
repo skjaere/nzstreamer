@@ -16,6 +16,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
@@ -29,6 +30,7 @@ import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToKey
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
@@ -64,10 +66,11 @@ import java.util.concurrent.atomic.AtomicInteger
  * The Sports list on a phone (L641, L644, L652), the real plugin over the fake Sportarr's
  * library: Recent as the tab opens, Up next first (a game played part-way, a card's next part), then Today and the days
  * before it, each league a small heading over its rows; the sport and league chips, the choice kept when the tab comes
- * back; "+N more" opening a league's day in place and Show fewer closing it; Show watched; Upcoming; each state as the
- * fake's switches give it (no list and Sportarr failing, a failing page under a kept list, the key refused, nothing
- * followed); the cut line with the fake's busy league, and M-big over it; no canary value anywhere on the screen or in
- * the plugin's files; and the list whole at 1.3 times the text size.
+ * back, a sport picked after another's leagues were scrolled along opening its leagues at their start; "+N more"
+ * opening a league's day in place and Show fewer closing it; Show watched; Upcoming; each state as the fake's switches
+ * give it (no list and Sportarr failing, a failing page under a kept list, the key refused, nothing followed); the cut
+ * line with the fake's busy league, and M-big over it; no canary value anywhere on the screen or in the plugin's files;
+ * and the list whole at 1.3 times the text size.
  *
  * Days are the device's: what the tests expect is read from the catalogue's starts in the device's zone, never from the
  * device's date, which is the fake's anchor only until midnight there (the fixtures' days count from the anchor). The watch rows
@@ -197,6 +200,65 @@ class SportarrListDeviceTest {
         assertFalse("the leagues' line with All", exists(chip and hasText(ALL_LEAGUES)))
         scrollTo(row(library.event(GAME).title))
     }
+
+    /**
+     * A sport picked after another's leagues were scrolled along, straight from it: its leagues open at their start, All
+     * leagues picked and whole in view, not where the last sport's line was left.
+     */
+    @Test
+    fun aSportPickedNextOpensItsLeaguesAtTheirStart() {
+        scrollAlongSoccersLeagues()
+        pickSport(MOTORSPORT)
+        leaguesOpenAtTheirStart(MOTORSPORT)
+    }
+
+    /** The same with All picked in between, the leagues' line gone and back. */
+    @Test
+    fun aSportPickedThroughAllOpensItsLeaguesAtTheirStart() {
+        scrollAlongSoccersLeagues()
+        pickSport(ALL)
+        compose.waitUntil(PLUGIN_WAIT_MS) { !exists(chip and hasText(ALL_LEAGUES)) }
+        pickSport(MOTORSPORT)
+        leaguesOpenAtTheirStart(MOTORSPORT)
+    }
+
+    /** Soccer picked, its leagues' line swiped along to its end: All leagues out of view, all or part. */
+    private fun scrollAlongSoccersLeagues() {
+        sportarr.install()
+        openSports()
+        listShown()
+        pickSport(SOCCER)
+        waitFor(chip and hasText(ALL_LEAGUES) and isSelected())
+        compose.onNode(leaguesLine).performTouchInput { swipeLeft() }
+        compose.waitForIdle()
+        assertFalse("Soccer's leagues scrolled past All leagues", shownWhole(chip and hasText(ALL_LEAGUES)))
+    }
+
+    /** [sport]'s chip tapped, and shown picked. */
+    private fun pickSport(sport: String) {
+        compose.onNode(chip and hasText(sport)).performClick()
+        waitFor(chip and hasText(sport) and isSelected())
+    }
+
+    /** [sport]'s leagues' line at its start: All leagues picked, and whole in view. */
+    private fun leaguesOpenAtTheirStart(sport: String) {
+        val names = library.leagues.filter { it.sport == sport }.map { it.name }.toSet() + ALL_LEAGUES
+        val leagues = chip and SemanticsMatcher("a league chip of $sport's or All leagues") { it.text() in names }
+        waitFor(leagues)
+        compose.waitForIdle()
+        val line = compose.onAllNodes(leagues).fetchSemanticsNodes().sortedBy { it.boundsInRoot.left }
+            .map { node -> node.text() + if (node.whole()) "" else " (cut)" }
+        assertTrue(
+            "$sport's leagues at their start, All leagues picked and whole: the line shows $line",
+            shownWhole(chip and hasText(ALL_LEAGUES) and isSelected()),
+        )
+    }
+
+    /** Whether [matcher]'s element shows whole: none of it cut off by the line it is in, or out of the line's view. */
+    private fun shownWhole(matcher: SemanticsMatcher): Boolean = compose.onAllNodes(matcher).fetchSemanticsNodes().any { it.whole() }
+
+    /** Whether all of the node's width shows: what its line scrolled out of view is clipped off its bounds in the window. */
+    private fun SemanticsNode.whole(): Boolean = boundsInWindow.width >= size.width - 1
 
     /**
      * L645: the side opens on Recent each time the tab opens. Upcoming is kept on the way back from a page the list opened,
@@ -574,6 +636,10 @@ class SportarrListDeviceTest {
 
     private fun button(words: String) = hasText(words) and hasClickAction()
 
+    /** The leagues' line: the chips' line that scrolls sideways with All leagues in it. */
+    private val leaguesLine = SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange) and
+        hasAnyDescendant(chip and hasText(ALL_LEAGUES))
+
     /** The list itself: the column that scrolls up and down. */
     private val list = SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange) and
         SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)
@@ -611,6 +677,8 @@ class SportarrListDeviceTest {
         const val MORE = "More"
         const val ALL = "All"
         const val ALL_LEAGUES = "All leagues"
+        const val SOCCER = "Soccer"
+        const val MOTORSPORT = "Motorsport"
         const val SHOW_WATCHED = "Show watched"
         const val HIDE_WATCHED = "Hide watched"
         const val REFRESH = "Refresh"

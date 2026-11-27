@@ -12,6 +12,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
@@ -46,6 +47,7 @@ import io.skjaere.usenet.app.ui.FieldGateLabel
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -64,7 +66,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * keeping the focus after a refused key, Up to the key); Change opening the key's field with its keyboard, Right from the
  * key's gate to Show; the list's first focus on All, Down into Up next and the days, Left to the rail and Right back to
  * the row left, Back to the rail and then Home; Back from a game's page on its row; "+N more" opening in place with the
- * focus on its sixth row, and Back from that row's page on it; Upcoming by OK, the focus staying on it; each state's
+ * focus on its sixth row, and Back from that row's page on it; Upcoming by OK, the focus staying on it; a sport picked
+ * after another's leagues were walked along, straight or through All, opening its leagues at their start; each state's
  * focus (loading, no list, nothing followed, the key refused, a failing page under the kept list); and M-big with the
  * fake's busy league.
  *
@@ -121,9 +124,12 @@ class SportarrTvTest {
      */
     private var generation by mutableIntStateOf(0)
 
-    /** The app as a TV shows it, then its Sports tab by the rail: Left to the rail, Down to Sports, OK. */
-    private fun openSports() {
-        compose.setTvContent {
+    /**
+     * The app as a TV shows it, at [fontScale] times the text size, then its Sports tab by the rail: Left to the rail, Down
+     * to Sports, OK.
+     */
+    private fun openSports(fontScale: Float = 1f) {
+        compose.setTvContent({ fontScale }) {
             key(generation) {
                 nav = rememberNavController()
                 AppNav(nav = nav)
@@ -388,6 +394,63 @@ class SportarrTvTest {
         assertTrue("shown picked", exists(chip(SKIING) and isSelected()))
     }
 
+    /**
+     * A sport picked after another's leagues were walked along, straight from it: its leagues open at their start, All
+     * leagues picked and whole in view, not where the last sport's line was left.
+     */
+    @Test
+    fun aSportPickedNextOpensItsLeaguesAtTheirStart() {
+        walkAlongMotorsportsLeagues()
+        remote.press(KeyEvent.KEYCODE_DPAD_UP)
+        assertEquals(SOCCER, remote.pressUntil(KeyEvent.KEYCODE_DPAD_LEFT, SOCCER, max = 12))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        soccersLeaguesOpenAtTheirStart()
+    }
+
+    /** The same with All picked in between, the leagues' line gone and back. */
+    @Test
+    fun aSportPickedThroughAllOpensItsLeaguesAtTheirStart() {
+        walkAlongMotorsportsLeagues()
+        remote.press(KeyEvent.KEYCODE_DPAD_UP)
+        assertEquals(ALL, remote.pressUntil(KeyEvent.KEYCODE_DPAD_LEFT, ALL, max = 12))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        waitFor(chip(ALL) and isSelected())
+        compose.waitUntil(FOCUS_WAIT_MS) { !exists(chip(ALL_LEAGUES)) }
+        assertEquals("Right from All", SOCCER, remote.press(KeyEvent.KEYCODE_DPAD_RIGHT))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        soccersLeaguesOpenAtTheirStart()
+    }
+
+    /**
+     * At twice the text size, so a sport's leagues don't fit on their line: Motorsport picked, Down into its leagues, then
+     * Right along them until the line has scrolled All leagues out of view, all or part.
+     */
+    private fun walkAlongMotorsportsLeagues() {
+        sportarr.install()
+        openSports(fontScale = 2f)
+        listFocused()
+        assertEquals(MOTORSPORT, remote.pressUntil(KeyEvent.KEYCODE_DPAD_RIGHT, MOTORSPORT, max = 12))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        waitFor(chip(ALL_LEAGUES) and isSelected())
+        remote.press(KeyEvent.KEYCODE_DPAD_DOWN)
+        repeat(MAX_RIGHTS) { if (shownWhole(chip(ALL_LEAGUES))) remote.press(KeyEvent.KEYCODE_DPAD_RIGHT) }
+        assertFalse("Motorsport's leagues walked past All leagues; the focus on \"${remote.focused()}\"", shownWhole(chip(ALL_LEAGUES)))
+    }
+
+    /** Soccer picked, its leagues' line at its start: All leagues picked, and whole in view. */
+    private fun soccersLeaguesOpenAtTheirStart() {
+        waitFor(chip(SOCCER) and isSelected())
+        val leagues = leagueChipOf(SOCCER) or chip(ALL_LEAGUES)
+        waitFor(leagues)
+        compose.waitForIdle()
+        val line = compose.onAllNodes(leagues).fetchSemanticsNodes().sortedBy { it.boundsInRoot.left }
+            .map { node -> node.label() + if (node.whole()) "" else " (cut)" }
+        assertTrue(
+            "Soccer's leagues at their start, All leagues picked and whole: the line shows $line",
+            shownWhole(chip(ALL_LEAGUES) and isSelected()),
+        )
+    }
+
     /** While the first read runs, the blank cards: the focus on Recent; then the list, the focus moved on to All. */
     @Test
     fun loadingFocusesRecentThenAll() {
@@ -543,6 +606,19 @@ class SportarrTvTest {
 
     private fun chip(label: String) = hasText(label) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton)
 
+    /** A league chip of [sport]'s, any. */
+    private fun leagueChipOf(sport: String): SemanticsMatcher {
+        val names = library.leagues.filter { it.sport == sport }.map { it.name }.toSet()
+        return SemanticsMatcher("a league chip of $sport's") { node -> node.label() in names } and
+            SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton)
+    }
+
+    /** Whether [matcher]'s element shows whole: none of it cut off by the line it is in, or out of the line's view. */
+    private fun shownWhole(matcher: SemanticsMatcher): Boolean = compose.onAllNodes(matcher).fetchSemanticsNodes().any { it.whole() }
+
+    /** Whether all of the node's width shows: what its line scrolled out of view is clipped off its bounds in the window. */
+    private fun SemanticsNode.whole(): Boolean = boundsInWindow.width >= size.width - 1
+
     private fun sideTab(label: String) = hasText(label) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
 
     private fun button(words: String) = hasText(words) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button)
@@ -580,6 +656,11 @@ class SportarrTvTest {
         const val ALL = "All"
         const val SKIING = "Skiing"
         const val SOCCER = "Soccer"
+        const val MOTORSPORT = "Motorsport"
+        const val ALL_LEAGUES = "All leagues"
+
+        /** Presses of Right along a line of league chips, at most. */
+        const val MAX_RIGHTS = 8
 
         /** The library's one skiing event, the last sport's. */
         const val SKI_EVENT = 2201
