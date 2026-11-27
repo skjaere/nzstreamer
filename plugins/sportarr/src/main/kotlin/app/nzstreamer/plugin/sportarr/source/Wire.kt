@@ -102,7 +102,7 @@ data class WireLeague(
     val id: Int,
     @Serializable(with = LooseText::class) val externalId: String? = null,
     val name: String,
-    // Guaranteed, but a league may have none: the family then reads the event's (L643).
+    // Guaranteed, but a league may have none: the family then reads the event's, as where the league's names none (L-SF2).
     val sport: String? = null,
     val monitored: Boolean,
     @Serializable(with = LooseText::class) val monitorType: String? = null,

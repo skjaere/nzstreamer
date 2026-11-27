@@ -460,6 +460,18 @@ class TeamMatchTest {
     }
 
     @Test
+    fun `a cricket match whose family came from the event's own sport is read as cricket`() {
+        val multi = KeptLeague(21, "Kestrel Games", "Exhibition")
+        val match = sports(
+            multi to listOf(game(multi, 1802, "2026-11-21T10:00", "Saltmere City", "Lowmarsh Rovers", round = null, season = "2026").copy(sport = "Cricket")),
+        )
+        val event = match.byId(1802)
+        assertEquals(Family.TeamGame, event.family)
+        val day = "Kestrel.Games.2026.11.21.Saltmere.City.vs.Lowmarsh.Rovers.Day.2.1080p.WEB.h264-KESTREL"
+        assertEquals(offered("One day of the match"), judge(event, day, TeamMatch(match)))
+    }
+
+    @Test
     fun `halves, a whip-around show, a film named like a side, an early post and a small full match`() {
         val rows = listOf(
             "Lantern.Bay.FC.vs.Copper.Crown.United.2026.11.21.1st.Half.1080p.WEB.h264-WREN" to Verdict.Reject(RejectKind.Partial),

@@ -9,9 +9,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 /**
- * L643: the family comes from the league's sport (the event's when the league has none), folded, in the plugin's own
- * groups; an event steps down to Generic, never up, when its title can't carry its family's matching; and a fight card's
- * type comes from its title and its league, in L643's order.
+ * L643, L-SF2: the family comes from the league's sport where it names one, else the event's own, else Sportarr's part
+ * names (a fight card's), folded, in the plugin's own groups; an event steps down to Generic, never up, when its title
+ * can't carry its family's matching; and a fight card's type comes from its title and its league, in L643's order.
  */
 class FamiliesTest {
     @Test
@@ -99,6 +99,42 @@ class FamiliesTest {
         assertEquals(Family.TeamGame, Families.of(null, event(2, AT, title = "Lantern Bay FC vs Copper Crown United", sport = "Soccer")))
         assertEquals(Family.TeamGame, Families.of(" ", event(2, AT, title = "Lantern Bay FC vs Copper Crown United", sport = "Soccer")))
         assertEquals(Family.Generic, Families.of(null, event(3, AT, title = "Kestrel · Men's Downhill", sport = null)))
+    }
+
+    @Test
+    fun `a league's sport that names no family gives way to the event's own, then to its part names, a fight card's`() {
+        fun night(sport: String? = null, names: List<String>? = listOf("Prelims", "Main Card"), title: String = "UFC Fight Night: Brisk vs. Loam") =
+            event(1, AT, title = title, sport = sport).copy(eventTypePartNames = names)
+        // An unknown word, a word in no family, or none; no sport on the event: Sportarr sends part names for combat alone.
+        listOf("Exhibition", "Skiing", " ", null).forEach { league ->
+            assertEquals(Family.FightCard, Families.of(league, night()), "$league, part names")
+            assertEquals(Family.Generic, Families.of(league, night(names = null)), "$league, none")
+            assertEquals(Family.Generic, Families.of(league, night(names = emptyList())), "$league, an empty list")
+            assertEquals(Family.Generic, Families.of(league, night(names = listOf("", "  "))), "$league, blank names are none")
+            // The step-down still holds: a title of dates and numbers alone is Generic, part names or not.
+            listOf("2026-11-21", "999").forEach { assertEquals(Family.Generic, Families.of(league, night(title = it)), "$league, $it") }
+        }
+        // A Generic word in the league, a family's in the event: the event's, stepped down as any.
+        assertEquals(Family.FightCard, Families.of("Skiing", night(sport = "Fighting", names = null)))
+        assertEquals(Family.FightCard, Families.of("Exhibition", night(sport = "Combat", names = null)))
+        val game = event(2, AT, title = "Lantern Bay FC vs Copper Crown United", sport = "Soccer")
+        assertEquals(Family.TeamGame, Families.of("Exhibition", game))
+        assertEquals(Family.Generic, Families.of("Exhibition", game.copy(title = "Kestrel Cup Final")), "no sides: stepped down")
+        // A league's sport that names a family keeps it, whatever the event says or carries.
+        assertEquals(Family.TeamGame, Families.of("Soccer", game))
+        assertEquals(Family.TeamGame, Families.of("Soccer", game.copy(sport = "Fighting", eventTypePartNames = listOf("Main Card"))))
+        assertEquals(Family.Motorsport, Families.of("Motorsport", night(sport = "Fighting", title = "Grand Prix of Kestrel - Race")))
+    }
+
+    @Test
+    fun `the sport a family was read from is the league's, the event's where that named it, else the league's word`() {
+        val game = event(2, AT, title = "Lantern Bay FC vs Copper Crown United", sport = "American Football")
+        assertEquals("Soccer", Families.read("Soccer", game).sport)
+        assertEquals("American Football", Families.read("Exhibition", game).sport)
+        assertEquals("American Football", Families.read(null, game).sport)
+        assertEquals("Exhibition", Families.read("Exhibition", game.copy(sport = "Darts")).sport)
+        assertEquals("Darts", Families.read(" ", game.copy(sport = "Darts")).sport)
+        assertEquals(Family.TeamGame, Families.read("Exhibition", game).family)
     }
 
     @Test

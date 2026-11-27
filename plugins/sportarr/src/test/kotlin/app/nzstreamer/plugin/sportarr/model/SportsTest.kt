@@ -61,6 +61,26 @@ class SportsTest {
     }
 
     @Test
+    fun `an event's own sport names its family and its runtime where its league's names none`() {
+        val multi = KeptLeague(21, "Kestrel Games", "Exhibition")
+        val sports = sports(
+            multi to listOf(
+                on(multi, 1, at("2026-11-21T18:00"), "Northfield Rovers vs Easton Athletic").copy(sport = "American Football"),
+                on(multi, 2, at("2026-11-21T22:00"), "Kestrel Fight Night: Brisk vs. Loam", parts = listOf("Prelims", "Main Card")),
+                on(multi, 3, at("2026-11-21T10:00"), "Kestrel Open Final").copy(sport = "Darts"),
+            ),
+        )
+        fun event(id: Int) = sports.events.single { it.id == id }
+        assertEquals(Family.TeamGame, event(1).family)
+        assertEquals("American Football", event(1).sport)
+        assertEquals(listOf(190), event(1).parts.map { it.runtimeMinutes }, "American football's, not another team game's")
+        assertEquals(Family.FightCard to CardType.FightNight, event(2).family to event(2).cardType)
+        assertEquals(listOf("prelims" to 120, "main-card" to 180), event(2).parts.map { it.id to it.runtimeMinutes })
+        assertEquals(Family.Generic, event(3).family)
+        assertEquals("Exhibition", event(3).sport, "the league's word, where no sport named a family")
+    }
+
+    @Test
     fun `an event is kept under the league whose route listed it, and nowhere else`() {
         val stray = on(PREMIER, 2, at("2026-11-21T15:00"), "Wrenford Albion vs Brackenmoor FC").copy(leagueId = 99)
         val list = SportsList(

@@ -90,11 +90,10 @@ data class Sports(
 
         private fun build(league: League, event: WireEvent, cardType: CardType?): SportsEvent {
             val key = Keys.event(event.externalId, event.id)
-            val family = Families.of(league.sport, event)
+            // The runtimes read the sport the family came from: the league's, or the event's where that named it.
+            val (family, sport) = Families.read(league.sport, event)
             val session = if (family == Family.Motorsport) Sessions.read(event.title) else null
             val card = if (family == Family.FightCard) cardType ?: CardType.Premium else null
-            // The runtimes read the sport as the family does: the league's, the event's where the league has none.
-            val sport = league.sport?.takeIf { it.isNotBlank() } ?: event.sport
             return SportsEvent(
                 key = key,
                 id = event.id,
@@ -107,6 +106,7 @@ data class Sports(
                 homeTeamName = event.homeTeamName,
                 awayTeamName = event.awayTeamName,
                 family = family,
+                sport = sport,
                 cardType = card,
                 session = session,
                 parts = Parts.of(key, event.title, family, card, session, sport, event.eventTypePartNames),
@@ -147,7 +147,9 @@ data class Part(val key: String, val id: String, val label: String, val runtimeM
 
 /**
  * An event as the tab lists it. [start] is Sportarr's eventDate, in UTC; [broadcastDate] the date as written (L647 reads
- * it); [round] and [season] are text as Sportarr sends them. [cardType] is a fight card's, [session] a motorsport event's.
+ * it); [round] and [season] are text as Sportarr sends them. [sport] is the one its [family] was read from, as Sportarr
+ * wrote it (its league's, or its own where that named the family). [cardType] is a fight card's, [session] a motorsport
+ * event's.
  */
 data class SportsEvent(
     override val key: String,
@@ -161,6 +163,7 @@ data class SportsEvent(
     val homeTeamName: String?,
     val awayTeamName: String?,
     val family: Family,
+    val sport: String?,
     val cardType: CardType?,
     val session: Session?,
     val parts: List<Part>,

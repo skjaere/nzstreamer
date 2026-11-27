@@ -218,7 +218,8 @@ class TeamMatch(private val sports: Sports) : FamilyMatcher {
         /** The number in its title's "Game N", a double header's. */
         val number: Int? by lazy { SportsName.read(event.title).numbered(NumberWord.Game).singleOrNull() }
 
-        val cricket: Boolean get() = Families.fold(event.league.sport) == CRICKET
+        // The sport the game's family came from: its league's, or its own where the league's names no family.
+        val cricket: Boolean get() = Families.fold(event.sport) == CRICKET
     }
 
     /**

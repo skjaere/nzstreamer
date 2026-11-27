@@ -7,10 +7,11 @@ import java.util.Locale
 import kotlin.math.abs
 
 /**
- * Which family an event belongs to (L643): from the league's sport (the event's when the league has none), then the
- * title. The sports and their names, each in its family, were written for this plugin from how sports are organised,
- * named and broadcast, by a writer who read no other project's lists; no league name is built in (C26). Every other
- * sport, an unknown one or none, is Generic.
+ * Which family an event belongs to (L643, L-SF2): from the league's sport where it names a family, else the event's own
+ * where that does, else a fight card where Sportarr sent the event part names (it sends them for combat sports alone);
+ * then the title. The sports and their names, each in its family, were written for this plugin from how sports are
+ * organised, named and broadcast, by a writer who read no other project's lists; no league, promotion or organisation
+ * name is built in (C26). Every other sport, an unknown one or none, is Generic.
  *
  * An event steps down to Generic, never up, where its title can't carry its family's matching: a team game with no two
  * sides, a motorsport event whose title is nothing but session words, a fight card whose title is nothing but dates and
@@ -20,15 +21,37 @@ object Families {
     /** The family [sport] names, lower-cased, its spaces and hyphens folded. */
     fun ofSport(sport: String?): Family = SPORTS[fold(sport)] ?: Family.Generic
 
-    /** [event]'s family: its league's sport's, [leagueSport], or its own when the league has none, stepped down. */
-    fun of(leagueSport: String?, event: WireEvent): Family {
-        val family = ofSport(leagueSport?.takeIf { it.isNotBlank() } ?: event.sport)
-        return when (family) {
-            Family.TeamGame -> if (hasSides(event)) family else Family.Generic
-            Family.Motorsport -> if (sessionWordsAlone(event.title)) Family.Generic else family
-            Family.FightCard -> if (datesAndNumbersAlone(event.title)) Family.Generic else family
-            Family.Generic -> family
+    /**
+     * An event's [family], stepped down, and the [sport] it was read from as Sportarr wrote it, which the runtimes and the
+     * families' own rules read as the family does: the league's, or the event's where that named the family; for a family
+     * no sport named, the league's, else the event's.
+     */
+    data class FamilyRead(val family: Family, val sport: String?)
+
+    /** [event]'s family read in L-SF2's order, its league's sport being [leagueSport], with the sport it came from. */
+    fun read(leagueSport: String?, event: WireEvent): FamilyRead {
+        val league = ofSport(leagueSport)
+        val own = ofSport(event.sport)
+        // Where no sport names a family, the word read is the league's, else the event's.
+        val written = leagueSport?.takeIf { it.isNotBlank() } ?: event.sport
+        val read = when {
+            league != Family.Generic -> FamilyRead(league, leagueSport)
+            own != Family.Generic -> FamilyRead(own, event.sport)
+            // Sportarr sends part names for combat sports alone: an event with any is a fight card, whatever its sport.
+            event.eventTypePartNames.orEmpty().any(String::isNotBlank) -> FamilyRead(Family.FightCard, written)
+            else -> FamilyRead(Family.Generic, written)
         }
+        return read.copy(family = steppedDown(read.family, event))
+    }
+
+    /** [event]'s family as [read] reads it. */
+    fun of(leagueSport: String?, event: WireEvent): Family = read(leagueSport, event).family
+
+    private fun steppedDown(family: Family, event: WireEvent): Family = when (family) {
+        Family.TeamGame -> if (hasSides(event)) family else Family.Generic
+        Family.Motorsport -> if (sessionWordsAlone(event.title)) Family.Generic else family
+        Family.FightCard -> if (datesAndNumbersAlone(event.title)) Family.Generic else family
+        Family.Generic -> family
     }
 
     /**
