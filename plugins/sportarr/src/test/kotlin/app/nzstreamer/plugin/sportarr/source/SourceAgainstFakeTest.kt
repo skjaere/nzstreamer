@@ -71,7 +71,7 @@ class SourceAgainstFakeTest {
             assertTrue(routes.getValue("status") > 0, "$routes")
             control("reset")
         }
-        assertEquals(TestAnswer.Connected("4.1.12.1122"), test())
+        assertEquals(TestAnswer.Connected(FakeSportarrServer.VERSION), test())
         assertEquals(TestAnswer.Refused, test(key = "a-key-Sportarr-never-gave"))
         control("refuse-key")
         assertEquals(TestAnswer.Refused, test())
@@ -83,7 +83,7 @@ class SourceAgainstFakeTest {
         assertEquals(TestAnswer.NotSportarr, test(), "a page where Sportarr's answer should be")
         resetAfterTests()
         control("url-base?base=/sportarr")
-        assertEquals(TestAnswer.Connected("4.1.12.1122"), test("$address/sportarr/"), "the base kept, its trailing slash dropped")
+        assertEquals(TestAnswer.Connected(FakeSportarrServer.VERSION), test("$address/sportarr/"), "the base kept, its trailing slash dropped")
         assertEquals(TestAnswer.NotSportarr, test(), "without the base: Sportarr's 404")
         resetAfterTests()
         control("fail?status=500&route=status")
@@ -117,19 +117,26 @@ class SourceAgainstFakeTest {
         // Scope None with a monitored card: that card alone. Scope None with nothing monitored: the route's answer.
         assertEquals(listOf(1302), list.events.filter { it.leagueId == 4 }.map { it.id })
         assertEquals(listOf(2101), list.events.filter { it.leagueId == 12 }.map { it.id })
+        // The fight leagues as Sportarr 4.1.12 names them, one as a server before it, and one of a word no family has.
+        assertEquals(
+            mapOf(4 to "Fighting", 10 to "Combat", 11 to "Combat", 12 to "Combat", 15 to "Exhibition"),
+            list.leagues.filter { it.id in setOf(4, 10, 11, 12, 15) }.associate { it.id to it.sport },
+        )
+        assertTrue(list.events.filter { it.leagueId in setOf(10, 11, 12) }.all { it.sport == "Combat" })
+        assertEquals(listOf("Early Prelims", "Prelims", "Main Card", "Post Show"), list.events.single { it.leagueId == 15 }.eventTypePartNames)
         // The route's answer elsewhere: the sessions chosen, the teams followed.
         assertEquals(setOf(1703, 1704, 1712, 1713), list.events.filter { it.leagueId == 8 }.map { it.id }.toSet())
         assertTrue(1503 !in read)
         // No monitorType or Keep every game sent: the route's answer as it is, the session switched off by hand too.
         assertEquals(setOf(1801, 1802), list.events.filter { it.leagueId == 9 }.map { it.id }.toSet())
         assertTrue(setOf("UFC 999: Quessel vs. Halde", "Velmora Monday Brawl", "Halde vs. Brisk", "Kestrel · Men's Downhill", "Grand Prix of Kestrel").all { it in titles(list) })
-        assertEquals(57, list.events.size)
+        assertEquals(58, list.events.size)
         assertEquals(false, list.cut)
         // Newest first, every event under the league whose page listed it.
         assertEquals(list.events.sortedWith(compareByDescending<WireEvent> { it.eventDate }.thenByDescending { it.id }), list.events)
         assertTrue(list.events.all { event -> library.single { it.id == event.leagueId }.events.any { it.id == event.id } })
         val (routes, pages) = requests()
-        assertEquals(mapOf("status" to 0, "health" to 0, "leagues" to 1, "events" to 13), routes)
+        assertEquals(mapOf("status" to 0, "health" to 0, "leagues" to 1, "events" to 14), routes)
         assertTrue(pages.keys.all { it.endsWith(":1") }, "one page each: $pages")
         println("M-refresh: the standard library: ${routes.values.sum()} requests, ${list.events.size} events, $ms ms")
     }
@@ -148,7 +155,7 @@ class SourceAgainstFakeTest {
         val (_, read) = requests()
         assertEquals(4, read.keys.count { it.startsWith("${SportsCatalog.BUSY_LEAGUE_ID}:") }, "the order check off: every page")
         assertEquals(ids(inOrder), ids(outOfOrder))
-        assertEquals(57 + 1500, inOrder.events.size)
+        assertEquals(58 + 1500, inOrder.events.size)
         assertEquals(false, outOfOrder.cut)
     }
 
@@ -160,7 +167,7 @@ class SourceAgainstFakeTest {
         val whole = list()
         assertEquals(ids(paged), ids(whole))
         val (routes, _) = requests()
-        assertEquals(13, routes.getValue("events"), "one request a league")
+        assertEquals(14, routes.getValue("events"), "one request a league")
     }
 
     @Test
@@ -185,7 +192,7 @@ class SourceAgainstFakeTest {
         val list = list()
         assertTrue(list.leagues.none { it.id == 1 })
         assertTrue(list.events.none { it.leagueId == 1 })
-        assertEquals(57 - 17, list.events.size)
+        assertEquals(58 - 17, list.events.size)
     }
 
     @Test
@@ -198,7 +205,7 @@ class SourceAgainstFakeTest {
         assertEquals(ListReader.CAP, list.events.size)
         val (routes, pages) = requests()
         assertEquals(ListReader.PAGE_BUDGET, pages.keys.count { it.startsWith("${SportsCatalog.BUSY_LEAGUE_ID}:") })
-        assertEquals(1 + 13 + ListReader.PAGE_BUDGET, routes.values.sum())
+        assertEquals(1 + 14 + ListReader.PAGE_BUDGET, routes.values.sum())
         println("M-refresh: busy (5,200 events in the window): ${routes.values.sum()} requests, ${list.events.size} events kept, $ms ms")
     }
 }

@@ -4,6 +4,7 @@ import app.nzstreamer.plugin.sportarr.family.Catalogue
 import app.nzstreamer.plugin.sportarr.family.CatalogueAt
 import app.nzstreamer.plugin.sportarr.family.Matchers
 import app.nzstreamer.plugin.sportarr.model.Family
+import app.nzstreamer.plugin.sportarr.model.FamilyFrom
 import org.junit.jupiter.api.Test
 import java.time.LocalDate
 import kotlin.test.assertEquals
@@ -37,6 +38,18 @@ class CatalogueAgreementTest {
             assertEquals(3, judged.filter { it.first == family }.map { it.second }.distinct().size, "$family accepts, offers and leaves out")
         }
         assertTrue(Catalogue.rows.size >= Catalogue.releases.size)
+    }
+
+    @Test
+    fun `the fight leagues are fight cards by Combat, by the older Fighting and by part names under a word of no family`() {
+        // As Sportarr 4.1.12 names them, one league as a server before it does, and one whose sport no family lists.
+        val fights = Catalogue.sports.events.filter { it.family == Family.FightCard }
+            .groupBy({ it.league.sport.orEmpty() }, { it.familyFrom }).mapValues { (_, from) -> from.toSet() }
+        assertEquals(
+            mapOf("Combat" to setOf(FamilyFrom.LeagueSport), "Fighting" to setOf(FamilyFrom.LeagueSport), "Exhibition" to setOf(FamilyFrom.PartNames)),
+            fights,
+        )
+        assertEquals(setOf("UFC", "Velmora Wrestling", "Kestrel Boxing"), Catalogue.sports.leagues.filter { it.sport == "Combat" }.map { it.name }.toSet())
     }
 
     @Test

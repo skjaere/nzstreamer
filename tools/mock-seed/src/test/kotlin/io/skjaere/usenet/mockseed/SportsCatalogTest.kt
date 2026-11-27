@@ -152,8 +152,20 @@ class SportsCatalogTest {
         assertTrue(league("Kestrel Endurance Series").events.any { !it.monitored && it.listed } && league("Kestrel Endurance Series").events.any { it.monitored })
         // Stored, not on the league's page: sessions not chosen, a game of a team not followed.
         assertTrue(league("MotoGP").events.any { !it.listed } && league("NBA").events.any { !it.listed })
-        // Fighting leagues list every stored event, whatever their scope.
-        assertEquals(setOf("KCL", "UFC", "Velmora Wrestling", "Kestrel Boxing"), leagues.filter { it.teamless }.map { it.name }.toSet())
+        // Fighting leagues list every stored event, whatever their scope; their sport is Combat, as Sportarr 4.1.12 names it,
+        // KCL's the older servers' Fighting, and one league's a word of no family, its card sent with part names.
+        assertEquals(
+            setOf("KCL", "UFC", "Velmora Wrestling", "Kestrel Boxing", "Quillfen Fight League"),
+            leagues.filter { it.teamless }.map { it.name }.toSet(),
+        )
+        assertEquals(
+            mapOf(
+                "KCL" to "Fighting", "UFC" to "Combat", "Velmora Wrestling" to "Combat", "Kestrel Boxing" to "Combat",
+                "Quillfen Fight League" to "Exhibition",
+            ),
+            leagues.filter { it.teamless }.associate { it.name to it.sport },
+        )
+        assertEquals(listOf("Early Prelims", "Prelims", "Main Card", "Post Show"), league("Quillfen Fight League").events.single().partNames)
         // A monitored league with nothing stored yet.
         assertTrue(leagues.any { it.monitored && it.events.isEmpty() })
         // The double header: the same sides on the same day, Game 1 and Game 2.

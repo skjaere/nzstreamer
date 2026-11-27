@@ -160,7 +160,7 @@ class SportarrListDeviceTest {
     }
 
     /**
-     * The sport chips (All, then by how many rows each sport has, Soccer and Motorsport first), a sport picked showing its
+     * The sport chips (All, then by how many rows each sport has, Soccer and Combat first), a sport picked showing its
      * leagues, a league picked narrowing the days; both kept for the tab, back after Home (view.json, L645); All clears them.
      */
     @Test
@@ -169,7 +169,7 @@ class SportarrListDeviceTest {
         openSports()
         listShown()
         val chips = compose.onAllNodes(chip).fetchSemanticsNodes().sortedBy { it.boundsInRoot.left }.map { it.text() }
-        assertEquals("the first chips", listOf(ALL, "Soccer", "Motorsport"), chips.take(3))
+        assertEquals("the first chips", listOf(ALL, "Soccer", "Combat"), chips.take(3))
         assertTrue("All picked", exists(chip and hasText(ALL) and isSelected()))
 
         compose.onNode(chip and hasText("Motorsport")).performClick()

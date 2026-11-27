@@ -168,9 +168,9 @@ class FakeSportarrServerTest {
         val all = leagues()
         assertEquals(
             listOf(
-                "Kestrel Baseball League", "NBA", "Kestrel Boxing", "KCL", "UFC", "Kestrel Hockey League", "Formula 1",
-                "Kestrel Endurance Series", "MotoGP", "FIS Alpine Ski World Cup", "Kestrel Cup", "Kestrel Premier Division",
-                "Premier League", "Velmora Wrestling",
+                "Kestrel Baseball League", "NBA", "Kestrel Boxing", "UFC", "Velmora Wrestling", "Quillfen Fight League", "KCL",
+                "Kestrel Hockey League", "Formula 1", "Kestrel Endurance Series", "MotoGP", "FIS Alpine Ski World Cup", "Kestrel Cup",
+                "Kestrel Premier Division", "Premier League",
             ),
             all.map { it.getValue("name").jsonPrimitive.content },
         )
@@ -188,6 +188,25 @@ class FakeSportarrServerTest {
         assertTrue(all.all { it.keys.containsAll(guaranteed) })
         assertEquals(1, all.map { it.keys }.toSet().size, "every league sends the same fields")
         assertFalse(all.any { "teamless" in it }, "what the catalogue says of a league's route isn't Sportarr's to send")
+    }
+
+    @Test
+    fun `fight leagues and their events say Combat as Sportarr renames them now, one the older Fighting, one a word of no family`() {
+        val sports = leagues().associate { it.getValue("name").jsonPrimitive.content to it.getValue("sport").jsonPrimitive.content }
+        val fights = listOf("UFC", "Kestrel Boxing", "Velmora Wrestling", "KCL", "Quillfen Fight League")
+        assertEquals(listOf("Combat", "Combat", "Combat", "Fighting", "Exhibition"), fights.map { sports.getValue(it) })
+        // Sportarr gives every event its league's sport.
+        leagues().forEach { league ->
+            val events = ok("/api/leagues/${league.number("id")}/events?showAll=true").jsonArray.map { it.jsonObject }
+            assertTrue(events.all { it.getValue("sport") == league.getValue("sport") }, league.getValue("name").toString())
+        }
+        // The league of a word no family has sends part names, as Sportarr does for every league it counts as combat.
+        val card = ok("/api/leagues/15/events").jsonArray.single().jsonObject
+        assertEquals("Quillfen 12", card.getValue("title").jsonPrimitive.content)
+        assertEquals(
+            listOf("Early Prelims", "Prelims", "Main Card", "Post Show"),
+            card.getValue("eventTypePartNames").jsonArray.map { it.jsonPrimitive.content },
+        )
     }
 
     @Test
@@ -273,6 +292,7 @@ class FakeSportarrServerTest {
         assertEquals(numbered, parts(11, 2003), "a weekly show")
         assertEquals(numbered, parts(11, 2004), "a premium event")
         assertEquals(listOf("Countdown", "Main Show"), parts(11, 2005))
+        assertEquals(numbered, parts(15, 2301), "a league of a sport word no family has")
         assertEquals(null, parts(1, 1001))
         assertEquals(null, parts(7, 1605))
         assertEquals(null, parts(13, 2201))
@@ -317,7 +337,7 @@ class FakeSportarrServerTest {
             assertTrue(page.body().startsWith("<!DOCTYPE html>"), path)
         }
         control("html?on=false")
-        assertEquals(14, ok("/api/leagues").jsonArray.size)
+        assertEquals(15, ok("/api/leagues").jsonArray.size)
 
         control("slow?ms=1500")
         get("/api/system/status")
@@ -370,7 +390,7 @@ class FakeSportarrServerTest {
         assertTrue(leagues().none { it.getValue("monitored").jsonPrimitive.boolean })
         assertEquals(17, ok("/api/leagues/1/events").jsonArray.size, "the events are still there")
         control("empty?on=false")
-        assertEquals(13, leagues().count { it.getValue("monitored").jsonPrimitive.boolean })
+        assertEquals(14, leagues().count { it.getValue("monitored").jsonPrimitive.boolean })
     }
 
     @Test
@@ -427,8 +447,8 @@ class FakeSportarrServerTest {
             "order?dir=asc", "paging?on=false", "empty", "busy?events=10").forEach { assertEquals(200, control(it).statusCode(), it) }
         control("reset")
         assertEquals(FakeSportarrServer.VERSION, ok("/api/system/status").jsonObject.getValue("version").jsonPrimitive.content)
-        assertEquals(14, leagues().size)
-        assertEquals(13, leagues().count { it.getValue("monitored").jsonPrimitive.boolean })
+        assertEquals(15, leagues().size)
+        assertEquals(14, leagues().count { it.getValue("monitored").jsonPrimitive.boolean })
         assertEquals(newestFirst(1), page(1, "page=1").records())
         assertEquals(emptyList(), paused.toList())
         assertEquals(404, control("calendar").statusCode())

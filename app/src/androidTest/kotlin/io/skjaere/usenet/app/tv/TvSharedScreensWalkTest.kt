@@ -839,25 +839,26 @@ class TvSharedScreensWalkTest {
     }
 
     /**
-     * The Sports list (L652), its view narrowed to Fighting so the walk reaches all of it: the title line with
-     * Recent | Upcoming, the sport chips and the ⋮, the sport's leagues, and its days' rows.
+     * The Sports list (L652), its view narrowed to Combat (the fake's fight leagues, as Sportarr names them) so the walk
+     * reaches all of it: the title line with Recent | Upcoming, the sport chips and the ⋮, the sport's leagues, and its
+     * days' rows.
      */
     @Test
     fun sportsList() {
         sportarr(connected = true)
         showTheApp()
-        val fighting = hasText("Fighting") and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton)
+        val combat = hasText("Combat") and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton)
         check(
             "The Sports list", scrollBack = true, sideways = true,
-            mustReach = listOf("All", "Recent", "Upcoming", "More", "Soccer", "Fighting", "Skiing", "All leagues", "UFC"),
+            mustReach = listOf("All", "Recent", "Upcoming", "More", "Soccer", "Combat", "Skiing", "All leagues", "UFC"),
         ) {
             openSports(hasText("TODAY"))
             // Picked once: the choice is kept for the tab (view.json), and the walk comes back to it at each text size.
-            if (compose.onAllNodes(fighting and isSelected()).fetchSemanticsNodes().isEmpty()) {
+            if (compose.onAllNodes(combat and isSelected()).fetchSemanticsNodes().isEmpty()) {
                 // Its chip brought into its line's view first: the line scrolls sideways.
                 val chips = hasScrollToNodeAction() and SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
-                compose.onAllNodes(chips).onFirst().performScrollToNode(fighting)
-                compose.onNode(fighting).performClick()
+                compose.onAllNodes(chips).onFirst().performScrollToNode(combat)
+                compose.onNode(combat).performClick()
             }
             compose.waitUntil(SPORTS_WAIT_MS) { compose.onAllNodes(hasText("All leagues")).fetchSemanticsNodes().isNotEmpty() }
             compose.waitForIdle()
@@ -866,7 +867,7 @@ class TvSharedScreensWalkTest {
 
     /**
      * The Sports list's rows of the other families, and Up next, for the safe area at 1x and 1.3x and words cut at 2x as
-     * the walk checks every screen (the Fighting walk, [sportsList], sees cards alone): with Motorsport picked, a weekend's
+     * the walk checks every screen (the Combat walk, [sportsList], sees cards alone): with Motorsport picked, a weekend's
      * line with its round, its count and what is left of a race begun.
      */
     @Test
@@ -883,7 +884,7 @@ class TvSharedScreensWalkTest {
     /**
      * The list with [sport]'s chip picked, a race and a game begun, walked at each text size. What the walk must reach:
      * the rows, a day's ("15:00 | ...") or with every sport Up next's ("title | line"); the title line's chips are the
-     * Fighting walk's, and with these sports' rows it would stop short of them.
+     * Combat walk's, and with these sports' rows it would stop short of them.
      */
     private fun sportsListWith(sport: String) {
         val device = sportarr(connected = true)

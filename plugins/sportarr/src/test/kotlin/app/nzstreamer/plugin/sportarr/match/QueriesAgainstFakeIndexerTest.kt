@@ -10,32 +10,22 @@ import io.skjaere.usenet.plugin.IndexerLine
 import io.skjaere.usenet.plugin.ItemReleases
 import io.skjaere.usenet.plugin.PluginSearch
 import io.skjaere.usenet.plugin.ReleaseInfo
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
-import java.net.HttpURLConnection
 import java.net.InetAddress
-import java.net.URI
-import java.net.URLEncoder
-import java.time.Instant
 import java.time.LocalDate
-import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * The plugin's searches against the sports indexer (L647-L651, L655's `reached`): mock-seed's fake indexer over the
  * catalogue's names on a loopback port, matching whole words and a word asked twice standing twice, as the device tests'
  * sports indexer does. For each part the catalogue judges releases of, the runner searches it as on a play, stage 1 then
- * stage 2 when stage 1 accepted nothing, each a text search (t=search&q=) read back from the indexer's RSS by a small
- * reader here. What those searches find is exactly the rows marked reached for that part, never one marked unreached (the
+ * stage 2 when stage 1 accepted nothing, each a text search (t=search&q=) read back from the indexer's RSS by
+ * [IndexerSearch]. What those searches find is exactly the rows marked reached for that part, never one marked unreached (the
  * race's F1-led and running-number names, and the film named like a side, which no query's words reach), and the runner
  * gives those rows' verdicts, the sizes and posted times read from the RSS among what they rest on.
  */
@@ -44,32 +34,6 @@ class QueriesAgainstFakeIndexerTest {
 
     @AfterEach
     fun stop() = indexer.close()
-
-    /** The indexer as the host searches it for a plugin: the words as a text search, no category; one answer, once it's in. */
-    private inner class IndexerSearch : PluginSearch {
-        /** Each search's words, in the order they were asked, and the guids each found. */
-        val asked: MutableList<String> = CopyOnWriteArrayList()
-        val byWords: MutableMap<String, Set<String>> = ConcurrentHashMap()
-        val found: Set<String> get() = byWords.values.flatten().toSet()
-
-        override fun search(words: String, runtimeMinutes: Int?, fresh: Boolean): Flow<Found> = flow {
-            asked += words
-            val items = withContext(Dispatchers.IO) { Rss.items(get("t=search&q=${URLEncoder.encode(words, Charsets.UTF_8)}")) }
-            byWords[words] = items.map { it.guid }.toSet()
-            val releases = items.map { ReleaseInfo(it.title, it.size, it.posted, INDEXER, playable = true, whyNot = null, handle = TestHandle(it.guid)) }
-            emit(Found(listOf(IndexerLine(INDEXER, IndexerLine.State.Found, releases.size, "${releases.size} found")), releases))
-        }
-
-        private fun get(query: String): String {
-            val connection = URI("http://127.0.0.1:${indexer.port}/api?$query&apikey=$KEY").toURL().openConnection() as HttpURLConnection
-            try {
-                assertEquals(200, connection.responseCode)
-                return connection.inputStream.use { it.readBytes().decodeToString() }
-            } finally {
-                connection.disconnect()
-            }
-        }
-    }
 
     /** The search that finds what the indexer's own word matching finds, with no request: every day of a year runs fast. */
     private inner class MatchingSearch(private val catalogue: CatalogueAt) : PluginSearch {
@@ -117,7 +81,7 @@ class QueriesAgainstFakeIndexerTest {
         indexer.serve(Catalogue.releases.map { it.fake() to NZB })
         val matchers = Matchers(Catalogue.sports)
         val wrong = judged(Catalogue).flatMap { judged ->
-            val search = IndexerSearch()
+            val search = IndexerSearch(indexer.port, KEY, INDEXER)
             val differences = compare(Catalogue, matchers, judged, search) { search.found }
             // Stage 1's two searches went first, together; stage 2's after them, only where stage 1 found no name the rows
             // accept.
@@ -153,30 +117,6 @@ class QueriesAgainstFakeIndexerTest {
             }
         }.toList()
         assertEquals(emptyList(), wrong.take(20), "${wrong.size} differ:\n" + wrong.take(20).joinToString("\n"))
-    }
-
-    /** The fake indexer's RSS as the host reads it: each item's guid, title, size and posted time. */
-    private object Rss {
-        class Item(val guid: String, val title: String, val size: Long, val posted: Instant)
-
-        fun items(xml: String): List<Item> {
-            assertTrue("<rss" in xml && "<error" !in xml, xml.take(200))
-            return xml.split("<item>").drop(1).map { item ->
-                Item(
-                    guid = text(item, "guid"),
-                    title = unescape(text(item, "title")),
-                    size = attribute(item, "size").toLong(),
-                    posted = ZonedDateTime.parse(text(item, "pubDate"), DateTimeFormatter.RFC_1123_DATE_TIME).toInstant(),
-                )
-            }
-        }
-
-        private fun text(item: String, tag: String): String = item.substringAfter("<$tag").substringAfter('>').substringBefore("</$tag>")
-
-        private fun attribute(item: String, name: String): String = item.substringAfter("""name="$name" value="""").substringBefore('"')
-
-        private fun unescape(text: String): String =
-            text.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&amp;", "&")
     }
 
     private companion object {

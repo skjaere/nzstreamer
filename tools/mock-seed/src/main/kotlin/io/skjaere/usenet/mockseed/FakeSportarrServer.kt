@@ -26,7 +26,9 @@ import java.util.concurrent.Executors
  * - `GET /api/system/status`: `appName` "Sportarr" and the four-part [VERSION] (switchable).
  * - `GET /api/health`: needs no key.
  * - `GET /api/leagues`: a plain array of every league, by sport, then name, each with `monitoredEventCount` (its stored
- *   events switched on).
+ *   events switched on). Each league's sport is the catalogue's word, and each event says its league's, as Sportarr
+ *   gives it: "Combat" for the fight leagues, as 4.1.12 renames every fighting league at each start, but one league's
+ *   the "Fighting" of the servers before it, and one's a word no family of the plugin's has.
  * - `GET /api/leagues/{id}/events`: what the league's page in Sportarr lists: the events the catalogue marks listed, or
  *   every stored one for a league with Keep every game or a fighting (teamless) league, whatever its scope, or with
  *   `showAll=true`. Newest first by start, then by id descending. With `page` or `pageSize`, Sportarr's envelope

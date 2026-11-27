@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "about": "The sports fakes' invented library (L655), format 1: the fake Sportarr serves the leagues and their events, the sports indexer the releases. Every name is invented but the real leagues'. An event's start is its day from the anchor and its UTC time; its broadcast date is the UTC date (Sportarr's fallback) unless 'broadcast' moves it that many days; 'listed' false is stored in Sportarr but not on the league's filtered page; 'parts' is eventTypePartNames as Sportarr sends it (null where absent). A release's name takes {date}, {date-N} and {date+N} from its event's UTC start and {year} from its event's season (a round's is its last event's), and is posted 'posted' hours from that start. Its verdict is for its event and part, and 'also' holds one for every other event and part whose searches find it; 'reached' says whether the plugin's searches find it at all.",
+  "about": "The sports fakes' invented library (L655), format 1: the fake Sportarr serves the leagues and their events, the sports indexer the releases. Every name is invented but the real leagues'. An event's start is its day from the anchor and its UTC time; its broadcast date is the UTC date (Sportarr's fallback) unless 'broadcast' moves it that many days; 'listed' false is stored in Sportarr but not on the league's filtered page; 'parts' is eventTypePartNames as Sportarr sends it (null where absent). The fight leagues' sport is 'Combat', as Sportarr 4.1.12 renames every fighting league at each start, but KCL's, the 'Fighting' of the servers before it; Quillfen Fight League's is a word no family has, its card sent with part names. A release's name takes {date}, {date-N} and {date+N} from its event's UTC start and {year} from its event's season (a round's is its last event's), and is posted 'posted' hours from that start. Its verdict is for its event and part, and 'also' holds one for every other event and part whose searches find it; 'reached' says whether the plugin's searches find it at all.",
   "leagues": [
     {"id": 1, "externalId": "4001", "name": "Premier League", "sport": "Soccer", "monitored": true, "monitorType": "Future", "keepAllEvents": false, "alternateName": "EPL", "teamless": false, "events": [
       {"id": 1001, "externalId": "ev-001001", "title": "Lantern Bay FC vs Copper Crown United", "day": -1, "time": "15:00", "season": "{split}", "round": "13", "home": "Lantern Bay FC", "away": "Copper Crown United", "monitored": true, "hasFile": false},
@@ -78,24 +78,27 @@
       {"id": 1801, "externalId": "ev-001801", "title": "6 Hours of Oskelund - Qualifying", "day": -31, "time": "14:00", "season": "{year}", "round": "7", "home": null, "away": null, "monitored": false, "hasFile": false},
       {"id": 1802, "externalId": "ev-001802", "title": "6 Hours of Oskelund", "day": -30, "time": "11:00", "season": "{year}", "round": "7", "home": null, "away": null, "monitored": true, "hasFile": false}
     ]},
-    {"id": 10, "externalId": "4010", "name": "UFC", "sport": "Fighting", "monitored": true, "monitorType": "Future", "keepAllEvents": false, "alternateName": null, "teamless": true, "events": [
+    {"id": 10, "externalId": "4010", "name": "UFC", "sport": "Combat", "monitored": true, "monitorType": "Future", "keepAllEvents": false, "alternateName": null, "teamless": true, "events": [
       {"id": 1901, "externalId": "ev-001901", "title": "UFC 999: Quessel vs. Halde", "day": -1, "time": "23:00", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Early Prelims", "Prelims", "Main Card", "Post Show"]},
       {"id": 1902, "externalId": "ev-001902", "title": "UFC Fight Night: Brisk vs. Loam", "day": 6, "time": "19:00", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Prelims", "Main Card"]}
     ]},
-    {"id": 11, "externalId": "4011", "name": "Velmora Wrestling", "sport": "Wrestling", "monitored": true, "monitorType": "Future", "keepAllEvents": false, "alternateName": null, "teamless": true, "events": [
+    {"id": 11, "externalId": "4011", "name": "Velmora Wrestling", "sport": "Combat", "monitored": true, "monitorType": "Future", "keepAllEvents": false, "alternateName": null, "teamless": true, "events": [
       {"id": 2001, "externalId": "ev-002001", "title": "Velmora Monday Brawl", "day": -15, "time": "01:00", "broadcast": -1, "timezone": "Etc/GMT+5", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Early Prelims", "Prelims", "Main Card", "Post Show"]},
       {"id": 2002, "externalId": "ev-002002", "title": "Velmora Monday Brawl", "day": -8, "time": "01:00", "broadcast": -1, "timezone": "Etc/GMT+5", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Early Prelims", "Prelims", "Main Card", "Post Show"]},
       {"id": 2003, "externalId": "ev-002003", "title": "Velmora Monday Brawl", "day": -1, "time": "01:00", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Early Prelims", "Prelims", "Main Card", "Post Show"]},
       {"id": 2004, "externalId": "ev-002004", "title": "Velmora Iron Crown", "day": -11, "time": "23:00", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Early Prelims", "Prelims", "Main Card", "Post Show"]},
       {"id": 2005, "externalId": "ev-002005", "title": "Velmora Iron Crown: Night 2", "day": -10, "time": "23:00", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Countdown", "Main Show"]}
     ]},
-    {"id": 12, "externalId": "4012", "name": "Kestrel Boxing", "sport": "Boxing", "monitored": true, "monitorType": "None", "keepAllEvents": false, "alternateName": null, "teamless": true, "events": [
+    {"id": 12, "externalId": "4012", "name": "Kestrel Boxing", "sport": "Combat", "monitored": true, "monitorType": "None", "keepAllEvents": false, "alternateName": null, "teamless": true, "events": [
       {"id": 2101, "externalId": "ev-002101", "title": "Halde vs. Brisk", "day": -4, "time": "20:00", "season": "{year}", "round": null, "home": null, "away": null, "monitored": false, "hasFile": false, "parts": ["Early Prelims", "Prelims", "Main Card", "Post Show"]}
     ]},
     {"id": 13, "externalId": "4013", "name": "FIS Alpine Ski World Cup", "sport": "Skiing", "monitored": true, "monitorType": "Future", "keepAllEvents": false, "alternateName": null, "teamless": false, "events": [
       {"id": 2201, "externalId": null, "title": "Kestrel · Men's Downhill", "day": -1, "time": "10:30", "season": "{split}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false}
     ]},
     {"id": 14, "externalId": "4014", "name": "Kestrel Cup", "sport": "Soccer", "monitored": true, "monitorType": "Future", "keepAllEvents": false, "alternateName": null, "teamless": false, "events": [
+    ]},
+    {"id": 15, "externalId": "4015", "name": "Quillfen Fight League", "sport": "Exhibition", "monitored": true, "monitorType": "Future", "keepAllEvents": false, "alternateName": null, "teamless": true, "events": [
+      {"id": 2301, "externalId": "ev-002301", "title": "Quillfen 12", "day": -5, "time": "21:00", "season": "{year}", "round": null, "home": null, "away": null, "monitored": true, "hasFile": false, "parts": ["Early Prelims", "Prelims", "Main Card", "Post Show"]}
     ]}
   ],
   "releases": [
