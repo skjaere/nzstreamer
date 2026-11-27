@@ -14,6 +14,12 @@ import java.util.Locale
  */
 enum class Family { TeamGame, Motorsport, FightCard, Generic }
 
+/**
+ * Where an event's family came from (L-SF2), in the order it is read: its league's sport, its own sport, the part names
+ * Sportarr sent with it (a fight card's), or none of them (Generic). The runner's log line names it.
+ */
+enum class FamilyFrom { LeagueSport, EventSport, PartNames, Nothing }
+
 /** A fight card's type (L643), which names its parts (L644). */
 enum class CardType {
     /** "UFC 999: Quessel vs. Halde": early prelims, prelims and the main card. */
@@ -91,7 +97,7 @@ data class Sports(
         private fun build(league: League, event: WireEvent, cardType: CardType?): SportsEvent {
             val key = Keys.event(event.externalId, event.id)
             // The runtimes read the sport the family came from: the league's, or the event's where that named it.
-            val (family, sport) = Families.read(league.sport, event)
+            val (family, from, sport) = Families.read(league.sport, event)
             val session = if (family == Family.Motorsport) Sessions.read(event.title) else null
             val card = if (family == Family.FightCard) cardType ?: CardType.Premium else null
             return SportsEvent(
@@ -106,6 +112,7 @@ data class Sports(
                 homeTeamName = event.homeTeamName,
                 awayTeamName = event.awayTeamName,
                 family = family,
+                familyFrom = from,
                 sport = sport,
                 cardType = card,
                 session = session,
@@ -147,9 +154,9 @@ data class Part(val key: String, val id: String, val label: String, val runtimeM
 
 /**
  * An event as the tab lists it. [start] is Sportarr's eventDate, in UTC; [broadcastDate] the date as written (L647 reads
- * it); [round] and [season] are text as Sportarr sends them. [sport] is the one its [family] was read from, as Sportarr
- * wrote it (its league's, or its own where that named the family). [cardType] is a fight card's, [session] a motorsport
- * event's.
+ * it); [round] and [season] are text as Sportarr sends them. [familyFrom] says where its [family] came from, and [sport]
+ * is the one it was read from, as Sportarr wrote it (its league's, or its own where that named the family). [cardType]
+ * is a fight card's, [session] a motorsport event's.
  */
 data class SportsEvent(
     override val key: String,
@@ -163,6 +170,7 @@ data class SportsEvent(
     val homeTeamName: String?,
     val awayTeamName: String?,
     val family: Family,
+    val familyFrom: FamilyFrom,
     val sport: String?,
     val cardType: CardType?,
     val session: Session?,

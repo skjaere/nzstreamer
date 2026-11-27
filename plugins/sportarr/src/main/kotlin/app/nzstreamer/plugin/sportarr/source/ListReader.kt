@@ -1,5 +1,6 @@
 package app.nzstreamer.plugin.sportarr.source
 
+import app.nzstreamer.plugin.sportarr.model.Family
 import io.skjaere.usenet.plugin.PluginHttpException.Kind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -36,20 +37,31 @@ class ListReader(
     private val windowEnd: Instant = now.atZone(zone).toLocalDate().plusDays(DAYS_AHEAD + 1).atStartOfDay(zone).toInstant()
     private var requests = 0
 
-    /** The read, all or nothing. Its log line says counts, the time it took and a failure's kind alone. */
+    /**
+     * The read, all or nothing. Its log line says counts (the leagues by family too, L-SF3), the time it took and a
+     * failure's kind alone.
+     */
     suspend fun read(): ListRead {
         val started = System.nanoTime()
         val read = readAll()
         val ms = (System.nanoTime() - started) / 1_000_000
         when (read) {
             is ListRead.Read -> log.info(
-                "Sportarr list read: {} leagues, {} events{}, {} requests in {} ms",
-                read.list.leagues.size, read.list.events.size, if (read.list.cut) " (cut)" else "", requests, ms,
+                "Sportarr list read: {} leagues {}, {} events{}, {} requests in {} ms",
+                read.list.leagues.size, withContext(work) { families(read.list) }, read.list.events.size, if (read.list.cut) " (cut)" else "",
+                requests, ms,
             )
             is ListRead.Failed -> log.info("Sportarr list not read: {} after {} requests in {} ms", read.why, requests, ms)
             ListRead.Refused -> log.info("Sportarr list not read: the key was refused after {} requests in {} ms", requests, ms)
         }
         return read
+    }
+
+    /** [list]'s leagues counted by family, in the families' order, each by what its listed events are read as. */
+    private fun families(list: SportsList): Map<Family, Int> {
+        val events = list.events.groupBy { it.leagueId }
+        val counts = list.leagues.groupingBy { Families.ofLeague(it.sport, events[it.id].orEmpty()) }.eachCount()
+        return Family.entries.mapNotNull { family -> counts[family]?.let { family to it } }.toMap()
     }
 
     private suspend fun readAll(): ListRead {

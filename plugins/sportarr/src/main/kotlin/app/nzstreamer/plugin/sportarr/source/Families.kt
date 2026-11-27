@@ -2,6 +2,7 @@ package app.nzstreamer.plugin.sportarr.source
 
 import app.nzstreamer.plugin.sportarr.model.CardType
 import app.nzstreamer.plugin.sportarr.model.Family
+import app.nzstreamer.plugin.sportarr.model.FamilyFrom
 import app.nzstreamer.plugin.sportarr.model.Sessions
 import java.util.Locale
 import kotlin.math.abs
@@ -22,30 +23,39 @@ object Families {
     fun ofSport(sport: String?): Family = SPORTS[fold(sport)] ?: Family.Generic
 
     /**
-     * An event's [family], stepped down, and the [sport] it was read from as Sportarr wrote it, which the runtimes and the
-     * families' own rules read as the family does: the league's, or the event's where that named the family; for a family
-     * no sport named, the league's, else the event's.
+     * An event's [family], stepped down, [from] where it came, and the [sport] it was read from as Sportarr wrote it,
+     * which the runtimes and the families' own rules read as the family does: the league's, or the event's where that
+     * named the family; for a family no sport named, the league's, else the event's.
      */
-    data class FamilyRead(val family: Family, val sport: String?)
+    data class FamilyRead(val family: Family, val from: FamilyFrom, val sport: String?)
 
-    /** [event]'s family read in L-SF2's order, its league's sport being [leagueSport], with the sport it came from. */
-    fun read(leagueSport: String?, event: WireEvent): FamilyRead {
+    /** [event]'s family read in L-SF2's order, its league's sport being [leagueSport], with where it came from. */
+    fun read(leagueSport: String?, event: WireEvent): FamilyRead =
+        unstepped(leagueSport, event).let { it.copy(family = steppedDown(it.family, event)) }
+
+    /** [event]'s family as [read] reads it. */
+    fun of(leagueSport: String?, event: WireEvent): Family = read(leagueSport, event).family
+
+    /**
+     * A league's family, as the list read's log line counts it: the one most of its [events] are read as before any
+     * step-down (every one its [sport]'s where that names a family), or its sport's with none listed.
+     */
+    fun ofLeague(sport: String?, events: List<WireEvent>): Family =
+        events.groupingBy { unstepped(sport, it).family }.eachCount().maxByOrNull { it.value }?.key ?: ofSport(sport)
+
+    private fun unstepped(leagueSport: String?, event: WireEvent): FamilyRead {
         val league = ofSport(leagueSport)
         val own = ofSport(event.sport)
         // Where no sport names a family, the word read is the league's, else the event's.
         val written = leagueSport?.takeIf { it.isNotBlank() } ?: event.sport
-        val read = when {
-            league != Family.Generic -> FamilyRead(league, leagueSport)
-            own != Family.Generic -> FamilyRead(own, event.sport)
+        return when {
+            league != Family.Generic -> FamilyRead(league, FamilyFrom.LeagueSport, leagueSport)
+            own != Family.Generic -> FamilyRead(own, FamilyFrom.EventSport, event.sport)
             // Sportarr sends part names for combat sports alone: an event with any is a fight card, whatever its sport.
-            event.eventTypePartNames.orEmpty().any(String::isNotBlank) -> FamilyRead(Family.FightCard, written)
-            else -> FamilyRead(Family.Generic, written)
+            event.eventTypePartNames.orEmpty().any(String::isNotBlank) -> FamilyRead(Family.FightCard, FamilyFrom.PartNames, written)
+            else -> FamilyRead(Family.Generic, FamilyFrom.Nothing, written)
         }
-        return read.copy(family = steppedDown(read.family, event))
     }
-
-    /** [event]'s family as [read] reads it. */
-    fun of(leagueSport: String?, event: WireEvent): Family = read(leagueSport, event).family
 
     private fun steppedDown(family: Family, event: WireEvent): Family = when (family) {
         Family.TeamGame -> if (hasSides(event)) family else Family.Generic

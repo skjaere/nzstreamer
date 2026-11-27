@@ -1,7 +1,10 @@
 package app.nzstreamer.plugin.sportarr.match
 
+import app.nzstreamer.plugin.sportarr.model.Family
+import app.nzstreamer.plugin.sportarr.model.FamilyFrom
 import app.nzstreamer.plugin.sportarr.model.Part
 import app.nzstreamer.plugin.sportarr.model.SportsEvent
+import app.nzstreamer.plugin.sportarr.source.Families
 import app.nzstreamer.plugin.sportarr.ui.Words
 import io.skjaere.usenet.plugin.Found
 import io.skjaere.usenet.plugin.IndexerLine
@@ -19,6 +22,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.lastOrNull
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
+import java.util.Locale
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -32,7 +36,9 @@ import kotlin.coroutines.CoroutineContext
  * release), on [work], off the caller's thread; the accepted keep the host's order, each at its best place across the
  * answers, the first search first at the same place, and the possible matches follow that order.
  *
- * A cancelled run cancels its searches with it. Its log line says counts, kinds and how long it took, never a name.
+ * A cancelled run cancels its searches with it. Its log line says counts, kinds and how long it took, never a name: the
+ * family, the sport it came from by Sportarr's category word and whose word it was (L-SF3), and each search's indexers
+ * in the host's order, by their counts or what kept them from one.
  */
 class Runner(private val search: PluginSearch, private val work: CoroutineContext = Dispatchers.Default) {
     /**
@@ -70,8 +76,9 @@ class Runner(private val search: PluginSearch, private val work: CoroutineContex
         val nothing = ordered.none { it.playable && it.verdict !is Verdict.Reject }
         val noun = Nouns.event(event)
         log.info(
-            "Releases for a {} part: {} searches, {} judged, {} accepted, {} offered, {} left out {} in {} ms",
-            event.family, answers.size, ordered.size, accepted.size, offered.size, kinds.values.sum(), kinds, (System.nanoTime() - started) / 1_000_000,
+            "Releases for a {} part ({}): {} searches {}, {} judged, {} accepted, {} offered, {} left out {} in {} ms",
+            event.family, origin(event), answers.size, answers.joinToString(" ", transform = ::indexers), ordered.size, accepted.size,
+            offered.size, kinds.values.sum(), kinds, (System.nanoTime() - started) / 1_000_000,
         )
         val releases = ItemReleases(
             accepted = accepted,
@@ -81,6 +88,40 @@ class Runner(private val search: PluginSearch, private val work: CoroutineContex
             note = if (nothing) Words.NoRelease.note(noun) else null,
         )
         return Run(releases, answered = answers.any { found -> found.indexers.any { it.state == IndexerLine.State.Found } })
+    }
+
+    /**
+     * Where [event]'s family came from, for the log line: the league's sport or the event's, the part names Sportarr sent,
+     * or none, with the sport word folded (Sportarr's category word, never a title or a league's name), and whether the
+     * title stepped it down.
+     */
+    private fun origin(event: SportsEvent): String {
+        val sport = Families.fold(event.sport).takeIf { it.isNotEmpty() }?.let { "sport \"$it\"" }
+        val stepped = if (event.family == Family.Generic && event.familyFrom != FamilyFrom.Nothing) ", stepped down" else ""
+        return when (event.familyFrom) {
+            FamilyFrom.LeagueSport -> "the league's $sport$stepped"
+            FamilyFrom.EventSport -> "the event's $sport$stepped"
+            FamilyFrom.PartNames -> "part names, ${sport ?: "no sport"}$stepped"
+            FamilyFrom.Nothing -> sport?.let { "$it in no family" } ?: "no sport"
+        }
+    }
+
+    /**
+     * One search's indexers in the host's order, as its last answer had them: each one's count, "empty", its failure in the
+     * host's words, paused or skipped; never an indexer's name, which the user typed.
+     */
+    private fun indexers(found: Found): String {
+        if (found.indexers.isEmpty()) return "[no indexer]"
+        return found.indexers.joinToString(", ", "[", "]") {
+            when (it.state) {
+                IndexerLine.State.Found -> if (it.found > 0) "${it.found}" else "empty"
+                IndexerLine.State.Failed -> "failed (${it.text})"
+                IndexerLine.State.Limited -> "paused"
+                IndexerLine.State.Skipped -> "skipped"
+                // Still searching when its search ended (the host's own failure), or a state a later NZStreamer adds.
+                else -> it.state.name.lowercase(Locale.ROOT)
+            }
+        }
     }
 
     /** The search for [words], read to its last answer: what every indexer said once they all had. */

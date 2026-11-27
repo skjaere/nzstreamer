@@ -111,6 +111,10 @@ class LogsTest {
         read()
         val lines = Logged.pluginLinesSince(mark)
         assertEquals(5, lines.size, lines.joinToString("\n") { it.words })
+        // A read's line counts its leagues by family, by the family's name alone.
+        val read = lines.filter { it.words.startsWith("Sportarr list read:") }
+        assertEquals(3, read.size, lines.joinToString("\n") { it.words })
+        assertTrue(read.all { LEAGUES_BY_FAMILY.containsMatchIn(it.words) }, read.joinToString("\n") { it.words })
         assertClean(lines)
     }
 
@@ -139,10 +143,24 @@ class LogsTest {
         // Every run judged every name, and counted the scores and result words it left out without naming one.
         assertTrue(lines.all { "${releases.size} judged" in it.words }, lines.first().words)
         assertTrue(lines.any { "Score=" in it.words } && lines.any { "Result=" in it.words }, lines.joinToString("\n") { it.words })
+        // Each says its family, the sport it came from by Sportarr's category word, and each search's one indexer by its count.
+        val wrong = lines.filterNot { RELEASES.matches(it.words) }
+        assertEquals(emptyList(), wrong.map { it.words })
+        assertTrue(lines.any { "FightCard part (the league's sport \"" in it.words }, lines.joinToString("\n") { it.words })
         assertClean(lines, *(releases.map { it.name } + asked).toTypedArray())
     }
 
     private companion object {
         const val INDEXER = "Sports indexer"
+
+        /** A read's leagues by family: "13 leagues {TeamGame=5, Motorsport=3, FightCard=4, Generic=1}". */
+        val LEAGUES_BY_FAMILY = Regex("""^Sportarr list read: \d+ leagues \{(?:(?:TeamGame|Motorsport|FightCard|Generic)=\d+(?:, )?)+}, """)
+
+        /** A run's line, each of its searches answered by the one indexer with every name the catalogue has. */
+        val RELEASES = Regex(
+            """^Releases for a (TeamGame|Motorsport|FightCard|Generic) part """ +
+                """\((?:(?:the (?:league|event)'s sport "[a-z ]+"|part names, (?:sport "[a-z ]+"|no sport))(?:, stepped down)?|sport "[a-z ]+" in no family|no sport)\): """ +
+                """\d searches( \[\d+])+, \d+ judged, .* in \d+ ms$""",
+        )
     }
 }

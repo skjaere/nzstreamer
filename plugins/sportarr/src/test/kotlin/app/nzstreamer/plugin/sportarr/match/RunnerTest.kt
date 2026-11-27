@@ -12,6 +12,7 @@ import app.nzstreamer.plugin.sportarr.model.at
 import app.nzstreamer.plugin.sportarr.model.on
 import app.nzstreamer.plugin.sportarr.model.sports
 import app.nzstreamer.plugin.sportarr.model.ufc999
+import app.nzstreamer.plugin.sportarr.source.KeptLeague
 import app.nzstreamer.plugin.sportarr.source.TestSportarr
 import io.skjaere.usenet.plugin.FileInfo
 import io.skjaere.usenet.plugin.Found
@@ -370,6 +371,79 @@ class RunnerTest {
         assertEquals(0, search.runningNow)
         assertEquals(2, search.asked.size, "no stage two after a cancel")
         assertEquals(emptyList(), Logged.pluginLinesSince(mark).map { it.words }, "a cancelled run logs no result")
+    }
+
+    @Test
+    fun `a run's line names the family, the sport it came from and each search's indexers, and never a name or a query`() = runTest {
+        val combat = KeptLeague(4, "UFC", "Combat")
+        val fights = sports(combat to listOf(ufc999()))
+        val card = fights.byId(31)
+        val queries = listOf("UFC 999", "UFC 2026 11 21")
+        val names = listOf("UFC.999.Quessel.vs.Halde.1080p.WEB.h264-KESTREL", "UFC.999.Prelims.720p.WEB.h264-WREN")
+        val answers = mapOf(
+            queries[0] to found(
+                names.map { release(it) },
+                listOf(
+                    answered("Indexer A", 2),
+                    IndexerLine("Indexer B", IndexerLine.State.Found, 0, "0 found"),
+                    IndexerLine("Indexer C", IndexerLine.State.Failed, 0, "No answer in time"),
+                ),
+            ),
+            queries[1] to found(
+                emptyList(),
+                listOf(
+                    IndexerLine("Indexer A", IndexerLine.State.Failed, 0, "Server error"),
+                    IndexerLine("Indexer B", IndexerLine.State.Skipped, 0, "Doesn't support this search"),
+                    IndexerLine("Indexer C", IndexerLine.State.Limited, 0, "Paused: too many searches from Sportarr"),
+                ),
+            ),
+            "UFC Quessel Halde" to found(emptyList(), emptyList()),
+        )
+        val family = TestFamily(first = queries, then = "UFC Quessel Halde", verdict = { Verdict.Offer("No date in the name") })
+        val mark = Logged.mark()
+        Runner(CountingSearch { answers.getValue(it) }).releases(family, card, card.headline)
+        val line = Logged.pluginLinesSince(mark).single().words
+        assertEquals(
+            "Releases for a FightCard part (the league's sport \"combat\"): 3 searches [2, empty, failed (No answer in time)] " +
+                "[failed (Server error), skipped, paused] [no indexer], 2 judged, 0 accepted, 2 offered, 0 left out {}",
+            line.substringBeforeLast(" in "),
+        )
+        val secrets = names + queries + listOf("UFC Quessel Halde", card.title, combat.name, "Indexer", "Quessel", "Sportarr") + TestSportarr.CANARY_VALUES
+        assertEquals(emptyList(), secrets.filter { it in line }, line)
+    }
+
+    @Test
+    fun `a run's line says where the family came from - the league's sport, the event's, part names or none`() = runTest {
+        val combat = KeptLeague(4, "UFC", "Combat")
+        val unknown = KeptLeague(21, "Kestrel Games", "Exhibition")
+        val none = KeptLeague(22, "Kestrel Open", null)
+        val listed = sports(
+            combat to listOf(ufc999(), on(combat, 34, at("2026-11-07T23:00"), "2026-11-07")),
+            unknown to listOf(
+                on(unknown, 32, at("2026-11-14T23:00"), "Kestrel Fight Night: Brisk vs. Loam", parts = listOf("Prelims", "Main Card")),
+                on(unknown, 33, at("2026-11-15T23:00"), "Halde vs. Brisk").copy(sport = "Fighting"),
+                on(unknown, 35, at("2026-11-16T10:00"), "Kestrel Open Final"),
+            ),
+            none to listOf(on(none, 36, at("2026-11-17T10:00"), "Kestrel Open Semi-Final")),
+            SKIING to listOf(on(SKIING, 2201, at("2026-11-21T10:30"), "Kestrel · Men's Downhill")),
+        )
+        val origins = listed.events.sortedBy { it.id }.map { event ->
+            val mark = Logged.mark()
+            Runner(answers()).releases(family(), event, event.headline)
+            Logged.pluginLinesSince(mark).single().words.substringBefore("):") + ")"
+        }
+        assertEquals(
+            listOf(
+                "Releases for a FightCard part (the league's sport \"combat\")",
+                "Releases for a FightCard part (part names, sport \"exhibition\")",
+                "Releases for a FightCard part (the event's sport \"fighting\")",
+                "Releases for a Generic part (the league's sport \"combat\", stepped down)",
+                "Releases for a Generic part (sport \"exhibition\" in no family)",
+                "Releases for a Generic part (no sport)",
+                "Releases for a Generic part (sport \"skiing\" in no family)",
+            ),
+            origins,
+        )
     }
 
     @Test

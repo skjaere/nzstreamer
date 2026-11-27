@@ -1,5 +1,6 @@
 package app.nzstreamer.plugin.sportarr.source
 
+import app.nzstreamer.plugin.sportarr.Logged
 import io.skjaere.usenet.plugin.PluginHttpException.Kind
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
@@ -230,6 +231,35 @@ class ListReaderTest {
         )
         val list = list(read(sportarr))
         assertEquals(mapOf(1 to 1, 2 to 1, 3 to 3), list.events.associate { it.id to it.leagueId })
+    }
+
+    @Test
+    fun `the read's line counts the leagues of each family, each by what its events are read as before any step-down`() {
+        val sportarr = TestSportarr(
+            listOf(
+                league(1, "Premier League"), league(2, "MotoGP", "Motorsport"), league(3, "UFC", "Combat"), league(4, "KCL", "Fighting"),
+                league(5, "Kestrel Games", "Exhibition"), league(6, "Kestrel Open", null), league(7, "Kestrel Cup", "Soccer"),
+            ),
+            mapOf(
+                1 to listOf(event(1, NOW, 1)),
+                2 to listOf(event(2, NOW, 2, title = "Grand Prix of Kestrel - Race", sport = "Motorsport")),
+                // A card whose title is a date alone steps down to Generic; its league is still a fight card's.
+                3 to listOf(event(3, NOW, 3, title = "UFC 999: Quessel vs. Halde", sport = "Combat"), event(8, NOW, 3, title = "2026-11-24", sport = "Combat")),
+                4 to listOf(event(4, NOW, 4, title = "KCL 42", sport = "Fighting")),
+                5 to listOf(
+                    event(5, NOW, 5, title = "Kestrel Fight Night: Brisk vs. Loam", sport = "Exhibition").copy(eventTypePartNames = listOf("Prelims", "Main Card")),
+                ),
+                6 to listOf(event(6, NOW, 6, title = "Kestrel Open Final", sport = null)),
+                7 to emptyList(),
+            ),
+        )
+        val mark = Logged.mark()
+        list(read(sportarr))
+        val line = Logged.pluginLinesSince(mark).single().words
+        assertEquals(
+            "Sportarr list read: 7 leagues {TeamGame=2, Motorsport=1, FightCard=3, Generic=1}, 7 events, 8 requests",
+            line.substringBefore(" in "),
+        )
     }
 
     @Test
