@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.1](https://github.com/skjaere/nzstreamer/compare/plugin-sportarr-v0.1.0...plugin-sportarr-v0.1.1) (2026-11-27)
+
+
+### Bug fixes
+
+* **sportarr:** accept a fight card's release by its two fighters ([13efc33](https://github.com/skjaere/nzstreamer/commit/13efc33ce5d772ae1a23751de6c1786ecda000d6))
+* **sportarr:** accept a fight night's release by its own night number ([cbb1aeb](https://github.com/skjaere/nzstreamer/commit/cbb1aeb7cd3be6c7dde4c00aafbb46d714a00626))
+* **sportarr:** drop the stray space before the comma when a run searched nothing ([71c0b75](https://github.com/skjaere/nzstreamer/commit/71c0b75ebcdfb71e3975d2268ed646d97ea76752))
+* **sportarr:** leave out a name with another listed fight night's number for a night its title doesn't number ([1017841](https://github.com/skjaere/nzstreamer/commit/1017841bfa7b20a6efdf5fa97b3d36cf3202f857))
+* **sportarr:** name a sport word in no family in the releases line only when it is short and plain ([a27d697](https://github.com/skjaere/nzstreamer/commit/a27d6978ce16ae5b1a3951aa84c9765edb98ed27))
+* **sportarr:** need a surname both sides share twice in a name before a card is accepted by its fighters ([409a594](https://github.com/skjaere/nzstreamer/commit/409a5946c15bc8cb1b8ad4a5e1365d3c39e04eb6))
+* **sportarr:** open a sport's leagues at their start after another sport's line was scrolled along ([1d7b458](https://github.com/skjaere/nzstreamer/commit/1d7b458fb100d53f4d582de626f0eb25930c62fc))
+* **sportarr:** read a side's surname before a Jr., Sr. or roman numeral, so a rematch titled with one is a rematch ([8951487](https://github.com/skjaere/nzstreamer/commit/89514870b0c05ec4c1836024ee46ce798e61b85c))
+* **sportarr:** read Sportarr's "Combat" as a fight sport ([fcf8d8b](https://github.com/skjaere/nzstreamer/commit/fcf8d8b1e040a91830f4baee42418ed406f3db10))
+* **sportarr:** say "no answer" for a search whose answer names no indexer ([0ebd351](https://github.com/skjaere/nzstreamer/commit/0ebd351f3037e0c6c19361e4119931bc2c242485))
+* **sportarr:** say which sport and which indexer answers decided a part's releases ([a108b8a](https://github.com/skjaere/nzstreamer/commit/a108b8aae3a44b58db2379f27100eec385eb2bc9))
+* **sportarr:** search a fight night by its number when its title names the fighters ([4ed497b](https://github.com/skjaere/nzstreamer/commit/4ed497b535cc3082c8e95cae7e318c511dd51e92))
+* **sportarr:** take a fight card's family from the event or its card parts when the league's sport is unknown ([69ed94e](https://github.com/skjaere/nzstreamer/commit/69ed94eb24edc16a1c13fc5a117ceb05c18f666a))
+
 ## 0.1.0 (2026-11-26)
 
 
