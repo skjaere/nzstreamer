@@ -111,10 +111,11 @@ class LogsTest {
         read()
         val lines = Logged.pluginLinesSince(mark)
         assertEquals(5, lines.size, lines.joinToString("\n") { it.words })
-        // A read's line counts its leagues by family, by the family's name alone.
+        // A read's line counts its leagues by family, by the family's name alone; the whole fake's first.
         val read = lines.filter { it.words.startsWith("Sportarr list read:") }
         assertEquals(3, read.size, lines.joinToString("\n") { it.words })
         assertTrue(read.all { LEAGUES_BY_FAMILY.containsMatchIn(it.words) }, read.joinToString("\n") { it.words })
+        assertTrue(read.first().words.startsWith("Sportarr list read: $WHOLE_FAKE, "), read.first().words)
         assertClean(lines)
     }
 
@@ -153,7 +154,13 @@ class LogsTest {
     private companion object {
         const val INDEXER = "Sports indexer"
 
-        /** A read's leagues by family: "13 leagues {TeamGame=5, Motorsport=3, FightCard=4, Generic=1}". */
+        /**
+         * The whole fake's leagues by family: its fight leagues under "Combat", the one kept on "Fighting" and the one with
+         * an unknown sport whose events carry part names are all fight cards.
+         */
+        const val WHOLE_FAKE = "14 leagues {TeamGame=5, Motorsport=3, FightCard=5, Generic=1}"
+
+        /** A read's leagues by family, as [WHOLE_FAKE] gives the whole fake's. */
         val LEAGUES_BY_FAMILY = Regex("""^Sportarr list read: \d+ leagues \{(?:(?:TeamGame|Motorsport|FightCard|Generic)=\d+(?:, )?)+}, """)
 
         /** A run's line, each of its searches answered by the one indexer with every name the catalogue has. */
