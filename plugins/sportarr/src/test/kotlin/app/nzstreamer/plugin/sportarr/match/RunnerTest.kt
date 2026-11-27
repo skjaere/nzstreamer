@@ -146,7 +146,11 @@ class RunnerTest {
         val prelims = "UFC.Fight.Night.888.Quessel.vs.Halde.Prelims.1080p.WEB.h264-KESTREL"
         val main = "UFC.Fight.Night.888.Quessel.vs.Halde.1080p.WEB.h264-KESTREL"
         val scene = listOf(release(prelims), release(main))
-        val indexer = CountingSearch { words -> found(if (words == "UFC Fight Night 888" || words == "UFC Quessel Halde") scene else emptyList()) }
+        // Each answer a second in coming, in virtual time, so the searches that run together overlap.
+        val indexer = CountingSearch { words ->
+            delay(1_000)
+            found(if (words == "UFC Fight Night 888" || words == "UFC Quessel Halde") scene else emptyList())
+        }
         val host = CachedSearch(indexer)
         val runner = Runner(host)
         assertEquals(listOf(main), runner.releases(matcher, night, part(Parts.MAIN_CARD)).acceptedLabels)
@@ -154,16 +158,19 @@ class RunnerTest {
         assertEquals(setOf("UFC Fight Night 888", "UFC Quessel Halde"), indexer.asked.map { it.words }.toSet(), "stage one found both, so no date")
         assertEquals(2, indexer.asked.size, "the prelims' run asked the indexers nothing new")
         assertEquals(4, host.asked.size)
-        assertTrue(indexer.mostAtOnce <= 2)
+        assertEquals(2, indexer.mostAtOnce, "stage one's two together, and no more")
 
         // With nothing found, each run searches its three, the date last; the second part's are the first's again.
-        val empty = CountingSearch { found(emptyList()) }
+        val empty = CountingSearch {
+            delay(1_000)
+            found(emptyList())
+        }
         val nothing = CachedSearch(empty)
         listOf(Parts.MAIN_CARD, Parts.PRELIMS).forEach { Runner(nothing).releases(matcher, night, part(it)) }
         assertEquals(listOf("UFC 2026 11 28"), empty.asked.drop(2).map { it.words }, "the date in stage two")
         assertEquals(3, empty.asked.size, "three searches for the card, whichever part")
         assertEquals(6, nothing.asked.size, "three a run: two parts within the host's ten a minute")
-        assertTrue(empty.mostAtOnce <= 2)
+        assertEquals(2, empty.mostAtOnce, "the date's search after stage one's two, never beside them")
     }
 
     @Test
