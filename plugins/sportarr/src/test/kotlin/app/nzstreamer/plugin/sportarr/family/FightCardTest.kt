@@ -285,6 +285,9 @@ class FightCardTest {
             "UFC.999.Prelims.1080p.WEB.h264-KESTREL" to every(other, parts),
             "UFC.Fight.Night.888.2025.1080p.WEB.h264-KESTREL" to every(other, parts),
             "UFC.Fight.Night.888.2025.Prelims.1080p.WEB.h264-KESTREL" to every(other, parts),
+            // A season's years or a running number's year, none of them the card's, are another year's too.
+            "UFC.Fight.Night.888.2025.2026.1080p.WEB.h264-KESTREL" to every(other, parts),
+            "UFC.Fight.Night.888.S2025E34.1080p.WEB.h264-KESTREL" to every(other, parts),
             "UFC.Fight.Night.888.2026.11.21.1080p.WEB.h264-KESTREL" to every(other, parts),
             // The number with no organisation, or with no "Fight Night", names no card.
             "Fight.Night.888.1080p.WEB.h264-KESTREL" to every(other, parts),
@@ -365,6 +368,9 @@ class FightCardTest {
             "UFC.Quessel.vs.Halde.2026.1080p.WEB.h264-ORCHID" to only(Parts.MAIN_CARD),
             // Another year, another card's number, a fight night or another date: another card's.
             "UFC.Halde.vs.Quessel.2025.1080p.WEB.h264-KESTREL" to every(other),
+            "UFC.Halde.vs.Quessel.2025.2026.1080p.WEB.h264-KESTREL" to every(other),
+            "UFC.Quessel.vs.Halde.S2025E34.1080p.WEB.h264-WREN" to every(other),
+            "UFC.Quessel.vs.Halde.2025x07.1080p.WEB.h264-WREN" to every(other),
             "UFC.998.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to every(other),
             "UFC.Fight.Night.888.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to every(other),
             "UFC.2026.11.28.Quessel.vs.Halde.1080p.WEB.h264-WREN" to every(other),
@@ -421,6 +427,14 @@ class FightCardTest {
             "UFC.999.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to every(other, parts),
         )
         assertEquals("", wrong(rematch.byId(42), nightRows, matcher))
+
+        // The same two in another league's fight, a boxing matchup: no rematch of the UFC card's, whose word the name has.
+        val boxed = sports(UFC to listOf(ufc999()), BOXING to listOf(on(BOXING, 63, at("2026-12-12T20:00"), "Quessel vs. Halde")))
+        val boxedRows = listOf(
+            "UFC.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD),
+            "UFC.Halde.vs.Quessel.Prelims.720p.WEB.h264-WREN" to only(Parts.PRELIMS),
+        )
+        assertEquals("", wrong(boxed.byId(31), boxedRows, FightCard(boxed)))
     }
 
     @Test
@@ -534,6 +548,16 @@ class FightCardTest {
             "UFC.Quessel.vs.Brisk.1080p.WEB.h264-KESTREL" to every(other),
         )
         assertEquals("", wrong(card, cardRows, FightCard(numbered)))
+
+        // A title that names its sides is read by them, whatever home and away names come with it.
+        val (both, titled) = untitled("UFC 999: Quessel vs. Halde", "Brisk", "Loam", listOf("Early Prelims", "Prelims", "Main Card"))
+        val titledRows = listOf(
+            "UFC.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD),
+            "UFC.Brisk.vs.Loam.1080p.WEB.h264-KESTREL" to every(other),
+        )
+        assertEquals("", wrong(titled, titledRows, FightCard(both)))
+        assertEquals(listOf("Quessel", "Halde"), FightCard(both).context(titled).sides)
+        assertEquals("UFC Quessel Halde", FightCard(both).queries(titled, titled.headline).then)
 
         // Without them, with one alone, or with a side of one letter or a number alone, which is no surname: as before.
         listOf(null to null, "Brisk" to null, "Brisk" to "L", "Brisk" to "7").forEach { (home, away) ->
