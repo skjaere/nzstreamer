@@ -90,7 +90,7 @@ offline. It comes with no providers, indexers or content of its own.
 ### Plugins
 - A plugin adds a tab to NZStreamer, after Discover where the build has it, else after Home. Settings › Plugins, in
   every build, installs, updates and removes plugins inside the app's own storage: Android doesn't list them as apps,
-  and no install dialog shows. No plugin is released yet.
+  and no install dialog shows.
 - The list of plugins is `index.json` on this repository's `plugin-index` branch, which only CI writes, after a plugin
   release:
   `https://raw.githubusercontent.com/skjaere/nzstreamer/refs/heads/plugin-index/index.json`
