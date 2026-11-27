@@ -18,6 +18,7 @@ import io.skjaere.usenet.plugin.FileInfo
 import io.skjaere.usenet.plugin.Found
 import io.skjaere.usenet.plugin.IndexerLine
 import io.skjaere.usenet.plugin.ItemReleases
+import io.skjaere.usenet.plugin.PluginSearch
 import io.skjaere.usenet.plugin.ReleaseInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -25,6 +26,9 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
@@ -405,11 +409,25 @@ class RunnerTest {
         val line = Logged.pluginLinesSince(mark).single().words
         assertEquals(
             "Releases for a FightCard part (the league's sport \"combat\"): 3 searches [2, empty, failed (No answer in time)] " +
-                "[failed (Server error), skipped, paused] [no indexer], 2 judged, 0 accepted, 2 offered, 0 left out {}",
+                "[failed (Server error), skipped, paused] [no answer], 2 judged, 0 accepted, 2 offered, 0 left out {}",
             line.substringBeforeLast(" in "),
         )
         val secrets = names + queries + listOf("UFC Quessel Halde", card.title, combat.name, "Indexer", "Quessel", "Sportarr") + TestSportarr.CANARY_VALUES
         assertEquals(emptyList(), secrets.filter { it in line }, line)
+    }
+
+    @Test
+    fun `a search whose answer names no indexer, or that ended with none, says no answer, not that no indexer is on`() = runTest {
+        // None switched on, the host's own search failed before any indexer answered, or a flow that ended with nothing:
+        // the plugin can't tell them apart, so its line claims none of them.
+        val search = object : PluginSearch {
+            override fun search(words: String, runtimeMinutes: Int?, fresh: Boolean): Flow<Found> =
+                if (words == "q1") flowOf(Found(emptyList(), emptyList())) else emptyFlow()
+        }
+        val mark = Logged.mark()
+        Runner(search).releases(family(then = null), card, mainCard)
+        val line = Logged.pluginLinesSince(mark).single().words
+        assertTrue(": 2 searches [no answer] [no answer], 0 judged, " in line, line)
     }
 
     @Test

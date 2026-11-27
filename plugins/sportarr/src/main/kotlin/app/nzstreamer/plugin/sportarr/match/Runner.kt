@@ -115,10 +115,12 @@ class Runner(private val search: PluginSearch, private val work: CoroutineContex
 
     /**
      * One search's indexers in the host's order, as its last answer had them: each one's count, "empty", its failure in the
-     * host's words, paused or skipped; never an indexer's name, which the user typed.
+     * host's words, paused or skipped; never an indexer's name, which the user typed. An answer naming no indexer is "no
+     * answer": none switched on, the host's own search failing before any answered and a flow ending with none look the
+     * same here.
      */
     private fun indexers(found: Found): String {
-        if (found.indexers.isEmpty()) return "[no indexer]"
+        if (found.indexers.isEmpty()) return "[no answer]"
         return found.indexers.joinToString(", ", "[", "]") {
             when (it.state) {
                 IndexerLine.State.Found -> if (it.found > 0) "${it.found}" else "empty"
