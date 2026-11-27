@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "generated": "2026-11-27T08:26:46Z",
+  "plugins": [
+    {
+      "id": "sportarr",
+      "name": "Sportarr",
+      "package": "app.nzstreamer.plugin.sportarr",
+      "source": "https://github.com/skjaere/nzstreamer/tree/main/plugins/sportarr",
+      "summary": "The leagues, teams and sessions you follow in your own Sportarr, in a Sports tab.",
+      "versions": [
+        {
+          "api": "1.0",
+          "changes": "https://github.com/skjaere/nzstreamer/releases/tag/plugin-sportarr-v0.1.0",
+          "libs": {
+            "activity-compose": "1.13.0",
+            "compose-bom": "2026.06.01",
+            "kotlin-stdlib": "2.3.21",
+            "kotlinx-coroutines": "1.11.0",
+            "kotlinx-serialization-json": "1.11.0",
+            "lifecycle-viewmodel-compose": "2.10.0",
+            "slf4j-api": "2.0.20"
+          },
+          "minSdk": 26,
+          "released": "2026-11-27",
+          "sha256": "59273464eec818d49bec26964b3280f6c10e162eeef13ac78558524a26ad74df",
+          "size": 409438,
+          "targetSdk": 36,
+          "url": "https://github.com/skjaere/nzstreamer/releases/download/plugin-sportarr-v0.1.0/sportarr.apk",
+          "versionCode": 10000,
+          "versionName": "0.1.0"
+        }
+      ],
+      "withdrawn": []
+    }
+  ]
+}
