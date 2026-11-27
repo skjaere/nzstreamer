@@ -92,7 +92,8 @@ internal fun TvSportsList(screen: ListScreen, model: ListModel, actions: ListAct
     val rail = LocalRail.current
     val list = rememberLazyListState()
     val sportsLine = rememberLazyListState()
-    val leaguesLine = rememberLazyListState()
+    // Read where it is used: an effect still running from an earlier sport scrolls the line shown now.
+    val leaguesLine by rememberUpdatedState(rememberLeaguesLine(screen))
     val memory = remember(focus) { TvListFocus({ key -> focus.requester(key).tryFocus() }, { withFrameNanos {} }) }
     val latest by rememberUpdatedState(screen)
 

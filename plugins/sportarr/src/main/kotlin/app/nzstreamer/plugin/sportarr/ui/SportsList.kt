@@ -32,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -185,6 +186,16 @@ internal object ListKeys {
 }
 
 /**
+ * The leagues' line's scroll, made afresh for each sport picked, so a sport's leagues open at their start, All leagues
+ * picked and in view. A lazy line keeps its place as its chips change, and a lazy list's item gets its state back as it
+ * comes again: one state for every sport, or the leagues' item's own through All, would open the next sport's leagues
+ * where the last one's were left. So the list keeps it, not the line's item.
+ */
+@Composable
+internal fun rememberLeaguesLine(screen: ListScreen): LazyListState =
+    rememberSaveable(screen.sports.firstOrNull { it.selected }?.sport, saver = LazyListState.Saver) { LazyListState() }
+
+/**
  * The Sports list on a phone (L652) and its states: the title line with Recent | Upcoming and the ⋮; the
  * sport chips, then a sport's leagues; the line over a list kept through a failed read; Up next; the days with a card per
  * league; the card in the list's place; the cut line. One list, which scrolls whole. A tap on a row opens its page, on an
@@ -194,6 +205,7 @@ internal object ListKeys {
 internal fun SportsList(screen: ListScreen, model: ListModel, actions: ListActions) {
     val focus = rememberReturnFocus()
     val list = rememberLazyListState()
+    val leaguesLine = rememberLeaguesLine(screen)
     val latest by rememberUpdatedState(screen)
     LaunchedEffect(Unit) { focus.restore { key -> ListKeys.bringIntoView(list, latest, key, sportsLine = true) } }
     val element = { key: String -> Modifier.focusRequester(focus.requester(key)) }
@@ -210,7 +222,7 @@ internal fun SportsList(screen: ListScreen, model: ListModel, actions: ListActio
         }
         if (screen.leagues.isNotEmpty()) {
             item(key = ListKeys.LEAGUES) {
-                PhoneChips(screen.leagues, { ListKeys.league(it.league) }, { it.label }, { it.selected }, element) { model.league(it.league) }
+                PhoneChips(screen.leagues, { ListKeys.league(it.league) }, { it.label }, { it.selected }, element, leaguesLine) { model.league(it.league) }
             }
         }
         screen.notice?.let { notice ->
@@ -329,7 +341,10 @@ private fun PhoneSideSwitch(side: Side, focus: ReturnFocus, onSide: (Side) -> Un
     }
 }
 
-/** A line of chips, sideways, as Discover's genres: the one picked tinted in the accent, each a 48 dp target drawn 33 dp tall. */
+/**
+ * A line of chips, sideways, as Discover's genres: the one picked tinted in the accent, each a 48 dp target drawn 33 dp
+ * tall; its scroll [state] the line's own unless the list keeps it.
+ */
 @Composable
 private fun <T> PhoneChips(
     chips: List<T>,
@@ -337,10 +352,12 @@ private fun <T> PhoneChips(
     label: (T) -> String,
     selected: (T) -> Boolean,
     element: (String) -> Modifier,
+    state: LazyListState = rememberLazyListState(),
     onPick: (T) -> Unit,
 ) {
     LazyRow(
-        contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 4.dp),
+        state = state, contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(bottom = 4.dp),
     ) {
         items(chips, key = key) { chip ->
             val on = selected(chip)
