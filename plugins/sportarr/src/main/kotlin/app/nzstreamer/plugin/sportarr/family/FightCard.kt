@@ -81,6 +81,8 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
      * Every part of a card is searched by the card's words, so the host's cache answers a second part's play:
      * - a numbered card: "<org> <number>" and "<org> <yyyy mm dd>", then "<org> <surname> <surname>";
      * - a fight night: "<org> <surname> <surname>" (with no sides, "<org> Fight Night <number>") and "<org> <yyyy mm dd>";
+     *   with both its number and its sides, "<org> Fight Night <number>" and "<org> <surname> <surname>", then
+     *   "<org> <yyyy mm dd>" (L-SF8);
      * - a matchup: "<surname> <surname>";
      * - a weekly show: "<title> <yyyy mm dd>", then "<title>";
      * - a premium event: its title's words, five at most.
@@ -95,9 +97,17 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
             card.type == CardType.WeeklyShow -> Queries(listOfNotNull(title?.let { "$it $date" }), title)
             card.type == CardType.Numbered && org != null ->
                 Queries(listOfNotNull(card.numberWritten?.let { "$org $it" }, "$org $date"), surnames?.let { "$org $it" })
-            // A fight night with no sides in its title is searched by its own words.
-            card.type == CardType.FightNight && org != null ->
-                Queries(listOf("$org ${surnames ?: listOfNotNull(FIGHT_NIGHT_WRITTEN, card.numberWritten).joinToString(" ")}", "$org $date"))
+            // A fight night with no sides is searched by its own words; one with its number and its sides by both first,
+            // which reach the undated names scene releases give it, then by its date (L-SF8).
+            card.type == CardType.FightNight && org != null -> {
+                val night = "$org ${listOfNotNull(FIGHT_NIGHT_WRITTEN, card.numberWritten).joinToString(" ")}"
+                val fighters = surnames?.let { "$org $it" }
+                if (fighters != null && card.numberWritten != null) {
+                    Queries(listOf(night, fighters), "$org $date")
+                } else {
+                    Queries(listOf(fighters ?: night, "$org $date"))
+                }
+            }
             card.type == CardType.Matchup -> Queries(listOfNotNull(surnames ?: title))
             else -> Queries(listOfNotNull(title))
         }

@@ -1,9 +1,11 @@
 package app.nzstreamer.plugin.sportarr.match
 
 import app.nzstreamer.plugin.sportarr.Logged
+import app.nzstreamer.plugin.sportarr.family.FightCard
 import app.nzstreamer.plugin.sportarr.model.BOXING
 import app.nzstreamer.plugin.sportarr.model.FORMULA_1
 import app.nzstreamer.plugin.sportarr.model.PREMIER
+import app.nzstreamer.plugin.sportarr.model.Parts
 import app.nzstreamer.plugin.sportarr.model.SKIING
 import app.nzstreamer.plugin.sportarr.model.Sports
 import app.nzstreamer.plugin.sportarr.model.UFC
@@ -28,11 +30,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import java.time.Duration
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import kotlin.test.assertEquals
@@ -109,6 +113,57 @@ class RunnerTest {
         val generic = answers()
         Runner(generic).releases(family(), downhill, downhill.headline)
         assertEquals(listOf(null, null, null), generic.asked.map { it.runtimeMinutes }, "no runtime for an event the plugin doesn't time")
+    }
+
+    /**
+     * The host's search as a plugin meets it: its cache keys on the words, so words asked before are answered from it and
+     * only new ones reach the [indexer].
+     */
+    private class CachedSearch(private val indexer: CountingSearch) : PluginSearch {
+        val asked: MutableList<String> = CopyOnWriteArrayList()
+        private val cache = ConcurrentHashMap<String, Found>()
+
+        override fun search(words: String, runtimeMinutes: Int?, fresh: Boolean): Flow<Found> = flow {
+            asked += words
+            val cached = cache[words]
+            if (cached != null) {
+                emit(cached)
+            } else {
+                indexer.search(words, runtimeMinutes, fresh).collect { found ->
+                    cache[words] = found
+                    emit(found)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `a fight night's second part is searched by the same words, so the host's cache answers it and the limits hold`() = runTest {
+        val listed = sports(UFC to listOf(on(UFC, 41, at("2026-11-28T19:00"), "UFC Fight Night 888 Quessel vs Halde", parts = listOf("Prelims", "Main Card"))))
+        val night = listed.byId(41)
+        val matcher = FightCard(listed)
+        fun part(id: String) = night.parts.single { it.id == id }
+        val prelims = "UFC.Fight.Night.888.Quessel.vs.Halde.Prelims.1080p.WEB.h264-KESTREL"
+        val main = "UFC.Fight.Night.888.Quessel.vs.Halde.1080p.WEB.h264-KESTREL"
+        val scene = listOf(release(prelims), release(main))
+        val indexer = CountingSearch { words -> found(if (words == "UFC Fight Night 888" || words == "UFC Quessel Halde") scene else emptyList()) }
+        val host = CachedSearch(indexer)
+        val runner = Runner(host)
+        assertEquals(listOf(main), runner.releases(matcher, night, part(Parts.MAIN_CARD)).acceptedLabels)
+        assertEquals(listOf(prelims), runner.releases(matcher, night, part(Parts.PRELIMS)).acceptedLabels)
+        assertEquals(setOf("UFC Fight Night 888", "UFC Quessel Halde"), indexer.asked.map { it.words }.toSet(), "stage one found both, so no date")
+        assertEquals(2, indexer.asked.size, "the prelims' run asked the indexers nothing new")
+        assertEquals(4, host.asked.size)
+        assertTrue(indexer.mostAtOnce <= 2)
+
+        // With nothing found, each run searches its three, the date last; the second part's are the first's again.
+        val empty = CountingSearch { found(emptyList()) }
+        val nothing = CachedSearch(empty)
+        listOf(Parts.MAIN_CARD, Parts.PRELIMS).forEach { Runner(nothing).releases(matcher, night, part(it)) }
+        assertEquals(listOf("UFC 2026 11 28"), empty.asked.drop(2).map { it.words }, "the date in stage two")
+        assertEquals(3, empty.asked.size, "three searches for the card, whichever part")
+        assertEquals(6, nothing.asked.size, "three a run: two parts within the host's ten a minute")
+        assertTrue(empty.mostAtOnce <= 2)
     }
 
     @Test

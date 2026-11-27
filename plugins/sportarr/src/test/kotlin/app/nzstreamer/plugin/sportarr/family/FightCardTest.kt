@@ -257,10 +257,10 @@ class FightCardTest {
         val matcher = FightCard(titled)
         assertEquals(CardType.FightNight, event.cardType)
         assertEquals(listOf("UFC"), matcher.context(event).organisations)
-        assertEquals(listOf("UFC Quessel Halde", "UFC 2026 11 28"), matcher.queries(event, event.headline).first, "its two surnames")
+        assertEquals(listOf("UFC Fight Night 888", "UFC Quessel Halde"), matcher.queries(event, event.headline).first, "its number and its surnames")
         // Full names on a side: the last word of each is the surname.
         val (named, full) = night("UFC Fight Night 888: Ana Quessel vs. Mira Halde")
-        assertEquals("UFC Quessel Halde", FightCard(named).queries(full, full.headline).first.first())
+        assertEquals(listOf("UFC Fight Night 888", "UFC Quessel Halde"), FightCard(named).queries(full, full.headline).first)
     }
 
     @Test
@@ -632,6 +632,28 @@ class FightCardTest {
         assertEquals(listOf("KCL 41", "KCL 2026 11 01") to null, queries(untitled.byId(71), matcher))
         assertEquals(listOf("KCL Fight Night 40", "KCL 2026 11 08") to null, queries(untitled.byId(72), matcher))
         assertEquals(listOf("KCL Lantern Bay Copper Crown") to null, queries(untitled.byId(73), matcher), "five words at most, no article")
+    }
+
+    @Test
+    fun `a fight night with its number and its fighters is searched by both first, then by its date, the same for every part`() {
+        val (titled, night) = night("UFC Fight Night 888 Quessel vs Halde")
+        val matcher = FightCard(titled)
+        val searched = night.parts.map { part -> matcher.queries(night, part).let { it.first to it.then } }
+        assertEquals(listOf(listOf("UFC Fight Night 888", "UFC Quessel Halde") to "UFC 2026 11 28"), searched.distinct(), "every part's words are the card's")
+        // No part's word: one card's answers serve every part from the host's cache.
+        val words = searched.flatMap { (first, then) -> first + listOfNotNull(then) }.flatMap { it.lowercase().split(' ') }
+        assertEquals(emptyList(), words.filter { it in setOf("prelims", "main", "card", "early", "ppv") })
+
+        // Its fighters as Sportarr's home and away names, where its title names none.
+        val sent = sports(
+            UFC to listOf(on(UFC, 43, at("2026-11-28T19:00"), "UFC Fight Night 888", parts = listOf("Prelims", "Main Card")).copy(homeTeamName = "Brisk", awayTeamName = "Loam")),
+        )
+        val untitled = sent.byId(43)
+        assertEquals(listOf("UFC Fight Night 888", "UFC Brisk Loam") to "UFC 2026 11 28", FightCard(sent).queries(untitled, untitled.headline).let { it.first to it.then })
+        // With its number alone, or its fighters alone, as before.
+        val (numbered, alone) = night("UFC Fight Night 888")
+        assertEquals(listOf("UFC Fight Night 888", "UFC 2026 11 28") to null, FightCard(numbered).queries(alone, alone.headline).let { it.first to it.then })
+        assertEquals(listOf("UFC Brisk Loam", "UFC 2026 11 28") to null, cards.queries(fightNight, fightNight.headline).let { it.first to it.then })
     }
 
     @Test
