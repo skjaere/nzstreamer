@@ -38,9 +38,10 @@ import kotlin.test.assertTrue
  * has for a league whose card carries part names; a refresh's read of it makes each of their events a fight card. An
  * undated fight-night name the sports indexer lists is then judged by the fight card's rules for the UFC fight night's
  * parts, through the runner's searches: its main card's by its two fighters (L-SF7), another part's for its prelims, and
- * for neither another event's, as it was when Combat read as no family. The sports indexer's own undated names for the
- * fight night, as scene releases write one, are found and accepted part by part; and a fight night titled with its number
- * and its fighters is searched by its number too, which reaches the names that carry no fighters (L-SF8).
+ * for neither another event's, as it was when Combat read as no family. The fake's fight night is titled with its number
+ * and its fighters, as Sportarr titles some, so the sports indexer's own undated names for it, as scene releases write
+ * one, are found by its number and its fighters and accepted part by part, its number naming it (L-SF6, L-SF8); and a
+ * fight night so titled is searched by its number too, which reaches the names that carry no fighters.
  */
 class CombatAgainstFakesTest {
     private val anchor = LocalDate.of(2026, 11, 22)
@@ -118,10 +119,18 @@ class CombatAgainstFakesTest {
         indexer.serve(releases.map { it.fake() to NZB })
         val matcher = Matchers(sports).of(night)
         fun accepted(part: String) = IndexerSearch(indexer.port, KEY, INDEXER).let { search ->
-            runBlocking { Runner(search).releases(matcher, night, night.parts.single { it.id == part }) }.accepted.map { it.toString() }
+            runBlocking { Runner(search).releases(matcher, night, night.parts.single { it.id == part }) }.accepted.map { it.toString() } to search.asked.toList()
         }
-        assertEquals(listOf("sp-ufc-fight-night-prelims"), accepted(Parts.PRELIMS))
-        assertEquals(listOf("sp-ufc-fight-night-main-card"), accepted(Parts.MAIN_CARD))
+        // Titled as Sportarr titles some fight nights, its number and its fighters with no colon (L-SF9): searched by its
+        // number and its fighters first (L-SF8), which find its names, so no search by its date.
+        val stageOne = setOf("UFC Fight Night 888", "UFC Brisk Loam")
+        assertEquals(listOf("sp-ufc-fight-night-prelims") to stageOne, accepted(Parts.PRELIMS).let { (found, asked) -> found to asked.toSet() })
+        assertEquals(listOf("sp-ufc-fight-night-main-card") to stageOne, accepted(Parts.MAIN_CARD).let { (found, asked) -> found to asked.toSet() })
+        // Its own number names it with no fighters and no date (L-SF6), another number another night's.
+        val mainCard = night.parts.single { it.id == Parts.MAIN_CARD }
+        val posted = night.start.plus(Duration.ofHours(1))
+        assertEquals(Verdict.Accept(), SharedRules.judge(matcher, night, mainCard, "UFC.Fight.Night.888.1080p.WEB.h264-ORCHID", posted, null))
+        assertEquals(Verdict.Reject(RejectKind.OtherEvents), SharedRules.judge(matcher, night, mainCard, "UFC.Fight.Night.887.1080p.WEB.h264-ORCHID", posted, null))
         // Named as scene releases name a fight night: its words, a number, the fighters, no date.
         val names = releases.filter { release -> release.verdicts.any { it.eventId == FIGHT_NIGHT } }.map { it.name }
         assertEquals(2, names.size)
@@ -157,7 +166,7 @@ class CombatAgainstFakesTest {
         const val KEY = "fake-indexer-key"
         const val INDEXER = "Sports indexer"
 
-        /** The catalogue's UFC Fight Night: Brisk vs. Loam, six days after the anchor. */
+        /** The catalogue's UFC Fight Night 888 Brisk vs Loam, six days after the anchor. */
         const val FIGHT_NIGHT = 1902
 
         /** An invented fight night's name as some indexers list one: no date, no number, both surnames. */

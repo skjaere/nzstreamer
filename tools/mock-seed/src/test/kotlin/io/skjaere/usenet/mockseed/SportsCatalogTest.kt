@@ -181,6 +181,8 @@ class SportsCatalogTest {
         // Sportarr's part names where it sends them: a numbered card's with its post show, a fight night's, Night 2's.
         assertEquals(listOf("Early Prelims", "Prelims", "Main Card", "Post Show"), event(1901).partNames)
         assertEquals(listOf("Prelims", "Main Card"), event(1902).partNames)
+        // The fight night titled as Sportarr titles some: its number and its fighters, with no colon.
+        assertEquals("UFC Fight Night 888 Brisk vs Loam", event(1902).title)
         assertTrue(events.filter { leagues.single { l -> l.id == it.leagueId }.teamless.not() }.all { it.partNames == null })
     }
 
@@ -449,7 +451,7 @@ class SportsCatalogTest {
             put(1605, listOf("Formula 1 Kestrel", "Formula1 Kestrel") to listOf("Formula 1 20"))
             (1611..1615).forEach { put(it, listOf("Formula 1 Vellmar", "Formula1 Vellmar") to listOf("Formula 1 19")) }
             put(1901, listOf("UFC 999", "UFC {bc}") to listOf("UFC Quessel Halde"))
-            put(1902, listOf("UFC Brisk Loam", "UFC {bc}") to emptyList())
+            put(1902, listOf("UFC Fight Night 888", "UFC Brisk Loam") to listOf("UFC {bc}"))
             (2001..2003).forEach { put(it, listOf("Velmora Monday Brawl {bc}") to listOf("Velmora Monday Brawl")) }
             put(2101, listOf("Halde Brisk") to emptyList())
             put(2201, listOf("Kestrel Men's Downhill", "FIS Alpine Ski World Cup {bc}") to listOf("Kestrel Men's Downhill {year}"))
