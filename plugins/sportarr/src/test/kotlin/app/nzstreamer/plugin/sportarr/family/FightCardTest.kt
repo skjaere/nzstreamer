@@ -299,8 +299,25 @@ class FightCardTest {
             "UFC.Fight.Night.888.Quessel.vs.Halde.Prelims.1080p.WEB.h264-KESTREL" to prelims(accepted),
             "UFC.Fight.Night.888.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to mainCard(accepted),
             "UFC.Fight.Night.887.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to every(other, parts),
+            // Its own number with two fighters no listed card has: the number names it, as when a bout is replaced.
+            "UFC.Fight.Night.888.Brisk.vs.Loam.1080p.WEB.h264-KESTREL" to mainCard(accepted),
+            "UFC.Fight.Night.888.Brisk.vs.Loam.Prelims.1080p.WEB.h264-KESTREL" to prelims(accepted),
         )
         assertEquals("", wrong(event, fighters, FightCard(titled)))
+
+        // Those two another listed card's: that card's, whatever the number says.
+        val paired = sports(
+            UFC to listOf(
+                on(UFC, 41, at("2026-11-28T19:00"), "UFC Fight Night 888 Quessel vs Halde", parts = listOf("Prelims", "Main Card")),
+                on(UFC, 32, at("2026-12-05T19:00"), "UFC Fight Night: Brisk vs. Loam", parts = listOf("Prelims", "Main Card")),
+            ),
+        )
+        val pairedRows = listOf(
+            "UFC.Fight.Night.888.Brisk.vs.Loam.1080p.WEB.h264-KESTREL" to every(other, parts),
+            "UFC.Fight.Night.888.Brisk.vs.Loam.Prelims.1080p.WEB.h264-KESTREL" to every(other, parts),
+            "UFC.Fight.Night.888.1080p.WEB.h264-KESTREL" to mainCard(accepted),
+        )
+        assertEquals("", wrong(paired.byId(41), pairedRows, FightCard(paired)))
     }
 
     @Test
@@ -351,6 +368,9 @@ class FightCardTest {
             "UFC.998.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to every(other),
             "UFC.Fight.Night.888.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to every(other),
             "UFC.2026.11.28.Quessel.vs.Halde.1080p.WEB.h264-WREN" to every(other),
+            // One of its fighters beside another: another pair's card.
+            "UFC.Quessel.vs.Brisk.1080p.WEB.h264-KESTREL" to every(other),
+            "UFC.Loam.vs.Halde.Prelims.720p.WEB.h264-WREN" to every(other),
             // Without the organisation's word, or with one fighter alone, no card's, as before.
             "Quessel.vs.Halde.1080p.WEB.h264-WREN" to every(other),
             "UFC.Quessel.1080p.WEB.h264-WREN" to every(other),
@@ -369,6 +389,8 @@ class FightCardTest {
             "UFC.Fight.Night.887.Quessel.vs.Halde.1080p.WEB.h264-WREN" to every(other, parts),
             "UFC.999.Quessel.vs.Halde.1080p.WEB.h264-WREN" to every(other, parts),
             "UFC.Fight.Night.2026.12.05.Quessel.vs.Halde.1080p.WEB.h264-WREN" to every(other, parts),
+            "UFC.Fight.Night.Quessel.vs.Brisk.Prelims.1080p.WEB.h264-WREN" to every(other, parts),
+            "UFC.Loam.vs.Halde.1080p.WEB.h264-WREN" to every(other, parts),
             "Quessel.vs.Halde.Prelims.1080p.WEB.h264-WREN" to every(other, parts),
         )
         assertEquals("", wrong(night, nightRows, FightCard(titled)))
