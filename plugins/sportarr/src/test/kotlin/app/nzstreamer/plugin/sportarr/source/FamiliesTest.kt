@@ -2,6 +2,7 @@ package app.nzstreamer.plugin.sportarr.source
 
 import app.nzstreamer.plugin.sportarr.model.CardType
 import app.nzstreamer.plugin.sportarr.model.Family
+import app.nzstreamer.plugin.sportarr.model.FamilyFrom
 import org.junit.jupiter.api.Test
 import java.time.Duration
 import java.time.Instant
@@ -119,6 +120,10 @@ class FamiliesTest {
         assertEquals(Family.FightCard, Families.of("Exhibition", night(sport = "Combat", names = null)))
         val game = event(2, AT, title = "Lantern Bay FC vs Copper Crown United", sport = "Soccer")
         assertEquals(Family.TeamGame, Families.of("Exhibition", game))
+        // The event's own sport comes before its part names: a fight's family is its sport's, and a team game carrying
+        // stray part names stays a team game.
+        assertEquals(FamilyFrom.EventSport, Families.read("Exhibition", night(sport = "Fighting")).from)
+        assertEquals(Family.TeamGame, Families.of("Exhibition", game.copy(eventTypePartNames = listOf("Main Card"))))
         assertEquals(Family.Generic, Families.of("Exhibition", game.copy(title = "Kestrel Cup Final")), "no sides: stepped down")
         // A league's sport that names a family keeps it, whatever the event says or carries.
         assertEquals(Family.TeamGame, Families.of("Soccer", game))
