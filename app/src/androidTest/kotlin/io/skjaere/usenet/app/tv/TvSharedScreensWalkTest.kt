@@ -911,17 +911,12 @@ class TvSharedScreensWalkTest {
         } else {
             { label: String -> " | " in label }
         }
-        val chip = hasText(sport) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton)
         check("The Sports list, $sport", counted = counted, scrollBack = true, sideways = true) {
-            openSports(chip)
-            // Picked once: the choice is kept for the tab (view.json), and the walk comes back to it at each text size.
-            if (compose.onAllNodes(chip and isSelected()).fetchSemanticsNodes().isEmpty()) {
-                val chips = hasScrollToNodeAction() and SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
-                compose.onAllNodes(chips).onFirst().performScrollToNode(chip)
-                compose.onNode(chip).performClick()
-            }
-            compose.waitUntil(SPORTS_WAIT_MS) { compose.onAllNodes(chip and isSelected()).fetchSemanticsNodes().isNotEmpty() }
-            compose.waitForIdle()
+            // The list read, its line of sport chips shown: the one picked may stand past the part of the line in view
+            // (Motorsport at 2x), its line brought to it only as the list puts the focus there, which waits while the
+            // rail keeps the focus, as the walk at the size before may have left it.
+            openSports(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton))
+            pickChip(sport, SPORTS_LINE)
         }
     }
 
