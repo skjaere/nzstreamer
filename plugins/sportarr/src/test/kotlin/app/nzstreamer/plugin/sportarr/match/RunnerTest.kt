@@ -447,6 +447,35 @@ class RunnerTest {
     }
 
     @Test
+    fun `a sport word in no family is named only when it is a short plain word, else by its length`() = runTest {
+        // A league's sport is whatever its Sportarr holds, which a user can rename: free text, of any length.
+        val marked = KeptLeague(23, "Kestrel Games", "Kestrel \"Open\": {Night}")
+        val longest = KeptLeague(24, "Kestrel Open", "Exhibition".repeat(3) + "ab")
+        val tooLong = KeptLeague(25, "Kestrel Open", "Exhibition".repeat(3) + "abc")
+        val numbered = KeptLeague(26, "Kestrel Open", "Kestrel Cup 2026")
+        val listed = sports(
+            marked to listOf(on(marked, 41, at("2026-11-14T23:00"), "Kestrel Fight Night: Brisk vs. Loam", parts = listOf("Prelims", "Main Card"))),
+            longest to listOf(on(longest, 42, at("2026-11-15T10:00"), "Kestrel Open Final")),
+            tooLong to listOf(on(tooLong, 43, at("2026-11-16T10:00"), "Kestrel Open Final")),
+            numbered to listOf(on(numbered, 44, at("2026-11-17T10:00"), "Kestrel Open Final")),
+        )
+        val origins = listed.events.sortedBy { it.id }.map { event ->
+            val mark = Logged.mark()
+            Runner(answers()).releases(family(), event, event.headline)
+            Logged.pluginLinesSince(mark).single().words.substringBefore("):") + ")"
+        }
+        assertEquals(
+            listOf(
+                "Releases for a FightCard part (part names, a sport of 23 characters)",
+                "Releases for a Generic part (sport \"exhibitionexhibitionexhibitionab\" in no family)",
+                "Releases for a Generic part (a sport of 33 characters in no family)",
+                "Releases for a Generic part (a sport of 16 characters in no family)",
+            ),
+            origins,
+        )
+    }
+
+    @Test
     fun `a run logs counts and kinds, never a release's name, a query, the event's title or a canary value`() = runTest {
         val names = listOf(
             gameNamed("1080p.WEB.h264-KESTREL"),

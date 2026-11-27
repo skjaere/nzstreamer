@@ -37,8 +37,8 @@ import kotlin.coroutines.CoroutineContext
  * answers, the first search first at the same place, and the possible matches follow that order.
  *
  * A cancelled run cancels its searches with it. Its log line says counts, kinds and how long it took, never a name: the
- * family, the sport it came from by Sportarr's category word and whose word it was (L-SF3), and each search's indexers
- * in the host's order, by their counts or what kept them from one.
+ * family, the sport it came from by Sportarr's category word (a word in no family only when it is short and plain) and
+ * whose word it was (L-SF3), and each search's indexers in the host's order, by their counts or what kept them from one.
  */
 class Runner(private val search: PluginSearch, private val work: CoroutineContext = Dispatchers.Default) {
     /**
@@ -93,10 +93,17 @@ class Runner(private val search: PluginSearch, private val work: CoroutineContex
     /**
      * Where [event]'s family came from, for the log line: the league's sport or the event's, the part names Sportarr sent,
      * or none, with the sport word folded (Sportarr's category word, never a title or a league's name), and whether the
-     * title stepped it down.
+     * title stepped it down. A word no family lists is whatever the user's Sportarr holds, which can be renamed to any
+     * text: it is named only when it is a short plain word, else by its length alone.
      */
     private fun origin(event: SportsEvent): String {
-        val sport = Families.fold(event.sport).takeIf { it.isNotEmpty() }?.let { "sport \"$it\"" }
+        val word = Families.fold(event.sport)
+        val plain = word.length <= PLAIN_SPORT && word.all { it.isLetter() || it == ' ' }
+        val sport = when {
+            word.isEmpty() -> null
+            plain || Families.ofSport(word) != Family.Generic -> "sport \"$word\""
+            else -> "a sport of ${word.length} characters"
+        }
         val stepped = if (event.family == Family.Generic && event.familyFrom != FamilyFrom.Nothing) ", stepped down" else ""
         return when (event.familyFrom) {
             FamilyFrom.LeagueSport -> "the league's $sport$stepped"
@@ -187,6 +194,9 @@ class Runner(private val search: PluginSearch, private val work: CoroutineContex
     private companion object {
         /** Stage 1's queries, searched together. */
         const val FIRST_AT_ONCE = 2
+
+        /** The longest sport word in no family the log line names, folded. */
+        const val PLAIN_SPORT = 32
 
         val log = LoggerFactory.getLogger(Runner::class.java)
     }
