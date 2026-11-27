@@ -18,6 +18,7 @@ release-please action's paths_released, with a fake gh for GitHub's API (and jq,
 - release-plugin.yml: no test runs while the key is in the runner, the signed build makes the APK alone, and the release
   is published as a prerelease that is never Latest, checked after.
 - plugin-index.yml and CI's step "Published plugins against this build".
+- Every reusable workflow: no secret required of its caller, as the key's are the release-signing environment's.
 """
 import json
 import os
@@ -534,12 +535,45 @@ class ReleasePluginWorkflowTest(unittest.TestCase):
         self.assertIn("tools/release/check-plugin-apk.sh", "\n".join(self.scripts))
         self.assertIn("release_notes.py scan", "\n".join(self.scripts))
 
+    def test_the_keys_secrets_are_checked_by_the_signing_job_not_required_by_the_call(self):
+        # They are the release-signing environment's secrets, which only a job in that environment reads. A call's
+        # required secrets are checked for each job of the called workflow, so a required one failed the index job, which
+        # runs in no environment, at the first plugin release: "Secret BETA_KEYSTORE_BASE64 is required, but not
+        # provided while calling", the list left unwritten. The plugin job's own check fails on any that arrives empty.
+        block = re.search(r"\n  workflow_call:\n(?:.*\n)*?    secrets:\n((?:      .*\n)+)", self.text).group(1)
+        names = ("BETA_KEYSTORE_BASE64", "BETA_STORE_PASSWORD", "BETA_KEY_ALIAS", "BETA_KEY_PASSWORD")
+        for name in names + ("BETA_SCAN_CANARIES",):
+            self.assertRegex(block, rf"(?m)^      {name}:\n        required: false$")
+        checked = self.index_of("[[ -n ${!name} ]]")
+        self.assertLess(checked, self.index_of("base64 --decode"))
+        for name in names:
+            self.assertIn(name, self.scripts[checked])
+            self.assertIn(f"{name}: ${{{{ secrets.{name} }}}}", "\n".join(self.steps[checked]))
+
     def test_the_list_is_written_again_after_the_release(self):
         index = self.jobs["index"]
         self.assertEqual("plugin", key(index, "needs", 4))
         self.assertEqual("./.github/workflows/plugin-index.yml", key(index, "uses", 4))
         self.assertEqual("inherit", key(index, "secrets", 4))
         self.assertEqual("write", key(index, "contents", 6))
+
+
+class ReusableWorkflowSecretsTest(unittest.TestCase):
+    def test_no_reusable_workflow_requires_a_secret_of_its_caller(self):
+        # Every secret these workflows take is the release-signing environment's, or optional: a required one fails any
+        # of the called workflow's jobs that runs in no environment (see ReleasePluginWorkflowTest), and each job that
+        # signs checks the key's for empty itself.
+        called = [name for name in sorted(os.listdir(WORKFLOWS))
+                  if name.endswith(".yml") and "\n  workflow_call:\n" in workflow(name)]
+        self.assertEqual(["plugin-index.yml", "release-apk.yml", "release-plugin.yml"], called)
+        for name in called:
+            text = workflow(name)
+            block = re.search(r"\n  workflow_call:\n((?:    .*\n|\n)*)", text).group(1)
+            secrets = re.search(r"(?m)^    secrets:\n((?:      .*\n)+)", block)
+            if secrets:
+                self.assertNotIn("required: true", secrets.group(1), name)
+            if "secrets.BETA_KEYSTORE_BASE64" in text:
+                self.assertIn("[[ -n ${!name} ]] || empty+=(\"$name\")", text, name)
 
 
 class PluginIndexWorkflowTest(unittest.TestCase):

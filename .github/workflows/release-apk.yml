@@ -20,15 +20,18 @@ on:
       publish:
         type: boolean
         default: true
+    # None required: the key's are the release-signing environment's, which only the apk job reads, and a call's
+    # required secrets are checked for each job, so a later job in no environment would fail. The apk job's check
+    # below fails on any that arrives empty.
     secrets:
       BETA_KEYSTORE_BASE64:
-        required: true
+        required: false
       BETA_STORE_PASSWORD:
-        required: true
+        required: false
       BETA_KEY_ALIAS:
-        required: true
+        required: false
       BETA_KEY_PASSWORD:
-        required: true
+        required: false
       BETA_SCAN_CANARIES:
         required: false
   workflow_dispatch:
