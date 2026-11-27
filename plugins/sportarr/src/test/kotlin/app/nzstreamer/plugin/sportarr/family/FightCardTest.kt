@@ -402,6 +402,51 @@ class FightCardTest {
     }
 
     @Test
+    fun `a card whose two sides share a surname needs it twice in a name, and a rematch of the two still leaves the name a possible match`() {
+        val parts = listOf(Parts.PRELIMS, Parts.MAIN_CARD)
+        val numbered = sports(UFC to listOf(on(UFC, 36, at("2026-11-21T23:00"), "UFC 999: Quessel vs. Quessel", parts = listOf("Early Prelims", "Prelims", "Main Card"))))
+        val rows = listOf(
+            "UFC.Quessel.vs.Quessel.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD),
+            "UFC.Quessel.vs.Quessel.Prelims.720p.WEB.h264-WREN" to only(Parts.PRELIMS),
+            // The shared surname once, beside another fighter or alone, is another card's.
+            "UFC.Quessel.vs.Brisk.1080p.WEB.h264-KESTREL" to every(other),
+            "UFC.Brisk.vs.Quessel.Prelims.720p.WEB.h264-WREN" to every(other),
+            "UFC.Quessel.1080p.WEB.h264-KESTREL" to every(other),
+        )
+        assertEquals("", wrong(numbered.byId(36), rows, FightCard(numbered)))
+
+        // A fight night titled with no number: one surname beside another, whatever night number, is another card's.
+        val (titled, night) = night("UFC Fight Night: Quessel vs. Quessel", id = 37)
+        val nightRows = listOf(
+            "UFC.Fight.Night.Quessel.vs.Quessel.Prelims.1080p.WEB.h264-KESTREL" to mapOf(Parts.PRELIMS to accepted, Parts.MAIN_CARD to otherParts),
+            "UFC.Fight.Night.901.Quessel.vs.Brisk.1080p.WEB.h264-KESTREL" to every(other, parts),
+            "UFC.Fight.Night.Quessel.vs.Loam.1080p.WEB.h264-KESTREL" to every(other, parts),
+        )
+        assertEquals("", wrong(night, nightRows, FightCard(titled)))
+
+        // A boxing matchup of the two, dated: the shared surname once is another fight's.
+        val bouts = sports(BOXING to listOf(on(BOXING, 62, at("2026-11-18T20:00"), "Quessel vs. Quessel")))
+        val boutRows = listOf(
+            "Boxing.2026.11.18.Quessel.vs.Quessel.1080p.WEB.h264-KESTREL" to full(accepted),
+            "Boxing.2026.11.18.Quessel.vs.Brisk.1080p.WEB.h264-KESTREL" to full(other),
+        )
+        assertEquals("", wrong(bouts.byId(62), boutRows, FightCard(bouts)))
+
+        // Their rematch listed in the league: the undated name a possible match, the card's own number sure.
+        val rematch = sports(
+            UFC to listOf(
+                on(UFC, 36, at("2026-11-21T23:00"), "UFC 999: Quessel vs. Quessel", parts = listOf("Early Prelims", "Prelims", "Main Card")),
+                on(UFC, 38, at("2026-12-05T19:00"), "UFC Fight Night 888 Quessel vs Quessel", parts = listOf("Prelims", "Main Card")),
+            ),
+        )
+        val rematchRows = listOf(
+            "UFC.Quessel.vs.Quessel.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD, offered("No date in the name")),
+            "UFC.999.Quessel.vs.Quessel.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD),
+        )
+        assertEquals("", wrong(rematch.byId(36), rematchRows, FightCard(rematch)))
+    }
+
+    @Test
     fun `a card whose title names no sides is read by Sportarr's home and away names where it sends both`() {
         fun untitled(title: String, home: String?, away: String?, parts: List<String> = listOf("Prelims", "Main Card")) =
             sports(UFC to listOf(on(UFC, 43, at("2026-11-28T19:00"), title, parts = parts).copy(homeTeamName = home, awayTeamName = away)))

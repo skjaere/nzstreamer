@@ -34,6 +34,7 @@ import java.time.Instant
  *   is a possible match unless it holds the card's own number. A title with no sides is read by Sportarr's home and away
  *   names where it sends both.
  * - A boxing matchup is both surnames and its date.
+ * - A surname both sides share stands twice in a name that holds both.
  * - A weekly show is its title's words and its own date: the same show airs every week, so a name with no date is no one
  *   week's.
  * - A premium event is the organisation's or league's word, every word of its title, its year or edition (its edition or
@@ -64,7 +65,7 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
     }
 
     /** The listed cards' keys by their league and their two surnames, which a rematch shares (L-SF7). */
-    private val byFighters: Map<Pair<Int, Set<String>>, List<String>> by lazy {
+    private val byFighters: Map<Pair<Int, List<String>>, List<String>> by lazy {
         cards.values.mapNotNull { card -> card.fighters?.let { (card.event.league.id to it) to card.event.key } }.groupBy({ it.first }, { it.second })
     }
 
@@ -202,7 +203,10 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
     private fun identity(card: Card, name: SportsName, words: Set<String>): Verdict? {
         val dated = name.dates.isNotEmpty()
         val organisation = card.organisation?.word?.let { it in words } == true
-        val surnames = card.surnames.size == 2 && card.surnames.all { it.word in words }
+        // Both surnames, in either order; one the two sides share must stand twice, as each side's.
+        val surnames = card.fighters?.let { (first, second) ->
+            if (first == second) name.identity.count { it.word == first } >= 2 else first in words && second in words
+        } == true
         // L-SF7: the organisation and both fighters name the card, but with no date not where a rematch is listed; a date,
         // which the shared rules held to this card's and no rematch's, tells the two apart.
         fun fighters(): Verdict = when {
@@ -313,8 +317,8 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
         // A side of one letter or a number alone has no surname (L-SF7).
         val surnames: List<Token> = sides.mapNotNull { side -> Tokens.of(side).lastOrNull { it.hasLetter }?.takeIf { it.word.length > 1 } }
 
-        /** Its two surnames as a set, in either order, or null without two. */
-        val fighters: Set<String>? = surnames.mapTo(HashSet()) { it.word }.takeIf { it.size == 2 }
+        /** Its two surnames in either order, sorted, both kept where the sides share one; null without two. */
+        val fighters: List<String>? = surnames.map { it.word }.sorted().takeIf { it.size == 2 }
 
         private val nightAt = tokens.indices.firstOrNull { tokens[it].word == NIGHT && tokens.getOrNull(it + 1)?.isNumber == true }
         val night: Int? = nightAt?.let { tokens[it + 1].word.toIntOrNull() }.takeIf { type == CardType.Premium }
