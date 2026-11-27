@@ -26,8 +26,9 @@ import java.time.Instant
  * - A numbered card ("UFC 999") is its organisation word and its number as whole tokens, never with "Fight Night"; a date,
  *   where a name has one, the shared rules hold to the card's.
  * - A fight night is its organisation word, "Fight Night" or both surnames, and its date; the number in its title, where
- *   it has one, the name's. Its organisation word, "Fight Night" and that number name it with no date (L-SF6), as scene
- *   names write a fight night, unless a year in the name, outside a date, is another's.
+ *   it has one, the name's, and where it has none, no other listed night's of its league. Its organisation word, "Fight
+ *   Night" and that number name it with no date (L-SF6), as scene names write a fight night, unless a year in the name,
+ *   outside a date, is another's.
  * - Either is also its organisation word and both surnames, in either order, with no date (L-SF7), unless a year in the
  *   name is another's; while another card of its league has the same two fighters, a rematch, such a name with no date
  *   is a possible match unless it holds the card's own number. A title with no sides is read by Sportarr's home and away
@@ -54,6 +55,12 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
     /** Every listed fight card, read from its title once, by its key. */
     private val cards: Map<String, Card> by lazy {
         sports.events.filter { it.family == Family.FightCard }.associate { it.key to Card(it) }
+    }
+
+    /** The listed fight nights' numbers by their league: a night's number in a name is that night's. */
+    private val nightNumbers: Map<Int, Set<Int>> by lazy {
+        cards.values.mapNotNull { card -> card.number?.takeIf { card.type == CardType.FightNight }?.let { card.event.league.id to it } }
+            .groupBy({ it.first }, { it.second }).mapValues { (_, numbers) -> numbers.toSet() }
     }
 
     /** The listed cards' keys by their league and their two surnames, which a rematch shares (L-SF7). */
@@ -135,15 +142,18 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
     }
 
     /**
-     * Whether [name] names another card: a numbered card's other number, or a fight night; a fight night's other number,
-     * or a numbered card; a premium event's other night; or another listed card's surnames or title words, by words this
-     * card's own don't hold.
+     * Whether [name] names another card: a numbered card's other number, or a fight night; a fight night's other number
+     * (where its title has none, another listed night's of its league), or a numbered card; a premium event's other night;
+     * or another listed card's surnames or title words, by words this card's own don't hold.
      */
     private fun anotherCard(card: Card, name: SportsName, words: Set<String>): Boolean {
         val nights = name.numbered(NumberWord.Night)
         val own = when (card.type) {
             CardType.Numbered -> name.cardNumbers.any { it != card.number } || name.has(FIGHT_NIGHT)
-            CardType.FightNight -> name.cardNumbers.isNotEmpty() || (card.number != null && nights.any { it != card.number })
+            // A night its title doesn't number may be any number no other listed night of its league holds.
+            CardType.FightNight -> name.cardNumbers.isNotEmpty() || nights.any { night ->
+                if (card.number != null) night != card.number else night in nightNumbers[card.event.league.id].orEmpty()
+            }
             // A title with no night is the first.
             CardType.Premium -> nights.any { it != (card.night ?: 1) } || otherEdition(card, name)
             CardType.Matchup, CardType.WeeklyShow -> false

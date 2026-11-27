@@ -304,6 +304,41 @@ class FightCardTest {
     }
 
     @Test
+    fun `a fight night with no number in its title leaves out a name with another listed night's number, and takes one no listed card holds`() {
+        val kcl = KeptLeague(20, "KCL", "Fighting")
+        val listed = sports(
+            UFC to listOf(
+                on(UFC, 32, at("2026-11-28T19:00"), "UFC Fight Night: Brisk vs. Loam", parts = listOf("Prelims", "Main Card")),
+                // Another fight night of the league, as Sportarr titles some: its number and no sides.
+                on(UFC, 34, at("2026-12-05T19:00"), "UFC Fight Night 901", parts = listOf("Prelims", "Main Card")),
+            ),
+            kcl to listOf(on(kcl, 35, at("2026-12-12T19:00"), "KCL Fight Night 902", parts = listOf("Prelims", "Main Card"))),
+        )
+        val matcher = FightCard(listed)
+        val parts = listOf(Parts.PRELIMS, Parts.MAIN_CARD)
+        fun prelims(verdict: Verdict) = mapOf(Parts.PRELIMS to verdict, Parts.MAIN_CARD to otherParts)
+        fun mainCard(verdict: Verdict) = mapOf(Parts.PRELIMS to otherParts, Parts.MAIN_CARD to verdict)
+        val rows = listOf(
+            // The number of the league's other listed night is that night's, with these fighters, a part or the card's date.
+            "UFC.Fight.Night.901.Brisk.vs.Loam.1080p.WEB.h264-KESTREL" to every(other, parts),
+            "UFC.Fight.Night.901.Brisk.vs.Loam.Prelims.1080p.WEB.h264-WREN" to every(other, parts),
+            "UFC.Fight.Night.901.2026.11.28.Brisk.vs.Loam.1080p.WEB.h264-KESTREL" to every(other, parts),
+            // A number no listed night of the league holds may be its own, which its title doesn't say: another league's is
+            // none of its league's.
+            "UFC.Fight.Night.888.Brisk.vs.Loam.1080p.WEB.h264-KESTREL" to mainCard(accepted),
+            "UFC.Fight.Night.902.Brisk.vs.Loam.Prelims.1080p.WEB.h264-WREN" to prelims(accepted),
+            "UFC.Fight.Night.Brisk.vs.Loam.Prelims.1080p.WEB.h264-WREN" to prelims(accepted),
+        )
+        assertEquals("", wrong(listed.byId(32), rows, matcher))
+        // The other night's by its own number, never by this one's fighters.
+        val otherRows = listOf(
+            "UFC.Fight.Night.901.1080p.WEB.h264-KESTREL" to mainCard(accepted),
+            "UFC.Fight.Night.901.Brisk.vs.Loam.1080p.WEB.h264-KESTREL" to every(other, parts),
+        )
+        assertEquals("", wrong(listed.byId(34), otherRows, matcher))
+    }
+
+    @Test
     fun `a card's undated name is accepted by its organisation and both fighters, and never with another year, number, date or part`() {
         // UFC 999 of the list, whose two fighters no other UFC card of it has: the matchup of Halde and Brisk is boxing's.
         val rows = listOf(
