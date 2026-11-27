@@ -32,11 +32,12 @@ import kotlin.test.assertTrue
 
 /**
  * L650's fight cards, each judged by the type its list gave it (L643): a numbered card by its organisation and number, a
- * fight night by its organisation, Fight Night or both surnames and its date, a boxing matchup by both surnames and its
- * date, a weekly show by its title's words on its own date, a premium event by its title's words with its year or
+ * fight night by its organisation, Fight Night or both surnames and its date, or by its own number (L-SF6), either by its
+ * organisation and both surnames with no date unless a rematch is listed (L-SF7), a boxing matchup by both surnames and
+ * its date, a weekly show by its title's words on its own date, a premium event by its title's words with its year or
  * edition and its night. Then a card's parts by their words: an unlabelled name or PPV is the main part, never a prelim,
  * and a full event is every part's. What names a card less surely is a possible match with its reason; another card's
- * number, night or names leave a name out. Every name goes through the shared rules first, as the runner judges it.
+ * number, night, year or names leave a name out. Every name goes through the shared rules first, as the runner judges it.
  */
 class FightCardTest {
     /** A Monday night show, at one in the morning UTC on Tuesday; [broadcast] the date Sportarr sends, the UTC date where it has none. */
@@ -221,7 +222,8 @@ class FightCardTest {
             "UFC.Fight.Night.2026.11.28.Brisk.vs.Loam.1080p.WEB.h264-KESTREL" to mainCard(accepted),
             "UFC.Fight.Night.2026.11.28.720p.WEB.h264-ORCHID" to mainCard(accepted),
             "UFC.2026.11.28.Brisk.vs.Loam.Prelims.720p.WEB.h264-WREN" to mapOf(Parts.PRELIMS to accepted, Parts.MAIN_CARD to otherParts),
-            "UFC.Fight.Night.Brisk.vs.Loam.Main.Card.1080p.WEB.h264-WREN" to mainCard(offered("No date in the name")),
+            // Both fighters with the organisation's word, and no date (L-SF7).
+            "UFC.Fight.Night.Brisk.vs.Loam.Main.Card.1080p.WEB.h264-WREN" to mainCard(accepted),
             // The organisation and the date alone: the league's word and the date, a possible match.
             "UFC.2026.11.28.1080p.WEB.h264-WREN" to mainCard(offered("Picked by league and date")),
             "UFC.Fight.Night.2026.11.21.Brisk.vs.Loam.1080p.WEB.h264-WREN" to every(other, parts),
@@ -299,6 +301,96 @@ class FightCardTest {
             "UFC.Fight.Night.887.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to every(other, parts),
         )
         assertEquals("", wrong(event, fighters, FightCard(titled)))
+    }
+
+    @Test
+    fun `a card's undated name is accepted by its organisation and both fighters, and never with another year, number, date or part`() {
+        // UFC 999 of the list, whose two fighters no other UFC card of it has: the matchup of Halde and Brisk is boxing's.
+        val rows = listOf(
+            "UFC.Halde.vs.Quessel.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD),
+            "UFC.Quessel.vs.Halde.Prelims.720p.WEB.h264-WREN" to only(Parts.PRELIMS),
+            "UFC.Quessel.vs.Halde.Early.Prelims.720p.WEB.h264-WREN" to only(Parts.EARLY_PRELIMS),
+            "UFC.Quessel.vs.Halde.2026.1080p.WEB.h264-ORCHID" to only(Parts.MAIN_CARD),
+            // Another year, another card's number, a fight night or another date: another card's.
+            "UFC.Halde.vs.Quessel.2025.1080p.WEB.h264-KESTREL" to every(other),
+            "UFC.998.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to every(other),
+            "UFC.Fight.Night.888.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to every(other),
+            "UFC.2026.11.28.Quessel.vs.Halde.1080p.WEB.h264-WREN" to every(other),
+            // Without the organisation's word, or with one fighter alone, no card's, as before.
+            "Quessel.vs.Halde.1080p.WEB.h264-WREN" to every(other),
+            "UFC.Quessel.1080p.WEB.h264-WREN" to every(other),
+        )
+        assertEquals("", wrong(card, rows))
+
+        val parts = listOf(Parts.PRELIMS, Parts.MAIN_CARD)
+        fun prelims(verdict: Verdict) = mapOf(Parts.PRELIMS to verdict, Parts.MAIN_CARD to otherParts)
+        fun mainCard(verdict: Verdict) = mapOf(Parts.PRELIMS to otherParts, Parts.MAIN_CARD to verdict)
+        val (titled, night) = night("UFC Fight Night 888 Quessel vs Halde")
+        val nightRows = listOf(
+            "UFC.Fight.Night.888.Quessel.vs.Halde.Prelims.1080p.WEB.h264-KESTREL" to prelims(accepted),
+            "UFC.Fight.Night.Quessel.vs.Halde.Prelims.1080p.WEB.h264-KESTREL" to prelims(accepted),
+            "UFC.Halde.vs.Quessel.1080p.WEB.h264-WREN" to mainCard(accepted),
+            "UFC.Fight.Night.Quessel.vs.Halde.2025.1080p.WEB.h264-WREN" to every(other, parts),
+            "UFC.Fight.Night.887.Quessel.vs.Halde.1080p.WEB.h264-WREN" to every(other, parts),
+            "UFC.999.Quessel.vs.Halde.1080p.WEB.h264-WREN" to every(other, parts),
+            "UFC.Fight.Night.2026.12.05.Quessel.vs.Halde.1080p.WEB.h264-WREN" to every(other, parts),
+            "Quessel.vs.Halde.Prelims.1080p.WEB.h264-WREN" to every(other, parts),
+        )
+        assertEquals("", wrong(night, nightRows, FightCard(titled)))
+    }
+
+    @Test
+    fun `a rematch listed in the league leaves an undated name of the two fighters a possible match, unless it has the card's number`() {
+        val rematch = sports(
+            UFC to listOf(ufc999(), on(UFC, 42, at("2026-12-05T19:00"), "UFC Fight Night 888 Quessel vs Halde", parts = listOf("Prelims", "Main Card"))),
+        )
+        val matcher = FightCard(rematch)
+        val noDate = offered("No date in the name")
+        val cardRows = listOf(
+            "UFC.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD, noDate),
+            "UFC.Halde.vs.Quessel.Prelims.720p.WEB.h264-WREN" to only(Parts.PRELIMS, noDate),
+            "UFC.999.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD),
+            // The card's own date tells the two apart; the rematch's date is the rematch's.
+            "UFC.2026.11.21.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD),
+            "UFC.2026.12.05.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to every(other),
+        )
+        assertEquals("", wrong(rematch.byId(31), cardRows, matcher))
+        val parts = listOf(Parts.PRELIMS, Parts.MAIN_CARD)
+        val nightRows = listOf(
+            "UFC.Quessel.vs.Halde.Prelims.1080p.WEB.h264-KESTREL" to mapOf(Parts.PRELIMS to noDate, Parts.MAIN_CARD to otherParts),
+            "UFC.Fight.Night.Halde.vs.Quessel.1080p.WEB.h264-KESTREL" to mapOf(Parts.PRELIMS to otherParts, Parts.MAIN_CARD to noDate),
+            "UFC.Fight.Night.888.Quessel.vs.Halde.Prelims.1080p.WEB.h264-KESTREL" to mapOf(Parts.PRELIMS to accepted, Parts.MAIN_CARD to otherParts),
+            "UFC.Fight.Night.2026.12.05.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to mapOf(Parts.PRELIMS to otherParts, Parts.MAIN_CARD to accepted),
+            "UFC.999.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to every(other, parts),
+        )
+        assertEquals("", wrong(rematch.byId(42), nightRows, matcher))
+    }
+
+    @Test
+    fun `a card whose title names no sides is read by Sportarr's home and away names where it sends both`() {
+        fun untitled(title: String, home: String?, away: String?, parts: List<String> = listOf("Prelims", "Main Card")) =
+            sports(UFC to listOf(on(UFC, 43, at("2026-11-28T19:00"), title, parts = parts).copy(homeTeamName = home, awayTeamName = away)))
+                .let { it to it.byId(43) }
+        val parts = listOf(Parts.PRELIMS, Parts.MAIN_CARD)
+        val (sent, night) = untitled("UFC Fight Night 888", "Brisk", "Loam")
+        val rows = listOf(
+            "UFC.Brisk.vs.Loam.1080p.WEB.h264-KESTREL" to mapOf(Parts.PRELIMS to otherParts, Parts.MAIN_CARD to accepted),
+            "UFC.Loam.vs.Brisk.Prelims.1080p.WEB.h264-WREN" to mapOf(Parts.PRELIMS to accepted, Parts.MAIN_CARD to otherParts),
+            "UFC.Brisk.vs.Loam.2025.1080p.WEB.h264-WREN" to every(other, parts),
+        )
+        assertEquals("", wrong(night, rows, FightCard(sent)))
+        assertEquals(listOf("Brisk", "Loam"), FightCard(sent).context(night).sides)
+
+        // A numbered card's too, and full names give their last words.
+        val (numbered, card) = untitled("UFC 997", "Ana Quessel", "Mira Halde", listOf("Early Prelims", "Prelims", "Main Card"))
+        assertEquals("", wrong(card, listOf("UFC.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD)), FightCard(numbered)))
+
+        // Without them, with one alone, or with a side of one letter or a number alone, which is no surname: as before.
+        listOf(null to null, "Brisk" to null, "Brisk" to "L", "Brisk" to "7").forEach { (home, away) ->
+            val (list, event) = untitled("UFC Fight Night 888", home, away)
+            val name = "UFC.Brisk.vs.${away ?: "Loam"}.1080p.WEB.h264-KESTREL"
+            assertEquals("", wrong(event, listOf(name to every(other, parts)), FightCard(list)), "$home and $away")
+        }
     }
 
     @Test
@@ -506,9 +598,9 @@ class FightCardTest {
         val rows = listOf(
             // The fight night's two surnames on the numbered card's number.
             "UFC.999.Brisk.vs.Loam.1080p.WEB.h264-WREN" to every(other),
-            "UFC.2026.11.21.Quessel.vs.Halde.1080p.WEB.h264-WREN" to only(Parts.MAIN_CARD, offered("Picked by league and date")),
+            "UFC.2026.11.21.Quessel.vs.Halde.1080p.WEB.h264-WREN" to only(Parts.MAIN_CARD),
             "UFC.2026.11.21.Prelims.720p.WEB.h264-WREN" to only(Parts.PRELIMS, offered("Picked by league and date")),
-            "UFC.Quessel.vs.Halde.1080p.WEB.h264-WREN" to only(Parts.MAIN_CARD, offered("No date in the name")),
+            "UFC.Quessel.vs.Halde.1080p.WEB.h264-WREN" to only(Parts.MAIN_CARD),
             "KCL.2026.11.21.1080p.WEB.h264-WREN" to every(other),
         )
         assertEquals("", wrong(card, rows))

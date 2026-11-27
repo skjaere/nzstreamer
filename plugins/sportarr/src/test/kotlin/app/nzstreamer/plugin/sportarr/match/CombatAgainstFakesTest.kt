@@ -32,8 +32,8 @@ import kotlin.test.assertIs
  * does, "Combat" for its fight leagues and their events, "Fighting" for one as a server before it, and a word no family
  * has for a league whose card carries part names; a refresh's read of it makes each of their events a fight card. An
  * undated fight-night name the sports indexer lists is then judged by the fight card's rules for the UFC fight night's
- * parts, through the runner's searches: a possible match for its main card, another part's for its prelims, and for
- * neither another event's, as it was when Combat read as no family.
+ * parts, through the runner's searches: its main card's by its two fighters (L-SF7), another part's for its prelims, and
+ * for neither another event's, as it was when Combat read as no family.
  */
 class CombatAgainstFakesTest {
     private val anchor = LocalDate.of(2026, 11, 22)
@@ -73,7 +73,7 @@ class CombatAgainstFakesTest {
     }
 
     @Test
-    fun `an undated fight-night name in the Combat league is a possible match for the main card, another part's for the prelims`() {
+    fun `an undated fight-night name in the Combat league is the main card's by its fighters, another part's for the prelims`() {
         val sports = sports()
         val night = sports.events.single { it.id == FIGHT_NIGHT }
         assertEquals(Triple(Family.FightCard, CardType.FightNight, "Combat"), Triple(night.family, night.cardType, night.league.sport))
@@ -92,8 +92,8 @@ class CombatAgainstFakesTest {
 
         val (main, foundForMain) = run(Parts.MAIN_CARD)
         assertEquals(setOf(GUID), foundForMain, "the fight night's searches reach it")
-        assertEquals(emptyList(), main.accepted)
-        assertEquals(listOf("$GUID: No date in the name"), main.offered.map { "${it.handle}: ${it.reason}" })
+        assertEquals(listOf(GUID), main.accepted.map { it.toString() })
+        assertEquals(emptyList(), main.offered.map { "${it.handle}: ${it.reason}" })
         assertEquals(null, main.leftOut)
 
         val (prelims, foundForPrelims) = run(Parts.PRELIMS)

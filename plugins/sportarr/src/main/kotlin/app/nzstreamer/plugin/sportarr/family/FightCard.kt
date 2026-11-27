@@ -28,6 +28,10 @@ import java.time.Instant
  * - A fight night is its organisation word, "Fight Night" or both surnames, and its date; the number in its title, where
  *   it has one, the name's. Its organisation word, "Fight Night" and that number name it with no date (L-SF6), as scene
  *   names write a fight night, unless a year in the name, outside a date, is another's.
+ * - Either is also its organisation word and both surnames, in either order, with no date (L-SF7), unless a year in the
+ *   name is another's; while another card of its league has the same two fighters, a rematch, such a name with no date
+ *   is a possible match unless it holds the card's own number. A title with no sides is read by Sportarr's home and away
+ *   names where it sends both.
  * - A boxing matchup is both surnames and its date.
  * - A weekly show is its title's words and its own date: the same show airs every week, so a name with no date is no one
  *   week's.
@@ -38,9 +42,10 @@ import java.time.Instant
  * Sportarr gave a part, read before them ("Countdown" where it labels a show's pre-show); one with none, or with PPV, is
  * the card's main part and never a prelim; a full event is every part's, the picker choosing the part's file.
  *
- * What names a card less surely is a possible match: both surnames with no date, the main event alone, and, as for every
- * family, a name with the league's word and the card's date that fails the rest. Another card's number or night, another
- * listed card's surnames or title words, or another part, leave a name out.
+ * What names a card less surely is a possible match: both surnames with no date where the organisation's word or a rematch
+ * leaves it unsure, the main event alone, and, as for every family, a name with the league's word and the card's date
+ * that fails the rest. Another card's number or night, another listed card's surnames or title words, another year, or
+ * another part, leave a name out.
  *
  * It reads the kept list ([sports]) for the other listed cards, whose names a name could hold instead, and for a show's
  * other nights, whose dates are theirs.
@@ -49,6 +54,11 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
     /** Every listed fight card, read from its title once, by its key. */
     private val cards: Map<String, Card> by lazy {
         sports.events.filter { it.family == Family.FightCard }.associate { it.key to Card(it) }
+    }
+
+    /** The listed cards' keys by their league and their two surnames, which a rematch shares (L-SF7). */
+    private val byFighters: Map<Pair<Int, Set<String>>, List<String>> by lazy {
+        cards.values.mapNotNull { card -> card.fighters?.let { (card.event.league.id to it) to card.event.key } }.groupBy({ it.first }, { it.second })
     }
 
     override fun context(event: SportsEvent): NameContext {
@@ -149,9 +159,16 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
         }
     }
 
+    /** Whether another listed card of [card]'s league has its two surnames, in either order: a rematch (L-SF7). */
+    private fun rematched(card: Card): Boolean {
+        val pair = card.fighters ?: return false
+        return byFighters[card.event.league.id to pair].orEmpty().any { it != card.event.key }
+    }
+
     /**
-     * Whether [name] holds a year outside a date that is none of [card]'s (L-SF6): a name sure of a card with no date is
-     * another year's card where it says so. A date's year is the shared date rule's, which held it to the card's day.
+     * Whether [name] holds a year outside a date that is none of [card]'s (L-SF6, L-SF7): a name sure of a card by its
+     * number or its fighters is another year's card where it says so. A date's year is the shared date rule's, which held
+     * it to the card's day.
      */
     private fun otherYear(card: Card, name: SportsName): Boolean {
         val own = eventYears(card.event)
@@ -166,10 +183,17 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
         val dated = name.dates.isNotEmpty()
         val organisation = card.organisation?.word?.let { it in words } == true
         val surnames = card.surnames.size == 2 && card.surnames.all { it.word in words }
+        // L-SF7: the organisation and both fighters name the card, but with no date not where a rematch is listed; a date,
+        // which the shared rules held to this card's and no rematch's, tells the two apart.
+        fun fighters(): Verdict = when {
+            otherYear(card, name) -> OTHER_CARD
+            !dated && rematched(card) -> Verdict.Offer(Words.Choose.NO_DATE)
+            else -> SURE
+        }
         return when (card.type) {
             CardType.Numbered -> when {
                 card.number != null && card.number in name.cardNumbers -> SURE
-                organisation && surnames && !dated -> Verdict.Offer(Words.Choose.NO_DATE)
+                organisation && surnames -> fighters()
                 else -> null
             }
             CardType.FightNight -> {
@@ -180,7 +204,7 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
                     dated && (fightNight || surnames) -> SURE
                     // Its own number after "Fight Night", which no other card holds: no date needed (L-SF6).
                     numbered -> if (otherYear(card, name)) OTHER_CARD else SURE
-                    surnames -> Verdict.Offer(Words.Choose.NO_DATE)
+                    surnames -> fighters()
                     else -> null
                 }
             }
@@ -232,9 +256,10 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
 
     /**
      * One card as its title gives it: its [type]; its [organisation], the word a numbered card's number or a fight night's
-     * words follow ("UFC"), else a premium event's league's first word; its [number]; its two [sides] as written and the
-     * last word of each, its [surnames]; its title's distinctive [words] (no number, date word, article or "vs", nor the
-     * "Night" of a "Night 2"); a premium event's [night]; and its numbers but the night's, an edition's ([editions]).
+     * words follow ("UFC"), else a premium event's league's first word; its [number]; its two [sides] as written (its
+     * title's, else Sportarr's home and away names) and the last word of each, its [surnames], which are its [fighters] in
+     * either order; its title's distinctive [words] (no number, date word, article or "vs", nor the "Night" of a
+     * "Night 2"); a premium event's [night]; and its numbers but the night's, an edition's ([editions]).
      * [identity] is what another card's names would have to hold to be this one's: its surnames, or a show's title words.
      */
     private class Card(val event: SportsEvent) {
@@ -261,12 +286,15 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
         }
         val number: Int? = numberWritten?.toIntOrNull()
 
-        val sides: List<String> = Families.sides(event.title)?.let { (home, away) ->
-            // A title may name more than the sides: the card before a colon, a note after a dash or a bracket.
-            listOf(home.substringAfterLast(": "), NOTES.fold(away) { side, note -> side.substringBefore(note) }).map(String::trim)
-        }?.takeIf { sides -> sides.all(String::isNotEmpty) }.orEmpty()
+        // A title with no sides: Sportarr's home and away names where it sends both, as it does for some fight cards (L-SF7).
+        val sides: List<String> = titleSides()
+            ?: listOfNotNull(event.homeTeamName, event.awayTeamName).map(String::trim).takeIf { it.size == 2 && it.all(String::isNotEmpty) }.orEmpty()
 
-        val surnames: List<Token> = sides.mapNotNull { side -> Tokens.of(side).lastOrNull { it.hasLetter } }
+        // A side of one letter or a number alone has no surname (L-SF7).
+        val surnames: List<Token> = sides.mapNotNull { side -> Tokens.of(side).lastOrNull { it.hasLetter }?.takeIf { it.word.length > 1 } }
+
+        /** Its two surnames as a set, in either order, or null without two. */
+        val fighters: Set<String>? = surnames.mapTo(HashSet()) { it.word }.takeIf { it.size == 2 }
 
         private val nightAt = tokens.indices.firstOrNull { tokens[it].word == NIGHT && tokens.getOrNull(it + 1)?.isNumber == true }
         val night: Int? = nightAt?.let { tokens[it + 1].word.toIntOrNull() }.takeIf { type == CardType.Premium }
@@ -290,6 +318,11 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
             CardType.WeeklyShow, CardType.Premium -> words.map { it.word }.toSet()
             else -> surnames.takeIf { it.size == 2 }?.map { it.word }?.toSet().orEmpty()
         }
+
+        /** The title's two sides, or null: a title may name more, the card before a colon, a note after a dash or a bracket. */
+        private fun titleSides(): List<String>? = Families.sides(event.title)?.let { (home, away) ->
+            listOf(home.substringAfterLast(": "), NOTES.fold(away) { side, note -> side.substringBefore(note) }).map(String::trim)
+        }?.takeIf { sides -> sides.all(String::isNotEmpty) }
 
         /** Whether every one of the title's distinctive words stands in a name's [present] words. */
         fun titleIn(present: Set<String>): Boolean = words.isNotEmpty() && words.all { it.word in present }
