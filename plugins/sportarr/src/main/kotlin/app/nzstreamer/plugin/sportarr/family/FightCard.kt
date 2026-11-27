@@ -26,7 +26,8 @@ import java.time.Instant
  * - A numbered card ("UFC 999") is its organisation word and its number as whole tokens, never with "Fight Night"; a date,
  *   where a name has one, the shared rules hold to the card's.
  * - A fight night is its organisation word, "Fight Night" or both surnames, and its date; the number in its title, where
- *   it has one, the name's.
+ *   it has one, the name's. Its organisation word, "Fight Night" and that number name it with no date (L-SF6), as scene
+ *   names write a fight night, unless a year in the name, outside a date, is another's.
  * - A boxing matchup is both surnames and its date.
  * - A weekly show is its title's words and its own date: the same show airs every week, so a name with no date is no one
  *   week's.
@@ -107,6 +108,8 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
         // L647 rule 6: a name with the league's word and the card's date that fails the rest is offered, not left out.
         val named = identity(card, name, words)
             ?: if (name.dates.isNotEmpty() && leagueNamed(card, name, words)) Verdict.Offer(Words.Choose.BY_LEAGUE_AND_DATE) else return OTHER_CARD
+        // Another card's, whatever part its words name.
+        if (named is Verdict.Reject) return named
         val parts = parts(card, part, name)
         return if (parts is Verdict.Reject || named is Verdict.Accept) parts else named
     }
@@ -146,7 +149,19 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
         }
     }
 
-    /** What [name] says of [card]'s identity by its type: Accept, a possible match with its reason, or null for neither. */
+    /**
+     * Whether [name] holds a year outside a date that is none of [card]'s (L-SF6): a name sure of a card with no date is
+     * another year's card where it says so. A date's year is the shared date rule's, which held it to the card's day.
+     */
+    private fun otherYear(card: Card, name: SportsName): Boolean {
+        val own = eventYears(card.event)
+        return (name.years + name.seasons.flatMap { listOf(it.first, it.second) } + name.indexes.map { it.year }).any { it !in own }
+    }
+
+    /**
+     * What [name] says of [card]'s identity by its type: Accept, a possible match with its reason, another card's, or null
+     * for none of them.
+     */
     private fun identity(card: Card, name: SportsName, words: Set<String>): Verdict? {
         val dated = name.dates.isNotEmpty()
         val organisation = card.organisation?.word?.let { it in words } == true
@@ -163,7 +178,9 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
                 when {
                     !organisation -> null
                     dated && (fightNight || surnames) -> SURE
-                    surnames || numbered -> Verdict.Offer(Words.Choose.NO_DATE)
+                    // Its own number after "Fight Night", which no other card holds: no date needed (L-SF6).
+                    numbered -> if (otherYear(card, name)) OTHER_CARD else SURE
+                    surnames -> Verdict.Offer(Words.Choose.NO_DATE)
                     else -> null
                 }
             }
