@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "generated": "2026-11-27T08:26:46Z",
+  "generated": "2026-11-27T15:19:21Z",
   "plugins": [
     {
       "id": "sportarr",
@@ -11,7 +11,7 @@
       "versions": [
         {
           "api": "1.0",
-          "changes": "https://github.com/skjaere/nzstreamer/releases/tag/plugin-sportarr-v0.1.0",
+          "changes": "https://github.com/skjaere/nzstreamer/releases/tag/plugin-sportarr-v0.1.1",
           "libs": {
             "activity-compose": "1.13.0",
             "compose-bom": "2026.06.01",
@@ -23,12 +23,12 @@
           },
           "minSdk": 26,
           "released": "2026-11-27",
-          "sha256": "59273464eec818d49bec26964b3280f6c10e162eeef13ac78558524a26ad74df",
-          "size": 409438,
+          "sha256": "e0854414f44520d5ec312dfd738601099ee4af9db89eb3ac52ca59dc98351a8e",
+          "size": 416410,
           "targetSdk": 36,
-          "url": "https://github.com/skjaere/nzstreamer/releases/download/plugin-sportarr-v0.1.0/sportarr.apk",
-          "versionCode": 10000,
-          "versionName": "0.1.0"
+          "url": "https://github.com/skjaere/nzstreamer/releases/download/plugin-sportarr-v0.1.1/sportarr.apk",
+          "versionCode": 10100,
+          "versionName": "0.1.1"
         }
       ],
       "withdrawn": []
