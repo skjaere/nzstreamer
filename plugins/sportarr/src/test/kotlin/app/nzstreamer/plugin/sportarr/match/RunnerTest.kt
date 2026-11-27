@@ -431,6 +431,17 @@ class RunnerTest {
     }
 
     @Test
+    fun `a run with no query to search says 0 searches, with no space before the comma`() = runTest {
+        // A matcher whose event gives no words (a game with no sides, a series with no written form) searches nothing.
+        val search = answers()
+        val mark = Logged.mark()
+        Runner(search).releases(family(first = emptyList(), then = null), card, mainCard)
+        assertEquals(emptyList(), search.asked)
+        val line = Logged.pluginLinesSince(mark).single().words
+        assertTrue("): 0 searches, 0 judged, 0 accepted, 0 offered, 0 left out {} in " in line, line)
+    }
+
+    @Test
     fun `a run's line says where the family came from - the league's sport, the event's, part names or none`() = runTest {
         val combat = KeptLeague(4, "UFC", "Combat")
         val unknown = KeptLeague(21, "Kestrel Games", "Exhibition")

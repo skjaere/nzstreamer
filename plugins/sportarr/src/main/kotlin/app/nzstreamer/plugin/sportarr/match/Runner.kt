@@ -75,9 +75,11 @@ class Runner(private val search: PluginSearch, private val work: CoroutineContex
         // As the host decides: with nothing here to play or to pick, it shows the no-release sheet, which needs the lines.
         val nothing = ordered.none { it.playable && it.verdict !is Verdict.Reject }
         val noun = Nouns.event(event)
+        // Each search's indexers after a space of its own, so a run that searched nothing says "0 searches,".
+        val searched = answers.joinToString("") { " " + indexers(it) }
         log.info(
-            "Releases for a {} part ({}): {} searches {}, {} judged, {} accepted, {} offered, {} left out {} in {} ms",
-            event.family, origin(event), answers.size, answers.joinToString(" ", transform = ::indexers), ordered.size, accepted.size,
+            "Releases for a {} part ({}): {} searches{}, {} judged, {} accepted, {} offered, {} left out {} in {} ms",
+            event.family, origin(event), answers.size, searched, ordered.size, accepted.size,
             offered.size, kinds.values.sum(), kinds, (System.nanoTime() - started) / 1_000_000,
         )
         val releases = ItemReleases(
