@@ -275,6 +275,8 @@ class SportsCatalogTest {
         assertEquals(mapOf(SportsVerdict.Verdict.Accept to 3, SportsVerdict.Verdict.Offer to 2, SportsVerdict.Verdict.Reject to 6), reached(1001))
         assertEquals(mapOf(SportsVerdict.Verdict.Accept to 2, SportsVerdict.Verdict.Offer to 1, SportsVerdict.Verdict.Reject to 5), reached(1605))
         assertEquals(mapOf(SportsVerdict.Verdict.Reject to 6), reached(1016), "six results, none for this game")
+        // The fight night's undated names as scene releases write them, one for each part and another part's for the other.
+        assertEquals(mapOf(SportsVerdict.Verdict.Accept to 2, SportsVerdict.Verdict.Reject to 2), reached(1902))
         // One result-word name in each family, left out as such.
         val results = releases.filter { release -> release.verdicts.any { it.kind == "a name with a result" } }.map { it.verdicts.first().eventId }
         assertEquals(setOf(1016, 1615, 1901, 2201), results.toSet())
@@ -447,6 +449,7 @@ class SportsCatalogTest {
             put(1605, listOf("Formula 1 Kestrel", "Formula1 Kestrel") to listOf("Formula 1 20"))
             (1611..1615).forEach { put(it, listOf("Formula 1 Vellmar", "Formula1 Vellmar") to listOf("Formula 1 19")) }
             put(1901, listOf("UFC 999", "UFC {bc}") to listOf("UFC Quessel Halde"))
+            put(1902, listOf("UFC Brisk Loam", "UFC {bc}") to emptyList())
             (2001..2003).forEach { put(it, listOf("Velmora Monday Brawl {bc}") to listOf("Velmora Monday Brawl")) }
             put(2101, listOf("Halde Brisk") to emptyList())
             put(2201, listOf("Kestrel Men's Downhill", "FIS Alpine Ski World Cup {bc}") to listOf("Kestrel Men's Downhill {year}"))

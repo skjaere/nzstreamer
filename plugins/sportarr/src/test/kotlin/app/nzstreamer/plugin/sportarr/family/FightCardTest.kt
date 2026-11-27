@@ -653,7 +653,19 @@ class FightCardTest {
         val rows = Catalogue.verdicts(Family.FightCard)
         val wrong = rows.mapNotNull { (release, verdict) -> Catalogue.disagreement(matcher, release, verdict) }
         assertTrue(wrong.isEmpty(), wrong.joinToString("\n"))
-        assertEquals(32, rows.size, "UFC 999's eight names for each of its parts, the matchup's two and the weekly show's six verdicts")
+        assertEquals(
+            36,
+            rows.size,
+            "UFC 999's eight names for each of its parts, the fight night's two for each of its, the matchup's two and the weekly show's six verdicts",
+        )
+        val night = rows.filter { (_, verdict) -> verdict.eventId == 1902 }.groupBy({ it.second.part }, { it.first.id to it.second.verdict.name })
+        assertEquals(
+            mapOf(
+                Parts.PRELIMS to listOf("ufc-fight-night-main-card" to "Reject", "ufc-fight-night-prelims" to "Accept"),
+                Parts.MAIN_CARD to listOf("ufc-fight-night-main-card" to "Accept", "ufc-fight-night-prelims" to "Reject"),
+            ),
+            night.mapValues { (_, verdicts) -> verdicts.sortedBy { it.first } },
+        )
         val mainCard = rows.filter { (_, verdict) -> verdict.eventId == 1901 && verdict.part == Parts.MAIN_CARD }
         assertEquals(
             setOf("ufc-999-main-card", "ufc-999-ppv", "ufc-999-full-event"),
