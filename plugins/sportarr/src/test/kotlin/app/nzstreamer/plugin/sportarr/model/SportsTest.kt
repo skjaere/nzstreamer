@@ -58,6 +58,8 @@ class SportsTest {
             parts(combat),
         )
         assertEquals(parts(UFC), parts(combat), "as under Fighting")
+        // Read from the league's Combat: the card's part names alone would make it a fight card without the word.
+        assertEquals(FamilyFrom.LeagueSport, sports(combat to listOf(ufc999().copy(sport = "Combat"))).events.single().familyFrom)
     }
 
     @Test
