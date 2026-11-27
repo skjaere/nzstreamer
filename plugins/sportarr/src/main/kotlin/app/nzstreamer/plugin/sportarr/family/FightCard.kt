@@ -281,9 +281,9 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
     /**
      * One card as its title gives it: its [type]; its [organisation], the word a numbered card's number or a fight night's
      * words follow ("UFC"), else a premium event's league's first word; its [number]; its two [sides] as written (its
-     * title's, else Sportarr's home and away names) and the last word of each, its [surnames], which are its [fighters] in
-     * either order; its title's distinctive [words] (no number, date word, article or "vs", nor the "Night" of a
-     * "Night 2"); a premium event's [night]; and its numbers but the night's, an edition's ([editions]).
+     * title's, else Sportarr's home and away names) and the last word of each but a "Jr." or "II", its [surnames], which
+     * are its [fighters] in either order; its title's distinctive [words] (no number, date word, article or "vs", nor the
+     * "Night" of a "Night 2"); a premium event's [night]; and its numbers but the night's, an edition's ([editions]).
      * [identity] is what another card's names would have to hold to be this one's: its surnames, or a show's title words.
      */
     private class Card(val event: SportsEvent) {
@@ -314,8 +314,11 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
         val sides: List<String> = titleSides()
             ?: listOfNotNull(event.homeTeamName, event.awayTeamName).map(String::trim).takeIf { it.size == 2 && it.all(String::isNotEmpty) }.orEmpty()
 
-        // A side of one letter or a number alone has no surname (L-SF7).
-        val surnames: List<Token> = sides.mapNotNull { side -> Tokens.of(side).lastOrNull { it.hasLetter }?.takeIf { it.word.length > 1 } }
+        // A side of one letter or a number alone has no surname (L-SF7), and a generation's or a rematch's word after one
+        // ("Jr.", "II") is none: the word before it is, so a rematch titled with one has its first meeting's two fighters.
+        val surnames: List<Token> = sides.mapNotNull { side ->
+            Tokens.of(side).lastOrNull { it.hasLetter && it.word !in SUFFIXES }?.takeIf { it.word.length > 1 }
+        }
 
         /** Its two surnames in either order, sorted, both kept where the sides share one; null without two. */
         val fighters: List<String>? = surnames.map { it.word }.sorted().takeIf { it.size == 2 }
@@ -372,6 +375,9 @@ class FightCard(private val sports: Sports) : FamilyMatcher {
 
         /** What follows a side in a title: " - Heavyweight", " (Title Fight)". */
         val NOTES = listOf(" - ", " – ", " (", " | ")
+
+        /** What may follow a fighter's surname on a side: a generation's word, or a rematch's numeral ("Halde II"). */
+        val SUFFIXES = setOf("jr", "sr", "ii", "iii", "iv")
 
         /** Words a title holds that names may leave out or write otherwise. */
         val FILLER = setOf("a", "an", "the", "of", "and", "vs", "v", "at", "@")

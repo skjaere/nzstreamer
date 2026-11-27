@@ -447,6 +447,39 @@ class FightCardTest {
     }
 
     @Test
+    fun `a roman numeral or a Jr after a side is no surname, so a rematch titled with one is still a rematch`() {
+        val rematch = sports(
+            UFC to listOf(
+                ufc999(),
+                on(UFC, 44, at("2026-12-05T23:00"), "UFC 1004: Quessel vs. Halde II", parts = listOf("Early Prelims", "Prelims", "Main Card")),
+            ),
+        )
+        val matcher = FightCard(rematch)
+        val noDate = offered("No date in the name")
+        // The rematch's undated name, its "2" no number of a card's: either card's, so a possible match for both.
+        val firstRows = listOf(
+            "UFC.Quessel.vs.Halde.2.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD, noDate),
+            "UFC.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD, noDate),
+            "UFC.999.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD),
+            "UFC.1004.Quessel.vs.Halde.2.1080p.WEB.h264-KESTREL" to every(other),
+        )
+        assertEquals("", wrong(rematch.byId(31), firstRows, matcher))
+        val secondRows = listOf(
+            "UFC.Quessel.vs.Halde.2.1080p.WEB.h264-KESTREL" to only(Parts.MAIN_CARD, noDate),
+            "UFC.1004.Quessel.vs.Halde.2.Prelims.1080p.WEB.h264-KESTREL" to only(Parts.PRELIMS),
+            "UFC.999.Quessel.vs.Halde.1080p.WEB.h264-KESTREL" to every(other),
+        )
+        assertEquals("", wrong(rematch.byId(44), secondRows, matcher))
+
+        // Each such word after a side leaves the word before it the surname, which the card is searched by.
+        listOf("Halde II", "Halde III", "Halde IV", "Halde Jr.", "Halde Jr", "Halde Sr.").forEach { side ->
+            val list = sports(UFC to listOf(on(UFC, 45, at("2026-12-05T23:00"), "UFC 1005: Quessel vs. $side", parts = listOf("Prelims", "Main Card"))))
+            val event = list.byId(45)
+            assertEquals("UFC Quessel Halde", FightCard(list).queries(event, event.headline).then, side)
+        }
+    }
+
+    @Test
     fun `a card whose title names no sides is read by Sportarr's home and away names where it sends both`() {
         fun untitled(title: String, home: String?, away: String?, parts: List<String> = listOf("Prelims", "Main Card")) =
             sports(UFC to listOf(on(UFC, 43, at("2026-11-28T19:00"), title, parts = parts).copy(homeTeamName = home, awayTeamName = away)))
