@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.2.0](https://github.com/skjaere/nzstreamer/compare/plugin-sportarr-v0.1.1...plugin-sportarr-v0.2.0) (2026-11-28)
+
+
+### Features
+
+* **sportarr:** a switch for fight cards from Wikipedia on Sportarr settings ([6811e8b](https://github.com/skjaere/nzstreamer/commit/6811e8b24c324f279e6b1595d496e72f525b1c86))
+* **sportarr:** find a UFC event's Wikipedia page by its title and date, a few requests at most ([419036d](https://github.com/skjaere/nzstreamer/commit/419036d436d5d95c1d9ab7002ac6e9b3e5449d4f))
+* **sportarr:** keep each UFC event's fight card and read it again only when it may have changed ([d56eac4](https://github.com/skjaere/nzstreamer/commit/d56eac48a8908188c075b80b1c554b0eed61e7b4))
+* **sportarr:** read a UFC fight card's bouts from its Wikipedia page, leaving every result out ([dd5cd7f](https://github.com/skjaere/nzstreamer/commit/dd5cd7fa407341249e9e9aac1dce3ea3f2b76928))
+* **sportarr:** show a UFC card's bouts under its parts, with their credit, on phones and TVs ([4bf1c7a](https://github.com/skjaere/nzstreamer/commit/4bf1c7a6af185da85a23e23ec156a013e754f023))
+
+
+### Bug fixes
+
+* **sportarr:** ignore a held OK on Try again for as long as a remote over CEC keeps sending it ([5c92bb2](https://github.com/skjaere/nzstreamer/commit/5c92bb2fd7183894d67a278a774f3557166dc59d))
+* **sportarr:** keep the focus on a TV bout as its part starts ([f92a3fa](https://github.com/skjaere/nzstreamer/commit/f92a3fa0f5dd6d5605a6aaea4852fd3fbf508d8a))
+* **sportarr:** keep the phone's credit sheet open while the credit's row is out of view ([d0d986c](https://github.com/skjaere/nzstreamer/commit/d0d986cfc4e0ea76a2a0837af6f2d1f95054f413))
+* **sportarr:** name no league in the log lines about Wikipedia's list of events ([4053859](https://github.com/skjaere/nzstreamer/commit/4053859148bab0fc9fff31537f6ae09dcc073c76))
+* **sportarr:** pass over a section's notice box above a fight card's table ([c4ce798](https://github.com/skjaere/nzstreamer/commit/c4ce7980fee6cf02dcaa8f0f7a559738cc8db6ea))
+* **sportarr:** play nothing on a double or held OK on a TV card's Try again ([f1393d7](https://github.com/skjaere/nzstreamer/commit/f1393d7cd7c1084d451100748ba8ea2186d8e40c))
+* **sportarr:** put a part the event lacks under its next part, though the table has no header for that one ([8c79536](https://github.com/skjaere/nzstreamer/commit/8c795368e4b552200d1b5308a90aae88172a0079))
+* **sportarr:** read a fight card's table row by row, never putting its method, round or time together ([f93c9f8](https://github.com/skjaere/nzstreamer/commit/f93c9f8847c93fe362cf94dfd6c952f2900c0e67))
+* **sportarr:** read a Retry-After in HTTP's older date forms too, so Wikipedia is never asked sooner than it said ([58cce3d](https://github.com/skjaere/nzstreamer/commit/58cce3df6aa4bf077c4b04eb4039358742681b90))
+* **sportarr:** read no fight card for a UFC event that Sportarr gives one part ([58f33fa](https://github.com/skjaere/nzstreamer/commit/58f33fad2ebd39b66b02a8e2a2fe8a6269949268))
+* **sportarr:** read runs of ampersands, brackets and letters in a page in time in step with their length ([a751018](https://github.com/skjaere/nzstreamer/commit/a751018356c9dd743ddc35045611a51a9c073976))
+* **sportarr:** set no title flag from a note that begins with a count of times, as only results write one ([a13ff0f](https://github.com/skjaere/nzstreamer/commit/a13ff0f88029eb84fb51b41626e92a0ddc80bc05))
+
 ## [0.1.1](https://github.com/skjaere/nzstreamer/compare/plugin-sportarr-v0.1.0...plugin-sportarr-v0.1.1) (2026-11-27)
 
 
