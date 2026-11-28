@@ -54,7 +54,8 @@ import kotlin.concurrent.withLock
  * whether a client asked for gzip and whether it sent a cookie back.
  *
  * Its switches and counts live on the fake Sportarr's control path, one lease and one reset for both
- * ([FakeSportarrServer]), which calls [form], [usualForms], [fail], [hold], [counts] and [reset]. It listens on the
+ * ([FakeSportarrServer]), which calls [form], [usualForms], [fail], [hold], [counts] and [reset]. A request held is
+ * answered as every switch stands when the hold lets it go, its article's form as much as a failure. It listens on the
  * loopback address alone. Development only. [onHold] is told each time a request starts waiting out a hold: a test's seam.
  */
 class FakeWikipediaServer(
@@ -145,8 +146,9 @@ class FakeWikipediaServer(
 
     /**
      * The requests: `paths`, how many asked each path (as sent, percent-encoded), and `requests`, the last [KEPT_REQUESTS]
-     * in order, each with its path and query, the event and the form its title named (null for any other), its status
-     * (null while held), its User-Agent, whether it asked for gzip and whether it sent a cookie.
+     * in order, each with its path and query, the event and the form its title named (null for any other; while it is
+     * held, the form it came under, then the one it was answered in), its status (null while held), its User-Agent,
+     * whether it asked for gzip and whether it sent a cookie.
      */
     fun counts(): JsonObject = synchronized(lock) {
         buildJsonObject {
@@ -157,12 +159,12 @@ class FakeWikipediaServer(
 
     // The answers.
 
-    /** A request as the counts keep it; its [status] is set once it is answered. */
+    /** A request as the counts keep it; its [form] is set again, and its [status] set, once it is answered. */
     private class Asked(
         val path: String,
         val query: String?,
         val event: Int?,
-        val form: WikiForm?,
+        @Volatile var form: WikiForm?,
         val userAgent: String?,
         val gzip: Boolean,
         val cookie: Boolean,
@@ -187,10 +189,10 @@ class FakeWikipediaServer(
     private fun answer(exchange: HttpExchange) {
         val uri = exchange.requestURI
         val title = titleOf(uri.path)
-        val named = title?.let(::named)
+        val arrived = title?.let(::named)
         val gzip = asksGzip(exchange.requestHeaders["Accept-Encoding"].orEmpty())
         val request = Asked(
-            uri.rawPath, uri.rawQuery, named?.article?.event, named?.form, exchange.requestHeaders.getFirst("User-Agent"), gzip,
+            uri.rawPath, uri.rawQuery, arrived?.article?.event, arrived?.form, exchange.requestHeaders.getFirst("User-Agent"), gzip,
             exchange.requestHeaders.containsKey("Cookie"),
         )
         synchronized(lock) {
@@ -202,6 +204,9 @@ class FakeWikipediaServer(
             if (holding) onHold()
             while (holding) released.await()
         }
+        // Every switch as it stands now the hold let the request go: a form switched while it waited is the one it gets.
+        val named = title?.let(::named)
+        request.form = named?.form
         val failure = failing
         val served = named?.served
         val (status, body) = when {

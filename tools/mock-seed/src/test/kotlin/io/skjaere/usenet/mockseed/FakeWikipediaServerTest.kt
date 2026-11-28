@@ -424,6 +424,25 @@ class FakeWikipediaServerTest {
     }
 
     @Test
+    fun `a held request is answered as the switches stand when the hold lets it go, its article's form among them`() {
+        switch("wiki-hold")
+        val missing = http.sendAsync(request("/wiki/UFC_999", false, AGENT, wiki.port), HttpResponse.BodyHandlers.ofString())
+        assertTrue(holds.tryAcquire(10, TimeUnit.SECONDS), "the request reached the hold")
+        val bare = http.sendAsync(request("/wiki/UFC_Fight_Night_888", false, AGENT, wiki.port), HttpResponse.BodyHandlers.ofString())
+        assertTrue(holds.tryAcquire(10, TimeUnit.SECONDS), "the second request reached the hold")
+        switch("wiki-form?event=1901&form=missing")
+        switch("wiki-form?event=1902&form=bare")
+        switch("wiki-hold?on=false")
+        assertEquals(404, missing.get(10, TimeUnit.SECONDS).statusCode(), "missing, as switched while it was held")
+        val page = bare.get(10, TimeUnit.SECONDS)
+        assertEquals(200, page.statusCode())
+        assertNull(cardTable(page.body()), "bare, as switched while it was held")
+        val asked = counts().getValue("wiki").jsonObject.getValue("requests").jsonArray.map { it.jsonObject }.associateBy { it.getValue("path").jsonPrimitive.content }
+        assertEquals("missing" to 404, asked.getValue("/wiki/UFC_999").let { it.getValue("form").jsonPrimitive.content to it.getValue("status").jsonPrimitive.int })
+        assertEquals("bare" to 200, asked.getValue("/wiki/UFC_Fight_Night_888").let { it.getValue("form").jsonPrimitive.content to it.getValue("status").jsonPrimitive.int })
+    }
+
+    @Test
     fun `the lease and the reset are the fake Sportarr's, one set for both fakes`() {
         switch("take?by=phone34-test")
         switch("wiki-form?event=1901&form=bare")
