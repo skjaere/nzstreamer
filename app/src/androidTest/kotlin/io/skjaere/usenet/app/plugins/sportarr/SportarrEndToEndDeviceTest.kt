@@ -4,6 +4,7 @@ import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
@@ -43,6 +44,7 @@ import io.skjaere.usenet.app.settings.PluginsPage
 import io.skjaere.usenet.app.ui.AppTheme
 import io.skjaere.usenet.app.ui.FormFactor
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -68,8 +70,9 @@ import java.util.Locale
  * Sports is now a tab after Discover."; Open Sports, the setup's first screen; Test against the fake Sportarr and Save;
  * the list; (mock) a game's page from its row and its Play, a release the plugin accepts from the sports indexer,
  * played in the player through the mock and stopped part-way; Home's Up next with it; and Remove in Settings › Plugins:
- * the tab, the plugin's files and both its secrets gone, the game's watch row kept, Home's Up next with it still. And
- * M-size: sportarr.apk's size, through the instrumentation's status.
+ * the tab, the plugin's files and both its secrets gone, the game's watch row kept, Home's Up next with it still. Installed
+ * so, UFC 999's page from its row shows its bouts from the fake Wikipedia, read once with NZStreamer's User-Agent, and a
+ * bout's tap plays its part (L-B13, W5). And M-size: sportarr.apk's size, through the instrumentation's status.
  *
  * The settings, the watch row and the fake's switches the test changes are put back as they were; PluginStateRule takes
  * the plugin out whatever the outcome. TMDB is a strict fake: what Home asks of other titles is refused, never sent.
@@ -143,45 +146,10 @@ class SportarrEndToEndDeviceTest {
         val game = library.event(GAME)
         val accepted = library.found(GAME, CatalogueEvent.FULL, "accept").map { it.first }.filter { it.whole }.map { it.name }
         sportarr.forget(game.part())
-        val size = SportarrBuild.bytes().size
         theBuildsCodeIsItsVersionsByTheConvention()
         server.list(Listed(SportarrBuild.listing, SportarrBuild.versionName))
         showTheApp()
-        val activity = compose.activity
-        val app = context.container
-
-        // Settings › Plugins: its listing's name and summary, its version and its size.
-        openPlugins()
-        waitFor(hasText(SportarrBuild.SUMMARY))
-        assertTrue("its name", exists(hasText(SportarrBuild.NAME)))
-        assertTrue("its version and size", exists(hasText("Version ${SportarrBuild.versionName} · ${megabytes(size)} MB")))
-
-        // Install, to its end: its tab, with nothing made again and nothing of the debug build's own Sportarr stored.
-        check(!PluginDevSecrets.seeding) { "The runner left the plugins' dev seeding on: an install would store local.properties' values" }
-        press("Install")
-        waitFor(hasText("Installed. $SPORTS is now a tab after ${pluginTabsFollow(FormFactor.Phone)}."))
-        val installed = listed("running") { it.status is PluginStatus.Running }
-        assertEquals("the listed version", SportarrBuild.versionCode to SportarrBuild.versionName, installed.versionCode to installed.versionName)
-        assertTrue("its file from its release's address", server.path(SportarrBuild.versionName, SPORTARR) in server.requests)
-        assertSame("the same activity", activity, compose.activity)
-        assertSame("the same app", app, context.container)
-        assertFalse("an address or a key stored by the install", stored("url") || stored("key"))
-
-        // Open Sports: its tab chosen, the setup's first screen.
-        press("Open $SPORTS")
-        waitFor(hasText(INTRO))
-        assertTrue("its tab chosen", compose.onNode(barTab(SPORTS)).fetchSemanticsNode().config.getOrNull(SemanticsProperties.Selected) == true)
-
-        // The setup: Test against the fake Sportarr, then Save; the list, read at once.
-        type(addressField, SportsFakes.URL)
-        type(keyField, SportsFakes.KEY)
-        press(button(TEST))
-        waitFor(hasText("Connected · Sportarr ${sportarr.version()}"))
-        press(button(SAVE))
-        waitFor(sideTab(RECENT))
-        waitFor(hasText(game.title), LIST_WAIT_MS)
-        assertTrue("its address and key stored", stored("url") && stored("key"))
-        assertEquals("canary values on the list", emptyList<String>(), compose.canaries())
+        installFromTheList(game.title)
 
         // (mock) The game's page from its row, and Play: a release the plugin accepts, from the sports indexer, played in
         // the player through the mock and stopped part-way.
@@ -222,6 +190,95 @@ class SportarrEndToEndDeviceTest {
         waitFor(homeShown)
         assertFalse("its tab gone", exists(barTab(SPORTS)))
         scrollToOnHome(hasContentDescription("Resume ${game.title}"))
+    }
+
+    /**
+     * (mock) Installed from the list and set up, UFC 999's page from its row: its bouts under their parts as the fake
+     * Wikipedia's card has them, the credit, and one request for them with NZStreamer's User-Agent (W2), through the app's
+     * own wiring. A bout's tap plays its part as the part's row does (W5): the part's play, a release the plugin accepts
+     * for it, by the card's title and the part.
+     */
+    @Test
+    fun theRealPluginFromAListShowsUfc999sBoutsAndABoutPlaysItsPart() {
+        sportarr.assumeUp(plays = true)
+        sportarr.hold()
+        sportarr.assumeWikipedia()
+        sportarr.indexers(plays = true)
+        val card = library.event(UFC_999)
+        val prelims = card.part("prelims")
+        sportarr.forget(prelims)
+        server.list(Listed(SportarrBuild.listing, SportarrBuild.versionName))
+        showTheApp()
+        installFromTheList(card.title)
+        assertEquals("requests for the list", 0, sportarr.wikiRequests().size)
+
+        // UFC 999's page from its row: its bouts under their parts, in the order fought, and the credit.
+        compose.onAllNodes(list)[0].performScrollToNode(row(card.title))
+        compose.onNode(row(card.title)).performClick()
+        waitFor(bout(MAIN_EVENT))
+        val tops = UFC_999_BOUTS.map { node(bout(it)).positionInRoot.y }
+        assertEquals("UFC 999's bouts in the order fought", tops.sorted(), tops)
+        scrollTo(hasText(CREDIT) and hasClickAction())
+        val asked = sportarr.wikiRequests()
+        assertEquals("one request: $asked", listOf("/wiki/UFC_999"), asked.map { it.getValue("path").jsonPrimitive.content })
+        val agent = asked.single().getValue("userAgent").jsonPrimitive.content
+        assertTrue("NZStreamer's User-Agent: $agent", USER_AGENT.matches(agent))
+        assertEquals("canary values on the page", emptyList<String>(), compose.canaries())
+
+        // (mock) A bout's tap: its part's play, as the part's row plays it.
+        val tapped = bout("Grisholm vs. Pellicot")
+        assertEquals("what it plays, as TalkBack says it", "Play Prelims", node(tapped).config.getOrNull(SemanticsActions.OnClick)?.label)
+        sportarr.paceSearches()
+        compose.onNode(tapped).performScrollTo().performClick()
+        val launch = sportarr.launchOf(prelims)
+        val accepted = library.found(UFC_999, "prelims", "accept").map { it.first.name }
+        assertTrue("a release the plugin accepts for the prelims: ${launch.release.title}", launch.release.title in accepted)
+        assertEquals("the part's play, by the card's title and the part", "${card.title} · Prelims", launch.watch.title)
+        container.playback.cancel()
+    }
+
+    /**
+     * Settings › Plugins: the listing's name, summary, version and size; Install to its end, its tab, with nothing made
+     * again and nothing of the debug build's own Sportarr stored; Open Sports, the setup's first screen; Test against the
+     * fake Sportarr and Save; the list, read at once, with [title]'s row.
+     */
+    private fun installFromTheList(title: String) {
+        val size = SportarrBuild.bytes().size
+        val activity = compose.activity
+        val app = context.container
+
+        // Settings › Plugins: its listing's name and summary, its version and its size.
+        openPlugins()
+        waitFor(hasText(SportarrBuild.SUMMARY))
+        assertTrue("its name", exists(hasText(SportarrBuild.NAME)))
+        assertTrue("its version and size", exists(hasText("Version ${SportarrBuild.versionName} · ${megabytes(size)} MB")))
+
+        // Install, to its end: its tab, with nothing made again and nothing of the debug build's own Sportarr stored.
+        check(!PluginDevSecrets.seeding) { "The runner left the plugins' dev seeding on: an install would store local.properties' values" }
+        press("Install")
+        waitFor(hasText("Installed. $SPORTS is now a tab after ${pluginTabsFollow(FormFactor.Phone)}."))
+        val installed = listed("running") { it.status is PluginStatus.Running }
+        assertEquals("the listed version", SportarrBuild.versionCode to SportarrBuild.versionName, installed.versionCode to installed.versionName)
+        assertTrue("its file from its release's address", server.path(SportarrBuild.versionName, SPORTARR) in server.requests)
+        assertSame("the same activity", activity, compose.activity)
+        assertSame("the same app", app, context.container)
+        assertFalse("an address or a key stored by the install", stored("url") || stored("key"))
+
+        // Open Sports: its tab chosen, the setup's first screen.
+        press("Open $SPORTS")
+        waitFor(hasText(INTRO))
+        assertTrue("its tab chosen", compose.onNode(barTab(SPORTS)).fetchSemanticsNode().config.getOrNull(SemanticsProperties.Selected) == true)
+
+        // The setup: Test against the fake Sportarr, then Save; the list, read at once.
+        type(addressField, SportsFakes.URL)
+        type(keyField, SportsFakes.KEY)
+        press(button(TEST))
+        waitFor(hasText("Connected · Sportarr ${sportarr.version()}"))
+        press(button(SAVE))
+        waitFor(sideTab(RECENT))
+        waitFor(hasText(title), LIST_WAIT_MS)
+        assertTrue("its address and key stored", stored("url") && stored("key"))
+        assertEquals("canary values on the list", emptyList<String>(), compose.canaries())
     }
 
     /**
@@ -336,6 +393,25 @@ class SportarrEndToEndDeviceTest {
     private fun row(title: String) = hasText(title) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button) and
         SemanticsMatcher("with its time") { node -> node.config.getOrNull(SemanticsProperties.Text).orEmpty().any { TIME.matches(it.text) } }
 
+    /** A bout's row by its names: the node that plays it, its names its first words. */
+    private fun bout(names: String) = hasText(names) and SemanticsMatcher("a bout's row") { node ->
+        node.config.getOrNull(SemanticsProperties.Text).orEmpty().firstOrNull()?.text == names
+    }
+
+    /** The one node [matcher] finds; its [SemanticsNode.positionInRoot] places it, as its bounds are cut at the screen's edge. */
+    private fun node(matcher: SemanticsMatcher): SemanticsNode = compose.onAllNodes(matcher).fetchSemanticsNodes().single()
+
+    /** The page's [matcher] brought into view, its list scrolled to it. */
+    private fun scrollTo(matcher: SemanticsMatcher) {
+        val deadline = SystemClock.elapsedRealtime() + PLUGIN_WAIT_MS
+        while (!exists(matcher)) {
+            runCatching { compose.onAllNodes(hasScrollToNodeAction()).onFirst().performScrollToNode(matcher) }
+            assertTrue("never shown: ${matcher.description}; shown: ${compose.screenWords()}", SystemClock.elapsedRealtime() < deadline)
+            compose.waitForIdle()
+        }
+        compose.onNode(matcher).performScrollTo()
+    }
+
     /** The list itself: the column that scrolls up and down. */
     private val list = SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange) and
         SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)
@@ -361,6 +437,20 @@ class SportarrEndToEndDeviceTest {
     private companion object {
         /** Lantern Bay FC's Premier League game, aired yesterday at the fake's anchor, with releases the plugin accepts. */
         const val GAME = 1001
+
+        /** The library's UFC 999, yesterday, whose card the fake Wikipedia has (L-B12). */
+        const val UFC_999 = 1901
+        const val MAIN_EVENT = "Quessel vs. Halde"
+        const val CREDIT = "Fight card from Wikipedia"
+
+        /** UFC 999's bouts in the order fought, as the fake Wikipedia's card and the reader give them. */
+        val UFC_999_BOUTS = listOf(
+            "Ambrel vs. Savrin", "Durnay vs. Wexmoor", "Kjelsen vs. Tollerup", "Ferlund vs. Tarnoy", "Grisholm vs. Pellicot", "Kestvik vs. Velmar",
+            "Brenneck vs. Marhoff", "Lindqvar vs. Zelinek", "Ostrem vs. Tessmar", "Rendahl vs. Varnholt", "Brisk vs. Loam", MAIN_EVENT,
+        )
+
+        /** NZStreamer's User-Agent on a plugin's requests, its contact the public repository (W2). */
+        val USER_AGENT = Regex("""NZStreamer/\d+\.\d+\.\d+ \(https://github\.com/skjaere/nzstreamer\)""")
 
         const val SPORTS = "Sports"
         const val RECENT = "Recent"
