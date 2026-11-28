@@ -127,6 +127,18 @@ class BoutTableTest {
     }
 
     @Test
+    fun `a section's notice box between the heading and the card is passed over, and the card read`() {
+        // A maintenance notice is a table of its own at the section's top: no part header, no bout.
+        val box = """<table class="box-Update plainlinks metadata ambox ambox-content" role="presentation"><tbody><tr>""" +
+            """<td class="mbox-image"><span>i</span></td><td class="mbox-text"><div>This section needs to be brought up to """ +
+            """date. Please help with <a href="/wiki/Kestrel">sources</a>.</div></td></tr></tbody></table>"""
+        Form.entries.forEach { form ->
+            assertEquals(UFC_999_CARD, card(article(form = form, cardTable = box + "\n" + Fixtures.table(Fixtures.UFC_999, form))), "$form")
+        }
+        assertEquals(BoutTable.Read.Missing, read(article(cardTable = box)), "a notice and no card")
+    }
+
+    @Test
     fun `nothing but the card's table is read, so no name from the lead, Background, Announced bouts or Bonus awards`() {
         Form.entries.forEach { form ->
             val names = card(article(form = form)).parts.flatMap { it.bouts }.flatMap { listOf(it.first, it.second) }

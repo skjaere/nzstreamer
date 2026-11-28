@@ -7,7 +7,8 @@ import java.util.Locale
  * An event's fight card from its Wikipedia article (L-B2, L-B3), with every result left out as it is read (W6, L-B4).
  *
  * It reads one thing of the page: the first heading (an `<h2>`, or the legacy parser's mw-headline span) whose id starts
- * "Fight_card", "Results" or "Card", and the first table after it before the next `<h2>`. Nothing else: not the lead,
+ * "Fight_card", "Results" or "Card", and the first table after it before the next `<h2>` that has a part's header or a
+ * bout's row, so a section's notice box (a table of its own) above the card is passed over. Nothing else: not the lead,
  * Background, Announced bouts or Bonus awards, no other table and no link. In that table a part's header is a `<th>` across
  * six columns or more; a bout's row has four `<td>` cells or more, the third "vs.", "vs" or "def.": its weight class, its
  * fighters (columns 2 and 4) and its notes (column 8), each cell at the column the cells before it end on. The separator,
@@ -35,8 +36,7 @@ internal object BoutTable {
      * another part.
      */
     fun read(page: String, article: String, title: String, parts: List<String>): Read {
-        val rows = cardRows(page) ?: return Read.Missing
-        val groups = groups(rows, title)
+        val groups = cardGroups(page, title) ?: return Read.Missing
         if (groups.all { it.bouts.isEmpty() }) return Read.Missing
         val named = groups.mapNotNull { it.id }.toSet()
         if (Parts.MAIN_CARD !in named || named.none { it != Parts.MAIN_CARD }) return Read.NotOut
@@ -53,8 +53,11 @@ internal object BoutTable {
         return if (card.parts.isEmpty()) Read.Missing else Read.Out(card)
     }
 
-    /** The rows of the first table after the card's heading and before the next `<h2>`; null where there is none. */
-    private fun cardRows(page: String): List<HtmlRow>? {
+    /**
+     * The parts of the first table after the card's heading, before the next `<h2>`, that has a part's header or a bout
+     * (any other, a notice box, passed over); null where none has.
+     */
+    private fun cardGroups(page: String, title: String): List<Group>? {
         val reader = HtmlReader(page)
         var headed = false
         while (true) {
@@ -63,7 +66,7 @@ internal object BoutTable {
             when {
                 !headed -> headed = cardHeading(token)
                 token.name == "h2" -> return null
-                token.name == "table" && !token.selfClosing -> return reader.table()
+                token.name == "table" && !token.selfClosing -> groups(reader.table(), title).takeIf { it.isNotEmpty() }?.let { return it }
             }
         }
     }
