@@ -50,7 +50,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  * on it; the credit's sheet, a double OK leaving it open with Close focused, Close and Back closing it with the focus back
  * on the credit; an upcoming card's bouts taking the focus, OK on one playing nothing; and the states: Reading with the
  * first focus on the top button, no card's line taking no focus, and Can't reach's Try again, reached by Down from the last
- * part, the focus on that part as the bouts come, a double OK on it playing nothing.
+ * part, the focus on that part as the bouts come, a double OK on it playing nothing; before the start by Right from the
+ * line in the buttons' place, the focus on the last part's first bout as the bouts come.
  *
  * The fake's switches, the indexer and the provider the tests set and the watch rows are put back after each test, and the
  * plugin with its files and secrets removed. TMDB is a strict fake: what Home asks of other titles is refused, never sent.
@@ -313,6 +314,33 @@ class SportarrTvBoutsTest {
         waitFor(hasText(MAIN_EVENT))
         assertEquals("the focus on the last part's row", MAIN_CARD, remote.focused())
         assertEquals("one more request", listOf("503", "200"), sportarr.wikiRequests().map { it["status"].toString() })
+    }
+
+    /**
+     * Can't reach before the start, no part taking the focus: Try again is reached by Right from the line in the buttons'
+     * place; pressed once the 503's hold has passed, the focus waits on that line as the button goes, and is on the last
+     * part's first bout as the bouts come.
+     */
+    @Test
+    fun beforeTheStartTryAgainIsRightOfTheHeldLineAndTheBoutsTakeTheFocus() {
+        sportarr.switch("wiki-fail", "status=503")
+        sportarr.install()
+        val card = library.event(FIGHT_NIGHT)
+        openPage(card.title, upcoming = true)
+        waitFor(hasText(CANT_REACH))
+        val failedAt = SystemClock.elapsedRealtime()
+        waitForFocusOn(hasAnyDescendant(hasText(CARD_NOT_STARTED)), "its line")
+        assertEquals("Right from the held line", TRY_AGAIN, remote.press(KeyEvent.KEYCODE_DPAD_RIGHT))
+        sportarr.off("wiki-fail")
+        SystemClock.sleep((failedAt + HOLD_MS - SystemClock.elapsedRealtime()).coerceAtLeast(0))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        waitFor(hasText("Brisk vs. Loam"))
+        val mainCardsFirst = FIGHT_NIGHT_ORDER.first { it.startsWith("Brenneck vs. Pellicot") }
+        remote.waitForFocus(mainCardsFirst)
+        assertEquals(
+            "one more read: Sportarr's title, then the number's page",
+            listOf("503", "404", "200"), sportarr.wikiRequests().map { it["status"].toString() },
+        )
     }
 
     /**
