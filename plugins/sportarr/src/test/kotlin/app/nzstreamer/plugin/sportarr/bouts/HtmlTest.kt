@@ -95,6 +95,34 @@ class HtmlTest {
     }
 
     @Test
+    fun `a table read row by row hands each row on as it ends, a column left out holding no text, counted by its span`() {
+        val page = """<table><tr><th colspan="8">Main card</th></tr>""" +
+            """<tr><td>Lightweight</td><td>Quessel</td><td>vs.</td><td>Halde</td><td colspan="3"><a href="/wiki/Kestrel">Kestrel</a></td>""" +
+            """<td>For the title.</td></tr><tr><td>Flyweight</td><td colspan="2">Savrin</td><td>Ambrel</td><td>KO</td></tr></table><p>after</p>"""
+        val reader = HtmlReader(page)
+        reader.next()
+        val rows = ArrayList<List<Triple<String, Int, String?>>>()
+        // Columns 3 and 5 left out: a header is always kept, and a <td>'s column counts the spans of the <td>s before it.
+        reader.table(keep = { it != 3 && it != 5 }) { row -> rows += row.cells.map { Triple(it.text, it.columns, it.link?.href) } }
+        assertEquals<List<List<Triple<String, Int, String?>>>>(
+            listOf(
+                listOf(Triple("Main card", 8, null)),
+                listOf(
+                    Triple("Lightweight", 1, null), Triple("Quessel", 1, null), Triple("", 1, null), Triple("Halde", 1, null),
+                    Triple("", 3, null), Triple("For the title.", 1, null),
+                ),
+                listOf(Triple("Flyweight", 1, null), Triple("Savrin", 2, null), Triple("Ambrel", 1, null), Triple("", 1, null)),
+            ),
+            rows,
+        )
+        assertEquals("p", (reader.next() as HtmlToken.Start).name, "the reader left after the table")
+        // Every column kept, the rows read one by one are the table's rows.
+        val streamed = ArrayList<List<String>>()
+        HtmlReader(page).apply { next() }.table { row -> streamed += row.cells.map { it.text } }
+        assertEquals(texts(firstTable(page)), streamed)
+    }
+
+    @Test
     fun `a cell without its end tag ends at the next cell, row or the table's end`() {
         assertEquals(listOf(listOf("a", "b"), listOf("c")), texts(firstTable("<table><tr><td>a<td>b<tr><td>c</table>")))
         assertEquals(listOf(listOf("a", "b")), texts(firstTable("<table><tr><td>a</td><td>b")))

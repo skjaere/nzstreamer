@@ -11,8 +11,9 @@ import java.util.Locale
  * bout's row, so a section's notice box (a table of its own) above the card is passed over. Nothing else: not the lead,
  * Background, Announced bouts or Bonus awards, no other table and no link. In that table a part's header is a `<th>` across
  * six columns or more; a bout's row has four `<td>` cells or more, the third "vs.", "vs" or "def.": its weight class, its
- * fighters (columns 2 and 4) and its notes (column 8), each cell at the column the cells before it end on. The separator,
- * the method, round and time are never read, and the notes only for the title flag; none outlives its row.
+ * fighters (columns 2 and 4) and its notes (column 8), each cell at the column the cells before it end on. The method,
+ * round and time (columns 5 to 7) are never put together; the separator is read only to know a bout's row, and the
+ * notes only for the title flag. Each row is read as it ends and let go, so none of them outlives its row (L-B4).
  */
 internal object BoutTable {
     /** What the page's card says. */
@@ -66,7 +67,11 @@ internal object BoutTable {
             when {
                 !headed -> headed = cardHeading(token)
                 token.name == "h2" -> return null
-                token.name == "table" && !token.selfClosing -> groups(reader.table(), title).takeIf { it.isNotEmpty() }?.let { return it }
+                token.name == "table" && !token.selfClosing -> {
+                    val groups = Groups(title)
+                    reader.table(keep = { it in READ }, row = groups::add)
+                    if (groups.read.isNotEmpty()) return groups.read
+                }
             }
         }
     }
@@ -82,24 +87,28 @@ internal object BoutTable {
         val bouts = ArrayList<Bout>()
     }
 
-    /** The table's parts in its order, bouts before any header in a part of their own that names none. */
-    private fun groups(rows: List<HtmlRow>, title: String): List<Group> {
-        val groups = ArrayList<Group>()
-        var current: Group? = null
-        var mainSeen = false
-        rows.forEach { row ->
+    /**
+     * A table's parts in its order ([read]), as its rows come ([add]), each row let go once read: a part's header starts
+     * one, a bout joins the last, and bouts before any header are a part of their own that names none. [title] is the
+     * event's, which the main event's order may follow.
+     */
+    private class Groups(private val title: String) {
+        val read = ArrayList<Group>()
+        private var current: Group? = null
+        private var mainSeen = false
+
+        fun add(row: HtmlRow) {
             val header = row.cells.firstOrNull { it.header && it.columns >= HEADER_COLUMNS }
             if (header != null) {
-                current = Group(partOf(header.text)).also { groups += it }
-                return@forEach
+                current = Group(partOf(header.text)).also { read += it }
+                return
             }
             val group = current
             val main = !mainSeen && group?.id == Parts.MAIN_CARD
-            val bout = bout(row, main, title) ?: return@forEach
+            val bout = bout(row, main, title) ?: return
             if (main) mainSeen = true
-            (group ?: Group(null).also { groups += it; current = it }).bouts += bout
+            (group ?: Group(null).also { read += it; current = it }).bouts += bout
         }
-        return groups
     }
 
     /**
@@ -173,6 +182,9 @@ internal object BoutTable {
     }
 
     private const val HEADER_COLUMNS = 6
+
+    /** The columns of a bout's row put together: the weight class, the fighters, the separator and the notes. */
+    private val READ = setOf(1, 2, 3, 4, 8)
 
     /** A card's parts in running order, which every header's words map to one of. */
     private val RUNNING = listOf(Parts.EARLY_PRELIMS, Parts.PRELIMS, Parts.MAIN_CARD)

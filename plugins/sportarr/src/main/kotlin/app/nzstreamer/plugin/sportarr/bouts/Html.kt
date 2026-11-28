@@ -146,31 +146,39 @@ internal class HtmlReader(private val page: String) {
         return page.substring(from, i).lowercase(Locale.ROOT)
     }
 
+    /** The table whose start tag was just read, to its end, as [table] reads it: its rows, every column kept. */
+    fun table(): List<HtmlRow> = ArrayList<HtmlRow>().also { rows -> table { rows += it } }
+
     /**
-     * The table whose start tag was just read, to its end: its rows, each with its own cells, the reader left after it.
-     * A nested table's text is its cell's; its rows aren't this table's. A cell, row or table whose end tag is missing ends
-     * where the next one starts, or at the page's end. Inside a cell, `<sup>` (a reference or a note) is left out, and so
-     * is every bracketed mark ("[4]", "[a]") of its text.
+     * The table whose start tag was just read, to its end: each of its rows, with its own cells, handed to [row] as it
+     * ends, so a caller that keeps nothing of a row keeps none of its text; the reader left after the table. A `<td>`
+     * whose column [keep] refuses (where it starts, counting the spans of the `<td>`s before it in its row from 1) holds
+     * no text and no link: what is in it is never put together. A `<th>` is always kept. A nested table's text is its
+     * cell's; its rows aren't this table's. A cell, row or table whose end tag is missing ends where the next one starts,
+     * or at the page's end. Inside a cell, `<sup>` (a reference or a note) is left out, and so is every bracketed mark
+     * ("[4]", "[a]") of its text.
      */
-    fun table(): List<HtmlRow> {
-        val rows = ArrayList<HtmlRow>()
+    fun table(keep: (column: Int) -> Boolean = { true }, row: (HtmlRow) -> Unit) {
         var cells: ArrayList<HtmlCell>? = null
         var cell: CellBuilder? = null
         var depth = 1
         var marks = 0
+        // Where the row's next <td> starts.
+        var column = 1
 
         fun endCell() {
             marks = 0
             val built = cell ?: return
-            val row = cells ?: ArrayList<HtmlCell>().also { cells = it }
-            row.add(built.build())
+            val current = cells ?: ArrayList<HtmlCell>().also { cells = it }
+            current.add(built.build())
             cell = null
         }
 
         fun endRow() {
             endCell()
-            cells?.let { rows += HtmlRow(it) }
+            cells?.let { row(HtmlRow(it)) }
             cells = null
+            column = 1
         }
 
         while (true) {
@@ -191,7 +199,10 @@ internal class HtmlReader(private val page: String) {
                     token.name == "td" || token.name == "th" -> {
                         endCell()
                         if (cells == null) cells = ArrayList()
-                        cell = CellBuilder(token.name == "th", span(token.attributes["colspan"]), span(token.attributes["rowspan"]))
+                        val header = token.name == "th"
+                        val columns = span(token.attributes["colspan"])
+                        cell = CellBuilder(header, columns, span(token.attributes["rowspan"]), header || keep(column))
+                        if (!header) column += columns
                     }
                     else -> cell?.inner(token, marks)
                 }
@@ -210,19 +221,22 @@ internal class HtmlReader(private val page: String) {
             }
         }
         endRow()
-        return rows
     }
 
     /** A colspan or rowspan: its number, one where it is missing or unreadable, at most a thousand. */
     private fun span(value: String?): Int = value?.trim()?.toIntOrNull()?.coerceIn(1, MAX_SPAN) ?: 1
 
-    /** A cell as its tokens come: its text, a space where a tag breaks a line, and its first link outside its marks. */
-    private class CellBuilder(val header: Boolean, val columns: Int, val rows: Int) {
+    /**
+     * A cell as its tokens come: its text, a space where a tag breaks a line, and its first link outside its marks; none
+     * of them where it isn't [kept].
+     */
+    private class CellBuilder(val header: Boolean, val columns: Int, val rows: Int, val kept: Boolean) {
         private val text = StringBuilder()
         private var link: LinkBuilder? = null
         private var linkOpen = false
 
         fun text(words: String) {
+            if (!kept) return
             text.append(words)
             if (linkOpen) link?.text?.append(words)
         }
@@ -232,7 +246,7 @@ internal class HtmlReader(private val page: String) {
         /** A tag inside the cell; [marks] says how many `<sup>` it is inside. */
         fun inner(start: HtmlToken.Start, marks: Int) {
             if (start.name in BREAKS) space()
-            if (start.name == "a" && marks == 0 && link == null && !start.selfClosing) {
+            if (kept && start.name == "a" && marks == 0 && link == null && !start.selfClosing) {
                 link = LinkBuilder(start.attributes["href"].orEmpty(), start.attributes["class"].orEmpty())
                 linkOpen = true
             }
