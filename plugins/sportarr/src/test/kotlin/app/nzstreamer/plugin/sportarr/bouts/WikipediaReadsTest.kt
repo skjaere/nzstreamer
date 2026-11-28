@@ -29,6 +29,7 @@ import java.io.File
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -107,6 +108,23 @@ class WikipediaReadsTest {
     fun `a 429's Retry-After may be an HTTP date`() = runTest {
         val date = DateTimeFormatter.RFC_1123_DATE_TIME.format(now().plusSeconds(300).atOffset(ZoneOffset.UTC))
         heldFor(answering(429, mapOf("retry-after" to date)), 300, "429")
+    }
+
+    @Test
+    fun `a 429's Retry-After may be in either of the older HTTP date forms, which a recipient must still read`() = runTest {
+        /** The time [seconds] from now, written as [pattern] writes it. */
+        fun ahead(seconds: Long, pattern: String) = DateTimeFormatter.ofPattern(pattern, Locale.ENGLISH).format(now().plusSeconds(seconds).atOffset(ZoneOffset.UTC))
+        // rfc850-date ("Sunday, 22-Nov-26 12:05:00 GMT") and asctime-date ("Sun Nov 22 12:05:00 2026").
+        heldFor(answering(429, mapOf("retry-after" to ahead(300, "EEEE, dd-MMM-yy HH:mm:ss 'GMT'"))), 300, "429")
+        heldFor(answering(429, mapOf("retry-after" to ahead(240, "EEE MMM ppd HH:mm:ss yyyy"))), 240, "429")
+        // asctime's day of one digit comes after two spaces; a day nine days on is held for the hour at most.
+        heldFor(answering(429, mapOf("retry-after" to "Tue Dec  1 12:00:00 2026")), 3600, "429")
+        // A two-digit year more than fifty years on is the last such year gone by: a time past, which holds nothing.
+        val http = answering(429, mapOf("retry-after" to "Saturday, 01-Jan-94 00:00:00 GMT"))
+        val reads = reads(http)
+        assertEquals(CardRead.Failed("429"), reads.read(ufc999))
+        reads.read(ufc999)
+        assertEquals(2, http.requests.size, "a time in 1994 holds nothing")
     }
 
     @Test

@@ -13,8 +13,12 @@ import org.slf4j.LoggerFactory
 import java.time.DateTimeException
 import java.time.Duration
 import java.time.Instant
+import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeFormatterBuilder
+import java.time.temporal.ChronoField
+import java.util.Locale
 import kotlin.coroutines.CoroutineContext
 
 /** What a read of an event's fight card gave (L-B5, L-B6). */
@@ -139,8 +143,8 @@ internal sealed interface Fetch {
  * Wikipedia's requests through the host's [http] (L-B6): `/wiki/` addresses with no header of the plugin's (the host sends
  * its User-Agent, and OkHttp asks for gzip when the caller sets no Accept-Encoding), each answer read for what it means,
  * and the holds an answer asks for: no request before a 429's Retry-After (60 s without one), for 30 s after a 5xx (its
- * Retry-After when longer), or for an hour after a 403. A Retry-After is seconds or an HTTP date, at most an hour. Holds
- * live in memory, timed by [clock]; while one lasts, a request fails at once with none sent.
+ * Retry-After when longer), or for an hour after a 403. A Retry-After is seconds or an HTTP date in any of its three
+ * forms, at most an hour. Holds live in memory, timed by [clock]; while one lasts, a request fails at once with none sent.
  */
 internal class WikipediaRequests(private val http: PluginHttp, private val clock: () -> Instant) {
     /** Requests sent so far, which each read's log line counts. */
@@ -182,16 +186,36 @@ internal class WikipediaRequests(private val http: PluginHttp, private val clock
     /** [answer]'s Retry-After: seconds, or an HTTP date from now; at most an hour, none where it reads as neither. */
     private fun retryAfter(answer: HttpAnswer): Duration? {
         val written = answer.headers["retry-after"]?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val now = clock()
         val length = if (written.all { it in '0'..'9' }) {
             Duration.ofSeconds(written.toLongOrNull()?.coerceAtMost(LONGEST.seconds) ?: LONGEST.seconds)
         } else {
-            try {
-                Duration.between(clock(), ZonedDateTime.parse(written, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant())
-            } catch (e: DateTimeException) {
-                return null
-            }
+            Duration.between(now, httpDate(written, now) ?: return null)
         }
         return length.coerceIn(Duration.ZERO, LONGEST)
+    }
+
+    /**
+     * [written] as an HTTP date, in each of the three forms RFC 9110 has a recipient read: IMF-fixdate ("Sun, 06 Nov
+     * 1994 08:49:37 GMT"), and the obsolete rfc850-date ("Sunday, 06-Nov-94 08:49:37 GMT", whose two-digit year, more
+     * than fifty years after [now], is the last such year gone by) and asctime-date ("Sun Nov  6 08:49:37 1994", in UTC).
+     * Null where it is none of them.
+     */
+    private fun httpDate(written: String, now: Instant): Instant? {
+        val text = Html.collapse(written)
+        val rfc850 = DateTimeFormatterBuilder()
+            .appendPattern("EEEE, dd-MMM-")
+            .appendValueReduced(ChronoField.YEAR, 2, 2, now.atOffset(ZoneOffset.UTC).toLocalDate().minusYears(49))
+            .appendPattern(" HH:mm:ss 'GMT'")
+            .toFormatter(Locale.ENGLISH)
+            .withZone(ZoneOffset.UTC)
+        return listOf(DateTimeFormatter.RFC_1123_DATE_TIME, rfc850, ASCTIME).firstNotNullOfOrNull { form ->
+            try {
+                ZonedDateTime.parse(text, form).toInstant()
+            } catch (e: DateTimeException) {
+                null
+            }
+        }
     }
 
     private companion object {
@@ -199,5 +223,8 @@ internal class WikipediaRequests(private val http: PluginHttp, private val clock
         val SERVER_ERROR: Duration = Duration.ofSeconds(30)
         val REFUSED: Duration = Duration.ofHours(1)
         val LONGEST: Duration = Duration.ofHours(1)
+
+        /** asctime-date, its spaces collapsed first ("Sun Nov 6 08:49:37 1994"). */
+        val ASCTIME: DateTimeFormatter = DateTimeFormatter.ofPattern("EEE MMM d HH:mm:ss yyyy", Locale.ENGLISH).withZone(ZoneOffset.UTC)
     }
 }
