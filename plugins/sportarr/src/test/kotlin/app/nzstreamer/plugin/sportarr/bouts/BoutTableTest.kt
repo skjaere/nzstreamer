@@ -216,6 +216,17 @@ class BoutTableTest {
     }
 
     @Test
+    fun `a cell is read at the column it starts on, past a merged one, and a row with a fighter's cell empty is no bout`() {
+        // Before the event the method, round and time may be one merged cell: the notes are still the eighth column.
+        val merged = """<tr><td>Welterweight</td><td>Rendahl</td><td>vs.</td><td>Varnholt</td><td colspan="3"></td>""" +
+            """<td>For the UFC Welterweight Championship.</td></tr>"""
+        val empty = data("Flyweight", """<sup class="reference"><a href="#cite_note-e">[e]</a></sup>""", "vs.", "Tollerup")
+        val read = card(page(header("Main card"), vs("Lightweight", "Quessel", "Halde"), merged, empty, header("Prelims"), vs("Flyweight", "Savrin", "Ambrel")))
+        assertEquals(mapOf("prelims" to listOf("Ambrel/Savrin"), "main-card" to listOf("Rendahl/Varnholt", "Quessel/Halde")), pairs(read))
+        assertEquals(true, read.parts.last().bouts.first().titleFight, "the merged row's note, in the eighth column")
+    }
+
+    @Test
     fun `no page cut short, at any tag's edge, makes the reader throw`() {
         listOf(article(form = Form.Results), article(heading = Heading.Legacy)).forEach { page ->
             Fixtures.cuts(page).forEach { cut ->
