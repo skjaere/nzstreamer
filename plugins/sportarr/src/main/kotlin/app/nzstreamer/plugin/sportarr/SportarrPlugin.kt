@@ -37,10 +37,13 @@ class SportarrPlugin : NzPlugin {
         }
     }
 
-    /** From the tab's ⋮ and from Settings › Plugins: back where it was opened from by the arrow, Back, or after a Save (L652). */
+    /**
+     * From the tab's ⋮, a UFC card's Sportarr settings and Settings › Plugins: back where it was opened from by the arrow,
+     * Back, or after a Save (L652). Its Event pages part holds the fight cards switch (L-B8).
+     */
     @Composable
     override fun Settings(host: PluginHost, nav: PluginNav) {
-        SetupPage(session(host), Words.Setup.SETTINGS_TITLE, intro = null, onBack = { nav.back() }, onSaved = { nav.back() })
+        SetupPage(session(host), Words.Setup.SETTINGS_TITLE, intro = null, onBack = { nav.back() }, onSaved = { nav.back() }, eventPages = true)
     }
 
     // The host cancels the plugin's scope before it closes it, and the plugin starts nothing outside that scope.

@@ -1,5 +1,13 @@
 package app.nzstreamer.plugin.sportarr.ui
 
+import app.nzstreamer.plugin.sportarr.bouts.Cards
+import app.nzstreamer.plugin.sportarr.bouts.CardsOption
+import app.nzstreamer.plugin.sportarr.bouts.IndexFile
+import app.nzstreamer.plugin.sportarr.bouts.KeptCards
+import app.nzstreamer.plugin.sportarr.bouts.TestWiki
+import app.nzstreamer.plugin.sportarr.bouts.WIKI_BASE
+import app.nzstreamer.plugin.sportarr.bouts.WIKI_START
+import app.nzstreamer.plugin.sportarr.bouts.WikipediaReads
 import app.nzstreamer.plugin.sportarr.source.Connection
 import app.nzstreamer.plugin.sportarr.source.MapSecrets
 import app.nzstreamer.plugin.sportarr.source.RecordingHttp
@@ -13,9 +21,13 @@ import io.skjaere.usenet.plugin.PluginHttpException.Kind
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.io.File
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -27,12 +39,19 @@ import kotlin.test.assertTrue
  * the address by the host's judgement of it; the key saved, changed and typed; Test's answers, each its line, and where a
  * TV's focus goes after one; Test and Save waiting for an address and a key; Save without a Test, and with the warning
  * shown. A counting fake of the host's HTTP holds the rule that nothing reaches Sportarr before Test or Save, and Save
- * itself sends nothing: the list's read after it is the refresh's, which [saves] records.
+ * itself sends nothing: the list's read after it is the refresh's, which [saves] records. The settings page's Fight cards
+ * from Wikipedia switch (L-B8) is kept the moment it is switched, apart from Save; the tab's first screen has none.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class SetupModelTest {
+    @TempDir
+    lateinit var dir: File
+
     /** What each Save told the refresh: whether it changed the address or the key. */
     private val saves = mutableListOf<Boolean>()
+
+    /** The plugin's own folder, where the switch is kept (options.json). */
+    private val data get() = File(dir, "data")
 
     /** Sportarr as Test meets it, counting every request. */
     private fun sportarr(
@@ -52,7 +71,18 @@ class SetupModelTest {
         tv: Boolean = false,
         safety: (String) -> AddressSafety = ::loopbackSafety,
         restored: SetupModel.Restored? = null,
-    ) = SetupModel(Connection(secrets), http, safety, tv, { changed -> saves += changed }, restored, EmptyCoroutineContext)
+        cards: Cards? = null,
+    ) = SetupModel(Connection(secrets), http, safety, tv, { changed -> saves += changed }, restored, EmptyCoroutineContext, cards)
+
+    /**
+     * A session's fight cards over [wiki], their switch and kept cards in the test's folder; in the test's own scope, so
+     * advancing the test's time runs what switching launches, and a throw from it fails the test.
+     */
+    private fun TestScope.cards(wiki: TestWiki): Cards {
+        val clock = { WIKI_START.plusMillis(testScheduler.currentTime) }
+        val reads = WikipediaReads(wiki.http, WIKI_BASE, clock, IndexFile(File(dir, "cache"), EmptyCoroutineContext), EmptyCoroutineContext)
+        return Cards(this, reads, KeptCards(data, EmptyCoroutineContext), CardsOption(data, EmptyCoroutineContext), clock)
+    }
 
     /** The form opened and filled in, as frame 2 has it. */
     private suspend fun filled(model: SetupModel, address: String = BASE, key: String = KEY): SetupModel {
@@ -423,6 +453,56 @@ class SetupModelTest {
         assertEquals("http://127.0.0.1:1868", again.form.value.address, "the address as typed, not as saved")
         assertEquals(Words.Setup.PASTE_NEW_KEY, again.form.value.keyPlaceholder, "still after Change")
         assertEquals("", again.form.value.key, "the key typed is gone")
+    }
+
+    @Test
+    fun `the fight cards switch on settings is kept the moment it is switched, Save untouched, nothing sent`() = runTest {
+        val http = sportarr()
+        val secrets = MapSecrets(mapOf("url" to BASE, "key" to KEY))
+        val wiki = TestWiki()
+        val model = model(http, secrets, cards = cards(wiki))
+        model.open()
+        advanceUntilIdle()
+        assertEquals(true, model.cardsSwitch?.value, "on, as nothing was kept yet (W3)")
+        model.address("http://127.0.0.1:1868")
+        val typed = model.form.value
+
+        model.switchCards(false)
+        advanceUntilIdle()
+        assertEquals(false, model.cardsSwitch?.value)
+        assertTrue(File(data, CardsOption.NAME).exists(), "kept with no Save")
+        assertFalse(CardsOption(data, EmptyCoroutineContext).read(), "kept off")
+        model.switchCards(true)
+        advanceUntilIdle()
+        assertEquals(true, model.cardsSwitch?.value)
+        assertTrue(CardsOption(data, EmptyCoroutineContext).read(), "kept on again")
+
+        assertEquals(typed, model.form.value, "the form as typed: the address unsaved, Save as it was")
+        assertTrue(model.form.value.canSave)
+        assertEquals(0, secrets.puts, "the address and the key are Save's alone")
+        assertEquals(emptyList(), saves, "no list read")
+        assertEquals(0, http.requests.size, "nothing sent to Sportarr")
+        assertEquals(0, wiki.http.requests.size, "nor to Wikipedia")
+    }
+
+    @Test
+    fun `the switch reads as off where options json says so, before it is shown`() = runTest {
+        CardsOption(data, EmptyCoroutineContext).write(false)
+        val model = model(secrets = MapSecrets(mapOf("url" to BASE, "key" to KEY)), cards = cards(TestWiki()))
+        assertEquals(null, model.cardsSwitch?.value, "not known before the page opens")
+        model.open()
+        advanceUntilIdle()
+        assertEquals(false, model.cardsSwitch?.value)
+    }
+
+    @Test
+    fun `the tab's first screen has no switch`() = runTest {
+        val model = model()
+        model.open()
+        assertNull(model.cardsSwitch)
+        model.switchCards(false)
+        advanceUntilIdle()
+        assertFalse(File(data, CardsOption.NAME).exists(), "nothing kept from a page with no switch")
     }
 
     private companion object {

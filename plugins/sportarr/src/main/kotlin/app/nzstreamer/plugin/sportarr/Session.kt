@@ -61,9 +61,12 @@ internal class Session(private val host: PluginHost, private val wikipediaBase: 
      */
     val listPlace = ListPlace()
 
-    /** The setup form's model on a [tv] or a phone, [restored] where its page's activity was made again; a Save reads the list. */
-    fun setup(tv: Boolean, restored: SetupModel.Restored?): SetupModel =
-        SetupModel(connection, host.http, host::addressSafety, tv, { changed -> refresh.saved(changed) }, restored)
+    /**
+     * The setup form's model on a [tv] or a phone, [restored] where its page's activity was made again; a Save reads the
+     * list. The settings page's has the [eventPages] part, with the switch of the session's [cards].
+     */
+    fun setup(tv: Boolean, restored: SetupModel.Restored?, eventPages: Boolean = false): SetupModel =
+        SetupModel(connection, host.http, host::addressSafety, tv, { changed -> refresh.saved(changed) }, restored, cards = cards.takeIf { eventPages })
 
     /**
      * The list's model on a [tv] or a phone, [restored] where its page comes back (Back from an event's page, its activity

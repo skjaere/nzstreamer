@@ -76,9 +76,22 @@ internal object Words {
         /** SpPhoneSetup 1: stores the address and the key. */
         const val SAVE = "Save"
 
-        /** SpPhoneSetup 1: under the form, what Sports does with the key. */
+        /**
+         * SpPhoneSetup 1: under the form, what Sports does with the key; on the tab's first screen and on settings, reworded in
+         * BtPhoneSettings, as the switch under it on settings reads from Wikipedia.
+         */
         const val READ_ONLY =
-            "Sports only reads from Sportarr. It never changes, searches or downloads anything there. To change what shows here, change it in Sportarr."
+            "Sports never changes, searches or downloads anything in Sportarr; it only reads from it. To change what shows here, change it in Sportarr."
+
+        /** BtPhoneSettings: the settings page's part under the footnote, which holds the fight cards switch; BtTvSettings. */
+        const val EVENT_PAGES = "Event pages"
+
+        /** BtPhoneSettings: the switch that reads UFC fight cards from Wikipedia (L-B8), on by default; BtTvSettings. */
+        const val FIGHT_CARDS = "Fight cards from Wikipedia"
+
+        /** BtPhoneSettings: under the switch, what it reads and what Wikipedia sees; BtTvSettings. */
+        const val FIGHT_CARDS_DETAIL =
+            "Reads a UFC event's fight card from Wikipedia when you open the event. Wikipedia sees which events you open."
 
         /** SpPhoneSetup 3: Test passed, with the version as Sportarr sent it, all four of its parts: "Connected · Sportarr <version>". */
         fun connected(version: String): String = "Connected · Sportarr $version"

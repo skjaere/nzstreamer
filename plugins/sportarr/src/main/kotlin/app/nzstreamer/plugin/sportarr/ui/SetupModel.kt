@@ -1,5 +1,6 @@
 package app.nzstreamer.plugin.sportarr.ui
 
+import app.nzstreamer.plugin.sportarr.bouts.Cards
 import app.nzstreamer.plugin.sportarr.source.Connection
 import app.nzstreamer.plugin.sportarr.source.SportarrAddress
 import app.nzstreamer.plugin.sportarr.source.SportarrClient
@@ -92,6 +93,9 @@ internal data class SetupForm(
  *
  * A page made again after its activity was ([restored]) keeps the address as typed and Change pressed; the key typed is
  * never kept anywhere but the host's secrets, once saved.
+ *
+ * The settings page alone has the Fight cards from Wikipedia switch (L-B8, W3): [cards]' own, which the UFC cards' pages
+ * follow; the tab's first screen has none.
  */
 internal class SetupModel(
     private val connection: Connection,
@@ -101,6 +105,7 @@ internal class SetupModel(
     private val saved: (changed: Boolean) -> Unit,
     private val restored: Restored? = null,
     private val work: CoroutineContext = Dispatchers.Default,
+    private val cards: Cards? = null,
 ) {
     private val current = MutableStateFlow(SetupForm(tv, address = restored?.address.orEmpty(), changing = restored?.changing == true))
     private var moves = 0
@@ -108,8 +113,18 @@ internal class SetupModel(
     /** The form as it stands. */
     val form: StateFlow<SetupForm> = current.asStateFlow()
 
-    /** Reads what is stored: the address (unless one typed was [restored]) and whether a key is. Sends nothing. */
+    /**
+     * The Fight cards from Wikipedia switch, on or off as options.json keeps it, null until that is read; none (null) on the
+     * tab's first screen.
+     */
+    val cardsSwitch: StateFlow<Boolean?>? = cards?.switch
+
+    /**
+     * Reads what is stored: the address (unless one typed was [restored]) and whether a key is, and the switch where the
+     * page has it. Sends nothing.
+     */
     suspend fun open() {
+        cards?.readSwitch()
         if (current.value.loaded) return
         val stored = connection.address()
         val keySaved = connection.key() != null
@@ -175,6 +190,14 @@ internal class SetupModel(
         } finally {
             current.update { it.copy(saving = false) }
         }
+    }
+
+    /**
+     * The switch turned [on] or off, kept the moment it is, as the app's switches are: Save stays for the address and the
+     * key, and the form is left as it is. Off cancels a card's read and deletes the kept cards ([Cards.setOn]).
+     */
+    fun switchCards(on: Boolean) {
+        cards?.setOn(on)
     }
 
     /** What a page keeps of the form for its activity made again: the address as typed and Change, never the key. */

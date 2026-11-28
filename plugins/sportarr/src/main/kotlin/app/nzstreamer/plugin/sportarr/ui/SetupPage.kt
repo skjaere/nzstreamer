@@ -8,9 +8,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -60,12 +62,15 @@ import io.skjaere.usenet.app.ui.FieldKind
 import io.skjaere.usenet.app.ui.Footnote
 import io.skjaere.usenet.app.ui.FormFactor
 import io.skjaere.usenet.app.ui.FormField
+import io.skjaere.usenet.app.ui.GroupCard
 import io.skjaere.usenet.app.ui.JoinChain
 import io.skjaere.usenet.app.ui.LocalFormFactor
 import io.skjaere.usenet.app.ui.OwnedRipple
 import io.skjaere.usenet.app.ui.PrimaryButton
 import io.skjaere.usenet.app.ui.ResultLine
 import io.skjaere.usenet.app.ui.SecondaryButton
+import io.skjaere.usenet.app.ui.SectionHeader
+import io.skjaere.usenet.app.ui.SwitchRow
 import io.skjaere.usenet.app.ui.TopBar
 import io.skjaere.usenet.app.ui.TvFieldGate
 import io.skjaere.usenet.app.ui.TvTypingTip
@@ -80,6 +85,7 @@ import io.skjaere.usenet.app.ui.showSpoken
 import io.skjaere.usenet.app.ui.tryFocus
 import io.skjaere.usenet.app.ui.turnsOver
 import io.skjaere.usenet.app.ui.tvFocusMemory
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -87,22 +93,32 @@ import kotlinx.coroutines.launch
  * with its [intro]; and the settings page, "Sportarr settings" with [onBack]'s arrow and no intro. The address and its
  * help, the key (or "Saved" with Change), Test and Save side by side, Test's answer under them, and what Sports does with
  * the key. [onSaved] follows a Save: the settings page goes back where it was opened from, while the tab shows the list by
- * itself once the address and the key are stored. Nothing reaches Sportarr before Test or Save ([SetupModel]).
+ * itself once the address and the key are stored. Nothing reaches Sportarr before Test or Save ([SetupModel]). The settings
+ * page has [eventPages], its part under the footnote with the Fight cards from Wikipedia switch (L-B8); the tab's first
+ * screen never has it.
  *
  * On a TV the typing tip comes first, each field is a gate the remote passes over (OK types, Back or Done closes the
  * keyboard), and the shell holds the phone screens' 720 dp column. The address takes the first focus once the rail lets
  * it, and Left goes to the rail while the form is the tab; the page keeps the place the focus had when it comes back from
  * the rail. After a passed Test the focus moves to Save; after any other answer it stays on Test, where Up goes back to
- * the key. Change sits in the key's field, one Down from the address, and Right from the key's field reaches Show.
+ * the key. Change sits in the key's field, one Down from the address, and Right from the key's field reaches Show. Down
+ * from Test or Save reaches the switch, and Up goes back to them (L-B10).
  */
 @Composable
-internal fun SetupPage(session: Session, title: String, intro: String?, onBack: (() -> Unit)?, onSaved: () -> Unit) {
+internal fun SetupPage(
+    session: Session,
+    title: String,
+    intro: String?,
+    onBack: (() -> Unit)?,
+    onSaved: () -> Unit,
+    eventPages: Boolean = false,
+) {
     val tv = LocalFormFactor.current == FormFactor.Tv
     // Only strings and booleans in saved state, which the host restores with its own class loader (NzPlugin's rule): the
     // address as typed and Change. Never the key, kept nowhere but the host's secrets.
     var keptAddress by rememberSaveable { mutableStateOf<String?>(null) }
     var keptChanging by rememberSaveable { mutableStateOf(false) }
-    val model = remember(session, tv) { session.setup(tv, keptAddress?.let { SetupModel.Restored(it, keptChanging) }) }
+    val model = remember(session, tv) { session.setup(tv, keptAddress?.let { SetupModel.Restored(it, keptChanging) }, eventPages) }
     val form by model.form.collectAsState()
     LaunchedEffect(model) { model.open() }
     // The stored address and key read: a moment, before which there is nothing to show.
@@ -153,6 +169,7 @@ internal fun SetupPage(session: Session, title: String, intro: String?, onBack: 
         }
         Answer(form)
         Footnote(Words.Setup.READ_ONLY)
+        model.cardsSwitch?.let { EventPages(it, model::switchCards) }
     }
     if (tv) LaunchedEffect(Unit) { initial.request(address) }
     LaunchedEffect(form.move) {
@@ -168,6 +185,21 @@ internal fun SetupPage(session: Session, title: String, intro: String?, onBack: 
             SetupFocus.Address -> if (tv) address.tryFocus()
             null -> Unit
         }
+    }
+}
+
+/**
+ * The settings page's Event pages part (BtPhoneSettings, BtTvSettings): the Fight cards from Wikipedia switch with its
+ * detail, kept the moment it is switched. Shown once options.json has been read, so it never shows on while the file
+ * says off. On a TV the row turns over while focused, as the app's switches do.
+ */
+@Composable
+private fun EventPages(switch: StateFlow<Boolean?>, onSwitch: (Boolean) -> Unit) {
+    val on by switch.collectAsState()
+    on?.let { checked ->
+        SectionHeader(Words.Setup.EVENT_PAGES, top = 10.dp)
+        GroupCard { SwitchRow(Words.Setup.FIGHT_CARDS, checked, onSwitch, detail = Words.Setup.FIGHT_CARDS_DETAIL) }
+        Spacer(Modifier.height(16.dp))
     }
 }
 
