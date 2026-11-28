@@ -1,6 +1,8 @@
 package app.nzstreamer.plugin.sportarr.bouts
 
+import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import org.junit.jupiter.api.Test
+import java.time.Duration
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -34,6 +36,16 @@ class HtmlTest {
         assertEquals("Quessel & Halde <b> \"c\" 'ic' a b – — é é é", Html.decode("Quessel &amp; Halde &lt;b&gt; &quot;c&quot; &apos;ic&apos; a&nbsp;b &ndash; &mdash; &#233; &#xE9; &#XE9;"))
         assertEquals("&eacute; &#xZZ; & &; &#; &#x; &#99999999999; &#xD800; &#0; &amp", Html.decode("&eacute; &#xZZ; & &; &#; &#x; &#99999999999; &#xD800; &#0; &amp"))
         assertEquals("Women's Flyweight", text("<p>Women&#39;s&#32;Flyweight</p>"))
+    }
+
+    @Test
+    fun `a run of ampersands with no semicolon near them decodes in time in step with its length`() {
+        // An entity's ';' is a few characters on or none: a page of ampersands is decoded without a look past that for each.
+        val ampersands = "&".repeat(4_000_000)
+        assertTimeoutPreemptively(Duration.ofSeconds(10)) {
+            assertEquals(ampersands, Html.decode(ampersands))
+            assertEquals("$ampersands&", Html.decode("$ampersands&amp;"))
+        }
     }
 
     @Test

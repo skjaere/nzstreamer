@@ -364,7 +364,8 @@ internal class PageFinder(
         private val NUMBERED_NIGHT = Regex("""^UFC Fight Night (\d+)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE)
         private val ANY_NIGHT = Regex("""(?<![\p{L}\p{N}])Fight Night (\d+)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE)
         private val ISO_DATE = Regex("""(\d{4})-(\d{2})-(\d{2})""")
-        private val WRITTEN_DAY = Regex("""([A-Za-z]+)\.? (\d{1,2}), (\d{4})""")
+        // From a word's start alone: a run of letters tried from each of them would cost its length once for each.
+        private val WRITTEN_DAY = Regex("""(?<![A-Za-z])([A-Za-z]+)\.? (\d{1,2}), (\d{4})""")
         private val SPACES = Regex("""\s+""")
         private val MONTHS: Map<String, Int> = listOf(
             "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december",

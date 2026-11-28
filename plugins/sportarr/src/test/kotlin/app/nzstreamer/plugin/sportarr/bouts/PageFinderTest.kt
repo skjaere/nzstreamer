@@ -19,6 +19,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -167,6 +168,20 @@ class PageFinderTest {
             ),
             PageFinder.indexRows(page),
         )
+    }
+
+    @Test
+    fun `a Date cell of letters alone is read in time in step with its length`() {
+        val page = index(
+            scheduled = listOf(
+                IndexEntry("UFC 999: Quessel vs. Halde", "/wiki/UFC_999", "Kestrel".repeat(60_000)),
+                IndexEntry("UFC Fight Night: Brisk vs. Loam", "/wiki/UFC_Fight_Night:_Brisk_vs._Loam", "Nov 28, 2026"),
+            ),
+            past = emptyList(),
+        )
+        assertTimeoutPreemptively(Duration.ofSeconds(10)) {
+            assertEquals(listOf(IndexRow("UFC Fight Night: Brisk vs. Loam", "UFC Fight Night: Brisk vs. Loam", "2026-11-28")), PageFinder.indexRows(page))
+        }
     }
 
     @Test

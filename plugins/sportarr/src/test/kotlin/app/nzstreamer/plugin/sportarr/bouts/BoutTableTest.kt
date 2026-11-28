@@ -13,7 +13,9 @@ import app.nzstreamer.plugin.sportarr.model.UFC
 import app.nzstreamer.plugin.sportarr.model.at
 import app.nzstreamer.plugin.sportarr.model.on
 import app.nzstreamer.plugin.sportarr.model.sports
+import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import org.junit.jupiter.api.Test
+import java.time.Duration
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
@@ -98,6 +100,15 @@ class BoutTableTest {
             ),
         )
         assertEquals(mapOf("prelims" to listOf("Kjelsen/Tollerup"), "main-card" to listOf("Durnay/Wexmoor", "Quessel/Halde")), pairs(read))
+    }
+
+    @Test
+    fun `a header of brackets that never close is read in time in step with its length`() {
+        val opened = "(".repeat(400_000)
+        assertTimeoutPreemptively(Duration.ofSeconds(10)) {
+            val read = card(page(header("$opened Main card"), vs("Lightweight", "Quessel", "Halde"), header("Prelims"), vs("Flyweight", "Savrin", "Ambrel")))
+            assertEquals(mapOf("prelims" to listOf("Ambrel/Savrin"), "main-card" to listOf("Quessel/Halde")), pairs(read))
+        }
     }
 
     @Test

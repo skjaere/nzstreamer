@@ -112,8 +112,25 @@ internal object BoutTable {
      * A part's id from its header's words, any bracketed broadcaster left out and the rest folded to its letters and
      * digits; null for a header that names no part, "Fight card" and "Card" among them (a card not split).
      */
-    private fun partOf(header: String): String? =
-        PART_WORDS[BRACKETED.replace(header, "").lowercase(Locale.ROOT).filter(Char::isLetterOrDigit)]
+    private fun partOf(header: String): String? = PART_WORDS[unbracketed(header).lowercase(Locale.ROOT).filter(Char::isLetterOrDigit)]
+
+    /**
+     * [text] with each "(" and what follows it to the next ")" left out; a "(" that no ")" follows stays, with the rest.
+     * A walk along it, so a header of brackets that never close is read in a time in step with its length.
+     */
+    private fun unbracketed(text: String): String = buildString {
+        var at = 0
+        while (at < text.length) {
+            val open = text.indexOf('(', at)
+            val close = if (open < 0) -1 else text.indexOf(')', open + 1)
+            if (close < 0) {
+                append(text, at, text.length)
+                break
+            }
+            append(text, at, open)
+            at = close + 1
+        }
+    }
 
     /**
      * The bout of [row], or null where the row isn't one. [main] marks it the main event, ordered by the event's [title];
@@ -158,7 +175,6 @@ internal object BoutTable {
 
     private val HEADINGS = listOf("Fight_card", "Results", "Card")
     private val SEPARATORS = setOf("vs.", "vs", "def.")
-    private val BRACKETED = Regex("""\([^)]*\)""")
     private val SENTENCE_END = Regex("""\.(\s|$)""")
 
     /** L-B3's header words, folded, each with the part it names. */

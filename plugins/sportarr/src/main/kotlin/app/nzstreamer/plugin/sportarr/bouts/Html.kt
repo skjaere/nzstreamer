@@ -273,7 +273,7 @@ internal object Html {
         var i = 0
         while (i < text.length) {
             val c = text[i]
-            val semicolon = if (c == '&') text.indexOf(';', i + 1).takeIf { it > i + 1 && it - i <= MAX_ENTITY } else null
+            val semicolon = if (c == '&') entityEnd(text, i) else null
             val decoded = semicolon?.let { entity(text.substring(i + 1, it)) }
             if (decoded == null) {
                 out.append(c)
@@ -284,6 +284,18 @@ internal object Html {
             }
         }
         return out.toString()
+    }
+
+    /**
+     * The ';' that ends an entity begun by the '&' at [at]: the first within [MAX_ENTITY] characters of it, null where
+     * there is none or it ends nothing ("&;"). Looked for no further: a page of ampersands is read in a time in step
+     * with its length, never one that grows with each ampersand's look to the text's end.
+     */
+    private fun entityEnd(text: String, at: Int): Int? {
+        for (i in at + 1..minOf(text.length - 1, at + MAX_ENTITY)) {
+            if (text[i] == ';') return i.takeIf { it > at + 1 }
+        }
+        return null
     }
 
     private fun entity(name: String): String? {
