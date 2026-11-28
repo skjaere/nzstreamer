@@ -348,6 +348,75 @@ internal object Words {
         const val TV_FOOTNOTE = "Press OK on a part to play the best release, or ⋮ to choose one yourself."
     }
 
+    /**
+     * A UFC card's bouts on its page (L-B7, L-B9), read from Wikipedia with every result left out (W6): their labels, the
+     * page's footnotes while they show, the line under the parts in each state, and the credit with its sheet.
+     */
+    object Bouts {
+        /** BtPhoneCard: a bout's label where a title is at stake; BtTvCard. */
+        const val TITLE_FIGHT = "Title fight"
+
+        /** BtPhoneCard: the card's last bout's label; BtTvCard. */
+        const val MAIN_EVENT = "Main event"
+
+        /**
+         * BtPhoneCard: a bout's two fighters, in the order the reader keeps them, which says nothing of who won: "Quessel vs.
+         * Halde". The plugin's own joiner, as the cell between them on Wikipedia's page ("vs." or "def.") is never read.
+         */
+        fun pair(first: String, second: String): String = "$first vs. $second"
+
+        /** BtPhoneCard: the line under the bouts that opens their credit's sheet; BtTvCard, the list's last stop. */
+        const val CREDIT = "Fight card from Wikipedia"
+
+        /** BtPhoneCard: the page's footnote while bouts are listed; today's ([Card.FOOTNOTE]) while none are. */
+        const val FOOTNOTE = "Tap a part, or a bout in it, to play the part's best release, or ⋮ to choose one yourself. Details from your Sportarr."
+
+        /** BtTvCard: the left pane's line on a TV while bouts are listed; today's ([Card.TV_FOOTNOTE]) while none are. */
+        const val TV_FOOTNOTE = "Press OK on a part, or a bout in it, to play the part's best release, or ⋮ to choose one yourself."
+
+        /** BtPhoneCardStates: under the parts, a spinner before it, while the card is read with none kept; BtTvCardStates. */
+        const val READING = "Reading the fight card…"
+
+        /** BtPhoneCardStates: no page, or none with a card, after the event's start; BtTvCardStates. */
+        const val NO_CARD = "No fight card found on Wikipedia for this event."
+
+        /** BtPhoneCardStates: no card split into parts yet, or no page, before the event's start. */
+        const val NOT_YET = "The fight card isn't on Wikipedia yet."
+
+        /** BtPhoneCardStates: the read failed with nothing kept, Try again after it. */
+        const val CANT_REACH = "Couldn't reach Wikipedia for the fight card."
+
+        /** BtPhoneCardStates: the switch on Sportarr settings is off, Sportarr settings after it; BtTvCardStates. */
+        const val OFF = "Fight cards from Wikipedia are off."
+
+        /** BtPhoneCredit: the credit's sheet's title; BtTvCard's sheet. */
+        const val ABOUT = "About the bouts"
+
+        /** BtPhoneCredit: the licence's name, the attribution's end, which links to the licence on a phone. */
+        const val LICENCE = "CC BY-SA 4.0"
+
+        /**
+         * BtPhoneCredit: where the card comes from, the article by its title: "Fight card: Wikipedia, “UFC 999”, CC BY-SA 4.0";
+         * BtTvCard's sheet.
+         */
+        fun attribution(article: String): String = "Fight card: Wikipedia, “$article”, $LICENCE"
+
+        /** BtPhoneCredit: what the bouts leave out; BtTvCard's sheet. */
+        const val LEFT_OUT = "Sports shows the bouts and leaves out the results: no winners, methods, rounds or times."
+
+        /** BtPhoneCredit: before the warning line, as Search's note has it. */
+        const val WARN = "⚠"
+
+        /** BtPhoneCredit: in the warning colour, over View on Wikipedia. */
+        const val SHOWS_RESULTS = "Wikipedia's page shows the results."
+
+        /** BtPhoneCredit: opens the article the card was read from in the browser. */
+        const val VIEW = "View on Wikipedia"
+
+        /** BtPhoneCredit: closes the sheet; the TV's sheet's one button (BtTvCard). */
+        const val CLOSE = "Close"
+    }
+
     /** Undrawn: the page of a sport the plugin has no rules for (L651), whose releases the user picks. */
     object Generic {
         /** Undrawn: the page's footnote. */

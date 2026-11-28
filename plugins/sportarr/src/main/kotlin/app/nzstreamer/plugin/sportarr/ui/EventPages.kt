@@ -149,6 +149,21 @@ internal class PageActions(
 
     fun back() = nav.back()
 
+    /**
+     * The button of a card's [line] (L-B7): Try again reads the card once more, holds allowing; Sportarr settings opens the
+     * plugin's settings, where the switch is, the focus coming back to the button.
+     */
+    fun cardButton(line: CardLine) {
+        when (line) {
+            CardLine.CantReach -> model.tryAgain()
+            CardLine.Off -> {
+                focus.leaving(PageKeys.CARD_BUTTON)
+                nav.openSettings()
+            }
+            CardLine.Reading, CardLine.NotYet, CardLine.NoCard -> Unit
+        }
+    }
+
     /** A page's button. */
     fun press(button: PageButton) = when (button.action) {
         PageAction.Play -> play(button.part, button.key)

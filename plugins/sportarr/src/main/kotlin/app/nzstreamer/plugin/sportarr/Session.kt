@@ -32,7 +32,7 @@ import java.time.ZoneId
  * type's, a test's own). Every page and the settings page share it, so a Save on one reads the list the tab shows, and the
  * switch on settings is the one the pages follow.
  */
-internal class Session(private val host: PluginHost, wikipediaBase: String = WikipediaBase.URL) {
+internal class Session(private val host: PluginHost, private val wikipediaBase: String = WikipediaBase.URL) {
     val connection = Connection(host.secrets)
 
     /** The list, read in the device's zone as the host's clock gives the time. */
@@ -75,9 +75,12 @@ internal class Session(private val host: PluginHost, wikipediaBase: String = Wik
     /** How the pages and Up next play a part, and the lines Play and Choose release leave when they find nothing. */
     val plays = Plays(host.play, host.watch, host.search, host.scope, Instant::now)
 
-    /** An event's or a weekend's page ([page], [key]) on a [tv] or a phone, over the list the tab shows. */
+    /**
+     * An event's or a weekend's page ([page], [key]) on a [tv] or a phone, over the list the tab shows; a UFC card's with its
+     * fight card from [cards], its credit linking to the article on the session's Wikipedia.
+     */
     fun page(page: String, key: String, tv: Boolean): PageModel =
-        PageModel(refresh.state, host.watch, plays, page, key, tv, Instant::now, ZoneId::systemDefault)
+        PageModel(refresh.state, host.watch, plays, page, key, tv, Instant::now, ZoneId::systemDefault, cards = cards, wikipedia = wikipediaBase)
 
     /** Plays [item] of [sports] from the list's Up next, as its page would. */
     fun play(item: Item, sports: Sports) {

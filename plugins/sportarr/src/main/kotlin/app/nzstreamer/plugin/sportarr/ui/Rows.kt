@@ -340,7 +340,7 @@ private val PHONE_PLAY = 48.dp
 private val TV_PLAY = 40.dp
 
 /** A turned-over row's labels and Play: a shade of the dark words on the cream. */
-private val TURNED_LABEL = Color(0x1A0E0F12)
+internal val TURNED_LABEL = Color(0x1A0E0F12)
 
 /** A turned-over row's bar's track. */
 private val TURNED_TRACK = Color(0x260E0F12)

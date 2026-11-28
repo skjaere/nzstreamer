@@ -76,6 +76,13 @@ class WordsTest {
     }
 
     @Test
+    fun `the credit's attribution ends in the licence's name, which the phone's sheet links`() {
+        val attribution = Words.Bouts.attribution("UFC 999")
+        assertTrue(attribution.endsWith(Words.Bouts.LICENCE), attribution)
+        assertEquals("Fight card: Wikipedia, “UFC 999”, ", attribution.removeSuffix(Words.Bouts.LICENCE))
+    }
+
+    @Test
     fun `each declaration names the design that draws it, or says it is undrawn`() {
         val comments = comments(source("Words.kt"))
         val fields = constants()
@@ -175,6 +182,7 @@ class WordsTest {
         const val NOTHING = "NoRelease"
         const val SEARCH = "SearchWarning"
         const val DATES = "Dates"
+        const val BOUTS = "Bouts"
 
         val CONSTANTS = listOf(
             Shown(SETUP, "SpPhoneSetup", "Sports"),
@@ -293,6 +301,24 @@ class WordsTest {
             Shown(NOTHING, null, "No indexers are switched on."),
 
             Shown(SEARCH, "SpPhoneSearchWarning", "Indexer results can show scores."),
+
+            Shown(BOUTS, "BtPhoneCard", "Title fight"),
+            Shown(BOUTS, "BtPhoneCard", "Main event"),
+            Shown(BOUTS, "BtPhoneCard", "Fight card from Wikipedia"),
+            Shown(BOUTS, "BtPhoneCard", "Tap a part, or a bout in it, to play the part's best release, or ⋮ to choose one yourself. Details from your Sportarr."),
+            Shown(BOUTS, "BtTvCard", "Press OK on a part, or a bout in it, to play the part's best release, or ⋮ to choose one yourself."),
+            Shown(BOUTS, "BtPhoneCardStates", "Reading the fight card…"),
+            Shown(BOUTS, "BtPhoneCardStates", "No fight card found on Wikipedia for this event."),
+            Shown(BOUTS, "BtPhoneCardStates", "The fight card isn't on Wikipedia yet."),
+            Shown(BOUTS, "BtPhoneCardStates", "Couldn't reach Wikipedia for the fight card."),
+            Shown(BOUTS, "BtPhoneCardStates", "Fight cards from Wikipedia are off."),
+            Shown(BOUTS, "BtPhoneCredit", "About the bouts"),
+            Shown(BOUTS, "BtPhoneCredit", "CC BY-SA 4.0"),
+            Shown(BOUTS, "BtPhoneCredit", "Sports shows the bouts and leaves out the results: no winners, methods, rounds or times."),
+            Shown(BOUTS, "BtPhoneCredit", "⚠"),
+            Shown(BOUTS, "BtPhoneCredit", "Wikipedia's page shows the results."),
+            Shown(BOUTS, "BtPhoneCredit", "View on Wikipedia"),
+            Shown(BOUTS, "BtPhoneCredit", "Close"),
 
             Shown(DATES, "SpPhoneList", "Today"),
             Shown(DATES, "SpPhoneList", "Yesterday"),
@@ -422,6 +448,11 @@ class WordsTest {
                 "No indexer answered. Indexer A: Paused: too many searches from Sportarr · Indexer B: Couldn't reach it.",
             ),
             Template(NOTHING, "unanswered", null, Words.NoRelease.unanswered(emptyList()), "No indexers are switched on."),
+
+            // The plugin's own joiner, as the cell between the fighters (vs. or def.) is never read (W6).
+            Template(BOUTS, "pair", "BtPhoneCard", Words.Bouts.pair("Quessel", "Halde"), "Quessel vs. Halde"),
+            Template(BOUTS, "pair", "BtPhoneCard", Words.Bouts.pair("Brannoc Marhoff", "Elsvin Marhoff"), "Brannoc Marhoff vs. Elsvin Marhoff"),
+            Template(BOUTS, "attribution", "BtPhoneCredit", Words.Bouts.attribution("UFC 999"), "Fight card: Wikipedia, “UFC 999”, CC BY-SA 4.0"),
             Template(
                 NOTHING, "keptOn", null, Words.NoRelease.keptOn("yesterday", "20:41", "game"),
                 "No release yesterday at 20:41. Releases often appear a few hours after a game ends.",

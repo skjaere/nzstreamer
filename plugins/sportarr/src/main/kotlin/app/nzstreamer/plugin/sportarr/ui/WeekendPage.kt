@@ -3,10 +3,13 @@ package app.nzstreamer.plugin.sportarr.ui
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,9 +27,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -34,10 +40,14 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
@@ -46,7 +56,9 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import io.skjaere.usenet.app.play.OkGuard
 import io.skjaere.usenet.app.play.pageOkGuard
 import io.skjaere.usenet.app.tv.TvMenu
@@ -58,11 +70,13 @@ import io.skjaere.usenet.app.ui.GroupCard
 import io.skjaere.usenet.app.ui.InsetDivider
 import io.skjaere.usenet.app.ui.OwnedRipple
 import io.skjaere.usenet.app.ui.PaneMemory
+import io.skjaere.usenet.app.ui.SecondaryButton
 import io.skjaere.usenet.app.ui.TvDimens
 import io.skjaere.usenet.app.ui.colors
 import io.skjaere.usenet.app.ui.focusOutline
 import io.skjaere.usenet.app.ui.focusScale
 import io.skjaere.usenet.app.ui.paneElement
+import io.skjaere.usenet.app.ui.tryFocus
 import io.skjaere.usenet.app.ui.turnsOver
 
 /**
@@ -81,11 +95,16 @@ internal fun WeekendPage(screen: EventScreen, tv: Boolean, actions: PageActions,
  * time or card order, its day and time or when it starts, what is left with its bar, its ✓, and its ⋮ (Choose release,
  * Search indexers, Mark watched or unwatched); the footnote. A part not begun yet can't be tapped and has no ⋮.
  *
+ * A UFC card's parts have their bouts under them, which play their part as its row does, then the credit, which opens
+ * its sheet ([CreditSheet]); or the line of the card's state in the credit's place, with Try again or Sportarr settings
+ * where it has them (L-B7).
+ *
  * On a TV, two panes: the title, the count, the top button and Choose release for the part it plays on the left, with
  * the TV's footnote at its foot; the parts on the right, the one the top button plays marked. OK on a part plays it; OK
  * on its ⋮ opens the menu, the focus on its first item; a part not begun takes no focus. The focus starts on the top
  * button, else on the first part begun and not watched; Back from Choose release puts it back on Choose release or on the
- * ⋮ it came from.
+ * ⋮ it came from. A card's bouts and its credit come row by row after their part, the credit the list's last stop; a
+ * line's button comes after the last part (L-B10).
  */
 @Composable
 internal fun PartsPage(screen: EventScreen, tv: Boolean, actions: PageActions, okGuard: OkGuard, bar: @Composable () -> Unit) {
@@ -124,11 +143,103 @@ private fun PhoneParts(screen: EventScreen, actions: PageActions, okGuard: OkGua
                         key(row.part) {
                             if (index > 0) InsetDivider()
                             PhonePartRow(row, actions)
+                            row.bouts.forEach { bout ->
+                                key(bout.key) {
+                                    BoutDivider()
+                                    PhoneBoutRow(bout, row, actions)
+                                }
+                            }
                         }
                     }
                 }
             }
+            screen.cardLine?.let { line -> item { PhoneCardLine(line, actions) } }
+            screen.credit?.let { credit -> item { PhoneCreditRow(credit, actions) } }
             item { Footnote(screen.footnote) }
+        }
+    }
+}
+
+/**
+ * A bout's row on a phone, under its part's (BtPhoneCard): its names at the secondary size, a step under the part's name,
+ * so the parts, which are what plays, stand out; its weight class and labels under them; 28 dp in, with the ⋮'s room kept
+ * at its end, and no ⋮, ✓ or bar of its own. A tap plays its part, as the part's row does (W5), TalkBack saying which
+ * ("Play Prelims"); before the part has started, in its not-aired colour, it can't be tapped, and is read as one line.
+ */
+@Composable
+private fun PhoneBoutRow(bout: BoutRow, row: PartRow, actions: PageActions) {
+    val play = bout.play
+    Column(
+        Modifier.fillMaxWidth().focusRequester(actions.focus.requester(bout.key)).heightIn(min = 54.dp)
+            .then(
+                if (play != null) {
+                    Modifier.focusOutline().clickable(onClickLabel = play, role = Role.Button) { actions.play(row.part, bout.key) }
+                } else {
+                    Modifier.semantics(mergeDescendants = true) {}
+                },
+            )
+            .padding(start = 28.dp, end = 64.dp, top = 8.dp, bottom = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically),
+    ) {
+        Text(bout.names, style = AppType.secondary, color = if (row.started) colors.text else colors.textSecondary)
+        BoutLine(bout, tv = false, turned = false)
+    }
+}
+
+/**
+ * A bout's weight class, small and muted (at the secondary size on a TV), then its labels: Title fight in the chip's grey,
+ * Main event in the accent's tint; on a TV row turned over, shades of the dark words on the cream.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun BoutLine(bout: BoutRow, tv: Boolean, turned: Boolean) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            bout.weight, style = if (tv) AppType.secondary else AppType.small, color = if (turned) colors.turnedSecondary else colors.muted,
+            modifier = Modifier.align(Alignment.CenterVertically),
+        )
+        if (bout.titleFight) BoutLabel(Words.Bouts.TITLE_FIGHT, accent = false, turned, Modifier.align(Alignment.CenterVertically))
+        if (bout.mainEvent) BoutLabel(Words.Bouts.MAIN_EVENT, accent = true, turned, Modifier.align(Alignment.CenterVertically))
+    }
+}
+
+/** A bout's label, as the kit's chips: [accent] in the accent's tint, else the chip's grey. */
+@Composable
+private fun BoutLabel(text: String, accent: Boolean, turned: Boolean, modifier: Modifier) {
+    val (background, words) = when {
+        turned && accent -> TURNED_ACCENT_LABEL to colors.turnedAccent
+        turned -> TURNED_LABEL to colors.background
+        accent -> colors.accentTint to colors.accent
+        else -> colors.chip to colors.chipText
+    }
+    Text(text, style = AppType.small, color = words, modifier = modifier.clip(RoundedCornerShape(6.dp)).background(background).padding(horizontal = 7.dp, vertical = 1.dp))
+}
+
+/** The divider over a bout's row, as far in as its words. */
+@Composable
+private fun BoutDivider(start: Dp = 28.dp) = HorizontalDivider(Modifier.padding(start = start, end = 12.dp), thickness = 1.dp, color = colors.divider)
+
+/**
+ * The line under a card's parts on a phone while it shows no bouts (BtPhoneCardStates), in the footnote's small muted
+ * style, as far in as the parts' names: a spinner before it while the card is read; Try again or Sportarr settings after
+ * it, as the list's line has its button. A read's outcome is announced as it comes.
+ */
+@Composable
+private fun PhoneCardLine(line: CardLine, actions: PageActions) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 28.dp, end = 4.dp, top = 4.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (line == CardLine.Reading) CircularProgressIndicator(Modifier.size(16.dp), color = colors.accent, strokeWidth = 2.dp)
+        Text(
+            line.words, style = AppType.small, color = colors.muted,
+            modifier = Modifier.weight(1f).then(if (line in OUTCOMES) Modifier.semantics { liveRegion = LiveRegionMode.Polite } else Modifier),
+        )
+        line.button?.let { words ->
+            TextButton(
+                onClick = { actions.cardButton(line) },
+                modifier = Modifier.focusRequester(actions.focus.requester(PageKeys.CARD_BUTTON)).heightIn(min = 48.dp).focusOutline(RoundedCornerShape(20.dp), fill = false),
+            ) { Text(words, style = AppType.bodyStrong.copy(fontSize = 14.sp), color = colors.accent) }
         }
     }
 }
@@ -185,6 +296,35 @@ private fun PhonePartRow(row: PartRow, actions: PageActions) {
 @Composable
 private fun TvParts(screen: EventScreen, actions: PageActions, okGuard: OkGuard) {
     val panes = remember(actions.focus) { PaneMemory(actions.focus) }
+    // Try again's button goes as its read starts. Before the start, with no part to take the focus, it waits on the line in
+    // the buttons' place for the bouts, and goes to the last part's first bout as they come (L-B10); a read that ends with
+    // no card ends the wait there. (One that fails again brings the button back, and the wait goes on to its next press.)
+    var awaitingBouts by remember { mutableStateOf(false) }
+    val lastBout = screen.parts.lastOrNull()?.bouts?.firstOrNull()?.key
+    LaunchedEffect(awaitingBouts, lastBout, screen.cardLine) {
+        if (!awaitingBouts) return@LaunchedEffect
+        when {
+            lastBout != null -> {
+                withFrameNanos {}
+                actions.focus.requester(lastBout).tryFocus()
+                awaitingBouts = false
+            }
+            screen.cardLine == CardLine.NotYet || screen.cardLine == CardLine.NoCard -> awaitingBouts = false
+        }
+    }
+    val cardButton = { line: CardLine ->
+        if (line == CardLine.CantReach) {
+            // The focus off the button before it goes: on the last part's row, which the bouts come under.
+            val last = screen.parts.lastOrNull { it.started }
+            if (last != null) {
+                actions.focus.requester(PageKeys.row(last.part)).tryFocus()
+            } else {
+                actions.focus.requester(PageKeys.HELD).tryFocus()
+                awaitingBouts = true
+            }
+        }
+        actions.cardButton(line)
+    }
     TvPanes(
         panes, okGuard,
         left = {
@@ -203,13 +343,87 @@ private fun TvParts(screen: EventScreen, actions: PageActions, okGuard: OkGuard)
                             key(row.part) {
                                 if (index > 0) InsetDivider()
                                 TvPartRow(row, panes, actions)
+                                row.bouts.forEach { bout ->
+                                    key(bout.key) {
+                                        BoutDivider(TV_BOUT_DIVIDER)
+                                        TvBoutRow(bout, row, panes, actions)
+                                    }
+                                }
                             }
                         }
                     }
+                    screen.cardLine?.let { line -> TvCardLine(line, panes, cardButton) }
+                    screen.credit?.let { credit -> TvCreditRow(credit, panes, actions) }
                 }
             }
         },
     )
+}
+
+/**
+ * A bout's row on a TV (BtTvCard): as a part's row, 22 dp further in, its names on one line at the secondary size over its
+ * weight class and labels; turned over while focused; no ⋮, its room kept so the rows' ends line up, and Right does
+ * nothing, as the 2D search would find a part's ⋮ nearby. OK plays its part (W5), the focus staying on it. Before the
+ * part has started it still takes the focus, so Down reads the card, shown by the ring on the chip's fill as Search's
+ * words are, and OK does nothing.
+ */
+@Composable
+private fun TvBoutRow(bout: BoutRow, row: PartRow, panes: PaneMemory, actions: PageActions) {
+    val interaction = remember { MutableInteractionSource() }
+    val play = bout.play
+    val turned = interaction.turnsOver() && play != null
+    Row(
+        Modifier.fillMaxWidth().padding(start = 5.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OwnedRipple {
+            Column(
+                Modifier.paneElement(panes, RIGHT, bout.key).focusProperties { right = FocusRequester.Cancel }.weight(1f).heightIn(min = 48.dp)
+                    .then(
+                        if (play != null) {
+                            Modifier.focusScale(interaction, { it.rowScale }).clip(RoundedCornerShape(10.dp))
+                                .then(if (turned) Modifier.background(colors.text) else Modifier)
+                                .clickable(interaction, LocalIndication.current, onClickLabel = play, role = Role.Button) { actions.play(row.part, bout.key) }
+                        } else {
+                            Modifier.focusOutline(RoundedCornerShape(10.dp)).focusable(interactionSource = interaction).semantics(mergeDescendants = true) {}
+                        },
+                    )
+                    .padding(start = 28.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(1.dp, Alignment.CenterVertically),
+            ) {
+                Text(
+                    bout.names, style = AppType.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    color = when {
+                        turned -> colors.background
+                        row.started -> colors.text
+                        else -> colors.textSecondary
+                    },
+                )
+                BoutLine(bout, tv = true, turned = turned)
+            }
+        }
+        Spacer(Modifier.width(TV_MORE))
+    }
+}
+
+/**
+ * The line under a card's parts on a TV while it shows no bouts (BtTvCardStates), as the list's offline line there: its
+ * small button first where it has one, the only stop on it, reached by Down from the last part, or by Right from the line
+ * in the buttons' place before the start ([onButton]); then a spinner while the card is read, and the words.
+ */
+@Composable
+private fun TvCardLine(line: CardLine, panes: PaneMemory, onButton: (CardLine) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 40.dp).padding(start = 16.dp, end = 16.dp, top = 14.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        line.button?.let { words -> SecondaryButton(words, { onButton(line) }, Modifier.paneElement(panes, RIGHT, PageKeys.CARD_BUTTON)) }
+        if (line == CardLine.Reading) CircularProgressIndicator(Modifier.size(18.dp), color = colors.accent, strokeWidth = 2.dp)
+        Text(
+            line.words, style = AppType.secondary, color = colors.textSecondary,
+            modifier = Modifier.weight(1f).then(if (line in OUTCOMES) Modifier.semantics { liveRegion = LiveRegionMode.Polite } else Modifier),
+        )
+    }
 }
 
 /**
@@ -321,4 +535,13 @@ private fun TvMore(modifier: Modifier, spoken: String, onClick: () -> Unit) {
 }
 
 /** A TV part's ⋮, and the room a part not begun keeps in its place. */
-private val TV_MORE = 48.dp
+internal val TV_MORE = 48.dp
+
+/** A bout's divider on a TV, as far in as its words. */
+private val TV_BOUT_DIVIDER = 33.dp
+
+/** A turned-over bout's Main event label: a shade of the turned accent on the cream. */
+private val TURNED_ACCENT_LABEL = Color(0x248A5000)
+
+/** The lines that are a read's outcome, which TalkBack says as they come. */
+private val OUTCOMES = setOf(CardLine.NotYet, CardLine.NoCard, CardLine.CantReach)

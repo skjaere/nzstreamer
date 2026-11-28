@@ -1,6 +1,20 @@
 package app.nzstreamer.plugin.sportarr.ui
 
 import app.nzstreamer.plugin.sportarr.Session
+import app.nzstreamer.plugin.sportarr.bouts.Bout
+import app.nzstreamer.plugin.sportarr.bouts.BoutCard
+import app.nzstreamer.plugin.sportarr.bouts.BoutPart
+import app.nzstreamer.plugin.sportarr.bouts.CardState
+import app.nzstreamer.plugin.sportarr.bouts.Cards
+import app.nzstreamer.plugin.sportarr.bouts.CardsOption
+import app.nzstreamer.plugin.sportarr.bouts.Fixtures
+import app.nzstreamer.plugin.sportarr.bouts.Form
+import app.nzstreamer.plugin.sportarr.bouts.IndexFile
+import app.nzstreamer.plugin.sportarr.bouts.KeptCards
+import app.nzstreamer.plugin.sportarr.bouts.PageFinder
+import app.nzstreamer.plugin.sportarr.bouts.TestWiki
+import app.nzstreamer.plugin.sportarr.bouts.WIKI_BASE
+import app.nzstreamer.plugin.sportarr.bouts.WikipediaReads
 import app.nzstreamer.plugin.sportarr.model.BOXING
 import app.nzstreamer.plugin.sportarr.model.FORMULA_1
 import app.nzstreamer.plugin.sportarr.model.PREMIER
@@ -19,6 +33,7 @@ import app.nzstreamer.plugin.sportarr.source.ListRead
 import app.nzstreamer.plugin.sportarr.source.ListReader
 import app.nzstreamer.plugin.sportarr.source.ListState
 import app.nzstreamer.plugin.sportarr.source.MapSecrets
+import app.nzstreamer.plugin.sportarr.source.RecordingHttp
 import app.nzstreamer.plugin.sportarr.source.SportarrClient
 import app.nzstreamer.plugin.sportarr.source.TestSportarr
 import app.nzstreamer.plugin.sportarr.source.league
@@ -56,6 +71,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -67,7 +83,9 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -79,6 +97,11 @@ import kotlin.test.assertTrue
  * Play or Choose release finding nothing leaves a line on the page until a release of it plays; Choose release says it is
  * searching and takes no second press; nothing is searched as a page opens; no page holds anything Sportarr sends besides
  * titles, leagues, rounds and times.
+ *
+ * A UFC card's page (L-B7, BtPhoneCard, BtPhoneCardStates, BtTvCard): each part's bouts under its row in running order,
+ * the credit and the bouts' footnote; a bout plays its part (W5); the line of each state in the credit's place with
+ * today's footnote; none at all while the card isn't known; the card read once as the page shows; the TV's first focus as
+ * before; a card read before the event and after it, its winners moved left, draws the same page (W6).
  */
 class PageModelTest {
     @TempDir
@@ -579,7 +602,7 @@ class PageModelTest {
         val sportarr = TestSportarr(listOf(league(PREMIER.id, PREMIER.name, "Soccer")), mapOf(PREMIER.id to listOf(game)))
         val host = FakeHost(sportarr.http, File(dir, "plugin"))
         try {
-            val session = Session(host)
+            val session = Session(host, WIKI_BASE)
             withTimeout(WAIT) { session.refresh.shown().join() }
             val model = session.page(Pages.EVENT, "ev-000001", tv = false)
             val running = launch { model.run() }
@@ -625,6 +648,284 @@ class PageModelTest {
         assertTrue(leaked.isEmpty(), "canary values in the pages: $leaked")
     }
 
+    @Test
+    fun `a UFC card's bouts show under each part in running order, the main event last, with the credit and the bouts' footnote`() {
+        val prelims = "⋮ Choose release, Search indexers, Mark watched"
+        assertEquals(
+            listOf(
+                "UFC 999: Quessel vs. Halde",
+                "UFC · Sat 21 Nov · 23:00",
+                "1 of 3 watched ▬",
+                "[Resume Prelims · 37:45]*",
+                "  Early Prelims | ✓ | ⋮ Choose release, Search indexers, Mark unwatched",
+                "    Ambrel vs. Savrin | Flyweight | ▶ Play Early Prelims",
+                "    Durnay vs. Wexmoor | Women's Strawweight | ▶ Play Early Prelims",
+                "    Kjelsen vs. Tollerup | Welterweight | ▶ Play Early Prelims",
+                "    Brannoc Marhoff vs. Elsvin Marhoff | Bantamweight | ▶ Play Early Prelims",
+                "> Prelims | 52:10 left ▬ | $prelims",
+                "    Ferlund vs. Tarnoy | Bantamweight | ▶ Play Prelims",
+                "    Grisholm vs. Pellicot | Light Heavyweight | ▶ Play Prelims",
+                "    Kestvik vs. Velmar | Featherweight | ▶ Play Prelims",
+                "    Brenneck vs. Marhoff | Middleweight | ▶ Play Prelims",
+                "  Main Card | $prelims",
+                "    Lindqvar vs. Zelinek | Heavyweight | ▶ Play Main Card",
+                "    Ostrem vs. Tessmar | Women’s Flyweight | ▶ Play Main Card",
+                "    Rendahl vs. Varnholt | Welterweight | ▶ Play Main Card",
+                "    Brisk vs. Loam | Bantamweight | Title fight | ▶ Play Main Card",
+                "    Quessel vs. Halde | Lightweight | Title fight | Main event | ▶ Play Main Card",
+                "ⓘ Fight card from Wikipedia | UFC 999 → $WIKI_BASE/wiki/UFC_999",
+                BOUTS_FOOT,
+                "focus: play",
+            ),
+            lines(card(CardState.Bouts(Fixtures.UFC_999_CARD))),
+        )
+    }
+
+    @Test
+    fun `a bout plays its part, as its row does, and says which part it plays, each bout with its own key`() {
+        val screen = assertIs<EventScreen>(card(CardState.Bouts(Fixtures.UFC_999_CARD)))
+        screen.parts.forEach { row ->
+            assertEquals(listOf(Words.SportsList.play(row.label)), row.bouts.map { it.play }.distinct(), "${row.label}'s bouts play it")
+            assertEquals(row.bouts.indices.map { PageKeys.bout(row.part, it) }, row.bouts.map { it.key })
+        }
+        assertEquals("Play Prelims", screen.parts.single { it.part == "ev-000031:prelims" }.bouts.first().play)
+        val keys = screen.parts.flatMap { row -> row.bouts.map { it.key } + PageKeys.row(row.part) + PageKeys.more(row.part) } +
+            screen.buttons.map { it.key } + PageKeys.CREDIT + PageKeys.CARD_BUTTON + PageKeys.HELD
+        assertEquals(keys.size, keys.toSet().size, "each element its own key, for the focus to come back to: $keys")
+    }
+
+    @Test
+    fun `before the start the bouts show as their parts do, none played, with the credit and the bouts' footnote`() {
+        assertEquals(
+            listOf(
+                "UFC Fight Night: Brisk vs. Loam",
+                "UFC",
+                "Starts Sat 19:00 [muted]",
+                "The parts play once the card has started. Releases often appear a few hours after the end.",
+                "  Prelims",
+                "    Ostrem vs. Wexmoor | Women's Strawweight",
+                "    Kestvik vs. Savrin | Featherweight",
+                "  Main Card",
+                "    Brenneck vs. Pellicot | Middleweight",
+                "    Brisk vs. Loam | Bantamweight | Main event",
+                "ⓘ Fight card from Wikipedia | UFC Fight Night: Brisk vs. Loam → $WIKI_BASE/wiki/UFC_Fight_Night:_Brisk_vs._Loam",
+                BOUTS_FOOT,
+                "focus: held",
+            ),
+            lines(card(CardState.Bouts(FIGHT_NIGHT_CARD), key = "ev-000032", watch = emptyMap())),
+        )
+        val tv = lines(card(CardState.Bouts(FIGHT_NIGHT_CARD), key = "ev-000032", watch = emptyMap(), tv = true))
+        assertEquals("focus: held", tv.last(), "the line before the start holds a TV's first focus, as before")
+    }
+
+    @Test
+    fun `a card's bouts on a TV, with its footnote, and a credit with no address, as a TV has no browser`() {
+        val phone = lines(card(CardState.Bouts(Fixtures.UFC_999_CARD)))
+        val tv = lines(card(CardState.Bouts(Fixtures.UFC_999_CARD), tv = true))
+        assertEquals("[Resume Prelims · 37:45]* [Choose release]", tv[3])
+        assertEquals(phone.subList(4, 20), tv.subList(4, 20), "the parts and their bouts as the phone's")
+        assertEquals(listOf("ⓘ Fight card from Wikipedia | UFC 999", BOUTS_TV_FOOT, "focus: play"), tv.takeLast(3))
+    }
+
+    @Test
+    fun `View on Wikipedia's address is the encoder's, from the base and the kept article's title`() {
+        listOf("UFC 999", "UFC 999 (Kestrel)", "UFC Fight Night: Quéssel vs. Halde").forEach { article ->
+            val screen = assertIs<EventScreen>(card(CardState.Bouts(Fixtures.UFC_999_CARD.copy(article = article))))
+            assertEquals(Credit(article, PageFinder.address(WIKI_BASE, article)), screen.credit)
+        }
+        val accented = assertIs<EventScreen>(card(CardState.Bouts(Fixtures.UFC_999_CARD.copy(article = "UFC Fight Night: Quéssel vs. Halde"))))
+        assertEquals("$WIKI_BASE/wiki/UFC_Fight_Night:_Qu%C3%A9ssel_vs._Halde", accented.credit?.address)
+        val tv = assertIs<EventScreen>(card(CardState.Bouts(Fixtures.UFC_999_CARD.copy(article = "UFC 999 (Kestrel)")), tv = true))
+        assertEquals(Credit("UFC 999 (Kestrel)", null), tv.credit, "the TV's sheet names the article, with no link")
+    }
+
+    @Test
+    fun `each state's line shows under the parts in the credit's place, with today's footnote, and none while none`() {
+        val today = lines(page(CARDS, Pages.EVENT, "ev-000031", PRELIMS_HALFWAY))
+        assertEquals(today, lines(card(null)), "none: the page as before")
+        val tvToday = lines(page(CARDS, Pages.EVENT, "ev-000031", PRELIMS_HALFWAY, tv = true))
+        assertEquals(tvToday, lines(card(null, tv = true)), "none on a TV: the page as before")
+        assertEquals(CARD_FOOT, today[today.lastIndex - 1])
+        assertEquals(CARD_TV_FOOT, tvToday[tvToday.lastIndex - 1])
+        val shown = mapOf(
+            CardState.Reading to "◌ Reading the fight card…",
+            CardState.NotYet to "The fight card isn't on Wikipedia yet.",
+            CardState.NoCard to "No fight card found on Wikipedia for this event.",
+            CardState.CantReach to "Couldn't reach Wikipedia for the fight card. [Try again]",
+            CardState.Off to "Fight cards from Wikipedia are off. [Sportarr settings]",
+        )
+        shown.forEach { (state, line) ->
+            assertEquals(today.dropLast(2) + line + today.takeLast(2), lines(card(state)), "$state on a phone")
+            assertEquals(tvToday.dropLast(2) + line + tvToday.takeLast(2), lines(card(state, tv = true)), "$state on a TV")
+        }
+        // Before the start, the same lines under the parts not begun.
+        val before = lines(card(null, key = "ev-000032", watch = emptyMap()))
+        shown.forEach { (state, line) ->
+            assertEquals(before.dropLast(2) + line + before.takeLast(2), lines(card(state, key = "ev-000032", watch = emptyMap())), "$state before the start")
+        }
+    }
+
+    @Test
+    fun `a TV's first focus is the same in every state of the card`() {
+        val states = listOf(null, CardState.Reading, CardState.NotYet, CardState.NoCard, CardState.CantReach, CardState.Off, CardState.Bouts(Fixtures.UFC_999_CARD))
+        val watches = listOf(emptyMap(), PRELIMS_HALFWAY, mapOf("ev-000031:prelims" to watched(), "ev-000031:main-card" to watched()))
+        watches.forEach { watch ->
+            val focus = states.map { assertIs<EventScreen>(card(it, watch = watch, tv = true)).firstFocus }
+            assertEquals(listOf(focus.first()), focus.distinct(), "with $watch: $focus")
+        }
+        val upcoming = states.map { it.takeUnless { state -> state is CardState.Bouts } ?: CardState.Bouts(FIGHT_NIGHT_CARD) }
+        upcoming.forEach { assertEquals(PageKeys.HELD, assertIs<EventScreen>(card(it, key = "ev-000032", watch = emptyMap(), tv = true)).firstFocus, "$it") }
+    }
+
+    @Test
+    fun `a game's, a weekend's and a premium card's pages show no card, whatever state they are given`() {
+        val premium = sports(UFC to listOf(on(UFC, 51, at("2026-11-21T20:00"), "UFC Countdown: Quessel vs. Halde", parts = listOf("Countdown", "Main Show"))))
+        val bouts = CardState.Bouts(Fixtures.UFC_999_CARD)
+        listOf(true, false).forEach { tv ->
+            listOf(CardState.Off, CardState.Reading, bouts).forEach { state ->
+                fun given(sports: Sports, page: String, key: String, watch: Map<String, WatchInfo> = emptyMap(), now: Instant = NOW) =
+                    PageScreens.of(ListState.Ready(sports), page, key, watch, emptyMap(), null, now, LONDON, tv, card = state, wikipedia = WIKI_BASE)
+                assertEquals(page(GAMES, Pages.EVENT, "ev-000012", tv = tv), given(GAMES, Pages.EVENT, "ev-000012"))
+                assertEquals(
+                    page(WEEKEND, Pages.WEEKEND, "2:r20", SATURDAY_EVENING, now = at("2026-11-21T20:41"), tv = tv),
+                    given(WEEKEND, Pages.WEEKEND, "2:r20", SATURDAY_EVENING, at("2026-11-21T20:41")),
+                )
+                assertEquals(page(premium, Pages.EVENT, "ev-000051", tv = tv), given(premium, Pages.EVENT, "ev-000051"))
+            }
+        }
+    }
+
+    @Test
+    fun `a UFC card's page reads its card as it shows, Reading meanwhile, and the page again reads nothing more`() = runBlocking<Unit> {
+        val gate = CompletableDeferred<Unit>()
+        val wiki = TestWiki()
+        val http = RecordingHttp { request ->
+            gate.await()
+            wiki.http.get(request.url, request.headers, request.maxBytes)
+        }
+        val cards = cards(this, http)
+        val plays = Plays(RecordingPlay(), MutableWatch(), AnsweringSearch(), this, { NOW }, EmptyCoroutineContext)
+        val first = cardModel(plays, cards)
+        val running = launch { first.run() }
+        val reading = assertIs<EventScreen>(first.next { (it as EventScreen).cardLine != null })
+        assertEquals(CardLine.Reading, reading.cardLine)
+        assertEquals(CARD_FOOT, reading.footnote, "today's footnote while it reads")
+        assertTrue(reading.parts.all { it.bouts.isEmpty() } && reading.credit == null)
+        gate.complete(Unit)
+        val shown = assertIs<EventScreen>(first.next { (it as EventScreen).credit != null })
+        assertEquals(lines(card(CardState.Bouts(Fixtures.UFC_999_CARD), watch = emptyMap())), lines(shown))
+        assertEquals(listOf("$WIKI_BASE/wiki/UFC_999"), http.requests.map { it.url })
+        running.cancelAndJoin()
+
+        // Back, then the row again: the card kept shows at once, and nothing is asked.
+        val second = cardModel(plays, cards)
+        val again = launch { second.run() }
+        assertEquals(lines(shown), lines(second.next { (it as EventScreen).credit != null }))
+        again.cancelAndJoin()
+        assertEquals(1, http.requests.size, "one read for the two showings")
+    }
+
+    @Test
+    fun `Can't reach says Try again, which reads once more, nothing asked while the hold lasts`() = runBlocking<Unit> {
+        var now = NOW
+        val wiki = TestWiki().apply { status = 503 }
+        val cards = cards(this, wiki.http, clock = { now })
+        val plays = Plays(RecordingPlay(), MutableWatch(), AnsweringSearch(), this, { now }, EmptyCoroutineContext)
+        val model = cardModel(plays, cards, clock = { now })
+        val running = launch { model.run() }
+        val failed = assertIs<EventScreen>(model.next { (it as EventScreen).cardLine == CardLine.CantReach })
+        assertEquals(Words.ListStates.TRY_AGAIN, failed.cardLine?.button)
+        assertEquals(1, wiki.http.requests.size)
+
+        wiki.status = null
+        assertNotNull(model.tryAgain()).join()
+        model.next { (it as EventScreen).cardLine == CardLine.CantReach }
+        assertEquals(1, wiki.http.requests.size, "the 503's hold: no request")
+
+        now = NOW.plusSeconds(30)
+        assertNotNull(model.tryAgain()).join()
+        assertEquals(lines(card(CardState.Bouts(Fixtures.UFC_999_CARD), watch = emptyMap())), lines(model.next { (it as EventScreen).credit != null }))
+        assertEquals(2, wiki.http.requests.size)
+        running.cancelAndJoin()
+    }
+
+    @Test
+    fun `with fight cards off, a card's page says so with Sportarr settings and reads nothing`() = runBlocking<Unit> {
+        assertTrue(CardsOption(File(File(dir, "cards"), "data"), EmptyCoroutineContext).write(false))
+        val wiki = TestWiki()
+        val cards = cards(this, wiki.http)
+        val plays = Plays(RecordingPlay(), MutableWatch(), AnsweringSearch(), this, { NOW }, EmptyCoroutineContext)
+        val model = cardModel(plays, cards)
+        val running = launch { model.run() }
+        val off = assertIs<EventScreen>(model.next { (it as EventScreen).cardLine != null })
+        assertEquals(CardLine.Off, off.cardLine)
+        assertEquals(Words.Setup.SETTINGS_TITLE, off.cardLine?.button)
+        running.cancelAndJoin()
+        assertEquals(0, wiki.http.requests.size)
+    }
+
+    @Test
+    fun `a game's page and a premium card's read no card`() = runBlocking<Unit> {
+        val wiki = TestWiki()
+        val cards = cards(this, wiki.http)
+        val plays = Plays(RecordingPlay(), MutableWatch(), AnsweringSearch(), this, { NOW }, EmptyCoroutineContext)
+        val premium = sports(UFC to listOf(on(UFC, 51, at("2026-11-21T20:00"), "UFC Countdown: Quessel vs. Halde", parts = listOf("Countdown", "Main Show"))))
+        listOf(GAMES to "ev-000012", premium to "ev-000051").forEach { (sports, key) ->
+            val model = cardModel(plays, cards, key = key, sports = sports)
+            val running = launch { model.run() }
+            val screen = assertIs<EventScreen>(model.next { true })
+            yield()
+            assertNull(screen.cardLine)
+            running.cancelAndJoin()
+        }
+        assertEquals(0, wiki.http.requests.size)
+    }
+
+    @Test
+    fun `a card read before the event and after it, its winners moved left, draws the same page on a phone and on a TV`() = runBlocking<Unit> {
+        val plays = Plays(RecordingPlay(), MutableWatch(), AnsweringSearch(), this, { NOW }, EmptyCoroutineContext)
+        val shown = Form.entries.map { form ->
+            val wiki = TestWiki().apply { pages["/wiki/UFC_999"] = Fixtures.article(form = form) }
+            val cards = cards(this, wiki.http, name = form.name)
+            listOf(false, true).map { tv ->
+                val model = cardModel(plays, cards, tv = tv)
+                val running = launch { model.run() }
+                assertIs<EventScreen>(model.next { (it as EventScreen).credit != null }).also { running.cancelAndJoin() }
+            }
+        }
+        val (before, after) = shown
+        assertEquals(before, after, "the phone's pages and the TV's")
+        assertEquals(lines(card(CardState.Bouts(Fixtures.UFC_999_CARD), watch = emptyMap())), lines(before[0]))
+        // Nothing of a result in a bout's row or in what TalkBack says of it.
+        val words = shown.flatten().flatMap { screen -> screen.parts.flatMap { row -> row.bouts.flatMap { listOfNotNull(it.names, it.weight, it.play) } } }
+        Fixtures.RESULT_WORDS.forEach { word -> assertTrue(words.none { word in it }, "\"$word\" shown") }
+        assertFalse(words.any { Regex("""\d""").containsMatchIn(it) }, "a round or a time shown: $words")
+    }
+
+    /** UFC 999's page ([key]: the fight night's, else) with the card's [state], View on Wikipedia's address on the test's base. */
+    private fun card(
+        state: CardState?,
+        key: String = "ev-000031",
+        watch: Map<String, WatchInfo> = PRELIMS_HALFWAY,
+        now: Instant = NOW,
+        tv: Boolean = false,
+        sports: Sports = CARDS,
+    ): PageScreen? = PageScreens.of(ListState.Ready(sports), Pages.EVENT, key, watch, emptyMap(), null, now, LONDON, tv, card = state, wikipedia = WIKI_BASE)
+
+    /**
+     * A session's fight cards over [http] in [scope], as the session makes them, in the test's folder [name], on the test's
+     * base; the time from [clock], the files read and written in place.
+     */
+    private fun cards(scope: CoroutineScope, http: PluginHttp, name: String = "cards", clock: () -> Instant = { NOW }): Cards {
+        val folder = File(dir, name)
+        val reads = WikipediaReads(http, WIKI_BASE, clock, IndexFile(File(folder, "cache"), EmptyCoroutineContext), EmptyCoroutineContext)
+        return Cards(scope, reads, KeptCards(File(folder, "data"), EmptyCoroutineContext), CardsOption(File(folder, "data"), EmptyCoroutineContext), clock)
+    }
+
+    /** UFC 999's page's model over [cards], in [plays]' scope. */
+    private fun cardModel(plays: Plays, cards: Cards, tv: Boolean = false, key: String = "ev-000031", clock: () -> Instant = { NOW }, sports: Sports = CARDS) =
+        PageModel(MutableStateFlow(ListState.Ready(sports)), MutableWatch(), plays, Pages.EVENT, key, tv, clock, { LONDON }, EmptyCoroutineContext, cards, WIKI_BASE)
+
     /** [page] [key] of [sports] as the model builds it from a list read and kept. */
     private fun page(
         sports: Sports,
@@ -638,7 +939,9 @@ class PageModelTest {
     /**
      * A page as lines, in the order it draws them: the title, the meta, the status line (its colour, ▬ for its bar), the
      * count, Generic's line, the buttons ([primary]*), the line before the start, the kept line, Mark watched, the parts
-     * ("> " marks the one the top button plays; when, what is left, ✓, the ⋮'s items), the footnote, a TV's first focus.
+     * ("> " marks the one the top button plays; when, what is left, ✓, the ⋮'s items), each with its bouts under it (their
+     * names, weight class and labels, and "▶" with what a tap on one plays, as TalkBack says it), a card's line (◌ for its
+     * spinner, [its button]), the credit (the article, → View on Wikipedia's address), the footnote, a TV's first focus.
      */
     private fun lines(screen: PageScreen?): List<String> = when (screen) {
         null -> listOf("(loading)")
@@ -664,7 +967,20 @@ class PageModelTest {
                         part.menu.takeIf { it.isNotEmpty() }?.joinToString(", ", "⋮ ") { it.label },
                     ).joinToString(" | "),
                 )
+                part.bouts.forEach { bout ->
+                    add(
+                        "    " + listOfNotNull(
+                            bout.names,
+                            bout.weight,
+                            Words.Bouts.TITLE_FIGHT.takeIf { bout.titleFight },
+                            Words.Bouts.MAIN_EVENT.takeIf { bout.mainEvent },
+                            bout.play?.let { "▶ $it" },
+                        ).joinToString(" | "),
+                    )
+                }
             }
+            screen.cardLine?.let { line -> add((if (line == CardLine.Reading) "◌ " else "") + line.words + (line.button?.let { " [$it]" } ?: "")) }
+            screen.credit?.let { credit -> add("ⓘ ${Words.Bouts.CREDIT} | ${credit.article}" + (credit.address?.let { " → $it" } ?: "")) }
             add(screen.footnote)
             add("focus: ${screen.firstFocus}")
         }
@@ -799,6 +1115,30 @@ class PageModelTest {
             "Play finds the best release on your indexers that names both teams and the date; the one that played before goes first. Details from your Sportarr."
         const val WEEKEND_FOOT = "Tap a session to play the best release, or ⋮ to choose one yourself. Details from your Sportarr."
         const val CARD_FOOT = "Tap a part to play the best release, or ⋮ to choose one yourself. Details from your Sportarr."
+        const val CARD_TV_FOOT = "Press OK on a part to play the best release, or ⋮ to choose one yourself."
+        const val BOUTS_FOOT = "Tap a part, or a bout in it, to play the part's best release, or ⋮ to choose one yourself. Details from your Sportarr."
+        const val BOUTS_TV_FOOT = "Press OK on a part, or a bout in it, to play the part's best release, or ⋮ to choose one yourself."
+
+        /** The fight night's card as the reader keeps it: its early-prelims bout under Prelims, first; the main event last. */
+        val FIGHT_NIGHT_CARD = BoutCard(
+            "UFC Fight Night: Brisk vs. Loam",
+            listOf(
+                BoutPart(
+                    "prelims",
+                    listOf(
+                        Bout("Women's Strawweight", "Ostrem", "Wexmoor", titleFight = false, mainEvent = false),
+                        Bout("Featherweight", "Kestvik", "Savrin", titleFight = false, mainEvent = false),
+                    ),
+                ),
+                BoutPart(
+                    "main-card",
+                    listOf(
+                        Bout("Middleweight", "Brenneck", "Pellicot", titleFight = false, mainEvent = false),
+                        Bout("Bantamweight", "Brisk", "Loam", titleFight = false, mainEvent = true),
+                    ),
+                ),
+            ),
+        )
         const val GENERIC_FOOT =
             "NZStreamer can't tell this sport's releases apart for sure, so you pick one; the one you played goes first next time. Details from your Sportarr."
 

@@ -1,5 +1,10 @@
 package app.nzstreamer.plugin.sportarr.ui
 
+import app.nzstreamer.plugin.sportarr.bouts.Bout
+import app.nzstreamer.plugin.sportarr.bouts.CardState
+import app.nzstreamer.plugin.sportarr.bouts.Cards
+import app.nzstreamer.plugin.sportarr.bouts.PageFinder
+import app.nzstreamer.plugin.sportarr.bouts.WikipediaBase
 import app.nzstreamer.plugin.sportarr.match.Nouns
 import app.nzstreamer.plugin.sportarr.model.Family
 import app.nzstreamer.plugin.sportarr.model.Item
@@ -15,6 +20,7 @@ import io.skjaere.usenet.plugin.PluginWatch
 import io.skjaere.usenet.plugin.WatchInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,7 +28,6 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
@@ -62,7 +67,8 @@ internal data class MenuEntry(val label: String, val action: MenuAction)
  * A weekend's session or a card's part, a row of its page: its [part]'s key and [label]; a session's day and time, or when
  * it starts ([meta]; none for a card's part); what is [left] of a play begun and how far it went ([progress]); the ✓ of a
  * [watched] one. Only one [started] plays and has its ⋮ ([menu]). The one the top button plays is [current], which a TV
- * marks; [searching] while Choose release runs for it from its ⋮.
+ * marks; [searching] while Choose release runs for it from its ⋮. A UFC card's part has its [bouts] under it, in the order
+ * fought (L-B7).
  */
 internal data class PartRow(
     val part: String,
@@ -75,7 +81,40 @@ internal data class PartRow(
     val current: Boolean,
     val searching: Boolean,
     val menu: List<MenuEntry>,
+    val bouts: List<BoutRow> = emptyList(),
 )
+
+/**
+ * A bout under its part's row on a UFC card's page (L-B7): its focus [key] ([PageKeys.bout]); its two fighters' [names]
+ * ("Quessel vs. Halde"), in the order the reader keeps them, which says nothing of who won (W6); its [weight] class as
+ * Wikipedia names it; whether it is a [titleFight], and the card's [mainEvent]. A tap or OK on it plays its part, as the
+ * part's row does (W5): [play] is what it does as TalkBack says it, the part's play words ("Play Prelims"); none before
+ * the part has started, when it can't be played, as its part can't.
+ */
+internal data class BoutRow(val key: String, val names: String, val weight: String, val titleFight: Boolean, val mainEvent: Boolean, val play: String?)
+
+/**
+ * The line under a UFC card's parts, in the credit's place, while it has no bouts to show (L-B7): its [words], and the
+ * small [button] where there is something to do. While the card is read for the first time a spinner goes before it.
+ */
+internal enum class CardLine(val words: String, val button: String?) {
+    Reading(Words.Bouts.READING, null),
+    NotYet(Words.Bouts.NOT_YET, null),
+    NoCard(Words.Bouts.NO_CARD, null),
+
+    /** The read failed with nothing kept: Try again reads it once more. */
+    CantReach(Words.Bouts.CANT_REACH, Words.ListStates.TRY_AGAIN),
+
+    /** The switch is off: Sportarr settings opens the plugin's settings, where it is. */
+    Off(Words.Bouts.OFF, Words.Setup.SETTINGS_TITLE),
+}
+
+/**
+ * The credit under a card's bouts (L-B7), which opens its sheet: the Wikipedia [article] the card was read from, by its
+ * title, and on a phone View on Wikipedia's [address] for it ([PageFinder.address], never a link from the page). A TV's
+ * sheet has none: a TV may have no browser to open it in.
+ */
+internal data class Credit(val article: String, val address: String?)
 
 /** What a page shows. */
 internal sealed interface PageScreen
@@ -87,7 +126,8 @@ internal sealed interface PageScreen
  * [buttons], the primary first; the line in the buttons' place before the start ([note], which holds a TV's focus); the
  * line kept after Play or Choose release found nothing, or why Choose release found nothing where no indexer answered
  * ([kept]); a one-part page's [mark]; a card's or weekend's [parts];
- * the [footnote]; and a TV's [firstFocus], one of [PageKeys].
+ * the [footnote]; and a TV's [firstFocus], one of [PageKeys]. A UFC card's page has its bouts under its parts and the
+ * [credit] under them, or the [cardLine] of its state in the credit's place; neither while the card isn't known (L-B7).
  */
 internal data class EventScreen(
     val kind: PageKind,
@@ -103,6 +143,8 @@ internal data class EventScreen(
     val parts: List<PartRow>,
     val footnote: String,
     val firstFocus: String,
+    val cardLine: CardLine? = null,
+    val credit: Credit? = null,
 ) : PageScreen
 
 /** A page whose event or weekend left the list after a read (L652): the [line] that says so, and [back]. */
@@ -125,6 +167,15 @@ internal object PageKeys {
 
     fun row(part: String) = "row:$part"
     fun more(part: String) = "more:$part"
+
+    /** A UFC card's [index]th bout under [part] (its key): the focus comes back to it after it played its part on a phone. */
+    fun bout(part: String, index: Int) = "bout:$part:$index"
+
+    /** A card's credit line, which the focus comes back to as its sheet closes. */
+    const val CREDIT = "credit"
+
+    /** The button of a card's line: Try again, or Sportarr settings, which the focus comes back to from the settings. */
+    const val CARD_BUTTON = "card-button"
 }
 
 /**
@@ -141,6 +192,9 @@ internal object PageKeys {
  *   race or main card is watched; on a TV Choose release for that part beside it; a row per part, those begun with their
  *   ⋮. Before the first part starts, when it starts and the line in the buttons' place.
  * - A page whose event or weekend left the list says so; none while the list loads.
+ * - A UFC card's page (one [PageFinder.reads]) with its fight [card] (L-B7): each part's bouts under it, the credit with
+ *   View on Wikipedia's address on [wikipedia] and the bouts' footnote; else the line of the card's state; none of it
+ *   while the card isn't known (null). Any other page shows no card, whatever it is given.
  */
 internal object PageScreens {
     fun of(
@@ -154,15 +208,18 @@ internal object PageScreens {
         zone: ZoneId,
         tv: Boolean,
         unanswered: Pair<String, String>? = null,
+        card: CardState? = null,
+        wikipedia: String = WikipediaBase.URL,
     ): PageScreen? {
         if (state == ListState.Loading) return null
         val sports = state.sports ?: return GONE
         val listed = listed(sports, page, key) ?: return GONE
-        val screen = if (listed is SportsEvent && listed.parts.size == 1) {
+        val built = if (listed is SportsEvent && listed.parts.size == 1) {
             onePart(listed, watch, nothing, searching, now, zone)
         } else {
             parts(listed, watch, nothing, searching, now, zone, tv)
         }
+        val screen = if (listed is SportsEvent && built.kind == PageKind.Card && PageFinder.reads(listed)) carded(built, listed, card, tv, wikipedia) else built
         // Why Choose release found nothing, where no indexer answered, in the kept line's place while the page shows.
         val why = unanswered?.takeIf { (part, _) -> listed.items.any { it.part.key == part } }?.second ?: return screen
         return screen.copy(kept = why)
@@ -334,6 +391,36 @@ internal object PageScreens {
         )
     }
 
+    /**
+     * A UFC card's page with what it shows of its [card] (L-B7). With bouts: each part's under its row, matched by the
+     * part's id (Sportarr's own part names receive Wikipedia's bouts), the credit with View on Wikipedia's address on a
+     * phone, and the bouts' footnote. Else the line of the card's state in the credit's place, and today's footnote. While
+     * the card isn't known (null), the page as before.
+     */
+    private fun carded(screen: EventScreen, event: SportsEvent, card: CardState?, tv: Boolean, wikipedia: String): EventScreen = when (card) {
+        null -> screen
+        is CardState.Bouts -> {
+            val bouts = card.card.parts.associate { it.id to it.bouts }
+            val ids = event.parts.associate { it.key to it.id }
+            screen.copy(
+                parts = screen.parts.map { row -> row.copy(bouts = bouts[ids[row.part]].orEmpty().mapIndexed { index, bout -> boutRow(row, index, bout) }) },
+                credit = Credit(card.card.article, if (tv) null else PageFinder.address(wikipedia, card.card.article)),
+                footnote = if (tv) Words.Bouts.TV_FOOTNOTE else Words.Bouts.FOOTNOTE,
+            )
+        }
+        CardState.Reading -> screen.copy(cardLine = CardLine.Reading)
+        CardState.NotYet -> screen.copy(cardLine = CardLine.NotYet)
+        CardState.NoCard -> screen.copy(cardLine = CardLine.NoCard)
+        CardState.CantReach -> screen.copy(cardLine = CardLine.CantReach)
+        CardState.Off -> screen.copy(cardLine = CardLine.Off)
+    }
+
+    /** The [index]th [bout] under [row]: it plays the row's part, once that has started (W5). */
+    private fun boutRow(row: PartRow, index: Int, bout: Bout): BoutRow = BoutRow(
+        PageKeys.bout(row.part, index), Words.Bouts.pair(bout.first, bout.second), bout.weight, bout.titleFight, bout.mainEvent,
+        Words.SportsList.play(row.label).takeIf { row.started },
+    )
+
     /** Choose release's words: "Searching your indexers…" while it runs for [part]. */
     private fun chooseLabel(part: Part, searching: String?): String = if (searching == part.key) Words.Game.SEARCHING else Words.Game.CHOOSE_RELEASE
 
@@ -364,7 +451,9 @@ internal object PageScreens {
  * which asks for releases only as it plays; Choose release and Search indexers search when pressed.
  *
  * [run] does its work while the page shows: it follows the list, its parts' watch states and the lines, and builds each
- * screen on [work], off the main thread (L641). The time moves on by [tick].
+ * screen on [work], off the main thread (L641). The time moves on by [tick]. A UFC card's page follows its fight card in
+ * [cards] (none: no card, as a test's page), which it asks to read once each time the page shows (W1, L-B5), and its
+ * credit links to the article on [wikipedia].
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 internal class PageModel(
@@ -377,6 +466,8 @@ internal class PageModel(
     private val clock: () -> Instant,
     private val zone: () -> ZoneId,
     private val work: CoroutineContext = Dispatchers.Default,
+    private val cards: Cards? = null,
+    private val wikipedia: String = WikipediaBase.URL,
 ) {
     private val now = MutableStateFlow(clock())
     private val searching = MutableStateFlow<String?>(null)
@@ -394,23 +485,48 @@ internal class PageModel(
 
     suspend fun run() {
         now.value = clock()
+        // The event whose card this showing asked to be read: once, not again as the list is read anew.
+        var opened: String? = null
         val followed = state.flatMapLatest { listState ->
             val sports = listState.sports
             val listed = sports?.let { withContext(work) { PageScreens.listed(it, page, key) } }
-            if (listed == null) flowOf(listState to emptyMap()) else watch.observe(listed.items.map { it.part.key }).map { listState to it }
+            if (listed == null) {
+                flowOf(Followed(listState, emptyMap(), null))
+            } else {
+                // Here, on the caller's thread (the main one), as the cards are asked.
+                val card = (listed as? SportsEvent)?.takeIf(PageFinder::reads)?.let { event ->
+                    cards?.let { cards ->
+                        if (opened != event.key) {
+                            opened = event.key
+                            cards.opened(event)
+                        }
+                        cards.state(event)
+                    }
+                } ?: flowOf(null)
+                combine(watch.observe(listed.items.map { it.part.key }), card) { states, shown -> Followed(listState, states, shown) }
+            }
         }
-        combine(followed, plays.nothing, searching, now, unanswered) { (listState, states), nothing, searching, now, unanswered ->
-            Input(listState, states, nothing, searching, now, unanswered)
+        combine(followed, plays.nothing, searching, now, unanswered) { followed, nothing, searching, now, unanswered ->
+            Input(followed.state, followed.watch, nothing, searching, now, unanswered, followed.card)
         }
             .collectLatest { input ->
                 val (built, listed) = withContext(work) {
                     val sports = input.state.sports
-                    PageScreens.of(input.state, page, key, input.watch, input.nothing, input.searching, input.now, zone(), tv, input.unanswered) to
+                    PageScreens.of(input.state, page, key, input.watch, input.nothing, input.searching, input.now, zone(), tv, input.unanswered, input.card, wikipedia) to
                         sports?.let { PageScreens.listed(it, page, key)?.let { listed -> sports to listed } }
                 }
                 current = listed
                 shown.value = built
             }
+    }
+
+    /**
+     * Try again, under Can't reach: one new read of the card, holds allowing; its job, none on a page that reads no card.
+     * On the main thread, as the cards are asked.
+     */
+    fun tryAgain(): Job? {
+        val event = current?.second as? SportsEvent ?: return null
+        return cards?.takeIf { PageFinder.reads(event) }?.tryAgain(event)
     }
 
     /**
@@ -461,6 +577,9 @@ internal class PageModel(
         return Triple(sports, item.event, item.part)
     }
 
+    /** The list, the watch states of what the page shows of it, and its fight card's state. */
+    private class Followed(val state: ListState, val watch: Map<String, WatchInfo>, val card: CardState?)
+
     private class Input(
         val state: ListState,
         val watch: Map<String, WatchInfo>,
@@ -468,5 +587,6 @@ internal class PageModel(
         val searching: String?,
         val now: Instant,
         val unanswered: Pair<String, String>?,
+        val card: CardState?,
     )
 }
