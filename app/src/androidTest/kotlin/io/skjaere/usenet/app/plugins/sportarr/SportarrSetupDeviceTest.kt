@@ -1,6 +1,7 @@
 package io.skjaere.usenet.app.plugins.sportarr
 
 import android.content.res.Configuration
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
@@ -12,16 +13,23 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isOff
+import androidx.compose.ui.test.isOn
 import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
@@ -33,11 +41,14 @@ import io.skjaere.usenet.app.FakeTmdb
 import io.skjaere.usenet.app.HomeContentShown
 import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.plugins.PLUGIN_WAIT_MS
+import io.skjaere.usenet.app.plugins.PluginPage1
 import io.skjaere.usenet.app.plugins.PluginStateRule
 import io.skjaere.usenet.app.settings.PluginsPage
 import io.skjaere.usenet.app.ui.AppTheme
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -51,6 +62,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
+import java.io.File
 import java.net.ServerSocket
 
 /**
@@ -59,11 +71,13 @@ import java.net.ServerSocket
  * Sportarr too old, a page that isn't Sportarr's, a port nobody answers on); the warning for plain http to a public
  * address, typed and never sent; Save, after which the tab shows the list; the settings page from the list's ⋮ and from
  * Settings › Plugins' card, its key "Saved" with Change, and after Change "Paste the new key", Test and Save waiting for
- * a key; and the form whole at 1.3 times the text size.
+ * a key; and the form whole at 1.3 times the text size. The settings page alone has the Fight cards from Wikipedia switch
+ * (L-B8, BtPhoneSettings), on at first: switched off, the kept cards go and a UFC card's page says so, its Sportarr
+ * settings opening the switch; on again, the page reads its card as it shows.
  *
  * Nothing but loopback and the emulator's host (10.0.2.2) is ever tested or saved; the public address is typed and its
  * line read, Test and Save never pressed on it. The fake's switches are put back, and the plugin with its files and
- * secrets removed, after each test. TMDB is a strict fake: what Home asks of other titles is refused, never sent.
+ * secrets removed (the fight cards switch's file with them), after each test. TMDB is a strict fake: what Home asks of other titles is refused, never sent.
  */
 @RunWith(AndroidJUnit4::class)
 class SportarrSetupDeviceTest {
@@ -134,6 +148,8 @@ class SportarrSetupDeviceTest {
         compose.onNode(button(SAVE)).assertIsEnabled()
         assertEquals("asked of the fake before Test", before, asked())
         assertFalse("an address stored before Save", stored("url"))
+        assertFalse("the fight cards switch on the first screen", exists(hasText(FIGHT_CARDS)))
+        assertFalse("its part on the first screen", exists(hasText(EVENT_PAGES)))
     }
 
     /**
@@ -218,9 +234,7 @@ class SportarrSetupDeviceTest {
         sportarr.install()
         openSports()
         waitFor(sideTab(RECENT))
-        compose.onNode(hasContentDescription(MORE) and hasClickAction()).performClick()
-        compose.onNode(hasText(SETTINGS) and hasAnyAncestor(isPopup()) and hasClickAction()).performClick()
-        waitFor(hasText(SAVED))
+        openSettings()
         assertTrue("its title", exists(hasText(SETTINGS)))
         assertFalse("the tab's intro on its settings page", exists(hasText(INTRO)))
         assertEquals("the address as stored", SportsFakes.URL, field(addressField).config.getOrNull(SemanticsProperties.EditableText)?.text)
@@ -256,6 +270,89 @@ class SportarrSetupDeviceTest {
         waitFor(hasText(PluginsPage.INTRO))
     }
 
+    /**
+     * BtPhoneSettings: Sportarr settings' Event pages part under the reworded footnote, its Fight cards from Wikipedia switch
+     * on at first with its detail, nothing written for it until it is switched; whole at 1.3 times the text size.
+     */
+    @Test
+    fun theSettingsPageHoldsTheFightCardsSwitchOnAtFirst() {
+        sportarr.install()
+        openSports(fontScale = 1.3f)
+        waitFor(sideTab(RECENT))
+        openSettings()
+        waitFor(cardsSwitch)
+        compose.onNode(cardsSwitch).performScrollTo().assertIsOn()
+        assertTrue("its detail", exists(cardsSwitch and hasText(FIGHT_CARDS_DETAIL)))
+        val footnote = top(hasText(READ_ONLY))
+        val part = top(hasText(EVENT_PAGES))
+        assertTrue("the part under the footnote, the switch under the part", footnote < part && part < top(cardsSwitch))
+        assertFalse("its file before it is switched", options().exists())
+        assertEquals("at 1.3x", emptyList<String>(), cutTexts())
+    }
+
+    /**
+     * Switched off on settings (L-B8): kept at once, the kept fight cards deleted, and a UFC card's page then says so with
+     * Sportarr settings, today's footnote and neither bouts nor credit; nothing more is asked of Wikipedia.
+     */
+    @Test
+    fun switchedOffTheKeptCardsGoAndACardsPageSaysSo() {
+        sportarr.assumeWikipedia()
+        sportarr.install()
+        openSports()
+        waitFor(sideTab(RECENT))
+        openEvent(UFC_999)
+        waitFor(hasText(MAIN_EVENT))
+        val cards = File(sportarr.dataDir, CARDS_FILE)
+        assertTrue("its card kept", cards.exists())
+        compose.runOnIdle { nav.popBackStack() }
+        waitFor(sideTab(RECENT))
+
+        openSettings()
+        switchCards(on = false)
+        compose.waitUntil(PLUGIN_WAIT_MS) { !cards.exists() && switchedOn() == false }
+        back()
+        waitFor(sideTab(RECENT))
+        openEvent(UFC_999)
+        waitFor(hasText(OFF))
+        assertTrue("Sportarr settings beside it", exists(button(SETTINGS)))
+        assertFalse("bouts", exists(hasText(MAIN_EVENT)))
+        assertFalse("the credit", exists(hasText(CREDIT)))
+        scrollTo(hasText(CARD_FOOTNOTE))
+        assertEquals("asked of Wikipedia: the first opening alone", 1, sportarr.wikiRequests().size)
+        assertFalse("a card kept since", cards.exists())
+    }
+
+    /**
+     * Off's Sportarr settings opens the settings page with the switch off; switched on there, Back to the card's page reads
+     * its card as the page shows again, one request, and the bouts take the line's place.
+     */
+    @Test
+    fun offsSportarrSettingsOpensTheSwitchAndOnAgainReadsTheCard() {
+        sportarr.assumeWikipedia()
+        sportarr.install()
+        openSports()
+        waitFor(sideTab(RECENT))
+        openSettings()
+        switchCards(on = false)
+        back()
+        waitFor(sideTab(RECENT))
+        openEvent(UFC_999)
+        waitFor(hasText(OFF))
+        assertEquals("asked of Wikipedia while off", 0, sportarr.wikiRequests().size)
+
+        compose.onNode(button(SETTINGS)).performScrollTo().performClick()
+        waitFor(hasText(SAVED))
+        assertTrue("Sportarr settings", exists(hasText(SETTINGS)))
+        compose.onNode(cardsSwitch).performScrollTo().assertIsOff()
+        switchCards(on = true)
+        compose.waitUntil(PLUGIN_WAIT_MS) { switchedOn() == true }
+        back()
+        waitFor(hasText(MAIN_EVENT))
+        assertFalse("Off's line", exists(hasText(OFF)))
+        val asked = sportarr.wikiRequests().map { it["path"]?.jsonPrimitive?.content }
+        assertEquals("read once, as the page showed again", listOf("/wiki/UFC_999"), asked)
+    }
+
     /** At 1.3 times the text size, the form's words are whole, none cut or off the screen's side, and Test's answer too. */
     @Test
     fun theFormAtLargeTextIsWhole() {
@@ -272,6 +369,55 @@ class SportarrSetupDeviceTest {
 
     private fun test() {
         compose.onNode(button(TEST)).performScrollTo().performClick()
+    }
+
+    /** Sportarr settings from the list's ⋮, its key Saved. */
+    private fun openSettings() {
+        compose.onNode(hasContentDescription(MORE) and hasClickAction()).performClick()
+        compose.onNode(hasText(SETTINGS) and hasAnyAncestor(isPopup()) and hasClickAction()).performClick()
+        waitFor(hasText(SAVED))
+    }
+
+    /** The plugin's page of the event [id], as its row opens it. */
+    private fun openEvent(id: Int) {
+        // The catalogue first, off the main thread: its first use asks the fake for its clock.
+        val key = sportarr.catalogue.event(id).key
+        compose.runOnIdle { nav.navigate(PluginPage1(EVENT, key)) }
+    }
+
+    /** The page's arrow back. */
+    private fun back() {
+        compose.onNode(hasContentDescription("Back") and hasClickAction()).performClick()
+    }
+
+    /** The fight cards switch tapped [on] or off, as it then shows. */
+    private fun switchCards(on: Boolean) {
+        compose.onNode(cardsSwitch).performScrollTo().performClick()
+        waitFor(cardsSwitch and if (on) isOn() else isOff())
+    }
+
+    /** The plugin's file for the switch (L-B8), in its own folder. */
+    private fun options() = File(sportarr.dataDir, OPTIONS_FILE)
+
+    /** Whether the switch's file says on; null while there is none. */
+    private fun switchedOn(): Boolean? = options().takeIf { it.exists() }?.let { file ->
+        Json.parseToJsonElement(file.readText()).jsonObject["fightCards"]?.jsonPrimitive?.boolean
+    }
+
+    /** The fight cards switch on settings: its row, read with its detail and whether it is on. */
+    private val cardsSwitch = hasText(FIGHT_CARDS) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch)
+
+    private fun top(matcher: SemanticsMatcher): Float = compose.onAllNodes(matcher).fetchSemanticsNodes().single().positionInRoot.y
+
+    /** A card page's [matcher] brought into view, its list scrolled to it. */
+    private fun scrollTo(matcher: SemanticsMatcher) {
+        val deadline = SystemClock.elapsedRealtime() + PLUGIN_WAIT_MS
+        while (!exists(matcher)) {
+            runCatching { compose.onAllNodes(hasScrollToNodeAction()).onFirst().performScrollToNode(matcher) }
+            assertTrue("never shown: ${matcher.description}; shown: ${compose.screenWords()}", SystemClock.elapsedRealtime() < deadline)
+            compose.waitForIdle()
+        }
+        compose.onNode(matcher).performScrollTo()
     }
 
     /** The fake's requests since its last reset, by route: none before Test or Save. */
@@ -357,10 +503,26 @@ class SportarrSetupDeviceTest {
         const val TEST = "Test"
         const val SAVE = "Save"
         const val READ_ONLY =
-            "Sports only reads from Sportarr. It never changes, searches or downloads anything there. To change what shows here, change it in Sportarr."
+            "Sports never changes, searches or downloads anything in Sportarr; it only reads from it. To change what shows here, change it in Sportarr."
+        const val EVENT_PAGES = "EVENT PAGES"
+        const val FIGHT_CARDS = "Fight cards from Wikipedia"
+        const val FIGHT_CARDS_DETAIL =
+            "Reads a UFC event's fight card from Wikipedia when you open the event. Wikipedia sees which events you open."
         const val REFUSED = "Sportarr refused this API key. Copy it again from Settings › General › Security in Sportarr."
         const val NOT_SPORTARR = "This address answers, but it isn't Sportarr."
         const val OLD = "4.0.998"
+
+        /** The plugin's pages (L652), and the library's UFC 999, yesterday (the fake Wikipedia's card). */
+        const val EVENT = "event"
+        const val UFC_999 = 1901
+        const val MAIN_EVENT = "Quessel vs. Halde"
+        const val CREDIT = "Fight card from Wikipedia"
+        const val OFF = "Fight cards from Wikipedia are off."
+        const val CARD_FOOTNOTE = "Tap a part to play the best release, or ⋮ to choose one yourself. Details from your Sportarr."
+
+        /** The plugin's kept fight cards and its switch, in its own folder (L-B5, L-B8). */
+        const val CARDS_FILE = "cards.json"
+        const val OPTIONS_FILE = "options.json"
 
         /** TEST-NET-3 (RFC 5737): plain http to a public address, typed alone. */
         const val PUBLIC = "http://203.0.113.7:1867"

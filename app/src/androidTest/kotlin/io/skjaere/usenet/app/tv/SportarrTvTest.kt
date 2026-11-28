@@ -19,6 +19,8 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
+import androidx.compose.ui.test.isOff
+import androidx.compose.ui.test.isOn
 import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.performImeAction
@@ -36,6 +38,7 @@ import io.skjaere.usenet.app.container
 import io.skjaere.usenet.app.play.PlayState
 import io.skjaere.usenet.app.plugins.PLUGIN_WAIT_MS
 import io.skjaere.usenet.app.plugins.PluginMeasure
+import io.skjaere.usenet.app.plugins.PluginPage1
 import io.skjaere.usenet.app.plugins.PluginStateRule
 import io.skjaere.usenet.app.play.OkGuard
 import io.skjaere.usenet.app.plugins.sportarr.SPORTARR
@@ -68,8 +71,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * the row left, Back to the rail and then Home; Back from a game's page on its row; "+N more" opening in place with the
  * focus on its sixth row, and Back from that row's page on it; Upcoming by OK, the focus staying on it; a sport picked
  * after another's leagues were walked along, straight or through All, opening its leagues at their start; each state's
- * focus (loading, no list, nothing followed, the key refused, a failing page under the kept list); and M-big with the
- * fake's busy league.
+ * focus (loading, no list, nothing followed, the key refused, a failing page under the kept list); M-big with the fake's
+ * busy league; and the fight cards switch on Sportarr settings (L-B10), Down from Test or Save, OK switching it, with a
+ * UFC card's Sportarr settings then reached by Down from its last part, and Back from the settings on it.
  *
  * The watch rows the tests write and the fake's switches are put back after each test, and the plugin with its files and
  * secrets removed. TMDB is a strict fake: what Home asks of other titles is refused, never sent.
@@ -221,6 +225,75 @@ class SportarrTvTest {
         instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
         waitForFocusOn(fieldGate(KEY), "the key's gate, after Back")
         assertEquals("Right from the key's gate", "Show $KEY", remote.press(KeyEvent.KEYCODE_DPAD_RIGHT))
+    }
+
+    /**
+     * BtTvSettings and BtTvCardStates by remote: Sportarr settings from the list's ⋮, Down from Save to Fight cards from
+     * Wikipedia and Up back, then Down from Test to it; OK switches it off, kept at once. UFC 999's page then says so, and
+     * its Sportarr settings, reached by Down from the last part, opens the settings, the switch off; Back comes back to the
+     * button. There Down to the switch and OK switch it on; Back on the page, which reads its card as it shows again, the
+     * focus on its first focus, the top button, as the button has gone.
+     */
+    @Test
+    fun theFightCardsSwitchByRemoteAndACardsSportarrSettings() {
+        sportarr.assumeWikipedia()
+        sportarr.install()
+        openSports()
+        listFocused()
+        assertEquals("the ⋮ at the title line's end", MORE, remote.pressUntil(KeyEvent.KEYCODE_DPAD_RIGHT, MORE, max = 12))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        remote.waitForFocus(SHOW_WATCHED)
+        assertEquals(SETTINGS, remote.pressUntil(KeyEvent.KEYCODE_DPAD_DOWN, SETTINGS, max = 3))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        waitFor(hasText("Saved"))
+        waitFor(cardsSwitch and isOn())
+        waitForFocusOn(fieldGate(ADDRESS), "the address")
+        assertEquals("Down from the address", "Change", remote.press(KeyEvent.KEYCODE_DPAD_DOWN))
+        assertEquals("Down from Change, at the key's field's end", "Save", remote.press(KeyEvent.KEYCODE_DPAD_DOWN))
+        remote.press(KeyEvent.KEYCODE_DPAD_DOWN)
+        assertTrue("Down from Save: the switch, not \"${remote.focused()}\"", remote.isFocused(cardsSwitch))
+        val up = remote.press(KeyEvent.KEYCODE_DPAD_UP)
+        assertTrue("Up from the switch: Test or Save, not \"$up\"", up == "Test" || up == "Save")
+        if (up == "Save") assertEquals("Left from Save", "Test", remote.press(KeyEvent.KEYCODE_DPAD_LEFT))
+        remote.press(KeyEvent.KEYCODE_DPAD_DOWN)
+        assertTrue("Down from Test: the switch, not \"${remote.focused()}\"", remote.isFocused(cardsSwitch))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        waitFor(cardsSwitch and isOff())
+        assertTrue("still on the switch", remote.isFocused(cardsSwitch))
+        compose.waitUntil(PLUGIN_WAIT_MS) { File(sportarr.dataDir, OPTIONS_FILE).let { it.exists() && "false" in it.readText() } }
+
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+        val card = library.event(UFC_999)
+        compose.runOnIdle { nav.navigate(PluginPage1("event", card.key)) }
+        waitFor(hasText(card.title) and SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
+        waitFor(hasText(CARDS_OFF))
+        remote.waitForFocus(TOP_BUTTON)
+        SystemClock.sleep(OkGuard.WINDOW_MS)
+        remote.press(KeyEvent.KEYCODE_DPAD_RIGHT)
+        assertEquals(MAIN_CARD, remote.pressUntil(KeyEvent.KEYCODE_DPAD_DOWN, MAIN_CARD, max = 5))
+        assertEquals("Down from the last part", SETTINGS, remote.press(KeyEvent.KEYCODE_DPAD_DOWN))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        waitFor(hasText("Saved"))
+        waitFor(cardsSwitch and isOff())
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+        waitFor(hasText(CARDS_OFF))
+        remote.waitForFocus(SETTINGS, FOCUS_WAIT_MS)
+        assertEquals("asked of Wikipedia while off", 0, sportarr.wikiRequests().size)
+
+        // The page shown again guards its first moment from an OK, as when it opened.
+        SystemClock.sleep(OkGuard.WINDOW_MS)
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        waitFor(hasText("Saved"))
+        waitForFocusOn(fieldGate(ADDRESS), "the address")
+        remote.pressUntil(KeyEvent.KEYCODE_DPAD_DOWN, FIGHT_CARDS, max = 4)
+        assertTrue("Down to the switch, not \"${remote.focused()}\"", remote.isFocused(cardsSwitch))
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
+        waitFor(cardsSwitch and isOn())
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+        waitFor(hasText(UFC_999_MAIN_EVENT))
+        assertFalse("Off's line", exists(hasText(CARDS_OFF)))
+        remote.waitForFocus(TOP_BUTTON, FOCUS_WAIT_MS)
+        assertEquals("one read, as the page showed again", 1, sportarr.wikiRequests().size)
     }
 
     /**
@@ -606,6 +679,9 @@ class SportarrTvTest {
 
     private fun chip(label: String) = hasText(label) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton)
 
+    /** The fight cards switch on Sportarr settings: its row, read with its detail and whether it is on. */
+    private val cardsSwitch = hasText(FIGHT_CARDS) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch)
+
     /** A league chip of [sport]'s, any. */
     private fun leagueChipOf(sport: String): SemanticsMatcher {
         val names = library.leagues.filter { it.sport == sport }.map { it.name }.toSet()
@@ -694,8 +770,17 @@ class SportarrTvTest {
         const val SETTLE_MS = 1_500L
         const val SLOW_FRAME_MS = 16L
 
-        /** The plugin's kept list in its folder (L645). */
+        /** The plugin's kept list in its folder (L645), and its fight cards switch (L-B8). */
         const val LIST_FILE = "list.json"
+        const val OPTIONS_FILE = "options.json"
+
+        /** The fight cards switch, and the library's UFC 999, yesterday, its page with the switch off (BtTvCardStates). */
+        const val FIGHT_CARDS = "Fight cards from Wikipedia"
+        const val UFC_999 = 1901
+        const val TOP_BUTTON = "Play Early Prelims"
+        const val MAIN_CARD = "Main Card"
+        const val UFC_999_MAIN_EVENT = "Quessel vs. Halde"
+        const val CARDS_OFF = "Fight cards from Wikipedia are off."
 
         /** Presses of Left that bring the focus out of Home's content to the rail, at most. */
         const val MAX_LEFTS = 6

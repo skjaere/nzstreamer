@@ -938,7 +938,8 @@ class TvSharedScreensWalkTest {
 
     /**
      * The Sports setup (L640): the tab's first screen, its two fields' gates and Show; then the same form as
-     * Sportarr settings, the address stored, the key Saved with Change, and Test and Save.
+     * Sportarr settings, the address stored, the key Saved with Change, Test and Save, and the Fight cards from Wikipedia
+     * switch under them (L-B8), shown once the plugin has read it.
      */
     @Test
     fun sportsSetup() {
@@ -948,12 +949,14 @@ class TvSharedScreensWalkTest {
             openSports(hasText("Sportarr address"))
         }
         runBlocking { device.connect() }
-        check("Sportarr settings", mustReach = listOf("Sportarr address", "Change", "Test", "Save")) {
+        check("Sportarr settings", mustReach = listOf("Sportarr address", "Change", "Test", "Save", "Fight cards from Wikipedia")) {
             compose.runOnIdle {
                 nav.switchTab(HomeRoute)
                 nav.navigate(PluginSettings1)
             }
-            compose.waitUntil(SPORTS_WAIT_MS) { compose.onAllNodes(hasText("Saved")).fetchSemanticsNodes().isNotEmpty() }
+            compose.waitUntil(SPORTS_WAIT_MS) {
+                listOf("Saved", "Fight cards from Wikipedia").all { compose.onAllNodes(hasText(it)).fetchSemanticsNodes().isNotEmpty() }
+            }
             compose.waitForIdle()
         }
     }
