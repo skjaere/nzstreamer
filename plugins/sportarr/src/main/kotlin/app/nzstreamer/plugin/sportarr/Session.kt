@@ -1,5 +1,11 @@
 package app.nzstreamer.plugin.sportarr
 
+import app.nzstreamer.plugin.sportarr.bouts.Cards
+import app.nzstreamer.plugin.sportarr.bouts.CardsOption
+import app.nzstreamer.plugin.sportarr.bouts.IndexFile
+import app.nzstreamer.plugin.sportarr.bouts.KeptCards
+import app.nzstreamer.plugin.sportarr.bouts.WikipediaBase
+import app.nzstreamer.plugin.sportarr.bouts.WikipediaReads
 import app.nzstreamer.plugin.sportarr.model.Item
 import app.nzstreamer.plugin.sportarr.model.Sports
 import app.nzstreamer.plugin.sportarr.source.Connection
@@ -22,16 +28,29 @@ import java.time.ZoneId
 /**
  * What one loaded instance of the plugin keeps while it runs, made as its first page draws, from its [host]: the user's
  * Sportarr as the host's secrets hold it ([connection], L640), and the list's [refresh] in the host's scope, with its file
- * in the plugin's own folder (L641, L645). Every page and the settings page share it, so a Save on one reads the list the
- * tab shows.
+ * in the plugin's own folder (L641, L645); and UFC events' fight [cards], read from Wikipedia at [wikipediaBase] (the build
+ * type's, a test's own). Every page and the settings page share it, so a Save on one reads the list the tab shows, and the
+ * switch on settings is the one the pages follow.
  */
-internal class Session(private val host: PluginHost) {
+internal class Session(private val host: PluginHost, wikipediaBase: String = WikipediaBase.URL) {
     val connection = Connection(host.secrets)
 
     /** The list, read in the device's zone as the host's clock gives the time. */
     val refresh = Refresh(host.scope, connection, KeptList(host.dataDir), Instant::now) { saved ->
         ListReader(SportarrClient(host.http, saved.address, saved.key, host::addressSafety), Instant.now(), ZoneId.systemDefault()).read()
     }
+
+    /**
+     * UFC events' fight cards (L-B5, L-B6, L-B8): read in the host's scope as their pages open, one at a time, the time as the
+     * host's clock gives it; the cards and the switch kept in the plugin's own folder, the index's rows in its cache folder.
+     */
+    val cards = Cards(
+        host.scope,
+        WikipediaReads(host.http, wikipediaBase, Instant::now, IndexFile(host.cacheDir)),
+        KeptCards(host.dataDir),
+        CardsOption(host.dataDir),
+        Instant::now,
+    )
 
     /** Whether an address and a key are saved, as that changes: the tab is the setup until both are. */
     val setUp: Flow<Boolean> = combine(host.secrets.has(Connection.URL), host.secrets.has(Connection.KEY)) { url, key -> url && key }
