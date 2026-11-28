@@ -519,17 +519,19 @@ class FakeSportarrServerTest {
     }
 
     /**
-     * `mock-seed sports` (L655): the fake Sportarr and the sports indexer in one process, on one anchor, each on the
-     * loopback address alone (the emulators reach them at 10.0.2.2); with --seed false it lists the catalogue's releases
-     * and never posts to the mock, so it runs while the mock is down. Given the address of a socket that only listens, it
-     * never connects there.
+     * `mock-seed sports` (L655, L-B12): the fake Sportarr, the sports indexer and the fake Wikipedia in one process, on one
+     * anchor, each on the loopback address alone (the emulators reach them at 10.0.2.2), the fake Wikipedia's switches on
+     * the fake Sportarr's control path; with --seed false it lists the catalogue's releases and never posts to the mock, so
+     * it runs while the mock is down. Given the address of a socket that only listens, it never connects there.
      */
     @Test
-    fun `the sports command serves the fake Sportarr and the sports indexer on one anchor, and seeds nothing with --seed false`() = runBlocking<Unit> {
+    fun `the sports command serves the fake Sportarr, the sports indexer and the fake Wikipedia on one anchor, and seeds nothing with --seed false`() = runBlocking<Unit> {
         ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { mock ->
             mock.soTimeout = 300
             val log = CopyOnWriteArrayList<String>()
-            val options = mapOf("port" to "0", "indexer-port" to "0", "anchor" to "2026-11-22", "seed" to "false", "mock" to "http://127.0.0.1:${mock.localPort}")
+            val options = mapOf(
+                "port" to "0", "indexer-port" to "0", "wiki-port" to "0", "anchor" to "2026-11-22", "seed" to "false", "mock" to "http://127.0.0.1:${mock.localPort}",
+            )
             sports(options, log = { log += it }).use { fakes ->
                 assertEquals(anchor, fakes.anchor)
                 assertTrue(fakes.sportarr.address.isLoopbackAddress)
@@ -543,6 +545,18 @@ class FakeSportarrServerTest {
                 assertContains(clock.body(), "\"anchor\":\"2026-11-22\"")
                 val indexer = IndexerConfig("sports", "Sports", "http://127.0.0.1:${fakes.indexer.port}", SportsFakes.INDEXER_KEY)
                 assertEquals("Fake Indexer", NewznabClient(NewznabClient.defaultHttpClient()).caps(indexer).serverTitle)
+                // The fake Wikipedia, dated from the same anchor, its switches on the fake Sportarr's control path.
+                assertEquals(anchor, fakes.wikipedia.anchor)
+                assertTrue(fakes.wikipedia.address.isLoopbackAddress)
+                fun wiki(path: String) = http.send(HttpRequest.newBuilder(URI("http://127.0.0.1:${fakes.wikipedia.port}$path")).GET().build(), HttpResponse.BodyHandlers.ofString())
+                assertContains(wiki("/wiki/UFC_999").body(), ">2026-11-21<")
+                val switched = http.send(
+                    HttpRequest.newBuilder(URI("http://127.0.0.1:${fakes.sportarr.port}/control/wiki-form?event=1901&form=missing")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString(),
+                )
+                assertEquals(200, switched.statusCode())
+                assertEquals(404, wiki("/wiki/UFC_999").statusCode())
+                assertTrue(log.any { "Fake Wikipedia on http://127.0.0.1:${fakes.wikipedia.port} (emulator: http://10.0.2.2:${fakes.wikipedia.port})" in it }, log.joinToString("\n"))
             }
             assertFailsWith<SocketTimeoutException> { mock.accept() }
             assertTrue(log.any { "anchor 2026-11-22" in it }, log.joinToString("\n"))
@@ -551,21 +565,25 @@ class FakeSportarrServerTest {
     }
 
     @Test
-    fun `the sports command refuses the ports others use, an anchor that isn't a date, and a seed that is neither true nor false`() {
+    fun `the sports command refuses the ports others use or one of its fakes' twice, an anchor that isn't a date, and a seed that is neither true nor false`() {
         fun refused(vararg options: Pair<String, String>): String = assertFailsWith<IllegalArgumentException>(options.toList().toString()) {
-            val whole = mapOf("port" to "0", "indexer-port" to "0", "seed" to "false", "mock" to "http://127.0.0.1:1")
+            val whole = mapOf("port" to "0", "indexer-port" to "0", "wiki-port" to "0", "seed" to "false", "mock" to "http://127.0.0.1:1")
             sports(whole + options, log = {}).close()
         }.message!!
         listOf("1119", "8081", "8089", "8090", "8091", "8092", "8093", "8096", "8097", "29101", "-1", "70000", "soon").forEach { port ->
             assertContains(refused("port" to port), "--port", ignoreCase = false)
             assertContains(refused("indexer-port" to port), "--indexer-port")
+            assertContains(refused("wiki-port" to port), "--wiki-port")
         }
-        assertContains(refused("port" to "18098", "indexer-port" to "18098"), "two ports")
+        assertContains(refused("port" to "18098", "indexer-port" to "18098"), "a port each")
+        assertContains(refused("port" to "18095", "wiki-port" to "18095"), "a port each")
+        assertContains(refused("indexer-port" to "18094", "wiki-port" to "18094"), "a port each")
         assertContains(refused("anchor" to "22.11.2026"), "--anchor")
         assertContains(refused("seed" to "yes"), "--seed")
         ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { taken ->
             assertContains(refused("port" to "${taken.localPort}"), "${taken.localPort} is taken")
             assertContains(refused("indexer-port" to "${taken.localPort}"), "${taken.localPort} is taken")
+            assertContains(refused("wiki-port" to "${taken.localPort}"), "${taken.localPort} is taken")
         }
     }
 

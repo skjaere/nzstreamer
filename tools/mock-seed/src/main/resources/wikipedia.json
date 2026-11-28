@@ -1,0 +1,83 @@
+{
+  "format": 1,
+  "about": "The fake Wikipedia's articles (L-B12), our own: the fight cards of the sports catalogue's UFC events, each by its event's id, each part's bouts in the order fought with a result for the results form (winner 0 or 1 into fighters as the pre-event table lists them; null for a draw or a no contest, listed as written in both forms), and List of UFC events' other rows, each dated by its day from the anchor. Every fighter, venue and place is invented; the part and weight-class words are the ones UFC's articles use. cite puts a reference mark on the weight class or on a fighter (first or second, as fighters lists them).",
+  "articles": [
+    {
+      "event": 1901,
+      "title": "UFC 999",
+      "name": "UFC 999: Quessel vs. Halde",
+      "redirects": [],
+      "moved": "UFC 999 (Tarnholm)",
+      "form": "results",
+      "heading": "parsoid",
+      "venue": "Kestrel Arena",
+      "city": "Tarnholm",
+      "number": 761,
+      "attendance": "18,452",
+      "background": "A lightweight title bout between the champion Quessel and Halde headlined the event. A welterweight bout between Varnholt and Tollerup was linked to the event and never booked.",
+      "result": "Halde def. Quessel by split decision to take the lightweight title, and Loam def. Brisk to take the bantamweight title.",
+      "announced": ["Welterweight bout: Velmar vs. Kjelsen"],
+      "bonus": ["Fight of the Night: Halde vs. Quessel", "Performance of the Night: Savrin and Zelinek"],
+      "parts": [
+        {"header": "Early preliminary card (Kestrel+)", "bouts": [
+          {"weight": "Flyweight", "fighters": ["Ambrel", "Savrin"], "winner": 1, "method": "Submission (rear-naked choke)", "round": 2, "time": "3:12", "cite": "second"},
+          {"weight": "Women's Strawweight", "fighters": ["Wexmoor", "Durnay"], "winner": 0, "method": "Decision (unanimous) (29–27, 29–27, 30–26)", "round": 3, "time": "5:00", "resultNote": "Durnay was deducted one point in round 2 due to an illegal knee."},
+          {"weight": "Welterweight", "fighters": ["Kjelsen", "Tollerup"], "winner": 0, "method": "Decision (unanimous) (29–28, 29–28, 30–27)", "round": 3, "time": "5:00"}
+        ]},
+        {"header": "Preliminary card (Kestrel Sports)", "bouts": [
+          {"weight": "Bantamweight", "fighters": ["Tarnoy", "Ferlund"], "winner": null, "method": "Draw (majority) (28–28, 28–28, 29–28)", "round": 3, "time": "5:00"},
+          {"weight": "Light Heavyweight", "fighters": ["Grisholm", "Pellicot"], "winner": 1, "method": "TKO (punches)", "round": 2, "time": "1:55", "cite": "weight"},
+          {"weight": "Featherweight", "fighters": ["Velmar", "Kestvik"], "winner": null, "method": "No Contest (accidental eye poke)", "round": 1, "time": "2:10"},
+          {"weight": "Middleweight", "fighters": ["Brenneck", "Marhoff"], "winner": 1, "method": "Decision (split) (29–28, 28–29, 29–28)", "round": 3, "time": "5:00"}
+        ]},
+        {"header": "Main card (Pay-per-view)", "bouts": [
+          {"weight": "Heavyweight", "fighters": ["Lindqvar", "Zelinek"], "winner": 1, "method": "KO (head kick)", "round": 1, "time": "1:02", "resultNote": "For the first time on a UFC main card, both heavyweights came in at the limit."},
+          {"weight": "Women's Flyweight", "fighters": ["Ostrem", "Tessmar"], "winner": 0, "method": "Decision (unanimous) (30–27, 30–27, 29–28)", "round": 3, "time": "5:00", "cite": "first"},
+          {"weight": "Welterweight", "fighters": ["Rendahl", "Varnholt"], "winner": 1, "method": "Submission (guillotine choke)", "round": 2, "time": "2:40"},
+          {"weight": "Bantamweight", "fighters": ["Brisk (c)", "Loam"], "winner": 1, "method": "TKO (punches)", "round": 4, "time": "3:33", "note": "For the UFC Bantamweight Championship."},
+          {"weight": "Lightweight", "fighters": ["Quessel (c)", "Halde"], "winner": 1, "method": "Decision (split) (48–47, 47–48, 48–47)", "round": 5, "time": "5:00", "note": "For the UFC Lightweight Championship."}
+        ]}
+      ]
+    },
+    {
+      "event": 1902,
+      "title": "UFC Fight Night: Brisk vs. Loam",
+      "name": "UFC Fight Night: Brisk vs. Loam",
+      "redirects": ["UFC Fight Night 888"],
+      "moved": "UFC on Kestrel: Brisk vs. Loam",
+      "form": "pre",
+      "heading": "legacy",
+      "venue": "Kestrel Arena",
+      "city": "Tarnby",
+      "number": null,
+      "attendance": "11,208",
+      "background": "A featherweight rematch between Brisk and Loam is expected to headline the event. A lightweight bout between Ambrel and Tarnoy was moved to a later card.",
+      "result": "Loam def. Brisk again by unanimous decision, and Wexmoor def. Ostrem on the early preliminary card.",
+      "announced": ["Lightweight bout: Ambrel vs. Tarnoy", "Welterweight bout: Tollerup vs. Varnholt"],
+      "bonus": ["Fight of the Night: Loam vs. Brisk", "Performance of the Night: Velmar and Marhoff"],
+      "parts": [
+        {"header": "Early preliminary card (Kestrel+)", "bouts": [
+          {"weight": "Women's Strawweight", "fighters": ["Wexmoor", "Ostrem"], "winner": 0, "method": "Decision (unanimous) (30–27, 29–28, 29–28)", "round": 3, "time": "5:00"}
+        ]},
+        {"header": "Preliminary card (Kestrel Sports)", "bouts": [
+          {"weight": "Flyweight", "fighters": ["Savrin", "Kestvik"], "winner": 0, "method": "TKO (elbows)", "round": 3, "time": "4:01"},
+          {"weight": "Bantamweight", "fighters": ["Ferlund", "Velmar"], "winner": 1, "method": "Submission (arm-triangle choke)", "round": 1, "time": "4:44", "cite": "first"},
+          {"weight": "Women's Flyweight", "fighters": ["Tessmar", "Durnay"], "winner": 1, "method": "Decision (split) (29–28, 28–29, 29–28)", "round": 3, "time": "5:00"},
+          {"weight": "Welterweight", "fighters": ["Rendahl", "Kjelsen"], "winner": null, "method": "No Contest (overturned)", "round": 2, "time": "3:58"}
+        ]},
+        {"header": "Main card (Kestrel Sports)", "bouts": [
+          {"weight": "Light Heavyweight", "fighters": ["Brenneck", "Pellicot"], "winner": 1, "method": "KO (punch)", "round": 1, "time": "0:51", "cite": "weight"},
+          {"weight": "Heavyweight", "fighters": ["Zelinek", "Lindqvar"], "winner": null, "method": "Draw (split) (29–28, 28–29, 28–28)", "round": 3, "time": "5:00"},
+          {"weight": "Middleweight", "fighters": ["Grisholm", "Marhoff"], "winner": 1, "method": "TKO (knee and punches)", "round": 2, "time": "2:17"},
+          {"weight": "Featherweight", "fighters": ["Loam", "Brisk"], "winner": 0, "method": "Decision (unanimous) (49–46, 48–47, 48–47)", "round": 5, "time": "5:00"}
+        ]}
+      ]
+    }
+  ],
+  "index": [
+    {"name": "UFC 1000: Pellicot vs. Velmar", "title": "UFC 1000", "day": 34, "red": true, "venue": "Kestrel Arena", "city": "Tarnholm"},
+    {"name": "UFC Fight Night: Tollerup vs. Kjelsen", "title": "UFC Fight Night: Tollerup vs. Kjelsen", "day": 13, "venue": "Kestrel Arena", "city": "Tarnby"},
+    {"name": "UFC Fight Night: Ambrel vs. Kestvik", "title": "UFC Fight Night: Ambrel vs. Kestvik", "day": -8, "venue": "Kestrel Arena", "city": "Tarnby", "number": 760, "attendance": "9,876"},
+    {"name": "UFC 998: Tarnoy vs. Varnholt", "title": "UFC 998", "day": -15, "venue": "Kestrel Arena", "city": "Tarnholm", "number": 759, "attendance": "17,310"}
+  ]
+}

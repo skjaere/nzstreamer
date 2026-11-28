@@ -55,6 +55,12 @@ import java.util.concurrent.Executors
  * paging), and how many asked without the key or carried it in the query, which the plugin never does; `reset` puts
  * every switch and count back.
  *
+ * Given the fake Wikipedia ([wiki], L-B12), its switches and counts live here too, one lease and one reset for both:
+ * `wiki-form?event=&form=` serves that event's article in a form (results, pre, unsplit, bare, missing or moved; `on=false`
+ * puts the event's back as usual, or every event's without `event=`), `wiki-fail?status=` answers every Wikipedia request
+ * with 503, 403 or 429, `wiki-hold` holds every Wikipedia answer until it is switched off (a device's Reading line), and
+ * `counts` gains `wiki`, its requests ([FakeWikipediaServer.counts]). Without one, the three are unknown (404).
+ *
  * The switches and counts are one set for every emulator reaching the fake, so a device class holds it while it runs
  * (`take?by=<its id>`, `give-back?by=`): another is refused (409) until it is given back or [leaseMs] after it was taken;
  * `take?by=&ms=` holds it that long instead, half an hour at most. A reset leaves the holder as it is. It listens on the
@@ -72,6 +78,7 @@ class FakeSportarrServer(
     private val now: () -> Long = { System.nanoTime() / 1_000_000 },
     private val wallClock: () -> Instant = Instant::now,
     private val pause: (Long) -> Unit = Thread::sleep,
+    private val wiki: FakeWikipediaServer? = null,
 ) : AutoCloseable {
     private val library: List<SportsLeague> = catalog.leagues(anchor)
     private val busyOf: (Int) -> SportsLeague = { events -> catalog.busy(anchor, events) }
@@ -289,7 +296,29 @@ class FakeSportarrServer(
                 if (!take(by, ms ?: leaseMs)) return exchange.json("""{"held":true}""", 409)
             }
             "give-back" -> synchronized(lock) { if (holder == query["by"]) holder = null }
-            else -> return exchange.json("""{"error":"no such control"}""", 404)
+            "wiki-form" -> {
+                val wiki = wiki ?: return exchange.json(NO_SUCH_CONTROL, 404)
+                val given = query["event"]
+                val event = given?.toIntOrNull()?.takeIf(wiki::hasArticle)
+                if (given != null && event == null) return exchange.json("""{"error":"event= names an event the fake Wikipedia has an article for"}""", 400)
+                val form = WikiForm.entries.firstOrNull { it.wire == query["form"] }
+                when {
+                    !on && event == null -> wiki.usualForms()
+                    !on -> wiki.form(requireNotNull(event), null)
+                    event == null || form == null ->
+                        return exchange.json("""{"error":"event= names an event, form= results, pre, unsplit, bare, missing or moved"}""", 400)
+                    else -> wiki.form(event, form)
+                }
+            }
+            "wiki-fail" -> {
+                val wiki = wiki ?: return exchange.json(NO_SUCH_CONTROL, 404)
+                wiki.fail(
+                    if (!on) null else query["status"]?.toIntOrNull()?.takeIf { it in FakeWikipediaServer.FAILS }
+                        ?: return exchange.json("""{"error":"status= is 503, 403 or 429"}""", 400),
+                )
+            }
+            "wiki-hold" -> (wiki ?: return exchange.json(NO_SUCH_CONTROL, 404)).hold(on)
+            else -> return exchange.json(NO_SUCH_CONTROL, 404)
         }
         log("sportarr fake: control $name")
         exchange.json("""{"ok":true}""")
@@ -301,6 +330,7 @@ class FakeSportarrServer(
             put("pages", JsonObject(pages.mapValues { JsonPrimitive(it.value) }))
             put("withoutKey", withoutKey)
             put("keyInQuery", keyInQuery)
+            wiki?.let { put("wiki", it.counts()) }
         }
     }
 
@@ -331,6 +361,7 @@ class FakeSportarrServer(
             withoutKey = 0
             keyInQuery = 0
         }
+        wiki?.reset()
     }
 
     private fun HttpExchange.json(body: String, status: Int = 200) = reply(body, "application/json", status)
@@ -359,6 +390,7 @@ class FakeSportarrServer(
         private val EVENTS = Regex("/api/leagues/(-?\\d+)/events")
 
         private const val NOT_FOUND = """{"error":"Not found"}"""
+        private const val NO_SUCH_CONTROL = """{"error":"no such control"}"""
         private const val LEAGUE_NOT_FOUND = """{"error":"League not found"}"""
         private const val PAGE = "<!DOCTYPE html><html><head><title>Sign in</title></head><body><form>Sign in</form></body></html>"
 

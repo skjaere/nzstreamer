@@ -67,6 +67,29 @@ class SportsCatalogTest {
         assertNull(event(1001).partNames)
     }
 
+    /**
+     * The fake Wikipedia's articles (L-B12, wikipedia.json) cover the catalogue's UFC events: one for each, none for another,
+     * each bout with a result for the results form.
+     */
+    @Test
+    fun `every UFC event of the catalogue has a card on the fake Wikipedia, each bout with a result for the results form`() {
+        val cards = WikipediaCards.load()
+        assertEquals(1, cards.format)
+        assertEquals(league("UFC").events.map { it.id }.sorted(), cards.articles.map { it.event }.sorted(), "one article for each UFC event")
+        cards.articles.forEach { article ->
+            assertTrue(article.title.startsWith("UFC ") && article.moved.startsWith("UFC "), article.title)
+            assertTrue(article.parts.isNotEmpty() && article.parts.all { it.bouts.isNotEmpty() }, article.title)
+            article.parts.flatMap { it.bouts }.forEach { bout ->
+                assertEquals(2, bout.fighters.size, article.title)
+                assertTrue(bout.method.isNotEmpty() && bout.round in 1..5 && bout.time.isNotEmpty(), "${article.title}: ${bout.fighters}")
+            }
+        }
+        // UFC 999's twelve bouts as its card page shows them; on the fight night one early prelims bout, a part Sportarr doesn't give it.
+        assertEquals(listOf(3, 4, 5), cards.articles.single { it.event == 1901 }.parts.map { it.bouts.size })
+        assertEquals(listOf("Prelims", "Main Card"), event(1902).partNames)
+        assertEquals("Early preliminary card (Kestrel+)" to 1, cards.articles.single { it.event == 1902 }.parts.first().let { it.header to it.bouts.size })
+    }
+
     @Test
     fun `a season is the start's UTC year, or the split season it falls in, written long or short`() {
         assertEquals("2026-2027", event(1001).season, "Premier League: a split season")
@@ -288,7 +311,7 @@ class SportsCatalogTest {
     fun `a dated search finds the same names on a day whose day and month are one number`() {
         // The searches L648 and L650 date with three numbers: "Premier League 2026 12 12" holds 12 twice.
         fun found(anchor: LocalDate): Map<String, Set<String>> = sports(
-            mapOf("port" to "0", "indexer-port" to "0", "anchor" to "$anchor", "seed" to "false"), log = {},
+            mapOf("port" to "0", "indexer-port" to "0", "wiki-port" to "0", "anchor" to "$anchor", "seed" to "false"), log = {},
         ).use { fakes ->
             val library = catalog.leagues(anchor).flatMap { it.events }.associateBy { it.id }
             fun date(id: Int) = numbers(library.getValue(id).broadcastDate)
@@ -308,7 +331,7 @@ class SportsCatalogTest {
 
     @Test
     fun `the plugin's searches find the names marked reached for each event and part and no other, whatever the anchor`() {
-        sports(mapOf("port" to "0", "indexer-port" to "0", "anchor" to "$anchor", "seed" to "false"), log = {}).use { fakes ->
+        sports(mapOf("port" to "0", "indexer-port" to "0", "wiki-port" to "0", "anchor" to "$anchor", "seed" to "false"), log = {}).use { fakes ->
             val rows = releases.flatMap { release -> release.verdicts.map { release.id to it } }
             val parts = rows.map { (_, row) -> row.eventId to row.part }.distinct()
             fun found(anchor: LocalDate): Map<Pair<Int, String>, Set<String>> {
@@ -358,7 +381,7 @@ class SportsCatalogTest {
             // One segment a file.
             val clip = File(dir, "clip.mkv").apply { writeBytes(Random(7).nextBytes(350_000)) }
             val options = mapOf(
-                "port" to "0", "indexer-port" to "0", "anchor" to "2026-11-22", "video" to clip.path, "mock" to "http://127.0.0.1:${mock.address.port}",
+                "port" to "0", "indexer-port" to "0", "wiki-port" to "0", "anchor" to "2026-11-22", "video" to clip.path, "mock" to "http://127.0.0.1:${mock.address.port}",
             )
             val log = CopyOnWriteArrayList<String>()
             sports(options, log = { log += it }).use { fakes ->
@@ -386,7 +409,7 @@ class SportsCatalogTest {
 
     @Test
     fun `with --seed false the sports indexer lists every name in TV Sport with its size and posted time, and needs no clip`() = runBlocking<Unit> {
-        sports(mapOf("port" to "0", "indexer-port" to "0", "anchor" to "2026-11-22", "seed" to "false", "video" to "none.mkv"), log = {}).use { fakes ->
+        sports(mapOf("port" to "0", "indexer-port" to "0", "wiki-port" to "0", "anchor" to "2026-11-22", "seed" to "false", "video" to "none.mkv"), log = {}).use { fakes ->
             val indexer = IndexerConfig("sports", "Sports", "http://127.0.0.1:${fakes.indexer.port}", SportsFakes.INDEXER_KEY)
             val client = NewznabClient(NewznabClient.defaultHttpClient())
             val race = client.search(indexer, SearchQuery.Text("Formula1 Kestrel")).items
@@ -406,7 +429,7 @@ class SportsCatalogTest {
     fun `the sports indexer lasts a long run of device classes, and takes a limit of its own`() {
         fun search(fakes: SportsFakes) =
             java.net.URI("http://127.0.0.1:${fakes.indexer.port}/api?t=search&q=Kestrel&apikey=${SportsFakes.INDEXER_KEY}").toURL().readText()
-        val options = mapOf("port" to "0", "indexer-port" to "0", "anchor" to "$anchor", "seed" to "false")
+        val options = mapOf("port" to "0", "indexer-port" to "0", "wiki-port" to "0", "anchor" to "$anchor", "seed" to "false")
         sports(options, log = {}).use { fakes -> assertContains(search(fakes), """apimax="100000"""") }
         sports(options + ("api-limit" to "2"), log = {}).use { fakes ->
             repeat(2) { assertContains(search(fakes), "<rss") }
@@ -420,7 +443,7 @@ class SportsCatalogTest {
     @Test
     fun `the command needs a clip to seed`() {
         val refused = assertFailsWith<IllegalArgumentException> {
-            sports(mapOf("port" to "0", "indexer-port" to "0", "video" to "none.mkv", "mock" to "http://127.0.0.1:1"), log = {}).close()
+            sports(mapOf("port" to "0", "indexer-port" to "0", "wiki-port" to "0", "video" to "none.mkv", "mock" to "http://127.0.0.1:1"), log = {}).close()
         }
         assertContains(refused.message!!, "none.mkv missing")
     }

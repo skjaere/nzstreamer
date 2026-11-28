@@ -29,7 +29,7 @@ import kotlin.system.exitProcess
  *   indexer --catalog screens --video <clip> --port <8093 or above> [--mock http://localhost:8081] [--apikey fake-indexer-key] [--segment 750000] [--catalog-file app/src/androidTest/assets/screens/catalog.json]
  *   torznab [--port 8096] [--apikey fake-torznab-key] [--extra-hash <hex> --extra-title <title>] [--fail 429-900] [--delay-ms <n>]
  *   debrid  [--port 8097] [--torbox-key fake-torbox-key] [--premiumize-key fake-premiumize-key] [--media build]
- *   sports  [--port 8098] [--indexer-port 8094] [--anchor <yyyy-mm-dd>] [--mock http://localhost:8081] [--seed true] [--video build/sample.mkv] [--api-limit 100000]
+ *   sports  [--port 8098] [--indexer-port 8094] [--wiki-port 8095] [--anchor <yyyy-mm-dd>] [--mock http://localhost:8081] [--seed true] [--video build/sample.mkv] [--api-limit 100000]
  */
 fun main(args: Array<String>) {
     val command = args.firstOrNull() ?: usage()
@@ -60,7 +60,7 @@ private fun usage(): Nothing {
         indexer --catalog screens --video <clip> --port <8093 or above> [--mock http://localhost:8081] [--apikey fake-indexer-key] [--segment 750000] [--catalog-file app/src/androidTest/assets/screens/catalog.json]
         torznab [--port 8096] [--apikey fake-torznab-key] [--extra-hash <hex> --extra-title <title>] [--fail 429-900] [--delay-ms <n>]
         debrid  [--port 8097] [--torbox-key fake-torbox-key] [--premiumize-key fake-premiumize-key] [--media build]
-        sports  [--port 8098] [--indexer-port 8094] [--anchor <yyyy-mm-dd>] [--mock http://localhost:8081] [--seed true] [--video build/sample.mkv] [--api-limit 100000]
+        sports  [--port 8098] [--indexer-port 8094] [--wiki-port 8095] [--anchor <yyyy-mm-dd>] [--mock http://localhost:8081] [--seed true] [--video build/sample.mkv] [--api-limit 100000]
         """.trimIndent()
     )
     exitProcess(2)
@@ -330,14 +330,15 @@ private fun serveSports(options: Map<String, String>) {
     fakes.use { Thread.currentThread().join() }
 }
 
-/** The sports fakes of one `sports` command (L655): the fake Sportarr and the sports indexer, on one anchor. */
-class SportsFakes(val sportarr: FakeSportarrServer, val indexer: FakeIndexerServer) : AutoCloseable {
+/** The sports fakes of one `sports` command (L655, L-B12): the fake Sportarr, the sports indexer and the fake Wikipedia, on one anchor. */
+class SportsFakes(val sportarr: FakeSportarrServer, val indexer: FakeIndexerServer, val wikipedia: FakeWikipediaServer) : AutoCloseable {
     /** The date every start, release name and posted time is counted from. */
     val anchor: LocalDate get() = sportarr.anchor
 
     override fun close() {
         sportarr.close()
         indexer.close()
+        wikipedia.close()
     }
 
     companion object {
@@ -359,12 +360,13 @@ class SportsFakes(val sportarr: FakeSportarrServer, val indexer: FakeIndexerServ
 }
 
 /**
- * The sports fakes (L655), one process with one clock: the fake Sportarr ([FakeSportarrServer]) over the catalogue's
- * library ([SportsCatalog]) and a second Newznab indexer, the sports indexer, over the catalogue's releases, never the
- * device tests' 8089 one. Both listen on 127.0.0.1 alone (emulator: 10.0.2.2), on --port and --indexer-port (0 for any
- * free one, never a port another fake or the mock uses), both taken before anything is seeded, so a port in use fails at
- * once. --anchor is the date every start, release name and posted time counts from (the UTC date it starts, unless
- * given). The sports indexer counts a word a search holds twice, so the catalogue's `reached` holds whatever the anchor:
+ * The sports fakes (L655, L-B12), one process with one clock: the fake Sportarr ([FakeSportarrServer]) over the
+ * catalogue's library ([SportsCatalog]), a second Newznab indexer, the sports indexer, over the catalogue's releases,
+ * never the device tests' 8089 one, and the fake Wikipedia ([FakeWikipediaServer]) with the UFC events' invented cards,
+ * whose switches and counts are the fake Sportarr's. Each listens on 127.0.0.1 alone (emulator: 10.0.2.2), on --port,
+ * --indexer-port and --wiki-port (8098, 8094 and 8095; 0 for any free one, never a port another fake or the mock uses,
+ * nor one of the others'), each taken before anything is seeded, so a port in use fails at once. --anchor is the date
+ * every start, release name, posted time and Wikipedia date counts from (the UTC date it starts, unless given). The sports indexer counts a word a search holds twice, so the catalogue's `reached` holds whatever the anchor:
  * a search dated "2026 12 12" finds the names of that day, not of the whole month. The releases marked whole are seeded
  * into the mock with the clip (--video, the sample clip) under their names, and the others with every article missing, as
  * the screens catalogue's are, so the indexer lists them and a play of one fails as a broken release would; with --seed
@@ -381,7 +383,9 @@ internal fun sports(options: Map<String, String>, log: (String) -> Unit = ::prin
     } ?: default
     val port = port("port", 8098)
     val indexerPort = port("indexer-port", 8094)
-    require(port == 0 || port != indexerPort) { "the fake Sportarr and the sports indexer take two ports" }
+    val wikiPort = port("wiki-port", 8095)
+    val given = listOf(port, indexerPort, wikiPort).filter { it != 0 }
+    require(given.size == given.toSet().size) { "the fake Sportarr, the sports indexer and the fake Wikipedia take a port each" }
     val anchor = options["anchor"]?.let { given ->
         requireNotNull(runCatching { LocalDate.parse(given) }.getOrNull()) { "--anchor takes a date, yyyy-mm-dd" }
     } ?: LocalDate.now(ZoneOffset.UTC)
@@ -396,9 +400,15 @@ internal fun sports(options: Map<String, String>, log: (String) -> Unit = ::prin
     val clip = if (seed) File(options["video"] ?: "build/sample.mkv").also { require(it.isFile) { "${it.path} missing; see README" } } else null
     val catalog = SportsCatalog.load()
     val releases = catalog.releases(anchor)
-    val sportarr = try {
-        FakeSportarrServer(catalog, anchor, port, log = log)
+    val wikipedia = try {
+        FakeWikipediaServer(catalog, anchor, wikiPort)
     } catch (e: BindException) {
+        throw IllegalArgumentException("port $wikiPort is taken", e)
+    }
+    val sportarr = try {
+        FakeSportarrServer(catalog, anchor, port, log = log, wiki = wikipedia)
+    } catch (e: BindException) {
+        wikipedia.close()
         throw IllegalArgumentException("port $port is taken", e)
     }
     val indexer = try {
@@ -407,6 +417,7 @@ internal fun sports(options: Map<String, String>, log: (String) -> Unit = ::prin
         )
     } catch (e: BindException) {
         sportarr.close()
+        wikipedia.close()
         throw IllegalArgumentException("port $indexerPort is taken", e)
     }
     val listed = try {
@@ -424,6 +435,7 @@ internal fun sports(options: Map<String, String>, log: (String) -> Unit = ::prin
     } catch (t: Throwable) {
         sportarr.close()
         indexer.close()
+        wikipedia.close()
         throw t
     }
     indexer.serve(listed.map { (release, nzb) -> release.fake() to nzb })
@@ -438,13 +450,18 @@ internal fun sports(options: Map<String, String>, log: (String) -> Unit = ::prin
     log(
         "Fake Sportarr on http://127.0.0.1:${sportarr.port} (emulator: http://10.0.2.2:${sportarr.port}), Sportarr ${FakeSportarrServer.VERSION} " +
             "with the device tests' key; anchor $anchor. Switches, the clock, counts and the lease at /control (refuse-key, version, html, " +
-            "url-base, slow, fail, remove-league, order, paging, empty, busy, clock, counts, reset; take and give-back).",
+            "url-base, slow, fail, remove-league, order, paging, empty, busy, wiki-form, wiki-fail, wiki-hold, clock, counts, reset; take and give-back).",
+    )
+    log(
+        "Fake Wikipedia on http://127.0.0.1:${wikipedia.port} (emulator: http://10.0.2.2:${wikipedia.port}): " +
+            "${wikipedia.cards.articles.joinToString { (listOf(it.title) + it.redirects).joinToString(" or ") }} and ${FakeWikipediaServer.INDEX}, " +
+            "invented and dated from the anchor; its switches and counts at the fake Sportarr's /control.",
     )
     log(
         "Sports indexer on http://127.0.0.1:${indexer.port}/api (emulator: http://10.0.2.2:${indexer.port}), API key ${SportsFakes.INDEXER_KEY}: " +
             "${releases.size} releases${if (clip == null) ", none seeded" else ", ${releases.count { it.whole }} of them whole"}. Ctrl+C to stop.",
     )
-    return SportsFakes(sportarr, indexer)
+    return SportsFakes(sportarr, indexer, wikipedia)
 }
 
 /** The sports releases' segments: the size the indexer command seeds. */
