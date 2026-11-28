@@ -338,11 +338,12 @@ private fun TvParts(screen: EventScreen, actions: PageActions, okGuard: OkGuard)
     }
     // The rest of the OK that moved the focus off Try again, pressed twice or held (a remote over CEC sends a held key as
     // separate presses), would reach the part's row the focus went to and play it: the right pane takes no OK for a moment
-    // from the move, as a sheet takes none as it opens. Read as each key comes, so it holds from the press itself.
-    val moved = remember { mutableStateOf<OkGuard?>(null) }
+    // from the move, and none while OK presses keep coming (HeldOkGuard). Read as each key comes, so it holds from the
+    // press itself.
+    val moved = remember { mutableStateOf<HeldOkGuard?>(null) }
     val cardButton = { line: CardLine ->
         if (line == CardLine.CantReach) {
-            moved.value = OkGuard(SystemClock.uptimeMillis())
+            moved.value = HeldOkGuard(SystemClock.uptimeMillis())
             // The focus off the button before it goes: on the last part's row, which the bouts come under.
             val last = screen.parts.lastOrNull { it.started }
             if (last != null) {
@@ -527,6 +528,37 @@ internal class BoutPress(private val interaction: MutableInteractionSource) {
         val down = PressInteraction.Press(at)
         interaction.tryEmit(down)
         interaction.tryEmit(if (released()) PressInteraction.Release(down) else PressInteraction.Cancel(down))
+    }
+}
+
+/**
+ * The right pane's OK guard from Try again's move of the focus ([movedAt], uptime), for [TvParts]. A TV's own remote over
+ * HDMI-CEC sends a held OK as separate presses, each with its repeat count 0, the first about 500 ms after the press and
+ * the next ones every 170 to 380 ms, so a window from the move alone would let a longer hold's later presses through to
+ * the row. OK presses are ignored for [WINDOW_MS] from the move, and each one ignored keeps them ignored for [WINDOW_MS]
+ * from it, for as long as they keep coming. Each press is otherwise an [OkGuard]'s: its up ignored with its down, and a
+ * press let through, held or not, coming up through it, so the row clicks on that up.
+ */
+internal class HeldOkGuard(movedAt: Long) {
+    private var from = movedAt
+    private var guard = OkGuard(movedAt, WINDOW_MS)
+
+    /** Whether the key event ([eventTime] in uptime) is ignored. */
+    fun blocks(keyCode: Int, down: Boolean, repeatCount: Int, eventTime: Long): Boolean {
+        val blocked = guard.blocks(keyCode, down, repeatCount, eventTime)
+        // A new press ignored starts the window again, in a guard that has seen it go down, so its up is ignored too. Not
+        // a repeat, which is part of a press already ruled on, nor a press sent before the last one, reaching the app late,
+        // which would shorten the window.
+        if (blocked && down && repeatCount == 0 && eventTime > from) {
+            from = eventTime
+            guard = OkGuard(eventTime, WINDOW_MS).also { it.blocks(keyCode, down = true, repeatCount = 0, eventTime = eventTime) }
+        }
+        return blocked
+    }
+
+    companion object {
+        /** As the player's window for a run of presses over HDMI-CEC that make a hold. */
+        const val WINDOW_MS = 600L
     }
 }
 

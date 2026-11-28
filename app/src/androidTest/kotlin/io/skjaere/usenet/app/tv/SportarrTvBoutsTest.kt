@@ -50,8 +50,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  * on it; the credit's sheet, a double OK leaving it open with Close focused, Close and Back closing it with the focus back
  * on the credit; an upcoming card's bouts taking the focus, OK on one playing nothing; and the states: Reading with the
  * first focus on the top button, no card's line taking no focus, and Can't reach's Try again, reached by Down from the last
- * part, the focus on that part as the bouts come, a double OK on it playing nothing; before the start by Right from the
- * line in the buttons' place, the focus on the last part's first bout as the bouts come.
+ * part, the focus on that part as the bouts come, a double or held OK on it playing nothing; before the start by Right
+ * from the line in the buttons' place, the focus on the last part's first bout as the bouts come.
  *
  * The fake's switches, the indexer and the provider the tests set and the watch rows are put back after each test, and the
  * plugin with its files and secrets removed. TMDB is a strict fake: what Home asks of other titles is refused, never sent.
@@ -344,12 +344,40 @@ class SportarrTvBoutsTest {
     }
 
     /**
-     * (indexer) Try again pressed twice quickly, as a remote over CEC sends a held OK: the first press moves the focus to the
-     * last part's row as the button goes, and the second, which reaches that row, plays nothing. The 503's hold answers
-     * Try again meanwhile, so the button comes back with no request.
+     * (indexer) Try again pressed twice quickly: the first press moves the focus to the last part's row as the button goes,
+     * and the second, which reaches that row, plays nothing.
      */
     @Test
     fun aDoubleOkOnTryAgainPlaysNothing() {
+        okOnTryAgainPlaysNothing("the double OK") { first ->
+            okSentAt(first)
+            remote.waitForFocus(MAIN_CARD)
+            // The double press's second OK, as the remote sent it 150 ms after the first, reaching the row the focus went to.
+            okSentAt(first + DOUBLE_OK_MS)
+        }
+    }
+
+    /**
+     * (indexer) OK held on Try again, as a TV's own remote over HDMI-CEC sends it: separate presses, each with its repeat
+     * count 0 and its up 71 ms after its down, the first repeat 500 ms after the press and the next ones 250 ms apart. The
+     * first press moves the focus to the last part's row as the button goes, and the repeats, which reach that row for as
+     * long as OK is held, play nothing.
+     */
+    @Test
+    fun aHeldOkOnTryAgainPlaysNothing() {
+        okOnTryAgainPlaysNothing("the held OK") { first ->
+            cecOkAt(first)
+            remote.waitForFocus(MAIN_CARD)
+            CEC_REPEATS_MS.forEach { cecOkAt(first + it) }
+        }
+    }
+
+    /**
+     * (indexer) UFC 999's Try again focused with Wikipedia failing, [presses] sent from the uptime they are given, and
+     * nothing started by them ([what]) then or for [QUIET_MS] after: the focus on the last part's row, and the 503's hold
+     * answering Try again, so the button comes back with no request.
+     */
+    private fun okOnTryAgainPlaysNothing(what: String, presses: (first: Long) -> Unit) {
         sportarr.assumeUp(indexer = true)
         sportarr.switch("wiki-fail", "status=503")
         sportarr.install()
@@ -368,18 +396,26 @@ class SportarrTvBoutsTest {
         }
         try {
             sportarr.paceSearches()
-            val first = SystemClock.uptimeMillis()
-            okSentAt(first)
-            remote.waitForFocus(MAIN_CARD)
-            // The double press's second OK, as the remote sent it 150 ms after the first, reaching the row the focus went to.
-            okSentAt(first + DOUBLE_OK_MS)
+            presses(SystemClock.uptimeMillis())
             SystemClock.sleep(QUIET_MS)
         } finally {
             watching.cancel()
         }
-        assertEquals("what the double OK started", emptyList<String>(), started.toList())
+        assertEquals("what $what started", emptyList<String>(), started.toList())
         assertEquals("the focus on the last part's row", MAIN_CARD, remote.focused())
         assertEquals("the one request, the hold answering Try again", listOf("503"), sportarr.wikiRequests().map { it["status"].toString() })
+    }
+
+    /** One press of OK as a remote over CEC sends it at [at] (uptime), its down and its up each sent at its own time. */
+    private fun cecOkAt(at: Long) {
+        sendAt(KeyEvent(at, at, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 0))
+        sendAt(KeyEvent(at, at + CEC_UP_MS, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0))
+        compose.waitForIdle()
+    }
+
+    private fun sendAt(event: KeyEvent) {
+        SystemClock.sleep((event.eventTime - SystemClock.uptimeMillis()).coerceAtLeast(0))
+        instrumentation.sendKeySync(event)
     }
 
     /** One press of OK as the remote sent it at [at] (uptime), however late it reaches the app. */
@@ -462,6 +498,10 @@ class SportarrTvBoutsTest {
 
         /** A double press's second OK after its first, and how long nothing may start after an OK that plays nothing. */
         const val DOUBLE_OK_MS = 150L
+
+        /** OK held on a TV's own remote over HDMI-CEC: each press's up after its down, and the repeats after the first press. */
+        const val CEC_UP_MS = 71L
+        val CEC_REPEATS_MS = listOf(500L, 750L, 1_000L)
         const val QUIET_MS = 3_000L
 
         /** The 503's hold (L-B6), and a moment more. */
