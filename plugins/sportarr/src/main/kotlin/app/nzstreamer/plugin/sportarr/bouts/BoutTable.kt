@@ -28,9 +28,11 @@ internal object BoutTable {
 
     /**
      * The card of [page], the article titled [article], for the event titled [title] (its main event's order may follow
-     * it) whose parts' ids are [parts], in running order. A bout under a part the event doesn't have, or under a header
-     * that names none, goes under the next part in running order the event has, before its own bouts; with none after it,
-     * it is left out. The card is out only when the table names the main card and another part.
+     * it) whose parts' ids are [parts], in running order. A bout under a part the event doesn't have goes under the next
+     * part in running order the event has (early prelims on a fight night under Prelims), whatever headers the table has;
+     * a bout under a header that names no part goes with the next header up the table that does. Either way before that
+     * part's own bouts; with no part after it, it is left out. The card is out only when the table names the main card and
+     * another part.
      */
     fun read(page: String, article: String, title: String, parts: List<String>): Read {
         val rows = cardRows(page) ?: return Read.Missing
@@ -43,10 +45,9 @@ internal object BoutTable {
         val waiting = ArrayList<Bout>()
         groups.asReversed().forEach { group ->
             waiting += group.bouts.asReversed()
-            if (group.id != null && group.id in parts) {
-                placed.getOrPut(group.id) { ArrayList() } += waiting
-                waiting.clear()
-            }
+            val id = group.id ?: return@forEach
+            partFor(id, parts)?.let { part -> placed.getOrPut(part) { ArrayList() } += waiting }
+            waiting.clear()
         }
         val card = BoutCard(article, parts.mapNotNull { id -> placed[id]?.takeIf { it.isNotEmpty() }?.let { BoutPart(id, it) } })
         return if (card.parts.isEmpty()) Read.Missing else Read.Out(card)
@@ -99,6 +100,12 @@ internal object BoutTable {
     }
 
     /**
+     * The one of the event's [parts] that a header naming the part [id] puts its bouts under: [id] where the event has it,
+     * else the next in running order it has; null where it has none after it.
+     */
+    private fun partFor(id: String, parts: List<String>): String? = RUNNING.dropWhile { it != id }.firstOrNull { it in parts }
+
+    /**
      * A part's id from its header's words, any bracketed broadcaster left out and the rest folded to its letters and
      * digits; null for a header that names no part, "Fight card" and "Card" among them (a card not split).
      */
@@ -142,6 +149,9 @@ internal object BoutTable {
     }
 
     private const val HEADER_COLUMNS = 6
+
+    /** A card's parts in running order, which every header's words map to one of. */
+    private val RUNNING = listOf(Parts.EARLY_PRELIMS, Parts.PRELIMS, Parts.MAIN_CARD)
 
     private val HEADINGS = listOf("Fight_card", "Results", "Card")
     private val SEPARATORS = setOf("vs.", "vs", "def.")

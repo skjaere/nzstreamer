@@ -80,6 +80,14 @@ class BoutTableTest {
     }
 
     @Test
+    fun `a part the event doesn't have goes under its next part the event has, though the table has no header for it`() {
+        // A fight night's table with no Prelims header: its early prelims are still Prelims' bouts, never the main card's.
+        val read = card(page(header("Main card"), vs("Lightweight", "Quessel", "Halde"), header("Early preliminary card"), vs("Flyweight", "Savrin", "Ambrel")), FIGHT_NIGHT)
+        assertEquals(mapOf("prelims" to listOf("Ambrel/Savrin"), "main-card" to listOf("Quessel/Halde")), pairs(read))
+        assertEquals(listOf("prelims", "main-card"), read.parts.map { it.id })
+    }
+
+    @Test
     fun `an unmapped header's bouts go under the next part, and one above the main card's are left out`() {
         val read = card(
             page(
