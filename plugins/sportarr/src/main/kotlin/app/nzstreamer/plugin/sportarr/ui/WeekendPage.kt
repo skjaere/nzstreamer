@@ -1,10 +1,15 @@
 package app.nzstreamer.plugin.sportarr.ui
 
+import androidx.compose.foundation.Indication
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,10 +52,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -60,6 +74,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.skjaere.usenet.app.play.OkGuard
+import io.skjaere.usenet.app.play.OkKeys
 import io.skjaere.usenet.app.play.pageOkGuard
 import io.skjaere.usenet.app.tv.TvMenu
 import io.skjaere.usenet.app.tv.TvMenuItem
@@ -370,6 +385,7 @@ private fun TvParts(screen: EventScreen, actions: PageActions, okGuard: OkGuard)
 @Composable
 private fun TvBoutRow(bout: BoutRow, row: PartRow, panes: PaneMemory, actions: PageActions) {
     val interaction = remember { MutableInteractionSource() }
+    val press = remember(interaction) { BoutPress(interaction) }
     val play = bout.play
     val turned = interaction.turnsOver() && play != null
     Row(
@@ -378,16 +394,16 @@ private fun TvBoutRow(bout: BoutRow, row: PartRow, panes: PaneMemory, actions: P
     ) {
         OwnedRipple {
             Column(
-                Modifier.paneElement(panes, RIGHT, bout.key).focusProperties { right = FocusRequester.Cancel }.weight(1f).heightIn(min = 48.dp)
+                Modifier.weight(1f).heightIn(min = 48.dp)
                     .then(
                         if (play != null) {
                             Modifier.focusScale(interaction, { it.rowScale }).clip(RoundedCornerShape(10.dp))
                                 .then(if (turned) Modifier.background(colors.text) else Modifier)
-                                .clickable(interaction, LocalIndication.current, onClickLabel = play, role = Role.Button) { actions.play(row.part, bout.key) }
                         } else {
-                            Modifier.focusOutline(RoundedCornerShape(10.dp)).focusable(interactionSource = interaction).semantics(mergeDescendants = true) {}
+                            Modifier.focusOutline(RoundedCornerShape(10.dp))
                         },
                     )
+                    .boutFocus(Modifier.paneElement(panes, RIGHT, bout.key), interaction, LocalIndication.current, press, play) { actions.play(row.part, bout.key) }
                     .padding(start = 28.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(1.dp, Alignment.CenterVertically),
             ) {
@@ -403,6 +419,95 @@ private fun TvBoutRow(bout: BoutRow, row: PartRow, panes: PaneMemory, actions: P
             }
         }
         Spacer(Modifier.width(TV_MORE))
+    }
+}
+
+/**
+ * A TV bout's focus and OK (L-B10). Its focus is the same element before its part starts and after, so the start, which a
+ * minute's tick brings while the user reads the card, changes what OK does and never the node holding the focus: Compose
+ * keeps a node only for an element of the same class in its place, and one dropped while focused takes the focus off the
+ * bout. (A clickable once started would be such an element, and one over the focusable would say the bout isn't focused.)
+ * Once [play] is set (its part begun), OK and a pointer's tap play ([onPlay]) as a clickable's do, through [press], with
+ * [interaction] showing the press through [indication] and a pointer over it, and TalkBack says what it plays; before, the
+ * row takes the focus, OK does nothing, and it is read as one line. [element] (its pane's memory of it) and Right going
+ * nowhere are on the focus itself.
+ */
+internal fun Modifier.boutFocus(
+    element: Modifier,
+    interaction: MutableInteractionSource,
+    indication: Indication?,
+    press: BoutPress,
+    play: String?,
+    onPlay: () -> Unit,
+): Modifier = indication(interaction, indication)
+    .hoverable(interaction)
+    .pointerInput(play) {
+        if (play == null) return@pointerInput
+        detectTapGestures(onPress = { at -> press.pointer(at) { tryAwaitRelease() } }, onTap = { onPlay() })
+    }
+    .onSizeChanged { press.middle = Offset(it.width / 2f, it.height / 2f) }
+    .onKeyEvent { event ->
+        val down = when (event.type) {
+            KeyEventType.KeyDown -> true
+            KeyEventType.KeyUp -> false
+            else -> return@onKeyEvent false
+        }
+        press.key(event.nativeKeyEvent.keyCode, down, playable = play != null, onPlay)
+    }
+    .semantics(mergeDescendants = true) {
+        if (play != null) {
+            role = Role.Button
+            onClick(label = play) {
+                onPlay()
+                true
+            }
+        }
+    }
+    .then(element)
+    .focusProperties { right = FocusRequester.Cancel }
+    .onFocusChanged { if (!it.isFocused) press.letGo() }
+    .focusable(interactionSource = interaction)
+
+/**
+ * A TV bout's presses, for [boutFocus], shown on [interaction] as a clickable shows its own. OK is pressed on its down
+ * (from the row's [middle]), its repeats taken, and plays on the up of a press it saw; a press under way is let go as the
+ * bout loses the focus, and one on a bout that can't play isn't taken. A pointer's press shows from where it went down.
+ */
+internal class BoutPress(private val interaction: MutableInteractionSource) {
+    private var press: PressInteraction.Press? = null
+
+    /** Where OK's press shows from: the row's middle, as a clickable's key press does. */
+    var middle: Offset = Offset.Zero
+
+    /** Whether the key [keyCode] going [down] or up was OK on a bout that plays ([playable]), and so taken: [onPlay] on its up. */
+    fun key(keyCode: Int, down: Boolean, playable: Boolean, onPlay: () -> Unit): Boolean {
+        if (keyCode !in OkKeys) return false
+        if (!playable) {
+            letGo()
+            return false
+        }
+        if (down) {
+            if (press == null) press = PressInteraction.Press(middle).also { interaction.tryEmit(it) }
+            return true
+        }
+        val pressed = press ?: return false
+        press = null
+        interaction.tryEmit(PressInteraction.Release(pressed))
+        onPlay()
+        return true
+    }
+
+    /** Lets go of OK's press under way, as the bout loses the focus. */
+    fun letGo() {
+        press?.let { interaction.tryEmit(PressInteraction.Cancel(it)) }
+        press = null
+    }
+
+    /** A pointer's press from [at] until it is [released], or cancelled where it isn't (dragged off, or taken by a scroll). */
+    suspend fun pointer(at: Offset, released: suspend () -> Boolean) {
+        val down = PressInteraction.Press(at)
+        interaction.tryEmit(down)
+        interaction.tryEmit(if (released()) PressInteraction.Release(down) else PressInteraction.Cancel(down))
     }
 }
 
