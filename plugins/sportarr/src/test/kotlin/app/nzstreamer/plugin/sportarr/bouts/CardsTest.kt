@@ -1,5 +1,6 @@
 package app.nzstreamer.plugin.sportarr.bouts
 
+import app.nzstreamer.plugin.sportarr.Logged
 import app.nzstreamer.plugin.sportarr.bouts.Fixtures.UFC_999_CARD
 import app.nzstreamer.plugin.sportarr.bouts.Fixtures.article
 import app.nzstreamer.plugin.sportarr.model.BOXING
@@ -225,12 +226,17 @@ class CardsTest {
         File(cache, "ufc-events.json").writeText("{}")
         File(cache, "ufc-events.json.tmp").writeText("torn")
 
+        // A read of several requests (no article: both candidates, then the index), switched off while its first is out.
+        wiki.pages.clear()
         wiki.latency = 1_000
+        val mark = Logged.mark()
         cards.opened(ufc999)
         runCurrent()
         assertEquals(2, wiki.http.requests.size)
         cards.setOn(false)
         advanceUntilIdle()
+        assertEquals(listOf("/wiki/UFC_Fight_Night:_Brisk_vs._Loam", "/wiki/UFC_999"), wiki.asked, "the read's other requests never sent")
+        assertEquals(emptyList(), Logged.pluginLinesSince(mark).map { it.words }.filter { it.startsWith("Fight card") }, "its answer dropped")
         assertEquals(listOf(CardsOption.NAME), data.list()!!.toList())
         assertEquals(emptyList(), cache.list()!!.toList())
         assertEquals(CardState.Off, cards.now(ufc999))
