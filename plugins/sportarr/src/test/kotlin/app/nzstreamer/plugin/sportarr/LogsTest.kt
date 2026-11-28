@@ -252,6 +252,9 @@ class LogsTest {
             val cards = fakes.cards(this, File(dir, form))
             val mark = Logged.mark()
             fakes.events.values.sortedBy { it.id }.forEach { cards.open(it) }
+            // Each article answered in this form, so the lines compared are two forms' and not the fake's usual ones twice.
+            val answered = fakes.asked().filter { it.status == 200 }.map { it.path to it.form }
+            assertEquals(ARTICLES.map { it to form }, answered, "the articles answered in the $form form")
             Logged.pluginLinesSince(mark).map { it.copy(words = it.words.replace(MS, "N ms")) }
         }
         assertEquals(logged[0], logged[1])
@@ -289,6 +292,9 @@ class LogsTest {
 
     private companion object {
         const val INDEXER = "Sports indexer"
+
+        /** Where each event's article is answered, in the events' order: at UFC 999's title, and at the fight night's number. */
+        val ARTICLES = listOf("/wiki/UFC_999", "/wiki/UFC_Fight_Night_888")
 
         /** The fake Wikipedia's forms of an article (L-B12). */
         val WIKI_FORMS = listOf("results", "pre", "unsplit", "bare", "missing", "moved")
