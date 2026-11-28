@@ -650,6 +650,19 @@ class ReadmePluginsTest(unittest.TestCase):
     def test_privacy_names_github_for_plugins(self):
         self.assertIn("to GitHub when you use plugins", self.section("Privacy"))
 
+    def test_privacy_and_sportarrs_bullet_name_wikipedia_as_the_apps_privacy_page_does(self):
+        # W3: the Sportarr plugin reads UFC fight cards from English Wikipedia while its switch is on, as the app's
+        # privacy page says. The README's summary of where data goes names it too, and Sportarr's bullet says so before
+        # it says the plugin sends nothing anywhere else. Read with the README's line wrapping undone.
+        privacy = read(os.path.join(ROOT, "app", "src", "main", "assets", "privacy.txt"))
+        self.assertIn("English Wikipedia", privacy)
+        self.assertIn("to English Wikipedia while", " ".join(self.section("Privacy").split()))
+        bullet = re.search(r"(?ms)^- Sportarr: (.*?)(?=^- |\Z)", self.section("Plugins")).group(1)
+        sportarr = " ".join(bullet.split())
+        self.assertIn("Fight cards from Wikipedia switch", sportarr)
+        self.assertIn("sends nothing anywhere else", sportarr)
+        self.assertLess(sportarr.index("English Wikipedia"), sportarr.index("sends nothing anywhere else"))
+
     def test_each_plugin_with_a_listing_has_a_bullet_named_as_the_list_names_it(self):
         # L659: a plugin's bullet in Plugins starts with the name its listing.json gives the plugin list (Sportarr's
         # first), so the README and the Plugins page call it the same.

@@ -71,9 +71,10 @@ offline. It comes with no providers, indexers or content of its own.
 - No account, analytics, ads or server of its own. Passwords and keys are stored encrypted with the Android Keystore.
   Logs leave the device only when you share them.
 - What leaves the device goes to your own providers, indexers and services, to TMDB with your own key, to TheIntroDB
-  while its switch is on, to Google while its Cast software runs, and to GitHub when you use plugins: the plugin list,
-  read as Settings › Plugins opens and once a day while a plugin is installed, and the plugins you install. Settings ›
-  Privacy in the app says what each one gets.
+  while its switch is on, to Google while its Cast software runs, to English Wikipedia while the Sportarr plugin's
+  Fight cards from Wikipedia switch is on, and to GitHub when you use plugins: the plugin list, read as Settings ›
+  Plugins opens and once a day while a plugin is installed, and the plugins you install. Settings › Privacy in the app
+  says what each one gets.
 - TheIntroDB is off by default, because turning it on tells a third party what you watch. With its switch on, each
   episode you start sends TheIntroDB the show's TMDB id, the season and episode, and the file's length, from your
   internet address. Its terms say it keeps internet addresses for up to 30 days, so together that is a record of the
@@ -102,7 +103,9 @@ offline. It comes with no providers, indexers or content of its own.
 - A plugin runs inside the app, with the same access as the app: that is why the app runs only plugins signed with its
   own key. Plugins are built from this repository, under `plugins/`.
 - Sportarr: a Sports tab with the leagues, teams and sessions you follow in your own Sportarr, 4.1.1 or newer. It reads
-  your Sportarr with your API key, searches your indexers only when you play or ask, and sends nothing anywhere else.
+  your Sportarr with your API key and searches your indexers only when you play or ask. With its Fight cards from
+  Wikipedia switch on (it starts on), it reads a UFC event's fight card from English Wikipedia when you open the event;
+  Wikipedia sees your internet address and which events you open. It sends nothing anywhere else.
 
 ### Requirements
 Android 8.0 (API 26) or later: phones, tablets, Android TV / Google TV, and Fire TV with Fire OS 7 or later (not Vega
