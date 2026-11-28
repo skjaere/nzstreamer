@@ -31,8 +31,9 @@ import kotlin.math.abs
  * one article a row of it links. A page is the event's only when its canonical link names a title starting "UFC " and its
  * infobox's date is within a day of the event's start in UTC or of its broadcast date.
  *
- * Pages are decoded and read on [work], off the main thread. One that throws while it is read holds no card: a candidate's
- * is a miss, the index's no page; the line logged names the exception's class alone. [clock] says the index copy's age.
+ * Pages are decoded ([decode], a test's seam) and read on [work], off the main thread. One that throws while it is read
+ * holds no card: a candidate's is a miss, the index's no page; the line logged names the exception's class alone. [clock]
+ * says the index copy's age.
  */
 internal class PageFinder(
     private val base: String,
@@ -40,6 +41,7 @@ internal class PageFinder(
     private val index: IndexCopy,
     private val clock: () -> Instant,
     private val work: CoroutineContext = Dispatchers.Default,
+    private val decode: (ByteArray) -> String = { it.decodeToString() },
 ) {
     /** What a search found. */
     sealed interface Found {
@@ -77,7 +79,7 @@ internal class PageFinder(
     /** The article in [body], where it is [event]'s by its canonical title and its date; else null, as a miss. */
     private suspend fun accepted(body: ByteArray, event: SportsEvent): Found.Article? = try {
         withContext(work) {
-            val page = body.decodeToString()
+            val page = decode(body)
             val (canonical, date) = head(page)
             val title = canonical?.let { titleOf(pathOf(it)) }
             if (title != null && title.startsWith("UFC ") && date != null && near(date, event)) Found.Article(title, page) else null
@@ -123,7 +125,7 @@ internal class PageFinder(
             Fetch.Miss -> Indexed.NoPage
             is Fetch.Page -> {
                 val rows = try {
-                    withContext(work) { indexRows(fetched.body.decodeToString()) }
+                    withContext(work) { indexRows(decode(fetched.body)) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {

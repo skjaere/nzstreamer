@@ -208,10 +208,13 @@ class WikipediaReadsTest {
         val mark = Logged.mark()
         val throwing = reads(wiki()) { _, _, _, _ -> throw IllegalStateException("Quessel vs. Halde at UFC 999") }
         assertEquals(CardRead.NoCard, backgroundScope.async { throwing.read(ufc999) }.await())
+        // Before the event's start it is not out yet, as any page with no card is.
+        val beforeStart = reads(wiki("/wiki/UFC_Fight_Night:_Brisk_vs._Loam" to fightNightPage())) { _, _, _, _ -> throw IllegalStateException("Brisk vs. Loam") }
+        assertEquals(CardRead.NotYet, backgroundScope.async { beforeStart.read(fightNight) }.await())
         assertTrue(backgroundScope.isActive)
         val lines = Logged.pluginLinesSince(mark).map { it.words }
         assertTrue(lines.any { "IllegalStateException" in it }, "$lines")
-        listOf("Quessel", "Halde", "999", BASE, "wiki").forEach { word -> assertFalse(lines.any { word in it }, "$word in $lines") }
+        listOf("Quessel", "Halde", "Brisk", "Loam", "999", BASE, "wiki").forEach { word -> assertFalse(lines.any { word in it }, "$word in $lines") }
     }
 
     @Test

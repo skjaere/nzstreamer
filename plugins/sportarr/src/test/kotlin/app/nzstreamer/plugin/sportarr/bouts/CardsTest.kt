@@ -10,6 +10,7 @@ import app.nzstreamer.plugin.sportarr.model.on
 import app.nzstreamer.plugin.sportarr.model.sports
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -195,6 +196,32 @@ class CardsTest {
         advanceUntilIdle()
         assertEquals(CardState.Bouts(UFC_999_CARD), cards.now(ufc999))
         assertEquals(2, wiki.http.requests.size)
+    }
+
+    @Test
+    fun `a throw outside the reads' own catch fails the read, the kept card staying or Can't reach, and nothing escapes`() = runTest {
+        // The cards' own clock throws once armed (the reads keep a clock of their own): when a kept card's age is taken,
+        // and when a read's time is.
+        var armed = false
+        val clock = { WIKI_START.plusMillis(testScheduler.currentTime) }
+        val reads = WikipediaReads(wiki.http, WIKI_BASE, clock, IndexFile(cache, EmptyCoroutineContext), EmptyCoroutineContext)
+        val cardsClock = { if (armed) throw IllegalStateException("No clock at /data/kestrel") else clock() }
+        val cards = Cards(this, reads, KeptCards(data, EmptyCoroutineContext), CardsOption(data, EmptyCoroutineContext), cardsClock)
+        assertIs<CardState.Bouts>(open(cards, fightNight))
+        val kept = File(data, KeptCards.NAME).readBytes()
+
+        armed = true
+        val mark = Logged.mark()
+        advanceTimeBy(2.hours)
+        assertIs<CardState.Bouts>(open(cards, fightNight), "the kept card, as it was")
+        assertEquals(1, wiki.http.requests.size)
+        assertEquals(CardState.CantReach, open(cards, ufc999), "nothing kept")
+        assertEquals(2, wiki.http.requests.size)
+        assertTrue(kept.contentEquals(File(data, KeptCards.NAME).readBytes()), "nothing kept of the failed read")
+        assertTrue(isActive)
+        val lines = Logged.pluginLinesSince(mark).map { it.words }
+        assertEquals(2, lines.count { "IllegalStateException" in it }, "$lines")
+        assertFalse(lines.any { "kestrel" in it || "/data" in it }, "$lines")
     }
 
     @Test

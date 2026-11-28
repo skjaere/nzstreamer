@@ -1,5 +1,6 @@
 package app.nzstreamer.plugin.sportarr.bouts
 
+import app.nzstreamer.plugin.sportarr.Logged
 import app.nzstreamer.plugin.sportarr.bouts.Fixtures.article
 import app.nzstreamer.plugin.sportarr.bouts.Fixtures.dateCell
 import app.nzstreamer.plugin.sportarr.bouts.Fixtures.index
@@ -56,8 +57,11 @@ class PageFinderTest {
         return RecordingHttp { request -> byPath[request.url.removePrefix(BASE)]?.let { answer(200, it) } ?: answer(404, "<p>No article</p>") }
     }
 
-    private fun finder(http: RecordingHttp, copy: IndexCopy = IndexFile(dir, EmptyCoroutineContext)) =
-        PageFinder(BASE, WikipediaRequests(http, { now }), copy, { now }, EmptyCoroutineContext)
+    private fun finder(
+        http: RecordingHttp,
+        copy: IndexCopy = IndexFile(dir, EmptyCoroutineContext),
+        decode: (ByteArray) -> String = { it.decodeToString() },
+    ) = PageFinder(BASE, WikipediaRequests(http, { now }), copy, { now }, EmptyCoroutineContext, decode)
 
     private fun paths(http: RecordingHttp): List<String> = http.requests.map { it.url.removePrefix(BASE) }
 
@@ -138,6 +142,27 @@ class PageFinderTest {
         listOf("/wiki/UFC_999", "https://elsewhere.invalid/wiki/UFC_999").forEach { canonical ->
             assertIs<PageFinder.Found.Article>(finder(wiki("/wiki/UFC_999" to article(canonical = canonical))).find(ufc999), canonical)
         }
+    }
+
+    @Test
+    fun `a candidate whose page throws while it is read is a miss, and an index that throws is no page, nothing escaping`() = runTest {
+        // A page holding the mark throws as it is read, its message naming what it read; any other reads as it is.
+        val mark = "<!-- unreadable -->"
+        val decode: (ByteArray) -> String = { bytes -> bytes.decodeToString().also { check(mark !in it) { "Quessel vs. Halde at /wiki/UFC_999" } } }
+        val logged = Logged.mark()
+        val http = wiki("/wiki/UFC_999" to article() + mark, "/wiki/UFC_999:_Quessel_vs._Halde" to article())
+        assertEquals("UFC 999", assertIs<PageFinder.Found.Article>(finder(http, decode = decode).find(ufc999)).title)
+        assertEquals(listOf("/wiki/UFC_999", "/wiki/UFC_999:_Quessel_vs._Halde"), paths(http))
+
+        val index = index(scheduled = emptyList(), past = listOf(IndexEntry("UFC 999: Quessel vs. Halde", "/wiki/UFC_999_(Kestrel)", "Nov 21, 2026")))
+        val listed = wiki("/wiki/List_of_UFC_events" to index + mark, "/wiki/UFC_999_(Kestrel)" to articleOn("UFC_999_(Kestrel)", "2026-11-21"))
+        assertEquals(PageFinder.Found.NoPage, finder(listed, decode = decode).find(ufc999))
+        assertEquals(listOf("/wiki/UFC_999", "/wiki/UFC_999:_Quessel_vs._Halde", "/wiki/List_of_UFC_events"), paths(listed))
+        assertEquals(emptyList(), dir.list()!!.toList(), "an index that couldn't be read isn't kept")
+
+        val lines = Logged.pluginLinesSince(logged).map { it.words }
+        assertEquals(2, lines.count { "IllegalStateException" in it }, "$lines")
+        listOf("Quessel", "Halde", "999", "/wiki").forEach { word -> assertFalse(lines.any { word in it }, "$word in $lines") }
     }
 
     @Test
