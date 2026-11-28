@@ -16,9 +16,11 @@ import app.nzstreamer.plugin.sportarr.source.noAnswer
 import io.skjaere.usenet.plugin.HttpAnswer
 import io.skjaere.usenet.plugin.PluginHttpException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -30,6 +32,8 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -236,6 +240,26 @@ class WikipediaReadsTest {
         // The read after it reads again.
         reads(http, failing).read(ufc999)
         assertEquals(4, http.requests.size)
+    }
+
+    @Test
+    fun `the card's page is read off the thread that asked, on the reads' own work`() {
+        val caller = CopyOnWriteArrayList<Thread>()
+        val callers = Executors.newSingleThreadExecutor { Thread(it, "cards-caller").also { thread -> caller += thread } }
+        val readOn = CopyOnWriteArrayList<Thread>()
+        try {
+            // The reads' work as a session makes them; the reader seam notes the thread it ran on, then reads.
+            val reads = WikipediaReads(wiki(), BASE, { START }, IndexFile(dir, EmptyCoroutineContext)) { page, article, title, parts ->
+                readOn += Thread.currentThread()
+                BoutTable.read(page, article, title, parts)
+            }
+            assertEquals(CardRead.Found(UFC_999_CARD), runBlocking(callers.asCoroutineDispatcher()) { reads.read(ufc999) })
+            assertEquals(1, caller.size, "the caller's one thread asked")
+            assertEquals(1, readOn.size)
+            assertTrue(readOn.none { it === caller.single() }, "read on: ${readOn.map { it.name }}")
+        } finally {
+            callers.shutdownNow()
+        }
     }
 
     @Test

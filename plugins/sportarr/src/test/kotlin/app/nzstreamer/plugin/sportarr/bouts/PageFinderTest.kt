@@ -16,6 +16,8 @@ import app.nzstreamer.plugin.sportarr.source.RecordingHttp
 import app.nzstreamer.plugin.sportarr.source.answer
 import app.nzstreamer.plugin.sportarr.source.noAnswer
 import io.skjaere.usenet.plugin.PluginHttpException
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -27,6 +29,8 @@ import java.io.File
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -163,6 +167,33 @@ class PageFinderTest {
         val lines = Logged.pluginLinesSince(logged).map { it.words }
         assertEquals(2, lines.count { "IllegalStateException" in it }, "$lines")
         listOf("Quessel", "Halde", "999", "/wiki").forEach { word -> assertFalse(lines.any { word in it }, "$word in $lines") }
+    }
+
+    @Test
+    fun `the candidates' pages, the index and its row's article are read off the thread that asked`() {
+        val caller = CopyOnWriteArrayList<Thread>()
+        val callers = Executors.newSingleThreadExecutor { Thread(it, "finder-caller").also { thread -> caller += thread } }
+        val readOn = CopyOnWriteArrayList<Thread>()
+        try {
+            val index = index(scheduled = emptyList(), past = listOf(IndexEntry("UFC 999: Quessel vs. Halde", "/wiki/UFC_999_(Kestrel)", "Nov 21, 2026")))
+            val http = wiki(
+                "/wiki/UFC_999" to articleOn("Quessel", "2026-11-21"),
+                "/wiki/List_of_UFC_events" to index,
+                "/wiki/UFC_999_(Kestrel)" to articleOn("UFC_999_(Kestrel)", "2026-11-21"),
+            )
+            // The finder's work as a session makes it; the decode seam notes the thread it ran on.
+            val finder = PageFinder(BASE, WikipediaRequests(http, { now }), IndexFile(dir, EmptyCoroutineContext), { now }) { bytes ->
+                readOn += Thread.currentThread()
+                bytes.decodeToString()
+            }
+            val found = runBlocking(callers.asCoroutineDispatcher()) { finder.find(ufc999) }
+            assertEquals("UFC 999 (Kestrel)", assertIs<PageFinder.Found.Article>(found).title)
+            assertEquals(1, caller.size, "the caller's one thread asked")
+            assertEquals(3, readOn.size, "the refused candidate, the index and its row's article")
+            assertTrue(readOn.none { it === caller.single() }, "read on: ${readOn.map { it.name }}")
+        } finally {
+            callers.shutdownNow()
+        }
     }
 
     @Test
