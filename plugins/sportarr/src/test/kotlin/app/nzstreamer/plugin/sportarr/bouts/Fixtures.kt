@@ -30,6 +30,12 @@ class FixtureBout(
 /** A part of a fixture card: its header's words, and its bouts as fought (the table lists them the other way up). */
 class FixturePart(val header: String, val bouts: List<FixtureBout>)
 
+/**
+ * A row of the fixture index: its Event cell's link [text] and [href] (no link where null), its Date cell as written
+ * ([date]), and whether its link is [red] (an event with no article yet).
+ */
+class IndexEntry(val text: String, val href: String?, val date: String, val red: Boolean = false)
+
 object Fixtures {
     const val CANONICAL_999 = "https://en.wikipedia.org/wiki/UFC_999"
 
@@ -231,6 +237,34 @@ object Fixtures {
 
     /** A pre-event bout's row: [left] vs. [right], with [note]. */
     fun vs(weight: String, left: String, right: String, note: String = ""): String = data(weight, left, "vs.", right, "", "", "", note)
+
+    /**
+     * The index page, `List of UFC events`, in L-B2's shape: a lead naming events, then the scheduled events' table (Event,
+     * Date, Venue, Location) and the past events' (#, Event, Date, Venue, Location, Attendance), both newest first, and a
+     * table of something else with an Event column of its own.
+     */
+    fun index(scheduled: List<IndexEntry>, past: List<IndexEntry>): String = buildString {
+        append("""<!DOCTYPE html><html><head><link rel="canonical" href="https://en.wikipedia.org/wiki/List_of_UFC_events"></head><body>""")
+        append("""<p>This list of UFC events names <a href="/wiki/UFC_999">UFC 999</a> among others.</p>""")
+        append("""<table class="wikitable"><tbody><tr><th>Event</th><th>Champion</th></tr>""")
+        append("""<tr><td><a href="/wiki/UFC_999">UFC 999: Quessel vs. Halde</a></td><td>Halde</td></tr></tbody></table>""")
+        append("""<div class="mw-heading mw-heading2"><h2 id="Scheduled_events">Scheduled events</h2></div>""")
+        append("""<table class="wikitable sortable"><tbody><tr><th>Event</th><th>Date</th><th>Venue</th><th>Location</th></tr>""")
+        scheduled.forEach { append("<tr><td>${event(it)}</td><td>${it.date}</td><td>Kestrel Arena</td><td>Tarnholm</td></tr>") }
+        append("</tbody></table>")
+        append("""<div class="mw-heading mw-heading2"><h2 id="Past_events">Past events</h2></div>""")
+        append("""<table class="wikitable sortable"><tbody><tr><th>#</th><th>Event</th><th>Date</th><th>Venue</th><th>Location</th><th>Attendance</th></tr>""")
+        past.forEachIndexed { i, entry ->
+            append("<tr><td>${past.size - i + 700}</td><td>${event(entry)}</td><td>${entry.date}</td><td>Kestrel Arena</td><td>Tarnholm</td><td>12,345</td></tr>")
+        }
+        append("</tbody></table></body></html>")
+    }
+
+    private fun event(entry: IndexEntry): String = when {
+        entry.href == null -> entry.text
+        entry.red -> """<a href="${entry.href}" class="new" title="${entry.text} (page does not exist)">${entry.text}</a>"""
+        else -> """<i><a href="${entry.href}" title="${entry.text}">${entry.text}</a></i><sup class="reference"><a href="#cite_note-9">[9]</a></sup>"""
+    }
 
     /** Where [page] can be cut at a tag's edge: before each '<' and after each '>'. */
     fun cuts(page: String): List<Int> =

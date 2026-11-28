@@ -29,6 +29,9 @@ internal object Pairs {
     /** [name]'s full key: each of its words folded as the surname key is, single spaces between them. */
     fun fullKey(name: String): String = name.split(SPACES).map(::key).filter { it.isNotEmpty() }.joinToString(" ")
 
+    /** [text]'s words, each folded as the surname key is: what an index row's link text is matched against. */
+    fun keys(text: String): List<String> = text.split(SPACES).map(::key).filter { it.isNotEmpty() }
+
     /** [a] and [b] in the pairs' one order: by surname key, then full key, then the text by code point. */
     fun ordered(a: String, b: String): Pair<String, String> = if (ORDER.compare(a, b) <= 0) a to b else b to a
 
