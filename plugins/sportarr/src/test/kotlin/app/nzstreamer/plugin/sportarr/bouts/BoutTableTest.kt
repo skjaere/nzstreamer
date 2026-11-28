@@ -50,7 +50,7 @@ class BoutTableTest {
     @Test
     fun `part headers map by their words, any broadcaster in brackets left out`() {
         val headers = mapOf(
-            "Early preliminary card (UFC Fight Pass)" to "early-prelims",
+            "Early preliminary card (Kestrel+)" to "early-prelims",
             "Early Prelims" to "early-prelims",
             "Preliminary Card (Kestrel Sports / Kestrel+)" to "prelims",
             "Prelims" to "prelims",

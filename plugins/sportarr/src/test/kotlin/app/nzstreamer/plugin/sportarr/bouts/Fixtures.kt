@@ -53,7 +53,7 @@ object Fixtures {
      */
     val UFC_999: List<FixturePart> = listOf(
         FixturePart(
-            "Early preliminary card (Fight Pass)",
+            "Early preliminary card (Kestrel+)",
             listOf(
                 FixtureBout("Flyweight", """Savrin<sup id="cite_ref-4" class="reference"><a href="#cite_note-4">[4]</a></sup>""", "Ambrel",
                     method = "Submission (rear-naked choke)", round = 2, time = "3:12"),
