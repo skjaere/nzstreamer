@@ -124,7 +124,8 @@ class PluginHttpImpl(
         /**
          * The User-Agent for [versionName]: "NZStreamer/<MAJOR.MINOR.PATCH> (<repository>)", the name's part before any
          * "-", so a beta sends its release's number. Wikimedia's User-Agent policy's form, client/version (contact),
-         * with the library left out, as it allows. Indexers, TMDB, providers and debrid keep ServiceHttp's own.
+         * with the library left out, as it allows. Every other request keeps its own: debrid's ServiceHttp's, an
+         * indexer's its own or NewznabClient's.
          */
         fun userAgent(versionName: String): String = "NZStreamer/${versionName.substringBefore('-')} ($REPOSITORY)"
 

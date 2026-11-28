@@ -86,7 +86,7 @@ class PluginHttpTest {
     /**
      * W2, L-B11: a plugin's requests name NZStreamer's release and its public repository as the contact, in the form
      * Wikimedia's User-Agent policy asks for. A beta sends its release's number, so the rule is checked on the function: the
-     * test builds carry no "-beta". The services' own agent stays as it was, for indexers, TMDB, providers and debrid.
+     * test builds carry no "-beta". ServiceHttp's agent, which debrid's requests send, stays as it was.
      */
     @Test
     fun `a plugin's requests name NZStreamer's release and its repository, a beta sending its release's`() = runBlocking<Unit> {
