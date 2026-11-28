@@ -1,5 +1,7 @@
 package app.nzstreamer.plugin.sportarr.ui
 
+import android.os.SystemClock
+import android.view.KeyEvent
 import androidx.compose.foundation.Indication
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
@@ -58,6 +60,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -333,8 +336,13 @@ private fun TvParts(screen: EventScreen, actions: PageActions, okGuard: OkGuard)
             screen.cardLine == CardLine.NotYet || screen.cardLine == CardLine.NoCard -> awaitingBouts = false
         }
     }
+    // The rest of the OK that moved the focus off Try again, pressed twice or held (a remote over CEC sends a held key as
+    // separate presses), would reach the part's row the focus went to and play it: the right pane takes no OK for a moment
+    // from the move, as a sheet takes none as it opens. Read as each key comes, so it holds from the press itself.
+    val moved = remember { mutableStateOf<OkGuard?>(null) }
     val cardButton = { line: CardLine ->
         if (line == CardLine.CantReach) {
+            moved.value = OkGuard(SystemClock.uptimeMillis())
             // The focus off the button before it goes: on the last part's row, which the bouts come under.
             val last = screen.parts.lastOrNull { it.started }
             if (last != null) {
@@ -358,7 +366,12 @@ private fun TvParts(screen: EventScreen, actions: PageActions, okGuard: OkGuard)
         right = {
             // Taller than the page (many sessions, a larger text size), the parts scroll as far as the focused one needs.
             EdgeScrolling {
-                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                Column(
+                    Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
+                        val key = event.nativeKeyEvent
+                        moved.value?.blocks(key.keyCode, key.action == KeyEvent.ACTION_DOWN, key.repeatCount, key.eventTime) == true
+                    }.verticalScroll(rememberScrollState()),
+                ) {
                     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(colors.surface)) {
                         screen.parts.forEachIndexed { index, row ->
                             key(row.part) {
