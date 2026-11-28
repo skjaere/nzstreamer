@@ -50,7 +50,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  * on it; the credit's sheet, a double OK leaving it open with Close focused, Close and Back closing it with the focus back
  * on the credit; an upcoming card's bouts taking the focus, OK on one playing nothing; and the states: Reading with the
  * first focus on the top button, no card's line taking no focus, and Can't reach's Try again, reached by Down from the last
- * part, the focus on that part as the bouts come.
+ * part, the focus on that part as the bouts come, a double OK on it playing nothing.
  *
  * The fake's switches, the indexer and the provider the tests set and the watch rows are put back after each test, and the
  * plugin with its files and secrets removed. TMDB is a strict fake: what Home asks of other titles is refused, never sent.
@@ -309,6 +309,45 @@ class SportarrTvBoutsTest {
         waitFor(hasText(MAIN_EVENT))
         assertEquals("the focus on the last part's row", MAIN_CARD, remote.focused())
         assertEquals("one more request", listOf("503", "200"), sportarr.wikiRequests().map { it["status"].toString() })
+    }
+
+    /**
+     * (indexer) Try again pressed twice quickly, as a remote over CEC sends a held OK: the first press moves the focus to the
+     * last part's row as the button goes, and the second, which reaches that row, plays nothing. The 503's hold answers
+     * Try again meanwhile, so the button comes back with no request.
+     */
+    @Test
+    fun aDoubleOkOnTryAgainPlaysNothing() {
+        sportarr.assumeUp(indexer = true)
+        sportarr.switch("wiki-fail", "status=503")
+        sportarr.install()
+        sportarr.indexers(plays = false)
+        openUfc999()
+        waitFor(hasText(CANT_REACH))
+        remote.waitForFocus(TOP_BUTTON)
+        remote.press(KeyEvent.KEYCODE_DPAD_RIGHT)
+        assertEquals(MAIN_CARD, remote.pressUntil(KeyEvent.KEYCODE_DPAD_DOWN, MAIN_CARD, max = 5))
+        assertEquals("Down from the last part", TRY_AGAIN, remote.press(KeyEvent.KEYCODE_DPAD_DOWN))
+        // What the coordinator does meanwhile, heard as it happens.
+        val started = CopyOnWriteArrayList<String>()
+        val watching = CoroutineScope(Dispatchers.Default).launch {
+            launch { container.playback.state.collect { if (it != PlayState.Idle) started += "the play ${it.javaClass.simpleName}" } }
+            launch { container.playback.launches.collect { started += "a launch of ${it.watchKey}" } }
+        }
+        try {
+            sportarr.paceSearches()
+            val first = SystemClock.uptimeMillis()
+            okSentAt(first)
+            remote.waitForFocus(MAIN_CARD)
+            // The double press's second OK, as the remote sent it 150 ms after the first, reaching the row the focus went to.
+            okSentAt(first + DOUBLE_OK_MS)
+            SystemClock.sleep(QUIET_MS)
+        } finally {
+            watching.cancel()
+        }
+        assertEquals("what the double OK started", emptyList<String>(), started.toList())
+        assertEquals("the focus on the last part's row", MAIN_CARD, remote.focused())
+        assertEquals("the one request, the hold answering Try again", listOf("503"), sportarr.wikiRequests().map { it["status"].toString() })
     }
 
     /** One press of OK as the remote sent it at [at] (uptime), however late it reaches the app. */
