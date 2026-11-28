@@ -209,6 +209,29 @@ class PageFinderTest {
     }
 
     @Test
+    fun `a row naming the event by its number alone, no fighter in it, matches, and a longer number doesn't`() = runTest {
+        val page = index(
+            scheduled = listOf(
+                IndexEntry("UFC Fight Night 888", "/wiki/UFC_Fight_Night_888_(Kestrel)", "Nov 28, 2026"),
+                IndexEntry("UFC Fight Night 8880", "/wiki/UFC_Fight_Night_8880", "Nov 28, 2026"),
+            ),
+            past = listOf(
+                IndexEntry("UFC 999 (Kestrel)", "/wiki/UFC_999_(Kestrel)", "Nov 21, 2026"),
+                IndexEntry("UFC 9990 (Tarnholm)", "/wiki/UFC_9990_(Tarnholm)", "Nov 21, 2026"),
+            ),
+        )
+        val http = wiki(
+            "/wiki/List_of_UFC_events" to page,
+            "/wiki/UFC_999_(Kestrel)" to articleOn("UFC_999_(Kestrel)", "2026-11-21"),
+            "/wiki/UFC_Fight_Night_888_(Kestrel)" to articleOn("UFC_Fight_Night_888_(Kestrel)", "2026-11-28"),
+        )
+        val finder = finder(http)
+        assertEquals("UFC 999 (Kestrel)", assertIs<PageFinder.Found.Article>(finder.find(ufc999)).title)
+        assertEquals("UFC Fight Night 888 (Kestrel)", assertIs<PageFinder.Found.Article>(finder.find(night888)).title)
+        assertFalse(paths(http).any { "9990" in it || "8880" in it })
+    }
+
+    @Test
     fun `a red link is no match, and nothing under w is ever asked`() = runTest {
         val page = index(
             scheduled = listOf(
