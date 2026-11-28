@@ -277,6 +277,28 @@ class CardsTest {
     }
 
     @Test
+    fun `the holds stay through the switch turned off and on again, however often`() = runTest {
+        wiki.status = 403
+        val cards = cards()
+        assertEquals(CardState.CantReach, open(cards, ufc999))
+        assertEquals(1, wiki.http.requests.size)
+        wiki.status = null
+        // Off and on again, as a remote's repeated presses could: the 403's hour still holds every read.
+        repeat(3) {
+            cards.setOn(false)
+            advanceUntilIdle()
+            cards.setOn(true)
+            advanceUntilIdle()
+        }
+        advanceTimeBy(1.hours - 1.milliseconds)
+        assertEquals(CardState.CantReach, open(cards, ufc999), "held")
+        assertEquals(1, wiki.http.requests.size)
+        advanceTimeBy(1.milliseconds)
+        assertEquals(CardState.Bouts(UFC_999_CARD), open(cards, ufc999))
+        assertEquals(2, wiki.http.requests.size)
+    }
+
+    @Test
     fun `switching off while a card is being written leaves no file`() = runTest {
         val io = ManualDispatcher()
         val cards = cards(keptIo = io)
