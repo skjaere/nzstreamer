@@ -10,6 +10,7 @@ import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentLength
 import io.ktor.utils.io.readRemaining
+import io.skjaere.usenet.app.BuildConfig
 import io.skjaere.usenet.debrid.ServiceHttp
 import io.skjaere.usenet.plugin.HttpAnswer
 import io.skjaere.usenet.plugin.PluginHttp
@@ -23,18 +24,20 @@ import java.net.URI
 
 /**
  * A plugin's GETs (L631) through the app's service client ([client], ServiceHttp's, which follows no redirect itself), with
- * its User-Agent and its timeouts: [connectTimeoutMs] to connect, and [requestTimeoutMs] for the whole request, every
- * redirect followed and the body included, as the API promises. Its own redirect rule on top: a redirect is followed only to the same scheme, host and port as the address
- * asked, [MAX_REDIRECTS] at most, the plugin's headers going along; any other is refused, so a key in a header never goes
- * to another address. A body is read no further than the request's maxBytes. Each request is one log line naming
- * [version], the host and the status, or the kind of failure: never a header's value, the path, the query or the body
- * (L606), and an exception's message names no address.
+ * [userAgent] in place of any the plugin sets (W2: [USER_AGENT], the repository as its contact, on plugin requests alone)
+ * and its timeouts: [connectTimeoutMs] to connect, and [requestTimeoutMs] for the whole request, every redirect followed
+ * and the body included, as the API promises. Its own redirect rule on top: a redirect is followed only to the same
+ * scheme, host and port as the address asked, [MAX_REDIRECTS] at most, the plugin's headers going along; any other is
+ * refused, so a key in a header never goes to another address. A body is read no further than the request's maxBytes.
+ * Each request is one log line naming [version], the host and the status, or the kind of failure: never a header's
+ * value, the path, the query or the body (L606), and an exception's message names no address.
  */
 class PluginHttpImpl(
     private val version: PluginVersion,
     private val client: () -> HttpClient,
     private val connectTimeoutMs: Long = ServiceHttp.CONNECT_TIMEOUT_MS,
     private val requestTimeoutMs: Long = ServiceHttp.REQUEST_TIMEOUT_MS,
+    private val userAgent: String = USER_AGENT,
 ) : PluginHttp {
     override suspend fun get(url: String, headers: Map<String, String>, maxBytes: Int): HttpAnswer {
         val asked = originOf(url) ?: throw failure(Kind.InvalidAddress, null)
@@ -74,7 +77,7 @@ class PluginHttpImpl(
     private suspend fun once(address: String, headers: Map<String, String>, maxBytes: Int): HttpAnswer =
         client().prepareGet(address) {
             headers.filterKeys { !it.equals(HttpHeaders.UserAgent, ignoreCase = true) }.forEach { (name, value) -> header(name, value) }
-            header(HttpHeaders.UserAgent, ServiceHttp.USER_AGENT)
+            header(HttpHeaders.UserAgent, userAgent)
             // The request's whole time, its body included, is this client's own timeout around it.
             timeout {
                 connectTimeoutMillis = connectTimeoutMs
@@ -111,6 +114,19 @@ class PluginHttpImpl(
     companion object {
         /** Redirects followed at most, each to the address asked. */
         const val MAX_REDIRECTS = 3
+
+        /** NZStreamer's public repository: the contact a plugin's requests name, so a site knows whose they are. */
+        const val REPOSITORY = "https://github.com/skjaere/nzstreamer"
+
+        /** The User-Agent of every plugin request (W2, L-B11): this build's release and the repository. */
+        val USER_AGENT: String = userAgent(BuildConfig.VERSION_NAME)
+
+        /**
+         * The User-Agent for [versionName]: "NZStreamer/<MAJOR.MINOR.PATCH> (<repository>)", the name's part before any
+         * "-", so a beta sends its release's number. Wikimedia's User-Agent policy's form, client/version (contact),
+         * with the library left out, as it allows. Indexers, TMDB, providers and debrid keep ServiceHttp's own.
+         */
+        fun userAgent(versionName: String): String = "NZStreamer/${versionName.substringBefore('-')} ($REPOSITORY)"
 
         private val log = LoggerFactory.getLogger(PluginHttpImpl::class.java)
         private val REDIRECTS = setOf(301, 302, 303, 307, 308)

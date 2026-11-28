@@ -20,9 +20,11 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.util.zip.GZIPOutputStream
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -33,7 +35,9 @@ import kotlin.test.assertTrue
  * L631 against servers of the test's own on the loopback address: a plugin's GET through the app's service client, a
  * redirect followed only to the same scheme, host and port and three at most, the body read no further than maxBytes, a
  * request with no answer in time, and log lines that name the host and the status alone: never a header's value, the
- * address's path or query, or the body. And L593: a plugin's host judges an address as the app judges an indexer's.
+ * address's path or query, or the body. And L593: a plugin's host judges an address as the app judges an indexer's. And
+ * W2, L-B11, L-B6: a plugin's requests carry NZStreamer's agent for plugins, ask for gzip and get the body unzipped, and
+ * keep no cookie.
  */
 class PluginHttpTest {
     @TempDir
@@ -75,7 +79,67 @@ class PluginHttpTest {
         val asked = server.requests.single()
         assertEquals("/api/v3/rounds?league=7", asked.path)
         assertEquals("kestrel-key", asked.headers["x-api-key"])
-        assertEquals(ServiceHttp.USER_AGENT, asked.headers["user-agent"], "the app's own User-Agent")
+        assertEquals(PluginHttpImpl.USER_AGENT, asked.headers["user-agent"], "the app's agent for plugins, the plugin's own dropped")
+        assertTrue(AGENT.matches(asked.headers["user-agent"].orEmpty()), "${asked.headers["user-agent"]}")
+    }
+
+    /**
+     * W2, L-B11: a plugin's requests name NZStreamer's release and its public repository as the contact, in the form
+     * Wikimedia's User-Agent policy asks for. A beta sends its release's number, so the rule is checked on the function: the
+     * test builds carry no "-beta". The services' own agent stays as it was, for indexers, TMDB, providers and debrid.
+     */
+    @Test
+    fun `a plugin's requests name NZStreamer's release and its repository, a beta sending its release's`() = runBlocking<Unit> {
+        assertEquals("NZStreamer/0.2.0 (https://github.com/skjaere/nzstreamer)", PluginHttpImpl.userAgent("0.2.0-beta.9"))
+        assertEquals("NZStreamer/0.2.0 (https://github.com/skjaere/nzstreamer)", PluginHttpImpl.userAgent("0.2.0"))
+        val release = File("../version.txt").readText().trim()
+        assertEquals("NZStreamer/$release (https://github.com/skjaere/nzstreamer)", PluginHttpImpl.USER_AGENT, "version.txt's release")
+        assertTrue(AGENT.matches(PluginHttpImpl.USER_AGENT) && "-beta" !in PluginHttpImpl.USER_AGENT, PluginHttpImpl.USER_AGENT)
+        assertEquals("NZStreamer/0.1", ServiceHttp.USER_AGENT, "the services' agent, unchanged")
+
+        val server = server { ok("kestrel") }
+        val beta = PluginHttpImpl(version, { client }, userAgent = PluginHttpImpl.userAgent("0.2.0-beta.9"))
+        beta.get("http://127.0.0.1:${server.port}/wiki/Kestrel_Cup", mapOf("user-agent" to "Kestrel/9"))
+        assertEquals(listOf("NZStreamer/0.2.0 (https://github.com/skjaere/nzstreamer)"), server.requests.map { it.headers["user-agent"] })
+    }
+
+    /**
+     * L-B6: a plugin sets no Accept-Encoding, so the app's client asks for gzip itself and unzips the answer: the plugin
+     * gets the body as it was before it was zipped, and maxBytes is counted on that body, not on the bytes that came.
+     */
+    @Test
+    fun `gzip is asked for, and the plugin gets the answer unzipped, maxBytes counted on it`() = runBlocking<Unit> {
+        val body = "Kestrel Cup round ".repeat(200).toByteArray()
+        val zipped = ByteArrayOutputStream().also { out -> GZIPOutputStream(out).use { it.write(body) } }.toByteArray()
+        assertTrue(zipped.size < body.size / 4, "the body zips small: ${zipped.size} of ${body.size}")
+        val server = server { request ->
+            if ("gzip" in request.headers["accept-encoding"].orEmpty()) {
+                LoopbackHttp.Response(200, zipped, headers = mapOf("Content-Encoding" to "gzip"))
+            } else {
+                LoopbackHttp.Response(200, body)
+            }
+        }
+        val url = "http://127.0.0.1:${server.port}/wiki/Kestrel_Cup"
+        val http = http()
+
+        val answer = http.get(url)
+        assertEquals("gzip", server.requests.single().headers["accept-encoding"], "the client asked for gzip")
+        assertContentEquals(body, answer.body, "unzipped")
+        refused(PluginHttpException.Kind.TooLarge) { http.get(url, maxBytes = body.size - 1) }
+        assertContentEquals(body, http.get(url, maxBytes = body.size).body)
+        assertEquals(listOf("gzip"), server.requests.map { it.headers["accept-encoding"] }.distinct(), "each request asked for gzip")
+    }
+
+    /** L-B6: the app's client keeps no cookie, so a cookie an answer sets never goes back with the plugin's next request. */
+    @Test
+    fun `a cookie an answer sets is never sent back`() = runBlocking<Unit> {
+        val server = server { LoopbackHttp.Response(200, "kestrel".toByteArray(), headers = mapOf("Set-Cookie" to "kestrelRound=7; Path=/")) }
+        val http = http()
+
+        http.get("http://127.0.0.1:${server.port}/wiki/Kestrel_Cup")
+        http.get("http://127.0.0.1:${server.port}/wiki/Kestrel_Cup")
+        assertEquals(2, server.requests.size)
+        assertEquals(listOf(null, null), server.requests.map { it.headers["cookie"] }, "no Cookie header")
     }
 
     /** Three redirects to the same address are followed, a fourth isn't; a redirect anywhere else isn't followed at all. */
@@ -229,5 +293,10 @@ class PluginHttpTest {
         val server = server { ok("from the app's client") }
         assertContentEquals("from the app's client".toByteArray(), host.http.get("http://127.0.0.1:${server.port}/").body)
         host.cancel()
+    }
+
+    private companion object {
+        /** W2, L-B11: the agent a plugin's requests carry, a release's MAJOR.MINOR.PATCH and the repository as its contact. */
+        val AGENT = Regex("""NZStreamer/\d+\.\d+\.\d+ \(https://github\.com/skjaere/nzstreamer\)""")
     }
 }

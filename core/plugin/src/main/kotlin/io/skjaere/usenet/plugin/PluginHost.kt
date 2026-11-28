@@ -24,7 +24,10 @@ interface PluginHost {
     /** The plugin's own secrets (an address's key), kept encrypted by the host under the plugin's id. */
     val secrets: PluginSecrets
 
-    /** GET requests to an address the plugin is set up with. */
+    /**
+     * GET requests to the addresses the plugin is set up with, and to a public source it names on its settings page behind
+     * a switch of its own.
+     */
     val http: PluginHttp
 
     /**
