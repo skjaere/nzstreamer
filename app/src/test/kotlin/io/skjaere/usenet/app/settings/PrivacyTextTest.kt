@@ -43,6 +43,10 @@ internal const val DEBRID_HEADING = "Your torrent indexers and debrid services"
  *
  * L659 (the Sportarr plugin): the Plugins part's second paragraph ends with what Sportarr sends, and to whom, after
  * L632's words, which stay as they were; Sportarr is named in those sentences alone.
+ *
+ * W3 (fight cards from Wikipedia): the Sportarr sentences gain one, just before "It sends nothing anywhere else.": what its
+ * switch reads from English Wikipedia, that the switch starts on, and what Wikipedia sees. Wikipedia is named in that
+ * sentence alone; the opening stays as it was.
  */
 class PrivacyTextTest {
     private val file = File("src/main/assets/privacy.txt")
@@ -188,6 +192,22 @@ class PrivacyTextTest {
         }
     }
 
+    /**
+     * W3: the fight cards' sentence comes just before Sportarr's last, "It sends nothing anywhere else.", in both forms; it
+     * says the switch starts on, and Wikipedia is named in it alone, so nothing else names a new recipient.
+     */
+    @Test
+    fun `the fight cards' sentence comes before Sportarr's last, naming Wikipedia there alone`() {
+        listOf(sections, hidden).forEach { form ->
+            val plugins = form.single { it.heading == "Plugins" }.paragraphs
+            assertTrue(plugins[1].endsWith(" $WIKIPEDIA_SENTENCE It sends nothing anywhere else."), plugins[1])
+        }
+        assertEquals(1, text.split(WIKIPEDIA_SENTENCE).size - 1, "the sentence, once")
+        assertTrue("(it starts on)" in WIKIPEDIA_SENTENCE && "English Wikipedia" in WIKIPEDIA_SENTENCE)
+        assertNull(Regex("(?i)wikipedia").find(text.replace(WIKIPEDIA_SENTENCE, ""))?.value, "Wikipedia outside its sentence")
+        assertFalse('\'' in WIKIPEDIA_SENTENCE, "the file's apostrophes are ’")
+    }
+
     /** L659: Sportarr's sentences are in the file once, and Sportarr is named nowhere else, so nothing else moved. */
     @Test
     fun `Sportarr is named in its sentences alone`() {
@@ -265,10 +285,15 @@ class PrivacyTextTest {
                 "key. A plugin you install talks to the services you set it up with, such as your own server. A plugin’s own " +
                 "settings and keys stay on this device."
 
-        /** L659: what the Sportarr plugin sends, and to whom, as approved (PlPhonePrivacy's words). */
+        /** W3, L-B9: what the Sportarr plugin's Fight cards from Wikipedia switch reads, and what Wikipedia sees. */
+        const val WIKIPEDIA_SENTENCE =
+            "With its Fight cards from Wikipedia switch on (it starts on), it reads a UFC event’s fight card from English " +
+                "Wikipedia when you open the event; Wikipedia sees your internet address and which events you open."
+
+        /** L659: what the Sportarr plugin sends, and to whom, as approved (PlPhonePrivacy's words), with W3's sentence. */
         const val SPORTARR_SENTENCES =
             "Sportarr asks your own Sportarr server, with your API key, for the leagues, teams and events you follow; its " +
-                "searches go to your indexers like any other. It sends nothing anywhere else."
+                "searches go to your indexers like any other. $WIKIPEDIA_SENTENCE It sends nothing anywhere else."
 
         /** L632's Plugins part, word for word, with the file's ’, and L659's sentences at the second paragraph's end. */
         val PLUGINS_PART = listOf(

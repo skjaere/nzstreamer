@@ -38,7 +38,7 @@ While you cast, your phone sends the video to the Cast device over your home net
 
 The app reads the list of plugins from GitHub when you open Settings › Plugins, and once a day while a plugin is installed. Installing or updating a plugin downloads it from GitHub. GitHub sees your internet address, the time and what is downloaded; the app sends it nothing else, and names no device or version. With no plugin installed and Plugins never opened, the app never contacts GitHub. GitHub’s privacy statement applies.
 
-A plugin runs inside the app, with the same access as the app, so the app runs only plugins signed with its own key. A plugin you install talks to the services you set it up with, such as your own server. A plugin’s own settings and keys stay on this device. Sportarr asks your own Sportarr server, with your API key, for the leagues, teams and events you follow; its searches go to your indexers like any other. It sends nothing anywhere else.
+A plugin runs inside the app, with the same access as the app, so the app runs only plugins signed with its own key. A plugin you install talks to the services you set it up with, such as your own server. A plugin’s own settings and keys stay on this device. Sportarr asks your own Sportarr server, with your API key, for the leagues, teams and events you follow; its searches go to your indexers like any other. With its Fight cards from Wikipedia switch on (it starts on), it reads a UFC event’s fight card from English Wikipedia when you open the event; Wikipedia sees your internet address and which events you open. It sends nothing anywhere else.
 
 ## On this device
 
