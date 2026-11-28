@@ -194,9 +194,9 @@ class SportarrTvBoutsTest {
     }
 
     /**
-     * The credit's sheet: OK twice quickly on the credit (a remote over CEC) leaves it open, Close focused; the attribution
-     * as plain words and what is left out, with no link and no warning; OK on Close, and Back, close it, the focus back on
-     * the credit.
+     * The credit's sheet: OK twice quickly on the credit (a remote over CEC), the second press reaching the sheet once Close
+     * has the focus, leaves it open, Close focused; the attribution as plain words and what is left out, with no link and no
+     * warning; OK on Close, and Back, close it, the focus back on the credit.
      */
     @Test
     fun theCreditsSheetKeepsADoubleOkAndGivesTheFocusBack() {
@@ -207,11 +207,15 @@ class SportarrTvBoutsTest {
         toTheFirstRow(UFC_999_ORDER.first())
         assertEquals(CREDIT, remote.pressUntil(KeyEvent.KEYCODE_DPAD_DOWN, CREDIT, max = 20))
         val first = SystemClock.uptimeMillis()
-        okSentAt(first)
-        okSentAt(first + DOUBLE_OK_MS)
+        remote.press(KeyEvent.KEYCODE_DPAD_CENTER)
         val inSheet = hasAnyAncestor(isDialog())
         waitFor(hasText(ABOUT) and inSheet)
         remote.waitForFocus(CLOSE)
+        // The double press's second OK, as the remote sent it 150 ms after the first: it reaches Close, and the sheet's guard
+        // takes it for the OK that opened the sheet.
+        okSentAt(first + DOUBLE_OK_MS)
+        assertTrue("the sheet still open after the second OK", exists(hasText(ABOUT) and inSheet))
+        assertEquals("Close still focused", CLOSE, remote.focused())
         assertTrue("the attribution as plain words", exists(hasText("Fight card: Wikipedia, “UFC 999”, CC BY-SA 4.0") and inSheet))
         assertTrue("what is left out", exists(hasText("Sports shows the bouts and leaves out the results: no winners, methods, rounds or times.") and inSheet))
         assertFalse("View on Wikipedia on a TV", exists(hasText("View on Wikipedia")))
@@ -354,6 +358,7 @@ class SportarrTvBoutsTest {
     private fun okSentAt(at: Long) {
         instrumentation.sendKeySync(KeyEvent(at, at, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 0))
         instrumentation.sendKeySync(KeyEvent(at, at + 40, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0))
+        compose.waitForIdle()
     }
 
     private fun waitForFocusOn(matcher: SemanticsMatcher, what: String) {
