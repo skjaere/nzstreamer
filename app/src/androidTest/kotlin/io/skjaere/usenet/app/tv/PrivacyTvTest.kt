@@ -80,11 +80,15 @@ class PrivacyTvTest {
             }
     }
 
+    /** Whether [tv] added [browser]: a case skipped on a phone, or before Home's content is shown, added none. */
+    private var monitored = false
+
     @Before
     fun tv() {
         assumeTv()
         home.show()
         instrumentation.addMonitor(browser)
+        monitored = true
         instrumentation.setInTouchMode(false)
     }
 
@@ -101,7 +105,8 @@ class PrivacyTvTest {
     @After
     fun restore() {
         instrumentation.setInTouchMode(true)
-        instrumentation.removeMonitor(browser)
+        // Removing a monitor that was never added fails in a process that has added none yet (a run of this class alone).
+        if (monitored) instrumentation.removeMonitor(browser)
         home.restore()
     }
 
