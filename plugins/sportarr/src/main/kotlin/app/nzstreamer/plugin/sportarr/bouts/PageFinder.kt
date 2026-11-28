@@ -173,12 +173,14 @@ internal class PageFinder(
         private val INDEX_KEPT: Duration = Duration.ofDays(1)
 
         /**
-         * Whether [event]'s page reads a card: a fight card, numbered or a fight night, whose title's first word is UFC.
-         * Any other event's page is as before: no request, no line (W1).
+         * Whether [event]'s page reads a card: a fight card, numbered or a fight night, whose title's first word is UFC, with
+         * more than one part. Any other event's page is as before: no request, no line (W1). One whose part names from
+         * Sportarr leave it a single part has a game's page, with no part rows for the bouts to go under, so a card read
+         * for it would never show.
          */
         fun reads(event: SportsEvent): Boolean =
             event.family == Family.FightCard && (event.cardType == CardType.Numbered || event.cardType == CardType.FightNight) &&
-                Html.words(event.title).firstOrNull() == "UFC"
+                event.parts.size > 1 && Html.words(event.title).firstOrNull() == "UFC"
 
         /**
          * The titles asked for an event titled [title], trimmed and its spaces collapsed, in order, each once: "UFC <n>"

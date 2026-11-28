@@ -882,6 +882,25 @@ class PageModelTest {
     }
 
     @Test
+    fun `a UFC card of one part has a game's page, which reads no card and shows none`() = runBlocking<Unit> {
+        val wiki = TestWiki()
+        val cards = cards(this, wiki.http)
+        val plays = Plays(RecordingPlay(), MutableWatch(), AnsweringSearch(), this, { NOW }, EmptyCoroutineContext)
+        val one = sports(UFC to listOf(on(UFC, 31, at("2026-11-21T23:00"), "UFC 999: Quessel vs. Halde", parts = listOf("Main Card"))))
+        val model = cardModel(plays, cards, sports = one)
+        val running = launch { model.run() }
+        model.next { true }
+        // What the page asked of the cards, run to its end.
+        coroutineContext.job.children.filter { it !== running }.toList().forEach { it.join() }
+        val screen = assertIs<EventScreen>(model.screen.value)
+        assertEquals(PageKind.Game, screen.kind)
+        assertNull(screen.cardLine)
+        assertNull(screen.credit)
+        running.cancelAndJoin()
+        assertEquals(emptyList(), wiki.asked, "nothing asked for a card the page has no room for")
+    }
+
+    @Test
     fun `a card read before the event and after it, its winners moved left, draws the same page on a phone and on a TV`() = runBlocking<Unit> {
         val plays = Plays(RecordingPlay(), MutableWatch(), AnsweringSearch(), this, { NOW }, EmptyCoroutineContext)
         val shown = Form.entries.map { form ->

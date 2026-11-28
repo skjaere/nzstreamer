@@ -94,6 +94,17 @@ class PageFinderTest {
     }
 
     @Test
+    fun `a UFC card Sportarr gives one part, drawn as a game's page with no room for bouts, is never read`() {
+        val numbered = on(UFC, 44, at("2026-11-21T23:00"), "UFC 999: Quessel vs. Halde", parts = listOf("Main Card"))
+        val night = on(UFC, 45, at("2026-11-28T01:00"), "UFC Fight Night 888: Brisk vs. Loam", parts = listOf("Main Event", "Post Show"))
+        listOf(numbered, night).forEach { wire ->
+            val event = sports(UFC to listOf(wire)).events.single()
+            assertEquals(1, event.parts.size, "${event.title}: Sportarr's names give it one part")
+            assertFalse(PageFinder.reads(event), event.title)
+        }
+    }
+
+    @Test
     fun `a title is encoded one way, underscores and a few marks kept, everything else as UTF-8, never a query`() {
         assertEquals("$BASE/wiki/UFC_Fight_Night:_Brisk_vs._Loam", PageFinder.address(BASE, "UFC Fight Night: Brisk vs. Loam"))
         assertEquals("$BASE/wiki/Qu%C3%A9ssel_(c),_~x-y", PageFinder.address(BASE, "Quéssel (c), ~x-y"))
