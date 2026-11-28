@@ -210,6 +210,8 @@ class SportarrEndToEndDeviceTest {
         server.list(Listed(SportarrBuild.listing, SportarrBuild.versionName))
         showTheApp()
         installFromTheList(card.title)
+        // Nothing on the screen says that no request is coming: a moment for one to reach the fake, were it made.
+        SystemClock.sleep(QUIET_MS)
         assertEquals("requests for the list", 0, sportarr.wikiRequests().size)
 
         // UFC 999's page from its row: its bouts under their parts, in the order fought, and the credit.
@@ -451,6 +453,9 @@ class SportarrEndToEndDeviceTest {
 
         /** NZStreamer's User-Agent on a plugin's requests, its contact the public repository (W2). */
         val USER_AGENT = Regex("""NZStreamer/\d+\.\d+\.\d+ \(https://github\.com/skjaere/nzstreamer\)""")
+
+        /** How long a request the list mustn't make gets to reach the fake. */
+        const val QUIET_MS = 1_500L
 
         const val SPORTS = "Sports"
         const val RECENT = "Recent"

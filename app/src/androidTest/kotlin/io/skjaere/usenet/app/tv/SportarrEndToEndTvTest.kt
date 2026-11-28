@@ -260,6 +260,8 @@ class SportarrEndToEndTvTest {
         server.list(Listed(SportarrBuild.listing, SportarrBuild.versionName))
         showTheApp()
         installFromTheListByRemote()
+        // Nothing on the screen says that no request is coming: a moment for one to reach the fake, were it made.
+        SystemClock.sleep(QUIET_MS)
         assertEquals("requests for the list", 0, sportarr.wikiRequests().size)
 
         // Down to UFC 999's row in its day, never Up next's; OK, its page, its top button focused, its bouts shown.
@@ -452,6 +454,9 @@ class SportarrEndToEndTvTest {
 
         /** NZStreamer's User-Agent on a plugin's requests, its contact the public repository (W2). */
         val USER_AGENT = Regex("""NZStreamer/\d+\.\d+\.\d+ \(https://github\.com/skjaere/nzstreamer\)""")
+
+        /** How long a request the list mustn't make gets to reach the fake. */
+        const val QUIET_MS = 1_500L
 
         const val SPORTS = "Sports"
         const val TODAY = "TODAY"

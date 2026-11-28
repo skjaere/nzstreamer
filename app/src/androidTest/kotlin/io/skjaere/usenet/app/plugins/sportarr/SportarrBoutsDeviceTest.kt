@@ -134,6 +134,8 @@ class SportarrBoutsDeviceTest {
     fun ufc999sBoutsShowUnderTheirPartsWithNoResult() {
         sportarr.install()
         openList()
+        // Nothing on the screen says that no request is coming: a moment for one to reach the fake, were it made.
+        SystemClock.sleep(QUIET_MS)
         assertEquals("requests for the list", emptyList<JsonObject>(), sportarr.wikiRequests())
         openEvent(UFC_999)
         waitFor(bout(MAIN_EVENT))
@@ -153,6 +155,8 @@ class SportarrBoutsDeviceTest {
         waitFor(hasText(TODAY), LIST_WAIT_MS)
         openEvent(UFC_999)
         waitFor(bout(MAIN_EVENT))
+        // The card kept shows before a read would ask anything, so the shown bouts are no sign that none was asked.
+        SystemClock.sleep(QUIET_MS)
         assertEquals("requests after the page again", 1, sportarr.wikiRequests().size)
     }
 
@@ -490,7 +494,7 @@ class SportarrBoutsDeviceTest {
         /** The 503's hold (L-B6), and a moment more. */
         const val HOLD_MS = 31_000L
 
-        /** How long a Try again pressed in a hold may take to ask nothing. */
+        /** How long a request that mustn't be made (the list's, the page's again, a held Try again's) gets to come. */
         const val QUIET_MS = 1_500L
 
         const val LIST_WAIT_MS = 30_000L
