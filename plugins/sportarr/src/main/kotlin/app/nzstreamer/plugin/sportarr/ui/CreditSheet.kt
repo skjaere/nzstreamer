@@ -85,19 +85,20 @@ internal fun open(url: String, opener: (String) -> Unit): String? = try {
     url
 }
 
-/** The credit line on a phone (BtPhoneCard): ⓘ and its words, small and muted, a 48 dp target; a tap opens its sheet. */
+/**
+ * The credit line on a phone (BtPhoneCard): ⓘ and its words, small and muted, a 48 dp target; a tap opens its sheet
+ * ([onOpen]), which the page holds: the row is an item of the page's list, there only while it is in view.
+ */
 @Composable
-internal fun PhoneCreditRow(credit: Credit, actions: PageActions) {
-    var about by rememberSaveable { mutableStateOf(false) }
+internal fun PhoneCreditRow(actions: PageActions, onOpen: () -> Unit) {
     Row(
         Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp).fillMaxWidth().focusRequester(actions.focus.requester(PageKeys.CREDIT))
-            .heightIn(min = 48.dp).focusOutline().clickable(role = Role.Button) { about = true }.padding(horizontal = 12.dp),
+            .heightIn(min = 48.dp).focusOutline().clickable(role = Role.Button, onClick = onOpen).padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Icon(Icons.Outlined.Info, contentDescription = null, modifier = Modifier.size(18.dp), tint = colors.muted)
         Text(Words.Bouts.CREDIT, style = AppType.small, color = colors.muted)
     }
-    if (about) CreditSheet(credit, tv = false) { about = false }
 }
 
 /**
@@ -151,7 +152,7 @@ internal fun TvCreditRow(credit: Credit, panes: PaneMemory, actions: PageActions
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CreditSheet(credit: Credit, tv: Boolean, onClose: () -> Unit) {
+internal fun CreditSheet(credit: Credit, tv: Boolean, onClose: () -> Unit) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     // A remote can't drag, and the handle would take the focus first.
     val handle: (@Composable () -> Unit)? = if (tv) null else ({ BottomSheetDefaults.DragHandle() })

@@ -44,6 +44,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -138,6 +139,10 @@ private fun PhoneParts(screen: EventScreen, actions: PageActions, okGuard: OkGua
         if (kept != null && kept != seen) list.animateScrollToItem(0)
         seen = kept
     }
+    // The credit's sheet is the page's, open or not, not its row's: the row is a list item, composed only while in view,
+    // and a page made again (turned, or at a larger text size) can leave it out of view with the sheet open, which would
+    // close it, then open it unasked as the row came back.
+    var about by rememberSaveable { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().pageOkGuard(okGuard)) {
         bar()
         LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(bottom = 16.dp)) {
@@ -169,10 +174,11 @@ private fun PhoneParts(screen: EventScreen, actions: PageActions, okGuard: OkGua
                 }
             }
             screen.cardLine?.let { line -> item { PhoneCardLine(line, actions) } }
-            screen.credit?.let { credit -> item { PhoneCreditRow(credit, actions) } }
+            screen.credit?.let { item { PhoneCreditRow(actions) { about = true } } }
             item { Footnote(screen.footnote) }
         }
     }
+    screen.credit?.takeIf { about }?.let { credit -> CreditSheet(credit, tv = false) { about = false } }
 }
 
 /**
