@@ -129,7 +129,8 @@ internal class PageFinder(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Throwable) {
-                    log.warn("Wikipedia's list of UFC events was unreadable: {}", e.javaClass.simpleName)
+                    // No league in a log line beyond the sport word (L-B13): the index by what it is, not by its title.
+                    log.warn("Wikipedia's list of events was unreadable: {}", e.javaClass.simpleName)
                     return Indexed.NoPage
                 }
                 val read = KeptIndex(KeptIndex.FORMAT, now, rows)
@@ -430,7 +431,7 @@ internal class IndexFile(private val dir: File, private val io: CoroutineContext
             temporary.writeText(json.encodeToString(KeptIndex.serializer(), index))
             if (!temporary.renameTo(File(dir, NAME))) throw IOException("Not renamed")
         } catch (e: IOException) {
-            log.warn("The list of UFC events wasn't kept: {}", e.javaClass.simpleName)
+            log.warn("Wikipedia's list of events wasn't kept: {}", e.javaClass.simpleName)
         }
     }
 

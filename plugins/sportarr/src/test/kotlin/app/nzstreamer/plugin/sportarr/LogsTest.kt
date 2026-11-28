@@ -219,8 +219,7 @@ class LogsTest {
         assertEquals(emptyList(), lines.filterNot { it.logger.startsWith("app.nzstreamer.plugin.sportarr.bouts.") }.map { it.words })
         // Each line an outcome and its counts, a kind, or an exception or a file by its class alone.
         assertEquals(emptyList(), lines.filterNot { line -> CARD_LINES.any { it.matches(line.words) } }.map { it.words })
-        // The index's name in two lines' own words is no title read from a page, and its "UFC" the one league cards are read for.
-        assertClean(lines.map { it.copy(words = it.words.replace(INDEX_WORDS, "list of events")) }, *cardSecrets(fakes), "127.0.0.1:$closed")
+        assertClean(lines, *cardSecrets(fakes), "127.0.0.1:$closed")
         // Every way a read ends, logged.
         val said = lines.map { it.words.replace(MS, "N ms") }.toSet()
         val expected = listOf(
@@ -236,7 +235,7 @@ class LogsTest {
             "Fight card not read: 403 after 1 requests in N ms",
             "Fight card not read: held after 0 requests in N ms",
             "The fight cards weren't kept: FileNotFoundException",
-            "The list of UFC events wasn't kept: FileNotFoundException",
+            "Wikipedia's list of events wasn't kept: FileNotFoundException",
             "The kept fight cards are unreadable: read as none",
             "The fight cards switch is unreadable: read as off",
         ) + PluginHttpException.Kind.entries.map { "Fight card not read: ${it.name} after 1 requests in N ms" }
@@ -302,9 +301,6 @@ class LogsTest {
         /** A line's duration. */
         val MS = Regex("""\d+ ms""")
 
-        /** The index's name, as two of the fight cards' lines write it. */
-        val INDEX_WORDS = Regex("""(?i)list of UFC events""")
-
         /**
          * The fight cards' lines (L-B13): a read's outcome with the bouts and parts it kept, its requests and its time; why
          * one failed (a status, a kind of failure, a hold, an error); an exception or a file's failure by its class alone.
@@ -317,8 +313,8 @@ class LogsTest {
                     """after \d+ requests in \d+ ms$""",
             ),
             Regex(
-                """^(A Wikipedia page was unreadable|Wikipedia's list of UFC events was unreadable|A fight card's page was unreadable|""" +
-                    """Fight card read failed|Fight cards failed|The list of UFC events wasn't kept|The fight cards weren't kept|""" +
+                """^(A Wikipedia page was unreadable|Wikipedia's list of events was unreadable|A fight card's page was unreadable|""" +
+                    """Fight card read failed|Fight cards failed|Wikipedia's list of events wasn't kept|The fight cards weren't kept|""" +
                     """The fight cards switch wasn't kept): [A-Z][A-Za-z0-9]*$""",
             ),
             Regex("""^The kept fight cards are unreadable: read as none$"""),
