@@ -10,6 +10,7 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -17,6 +18,7 @@ import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
 import androidx.media3.common.util.UnstableApi
 import androidx.navigation.NavHostController
@@ -52,11 +54,11 @@ import java.util.concurrent.CopyOnWriteArrayList
  * A UFC card's bouts on a phone (L-B7, W4, W5, W6), the real plugin over the fake Sportarr and the fake Wikipedia:
  * UFC 999's bouts under their parts in the order fought, each pair's names, weight class and labels as BtPhoneCard
  * draws them, nothing of a result anywhere on the page; a bout's row says it plays its part, and a tap plays it; the credit
- * and its sheet (View on Wikipedia shown, never tapped: a tap would leave the app for a browser); one request as the page
- * first opens, none for the list or the page again, sent with NZStreamer's User-Agent; the card read before the event and
- * after it, the same rows; an upcoming fight night's bouts, its early prelims' bout under Prelims, none of them tappable;
- * and the lines of BtPhoneCardStates: Reading, not out yet, no card (a page missing, and one with no card), and can't
- * reach with Try again.
+ * and its sheet (View on Wikipedia shown, never tapped: a tap would leave the app for a browser), open while the credit's
+ * row leaves the list and never opening by itself; one request as the page first opens, none for the list or the page
+ * again, sent with NZStreamer's User-Agent; the card read before the event and after it, the same rows; an upcoming fight
+ * night's bouts, its early prelims' bout under Prelims, none of them tappable; and the lines of BtPhoneCardStates:
+ * Reading, not out yet, no card (a page missing, and one with no card), and can't reach with Try again.
  *
  * The fake's switches are put back after each test, the plugin with its files and secrets removed; each test installs it
  * anew, so nothing kept answers for the one before. TMDB is a strict fake: what Home asks of other titles is refused.
@@ -196,6 +198,33 @@ class SportarrBoutsDeviceTest {
         assertEquals("canary values, with the sheet", emptyList<String>(), compose.canaries())
         compose.onNode(hasText("Close") and hasClickAction() and inSheet).performClick()
         compose.waitUntil(PLUGIN_WAIT_MS) { !exists(hasText("About the bouts")) }
+    }
+
+    /**
+     * The credit's sheet stays open while the credit's row leaves the page's list, as a page made again in landscape, or at
+     * a larger text size, can leave it below the fold; closed, it never opens again by itself as the row comes back.
+     */
+    @Test
+    fun theCreditsSheetOutlivesItsRowLeavingTheList() {
+        sportarr.install()
+        openList()
+        openEvent(UFC_999)
+        waitFor(bout(MAIN_EVENT))
+        val credit = hasText(CREDIT) and hasClickAction()
+        scrollTo(credit)
+        compose.onNode(credit).performClick()
+        val sheet = hasText(ABOUT) and hasAnyAncestor(isDialog())
+        waitFor(sheet)
+        // The page's list back at its top under the sheet: the credit's row out of it.
+        compose.onAllNodes(hasScrollToIndexAction()).onFirst().performScrollToIndex(0)
+        compose.waitForIdle()
+        assertFalse("the credit's row out of the list", exists(credit))
+        assertTrue("the sheet still open", exists(sheet))
+        compose.onNode(hasText("Close") and hasClickAction() and hasAnyAncestor(isDialog())).performClick()
+        compose.waitUntil(PLUGIN_WAIT_MS) { !exists(hasText(ABOUT)) }
+        scrollTo(credit)
+        compose.waitForIdle()
+        assertFalse("the sheet opened again by itself", exists(hasText(ABOUT)))
     }
 
     /**
@@ -404,6 +433,7 @@ class SportarrBoutsDeviceTest {
         const val TODAY = "TODAY"
         const val MAIN_EVENT = "Quessel vs. Halde"
         const val CREDIT = "Fight card from Wikipedia"
+        const val ABOUT = "About the bouts"
         const val READING = "Reading the fight card…"
         const val NOT_YET = "The fight card isn't on Wikipedia yet."
         const val NO_CARD = "No fight card found on Wikipedia for this event."
