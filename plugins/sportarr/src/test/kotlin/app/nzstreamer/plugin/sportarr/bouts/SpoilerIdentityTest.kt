@@ -13,7 +13,8 @@ import kotlin.test.assertTrue
 
 /**
  * W6, as L-B13 splits it, the reader's part: one card as its pre-event table and as its results table (every winner moved
- * left with "def.", methods, rounds, times, a deduction note, a note beginning "For the first time", a draw, a no contest
+ * left with "def.", methods, rounds, times, a deduction note, notes beginning "For the first time" and "For the second
+ * time" (a title named in it), a draw, a no contest
  * and a pair who share a surname) reads as one and the same card, and so encodes as the same JSON; and so does every way
  * of listing its thirteen pairs, each either way round. Nothing of a result is in any field.
  */

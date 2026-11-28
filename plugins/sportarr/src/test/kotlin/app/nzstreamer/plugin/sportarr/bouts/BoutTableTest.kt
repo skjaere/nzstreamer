@@ -186,6 +186,13 @@ class BoutTableTest {
         assertEquals(true, titleFights("Rendahl", "Varnholt", "For the UFC Welterweight Championship."))
         assertEquals(true, titleFights("Rendahl", "Varnholt", "for the interim UFC Welterweight title. Varnholt missed weight."))
         assertEquals(false, titleFights("Rendahl", "Varnholt", "For the first time, a title bout went the distance."))
+        // Any count of times, or a last one, is told after the event too.
+        assertEquals(false, titleFights("Rendahl", "Varnholt", "For the second time in his career, Varnholt won a title fight."))
+        assertEquals(false, titleFights("Rendahl", "Varnholt", "For the 3rd time, a title bout went the distance."))
+        assertEquals(false, titleFights("Rendahl", "Varnholt", "For the last time, Rendahl fought for the title."))
+        assertEquals(false, titleFights("Rendahl", "Varnholt", "For the first-ever time, a title bout went the distance."))
+        assertEquals(true, titleFights("Rendahl", "Varnholt", "For the vacant UFC Welterweight Championship."))
+        assertEquals(true, titleFights("Rendahl", "Varnholt", "For the inaugural UFC Welterweight title."))
         assertEquals(false, titleFights("Rendahl", "Varnholt", "Varnholt was deducted one point in round 2 due to repeated fouls."))
         assertEquals(false, titleFights("Rendahl", "Varnholt", "For the record. The title was never at stake."))
         assertEquals(false, titleFights("Rendahl", "Varnholt", "Bout for the title eliminator."))

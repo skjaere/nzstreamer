@@ -159,11 +159,15 @@ internal object BoutTable {
 
     /**
      * Whether a bout's [note] says it is for a title: it begins "For the" and names "Championship" or "title" in its first
-     * sentence. A note beginning "For the first time" never does: such notes are written after the event.
+     * sentence. A note beginning "For the" and a count ("For the first time", "For the second time in his career", "For
+     * the 3rd time", "For the last time") never does: such notes are written after the event, so the two forms would read
+     * apart.
      */
     private fun forTheTitle(note: String): Boolean {
         val words = note.lowercase(Locale.ROOT)
-        if (!words.startsWith("for the ") || words.startsWith("for the first")) return false
+        if (!words.startsWith("for the ")) return false
+        val next = words.removePrefix("for the ").takeWhile(Char::isLetterOrDigit)
+        if (next in COUNTS || ORDINAL.matches(next)) return false
         val sentence = Html.words(words.split(SENTENCE_END, limit = 2).first())
         return "CHAMPIONSHIP" in sentence || "TITLE" in sentence
     }
@@ -176,6 +180,13 @@ internal object BoutTable {
     private val HEADINGS = listOf("Fight_card", "Results", "Card")
     private val SEPARATORS = setOf("vs.", "vs", "def.")
     private val SENTENCE_END = Regex("""\.(\s|$)""")
+
+    /** The words after "For the" that count times, which only a note written after the event begins with. */
+    private val COUNTS = setOf(
+        "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth", "eleventh", "twelfth", "last",
+        "final",
+    )
+    private val ORDINAL = Regex("""\d+(st|nd|rd|th)""")
 
     /** L-B3's header words, folded, each with the part it names. */
     private val PART_WORDS = mapOf(

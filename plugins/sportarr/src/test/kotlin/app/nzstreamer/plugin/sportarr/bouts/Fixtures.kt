@@ -48,7 +48,8 @@ object Fixtures {
      * by their given names. The winners are chosen so the results table's order gives them away: in most "def." rows the
      * fighter later in the alphabet wins, and Halde, the title's second side, wins the main event. The draw and the no
      * contest are listed against the alphabet. Marks: a reference on a fighter and on a weight class, entities in the
-     * women's weight classes, "(c)" on both champions.
+     * women's weight classes, "(c)" on both champions. Two notes written after the event begin "For the first time" and
+     * "For the second time", one of them naming a title.
      */
     val UFC_999: List<FixturePart> = listOf(
         FixturePart(
@@ -78,7 +79,8 @@ object Fixtures {
             listOf(
                 FixtureBout("Heavyweight", "Zelinek", "Lindqvar", winner = 1, method = "KO (head kick)", round = 1, time = "1:02",
                     resultNote = "For the first time, a heavyweight title contender opened the main card. Lindqvar called for a rematch."),
-                FixtureBout("Women&#8217;s Flyweight", "Ostrem", "Tessmar", winner = 1),
+                FixtureBout("Women&#8217;s Flyweight", "Ostrem", "Tessmar", winner = 1,
+                    resultNote = "For the second time in her career, Tessmar won a bout on a title card."),
                 FixtureBout("Welterweight", "Rendahl", "Varnholt", method = "Submission (guillotine choke)", round = 2, time = "2:40"),
                 FixtureBout("Bantamweight", "Brisk (c)", "Loam", winner = 1, method = "TKO (punches)", round = 4, time = "3:33",
                     note = "For the UFC Bantamweight Championship."),
@@ -135,7 +137,8 @@ object Fixtures {
     /** Words a reader that kept anything of a result would carry into a card: separators, methods, times. */
     val RESULT_WORDS = listOf(
         "def", "Decision", "Submission", "KO", "TKO", "Draw", "No Contest", "unanimous", "split", "majority", "choke", "punch",
-        "elbows", "kick", "eye poke", "deducted", "first time", "rematch", "took the title", ":12", ":48", ":00", ":01", ":55", ":10",
+        "elbows", "kick", "eye poke", "deducted", "first time", "second time", "rematch", "took the title", ":12", ":48", ":00", ":01",
+        ":55", ":10",
         ":02", ":40", ":33",
     )
 
