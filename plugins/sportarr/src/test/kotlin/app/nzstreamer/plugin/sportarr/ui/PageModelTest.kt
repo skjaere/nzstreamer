@@ -826,6 +826,30 @@ class PageModelTest {
     }
 
     @Test
+    fun `a UFC card's page asks for its card once as it shows, however often the list is read again meanwhile`() = runBlocking<Unit> {
+        // A status that fails the read and sets no hold: nothing kept, so only the page's own guard keeps another read away.
+        val wiki = TestWiki().apply { status = 400 }
+        val cards = cards(this, wiki.http)
+        val plays = Plays(RecordingPlay(), MutableWatch(), AnsweringSearch(), this, { NOW }, EmptyCoroutineContext)
+        val list = MutableStateFlow<ListState>(ListState.Ready(CARDS))
+        val model = PageModel(list, MutableWatch(), plays, Pages.EVENT, "ev-000031", tv = false, { NOW }, { LONDON }, EmptyCoroutineContext, cards, WIKI_BASE)
+        val running = launch { model.run() }
+        model.next { (it as EventScreen).cardLine == CardLine.CantReach }
+        assertEquals(1, wiki.http.requests.size)
+
+        // The list read again while the page shows, twice (a Refresh, a stale list's read from the tab ending late).
+        listOf(NOW.plusSeconds(60), NOW.plusSeconds(120)).forEach { readAt ->
+            list.value = ListState.Ready(sports(UFC to CARDS_WIRE, readAt = readAt))
+            repeat(SETTLE_ROUNDS * 4) { yield() }
+            // What the page asked of the cards meanwhile, run to its end.
+            coroutineContext.job.children.filter { it !== running }.toList().forEach { it.join() }
+        }
+        assertEquals(CardLine.CantReach, assertIs<EventScreen>(model.screen.value).cardLine)
+        assertEquals(listOf("/wiki/UFC_999"), wiki.asked, "one read for the one showing, Try again the way to another")
+        running.cancelAndJoin()
+    }
+
+    @Test
     fun `Can't reach says Try again, which reads once more, nothing asked while the hold lasts`() = runBlocking<Unit> {
         var now = NOW
         val wiki = TestWiki().apply { status = 503 }
