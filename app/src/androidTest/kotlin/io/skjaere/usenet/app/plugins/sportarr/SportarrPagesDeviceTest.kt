@@ -8,12 +8,15 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.navigation.NavHostController
@@ -65,7 +68,8 @@ import kotlin.random.Random
  * The event pages on a phone (L647, L652, L653, L654), the real plugin over the
  * fake Sportarr's library: a game's page aired and not watched, with NZStreamer's Cast button in its top bar, played
  * part-way (Resume, what is left), marked watched and unwatched, and before its start; a weekend's sessions with their ⋮;
- * a card's parts; Generic's page, which you pick from. With the sports indexer: Search indexers opens Search with the
+ * a card's parts, a UFC card's with its bouts and a premium card's with the footnote as before; Generic's page, which you
+ * pick from. With the sports indexer: Search indexers opens Search with the
  * game's words and the scores note; Play with only possible matches opens Choose release with their reasons; Play with
  * nothing shows the no-release sheet with the indexer's line and the note, and the page keeps its line. With the mock:
  * Play plays an accepted release, its progress kept under item:sportarr:ev-…:full. No canary value on any page.
@@ -237,7 +241,10 @@ class SportarrPagesDeviceTest {
         assertEquals("canary values", emptyList<String>(), compose.canaries())
     }
 
-    /** A card's page: UFC 999's parts in card order, as Sportarr names them, the first to play on the top button; its footnote. */
+    /**
+     * A card's page: UFC 999's parts in card order, as Sportarr names them, the first to play on the top button; its bouts
+     * under them once the fake Wikipedia's card is read (SportarrBoutsDeviceTest's), and the footnote that names them.
+     */
     @Test
     fun aCardsPageListsItsParts() {
         sportarr.install()
@@ -247,12 +254,27 @@ class SportarrPagesDeviceTest {
         assertTrue("its line", exists(hasText("UFC · ${dayAndTime(card.start)}")))
         assertTrue("its count", exists(hasText("0 of 3 watched")))
         assertTrue("the first part to play", exists(button("Play Early Prelims")))
+        // Its card read from the fake Wikipedia, its main event last: the page as it stays.
+        waitFor(hasText("Quessel vs. Halde") and hasClickAction())
         val tops = listOf("Early Prelims", "Prelims", "Main Card").map { label ->
             val row = hasText(label) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button)
             compose.onAllNodes(row).fetchSemanticsNodes().single().boundsInRoot.top
         }
         assertEquals("in card order", tops.sorted(), tops)
-        assertTrue("its footnote", exists(hasText("Tap a part to play the best release, or ⋮ to choose one yourself. Details from your Sportarr.")))
+        scrollTo(hasText(BOUTS_FOOTNOTE))
+        assertEquals("canary values", emptyList<String>(), compose.canaries())
+    }
+
+    /** A card that reads none from Wikipedia (a premium card's, not UFC's): its parts, and the footnote as before. */
+    @Test
+    fun aPremiumCardsPageKeepsItsFootnote() {
+        sportarr.install()
+        val card = library.event(PREMIUM_CARD)
+        openEvent(PREMIUM_CARD)
+        waitFor(hasText(card.title))
+        listOf("Pre-Show", "Main Show").forEach { assertTrue("its $it", exists(hasText(it) and hasClickAction())) }
+        scrollTo(hasText(CARD_FOOTNOTE))
+        assertFalse("no credit", exists(hasText("Fight card from Wikipedia")))
         assertEquals("canary values", emptyList<String>(), compose.canaries())
     }
 
@@ -435,6 +457,17 @@ class SportarrPagesDeviceTest {
 
     private fun button(words: String) = hasText(words) and hasClickAction()
 
+    /** The page's [matcher] brought into view, its list scrolled to it: a card's page with its bouts is taller than the screen. */
+    private fun scrollTo(matcher: SemanticsMatcher) {
+        val deadline = SystemClock.elapsedRealtime() + PLUGIN_WAIT_MS
+        while (!exists(matcher)) {
+            runCatching { compose.onAllNodes(hasScrollToNodeAction()).onFirst().performScrollToNode(matcher) }
+            assertTrue("never shown: ${matcher.description}; shown: ${compose.screenWords()}", SystemClock.elapsedRealtime() < deadline)
+            compose.waitForIdle()
+        }
+        compose.onNode(matcher).performScrollTo()
+    }
+
     private fun exists(matcher: SemanticsMatcher) = compose.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty()
 
     private fun waitFor(matcher: SemanticsMatcher, timeoutMs: Long = PLUGIN_WAIT_MS) {
@@ -452,13 +485,15 @@ class SportarrPagesDeviceTest {
 
         /**
          * The library's: Lantern Bay FC's game, aired yesterday; a game six days on; a game with possible matches alone; one with
-         * nothing for it; UFC 999's card; the skiing event Generic lists; Formula 1's league.
+         * nothing for it; UFC 999's card; a wrestling promotion's premium card; the skiing event Generic lists; Formula 1's
+         * league.
          */
         const val GAME = 1001
         const val LATER_GAME = 1014
         const val OFFERED_GAME = 1017
         const val NOTHING_GAME = 1016
         const val CARD = 1901
+        const val PREMIUM_CARD = 2004
         const val GENERIC = 2201
         const val FORMULA_1 = 7
         const val KESTREL_GP = "Grand Prix of Kestrel"
@@ -478,6 +513,9 @@ class SportarrPagesDeviceTest {
             "Play finds the best release on your indexers that names both teams and the date; the one that played before goes first. Details from your Sportarr."
         const val GAME_NOT_STARTED =
             "Play, Choose release and Search indexers show once it has started. Releases often appear a few hours after the end."
+        const val CARD_FOOTNOTE = "Tap a part to play the best release, or ⋮ to choose one yourself. Details from your Sportarr."
+        const val BOUTS_FOOTNOTE =
+            "Tap a part, or a bout in it, to play the part's best release, or ⋮ to choose one yourself. Details from your Sportarr."
         const val GENERIC_FOOTNOTE =
             "NZStreamer can't tell this sport's releases apart for sure, so you pick one; the one you played goes first next time. Details from your Sportarr."
 

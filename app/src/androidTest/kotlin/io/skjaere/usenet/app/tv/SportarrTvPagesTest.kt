@@ -201,13 +201,16 @@ class SportarrTvPagesTest {
         assertTrue("Right from its line: on \"${remote.focused()}\"", remote.isFocused(held(WEEKEND_NOT_STARTED)))
     }
 
-    /** A card's page on a TV: the top button first, the parts on the right. */
+    /**
+     * A card's page on a TV: the top button first, the parts on the right; Right goes to the row across from it, a part, or
+     * one of the bouts a UFC card's parts have under them once its card is read (SportarrTvBoutsTest's).
+     */
     @Test
     fun aCardsTopButtonFirst() {
         openPage(library.event(CARD).title)
         remote.waitForFocus("Play Early Prelims")
-        val part = remote.press(KeyEvent.KEYCODE_DPAD_RIGHT).substringBefore(" |")
-        assertTrue("Right: a part, \"$part\"", part in setOf("Early Prelims", "Prelims", "Main Card"))
+        val row = remote.press(KeyEvent.KEYCODE_DPAD_RIGHT)
+        assertTrue("Right: a part or a bout, \"$row\"", row.substringBefore(" |") in setOf("Early Prelims", "Prelims", "Main Card") || BOUT.matches(row))
         assertEquals("canary values", emptyList<String>(), compose.canaries())
     }
 
@@ -337,6 +340,9 @@ class SportarrTvPagesTest {
 
         /** A session's row as the remote reads it: its name, then its day and time. */
         val SESSION = Regex("""(Practice \d|Qualifying|Race) \| .+""")
+
+        /** A bout's row as the remote reads it: its two names, then its weight class and labels. */
+        val BOUT = Regex(""".+ vs\. .+ \| .+""")
 
         /** A double press's second OK after its first, and how long nothing may start after it. */
         const val DOUBLE_OK_MS = 150L

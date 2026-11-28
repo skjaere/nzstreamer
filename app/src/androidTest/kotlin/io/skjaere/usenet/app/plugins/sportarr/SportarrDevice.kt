@@ -47,6 +47,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -271,6 +272,17 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
     /** The fake's requests by route and page since its last reset, and those without the key or with it in the query. */
     fun counts(): JsonObject = Json.parseToJsonElement(control("counts")).jsonObject
 
+    /** Skips the test where the fake Sportarr runs without the fake Wikipedia (L-B12), which its counts then leave out. */
+    fun assumeWikipedia() {
+        assumeTrue("the fake Sportarr runs without the fake Wikipedia (mock-seed sports --wiki-port)", "wiki" in counts())
+    }
+
+    /**
+     * The fake Wikipedia's requests since the fake's reset, in order (L-B12): each its path as sent, the event and form its
+     * title named, its status (null while held), its User-Agent, and whether it asked for gzip or sent a cookie.
+     */
+    fun wikiRequests(): List<JsonObject> = counts().getValue("wiki").jsonObject.getValue("requests").jsonArray.map { it.jsonObject }
+
     /**
      * The real plugin installed through the app's registry and running, with the fake Sportarr's address and key in its
      * secrets where [connected] (the setup's first screen where not). MainActivity's first creation is asked first, as
@@ -415,7 +427,7 @@ class SportarrDevice(private val plugins: PluginStateRule, owner: String) {
         }
     }
 
-    /** The plugin's own folder for its files (L645): list.json and view.json. */
+    /** The plugin's own folder for its files (L645): list.json and view.json; cards.json and options.json (L-B5, L-B8). */
     val dataDir: File get() = File(File(plugins.root, SPORTARR), "data")
 
     /** What the test changed put back, every step tried whatever the others do. */
